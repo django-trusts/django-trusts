@@ -187,7 +187,7 @@ def main() -> int:
     )
     from trusts.compile.nodes import Ref
     from trusts.decorators import filter_by_permitted_content
-    from trusts.plan.relations import ConditionLookup, RelationPlan
+    from trusts.plan.relations import RelationPlan
     from trusts.query import AuthorizedManager, AuthorizedManagerMixin, AuthorizedQuerySet
     from trusts.conditions import (
         PermissionConditionError,
@@ -306,8 +306,8 @@ def main() -> int:
     print('catalogs', installed_catalogs)
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager)
     print('filter_by_permitted_content', filter_by_permitted_content)
-    print('ConditionLookup', ConditionLookup)
     from trusts.plan.conditions import FrozenConditionLookup
+    print('FrozenConditionLookup', FrozenConditionLookup)
     standalone = RegistryFactory()
     shape = standalone.build()
     bound = shape.filter_lookup

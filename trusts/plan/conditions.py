@@ -74,7 +74,6 @@ from trusts.errors import (
     PermissionConditionNotQueryable,
     PermissionConditionUnsupported,
 )
-from trusts.plan.relations import ConditionLookup
 
 
 def get_short_model_name_lower(klass):
@@ -1229,8 +1228,8 @@ def evaluate_stored_condition(record, model, cond_code, user, perm, obj):
     )
 
 
-class FrozenConditionLookup(ConditionLookup):
-    """``ConditionLookup`` over condition rows frozen at ``build()``.
+class FrozenConditionLookup(object):
+    """Condition rows frozen at ``build()``.
 
     The rows are a tuple taken once from the factory store. This lookup
     does not share that mutable store.

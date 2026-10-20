@@ -1,8 +1,7 @@
 """Relation plans and the compiler protocol they implement.
 
-``QueryCompiler``, ``PlanQueryCompiler``, ``ConditionLookup``, and
-``RelationPlan`` live here with the user-binding and candidate helpers
-they close over.
+``QueryCompiler``, ``PlanQueryCompiler``, and ``RelationPlan`` live here
+with the user-binding and candidate helpers they close over.
 """
 
 __all__ = []
@@ -100,21 +99,6 @@ def candidate_queryset(content):
     raise TrustsConfigurationError(
         'content must be a model instance or QuerySet, not %r.' % (content,)
     )
-
-
-class ConditionLookup(object):
-    """Duck-typed ``:condition`` overlay protocol. Not a registry or store.
-
-    ``record_for`` returns the registered record or ``None`` (unregistered
-    codes fail closed as ``AttributeError`` at the caller). ``compile_q``
-    compiles stored condition IR to ``Q``.
-    """
-
-    def record_for(self, model, cond_code):
-        raise NotImplementedError
-
-    def compile_q(self, model, perm_string, user):
-        raise NotImplementedError
 
 
 class SkipParams(object):

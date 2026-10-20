@@ -322,7 +322,7 @@ class BuildCatalogShapeTest(SimpleTestCase):
         registry.conditions._records.clear()
         self.assertEqual(shape.conditions, ((Document, 'owned', condition),))
         self.assertIsInstance(shape.filter_lookup, FrozenConditionLookup)
-        self.assertIsNot(shape.filter_lookup, registry.filter_lookup)
+        self.assertFalse(hasattr(shape.filter_lookup, 'conditions'))
         self.assertIs(
             shape.filter_lookup.record_for(Document, 'owned'), condition,
         )
@@ -485,7 +485,8 @@ class CatalogFromShapeTest(TransactionTestCase):
             )
             empty = Catalog(CatalogShape(
                 records=(), delegations=(), conditions=(),
-                user_conditions=None, user_override=None, filter_lookup=None,
+                user_conditions=None, user_override=None,
+                filter_lookup=FrozenConditionLookup(()),
                 compiler=None, cls=RegistryFactory, path='empty-shape',
                 family='relationship', user_model=User,
                 user_rules=(Q(), Q()), override_q=None,

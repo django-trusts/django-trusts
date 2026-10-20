@@ -204,10 +204,10 @@ class RegistryFactory(object):
 
         ``build()`` freezes this factory and returns a fresh
         ``CatalogShape`` from the records already stored. A later build
-        returns another shape from those same records. ``register``,
+        returns another shape from those same records.         ``register``,
         ``register_delegation``, ``register_permission_condition``,
-        ``set_user_condition``, ``set_user_override``, and
-        ``set_filter_lookup`` raise ``TrustsConfigurationError``.
+        ``set_user_condition``, and ``set_user_override`` raise
+        ``TrustsConfigurationError``.
     """
 
     def __init__(self, *, compiler=None, path='', family='relationship',
@@ -216,40 +216,16 @@ class RegistryFactory(object):
         self._order = []
         self._delegations_by_root = {}
         self._delegation_order = []
-        self._filter_lookup = None
         self.frozen = False
         self._user_conditions = None
         self._user_override = None
         self.conditions = ConditionRegistry()
-        self._lookup_explicit = False
         self._explicit_compiler = compiler is not None
         self.compiler = compiler if self._explicit_compiler else PlanQueryCompiler()
         self.path = path
         self.family = family
         self.user_model = user_model
         self.cls = cls
-
-    @property
-    def filter_lookup(self):
-        """Bound ``ConditionLookup``, or ``None`` after explicit unbind."""
-        return self._filter_lookup
-
-    def set_filter_lookup(self, lookup):
-        """Bind a ``FrozenConditionLookup``, or ``None`` to unbind.
-
-        The only condition lookup is ``FrozenConditionLookup``. Anything
-        else raises ``TrustsConfigurationError`` and does not bind.
-        ``lookup is None`` clears the binding. Methods are not invoked
-        at bind time. A built factory is frozen.
-        """
-        self._open('set_filter_lookup')
-        if lookup is not None and not isinstance(lookup, FrozenConditionLookup):
-            raise TrustsConfigurationError(
-                'ConditionLookup must be a FrozenConditionLookup; '
-                'no partial bind.'
-            )
-        self._filter_lookup = lookup
-        self._lookup_explicit = True
 
     def register_permission_condition(self, model, cond_code, condition):
         """Register a ``:cond_code`` condition on ``model`` for this instance.
@@ -816,17 +792,14 @@ class RegistryFactory(object):
     def build(self):
         """Freeze this factory and return its ``CatalogShape``.
 
-        Condition rows are a tuple taken once. The default condition
-        lookup is rebuilt over that tuple, so the shape does not share
-        this factory's mutable store. User-rule and override fragments
-        are compiled here. A later call builds another shape from the
-        same stored rows.
+        Condition rows are a tuple taken once. The condition lookup is
+        a ``FrozenConditionLookup`` over that tuple, so the shape does
+        not share this factory's mutable store. User-rule and override
+        fragments are compiled here. A later call builds another shape
+        from the same stored rows.
         """
         rows = tuple(self.conditions.iter_permission_conditions())
-        lookup = (
-            self._filter_lookup if self._lookup_explicit
-            else FrozenConditionLookup(rows)
-        )
+        lookup = FrozenConditionLookup(rows)
         stored = self._stored_user_conditions()
         model = self.user_model
         primary = compile_user_rules(

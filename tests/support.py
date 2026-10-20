@@ -263,8 +263,12 @@ def listed_relationship(factories):
                     catalogs[cls] = previous
 
 
-def replay_recorder(factory, backend_cls):
-    """Replay a backend recorder onto a factory this test owns."""
+def replay_recorder(factory, backend_cls, *, filters=True):
+    """Replay a backend recorder onto a factory this test owns.
+
+    ``filters=False`` skips named-filter rows, so the frozen lookup
+    built from this factory does not contain them.
+    """
 
     recorder = recorders.get(backend_cls)
     if recorder is None:
@@ -276,7 +280,7 @@ def replay_recorder(factory, backend_cls):
         elif entry[0] == 'override':
             factory.set_user_override(entry[1], entry[2], on=entry[3])
     for entry in rows:
-        if entry[0] == 'filter':
+        if entry[0] == 'filter' and filters:
             factory.register_permission_condition(entry[1], entry[2], entry[3])
         elif entry[0] == 'register':
             factory.register_public(**entry[1])
@@ -285,7 +289,7 @@ def replay_recorder(factory, backend_cls):
 
 @contextmanager
 def unbound_named_filters(backend_cls):
-    """Publish a catalog built with the recorder rows and no named-filter lookup."""
+    """Publish a catalog whose frozen lookup has no named-filter rows."""
 
     saved = catalogs.get(backend_cls, _MISSING)
     live = None if saved is _MISSING else saved
@@ -294,9 +298,9 @@ def unbound_named_filters(backend_cls):
         path='' if live is None else live.path,
         family=backend_cls.family,
         user_model=standards.user_model,
+        cls=backend_cls,
     )
-    factory.set_filter_lookup(None)
-    replay_recorder(factory, backend_cls)
+    replay_recorder(factory, backend_cls, filters=False)
     catalogs[backend_cls] = built_catalog(factory, cls=backend_cls)
     try:
         yield catalogs[backend_cls]

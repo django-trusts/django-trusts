@@ -27,10 +27,8 @@ from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import TrustsImplementationConfig
 from trusts.decorators import filter_by_permitted_content
 from trusts.plan.conditions import FrozenConditionLookup
-from trusts.plan.relations import (
-    ConditionLookup,
-    PlanQueryCompiler,
-)
+from trusts.compile.catalogs import Catalog
+from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
@@ -148,73 +146,50 @@ class KernelConfigTest(SimpleTestCase):
 
 
 class ConditionLookupBindTest(TestCase):
-    def test_construct_self_binds_and_unbind_is_zero_sql(self):
-        with self.assertNumQueries(0):
-            registry = RegistryFactory()
-        self.assertIsNone(registry.filter_lookup)
-        frozen = FrozenConditionLookup(())
-        with self.assertNumQueries(0):
-            registry.set_filter_lookup(frozen)
-        self.assertIs(registry.filter_lookup, frozen)
-        with self.assertNumQueries(0):
-            registry.set_filter_lookup(None)
-        self.assertIsNone(registry.filter_lookup)
-        built_catalog(registry)
-        with self.assertRaises(TrustsConfigurationError):
-            registry.set_filter_lookup(frozen)
-
-    def test_missing_methods_raise_and_do_not_partial_bind(self):
+    def test_build_freezes_one_lookup_at_zero_sql(self):
         registry = RegistryFactory()
-        self.assertIsNone(registry.filter_lookup)
-
-        class OnlyRecord(object):
-            def record_for(self, model, cond_code):
-                return None
-
-        class OnlyCompile(object):
-            def compile_q(self, model, perm_string, user):
-                return Q()
-
         with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError):
-                registry.set_filter_lookup(OnlyRecord())
-            with self.assertRaises(TrustsConfigurationError):
-                registry.set_filter_lookup(OnlyCompile())
-            with self.assertRaises(TrustsConfigurationError):
-                registry.set_filter_lookup(object())
-        self.assertIsNone(registry.filter_lookup)
-
-        complete = FrozenConditionLookup(())
+            shape = registry.build()
+        self.assertIsInstance(shape.filter_lookup, FrozenConditionLookup)
+        self.assertIsNone(shape.filter_lookup.record_for(Document, 'own'))
+        catalog = Catalog(shape)
+        self.assertIs(catalog.filter_lookup, shape.filter_lookup)
         with self.assertNumQueries(0):
-            registry.set_filter_lookup(complete)
-        with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError):
-                registry.set_filter_lookup(OnlyRecord())
-            with self.assertRaises(TrustsConfigurationError):
-                registry.set_filter_lookup(OnlyCompile())
-            with self.assertRaises(TrustsConfigurationError):
-                registry.set_filter_lookup(object())
-        self.assertIs(registry.filter_lookup, complete)
+            again = registry.build()
+        self.assertIsNot(again.filter_lookup, shape.filter_lookup)
+        with self.assertRaises(TrustsConfigurationError):
+            registry.register_permission_condition(
+                Document, 'own', lambda u, p, o: o.title == 'keep',
+            )
 
-    def test_callable_policy_is_not_invoked_by_the_protocol(self):
+    def test_lookup_answers_only_the_frozen_rows(self):
         called = []
 
-        def callback(user, perm, obj):
+        def builder(user, perm, obj):
             called.append((user, perm, obj))
-            return True
+            return obj.title == 'keep'
 
-        class Refusing(ConditionLookup):
-            def record_for(self, model, cond_code):
-                return type('Rec', (), {'expr': None, 'func': callback})()
-
-            def compile_q(self, model, perm_string, user):
-                raise PermissionError('lookup compile_q must not invoke builders')
-
-        lookup = Refusing()
+        registry = RegistryFactory()
         with self.assertNumQueries(0):
-            with self.assertRaises(PermissionError):
-                lookup.compile_q(Document, 'myapp.change_document:own', None)
-        self.assertEqual(called, [])
+            record = registry.register_permission_condition(
+                Document, 'named', builder,
+            )
+            shape = registry.build()
+        self.assertEqual(len(called), 1)
+        lookup = shape.filter_lookup
+        self.assertIs(lookup.record_for(Document, 'named'), record)
+        self.assertIsNone(lookup.record_for(Document, 'missing'))
+        empty = FrozenConditionLookup(())
+        self.assertIsNone(empty.record_for(Document, 'named'))
+        with self.assertNumQueries(0):
+            compiled = lookup.compile_q(
+                Document, 'myapp.change_document:named', None,
+            )
+        self.assertIsNotNone(compiled)
+        self.assertEqual(len(called), 1)
+        with self.assertNumQueries(0):
+            with self.assertRaises(AttributeError):
+                empty.compile_q(Document, 'myapp.change_document:named', None)
 
 
 class AuthorizedQuerySetSurfaceTest(SimpleTestCase):
