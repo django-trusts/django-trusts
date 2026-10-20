@@ -26,7 +26,8 @@ from trusts.conditions import (
     permission_has_condition,
 )
 from trusts.plan.conditions import ConditionRecord, RegistryConditionLookup
-from trusts.core import TrustsConfigurationError, RegistryFactory
+from trusts.compile.factory import RegistryFactory
+from trusts.errors import TrustsConfigurationError
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -186,54 +187,53 @@ class ImportOrderStandaloneConstructionTest(SimpleTestCase):
         )
         return result.stdout
 
-    def test_import_core_then_construct_does_not_preload_ir(self):
+    def test_import_factory_then_construct_does_not_preload_ir(self):
         stdout = self._run_isolated(
             'import sys\n'
-            'import trusts.core\n'
+            'import trusts.compile.factory\n'
             'assert "trusts.conditions._ir" not in sys.modules\n'
             'assert "trusts.plan.conditions" not in sys.modules\n'
-            'registry = trusts.core.RegistryFactory()\n'
+            'registry = trusts.compile.factory.RegistryFactory()\n'
             'assert "trusts.plan.conditions" in sys.modules\n'
             'assert "trusts.conditions._ir" not in sys.modules\n'
             'lookup = registry.condition_lookup\n'
             'assert lookup is not None\n'
             'assert lookup.conditions is registry.conditions\n'
-            'print("core-then-construct-ok")\n'
+            'print("factory-then-construct-ok")\n'
         )
-        self.assertIn('core-then-construct-ok', stdout)
+        self.assertIn('factory-then-construct-ok', stdout)
 
-    def test_apps_registers_meta_option_without_loading_core_or_ir(self):
+    def test_apps_registers_meta_option_without_loading_ir(self):
         stdout = self._run_isolated(
             'import sys\n'
             'import trusts.apps\n'
             'from django.db.models import options as model_options\n'
             'assert "permission_conditions" in model_options.DEFAULT_NAMES\n'
-            'assert "trusts.core" not in sys.modules\n'
             'assert "trusts.conditions._ir" not in sys.modules\n'
             'assert "trusts.plan.conditions" not in sys.modules\n'
             'print("apps-option-ok")\n'
         )
         self.assertIn('apps-option-ok', stdout)
 
-    def test_rewrites_do_not_import_core(self):
+    def test_rewrites_import_does_not_load_the_factory(self):
         source = (ROOT / 'trusts' / 'plan' / 'rewrites.py').read_text()
-        self.assertNotIn('trusts.core', source)
+        self.assertNotIn('trusts.compile.factory', source)
         stdout = self._run_isolated(
             'import sys\n'
             'import trusts.plan.rewrites\n'
-            'assert "trusts.core" not in sys.modules\n'
+            'assert "trusts.compile.factory" not in sys.modules\n'
             'from trusts.plan.rewrites import bind_once\n'
             'assert bind_once is trusts.plan.rewrites.bind_once\n'
-            'assert "trusts.core" not in sys.modules\n'
-            'print("rewrites-without-core")\n'
+            'assert "trusts.compile.factory" not in sys.modules\n'
+            'print("rewrites-without-factory")\n'
         )
-        self.assertIn('rewrites-without-core', stdout)
+        self.assertIn('rewrites-without-factory', stdout)
 
     def test_import_ir_then_construct_is_not_circular(self):
         stdout = self._run_isolated(
             'import trusts.plan.conditions\n'
-            'import trusts.core\n'
-            'registry = trusts.core.RegistryFactory()\n'
+            'import trusts.compile.factory\n'
+            'registry = trusts.compile.factory.RegistryFactory()\n'
             'lookup = registry.condition_lookup\n'
             'assert isinstance(\n'
             '    lookup, trusts.plan.conditions.RegistryConditionLookup,\n'

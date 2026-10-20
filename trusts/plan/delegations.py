@@ -3,8 +3,7 @@
 One home for whether an ordinary sponsor record can satisfy a
 delegation, and for the sponsor-rule eligibility and row condition
 every delegation query shape ANDs on. Callers keep their own reach
-and sponsor SQL. This module does not import ``trusts.core`` or
-``trusts.compile``.
+and sponsor SQL. This module does not import ``trusts.compile``.
 """
 
 __all__ = []

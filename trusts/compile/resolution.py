@@ -3,8 +3,8 @@
 Metadata only: Django ``_meta`` and path info, no SQL. The shared
 ``_meta`` helpers used by both compile and plan live in
 ``trusts.commons``; the registration resolvers that need registry-shaped
-validation stay here. This module does not import ``trusts.core``,
-``trusts.compile.factory``, or ``trusts.plan``.
+validation stay here. This module does not import
+``trusts.compile.factory`` or ``trusts.plan``.
 """
 
 __all__ = []

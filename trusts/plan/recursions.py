@@ -1,8 +1,7 @@
 """Recursive reach expressions.
 
 ``GrantReach``, ``_IdentInReach``, ``_KeyedReach``,
-``_AnchorInInverseReach``, and ``_PrefixInForwardWalk``. Not a public
-import surface. ``trusts.core`` does not re-export them.
+``_AnchorInInverseReach``, and ``_PrefixInForwardWalk``.
 """
 
 __all__ = []

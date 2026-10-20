@@ -4,8 +4,7 @@
 lowered rows. Its ``build_*`` methods return the lowered shapes without
 storing them; the ``register*`` methods own duplicate and
 rule checks and append those shapes. ``build_registry`` builds the
-query-time ``Registry`` from stored values. ``trusts.core`` re-exports
-``TrustsRegistry``. This module does not import ``trusts.core``.
+query-time ``Registry`` from stored values.
 """
 
 __all__ = []

@@ -2,9 +2,9 @@
 
 Records, delegations, the named-filter condition store, stored user
 conditions, and the user override are passed in as data, all at once.
-Builders and model helpers are imported directly here; this module
-does not import ``trusts.core`` or ``trusts.compile``. Object methods
-take the runtime user, content, and permission.
+Builders and model helpers are imported directly here. This module
+does not import ``trusts.compile``. Object methods take the runtime
+user, content, and permission.
 """
 
 __all__ = []

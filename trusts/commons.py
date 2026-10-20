@@ -3,8 +3,7 @@
 The path helpers below are pure Django ``_meta`` math (models, strings,
 and values only; no registry or plan/compile types), shared by compile
 and plan. Walk execution lives in ``trusts.plan.walk``. This module does
-not import ``plan`` or ``compile``. ``trusts.core`` re-exports the names
-defined here.
+not import ``plan`` or ``compile``.
 """
 
 __all__ = []

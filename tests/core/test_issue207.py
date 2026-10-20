@@ -53,8 +53,6 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
 
     def test_register_relationship_is_absent(self):
         handle = _handle()
-        import trusts.core as core
-        self.assertFalse(hasattr(core, 'BackendHandle'))
         self.assertFalse(hasattr(handle, 'register_relationship'))
         self.assertTrue(callable(handle.register_public))
         self.assertFalse(hasattr(handle, 'register_ordered_fold'))
@@ -111,7 +109,7 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         self.assertIn('get_registry().register', pyright)
         self.assertIn('condition=', pyright)
         self.assertIn('t.team == t.document', pyright)
-        self.assertNotIn('from trusts.core import BackendHandle', pyright)
+        self.assertNotIn('import BackendHandle', pyright)
 
     def test_keyword_only_signature(self):
         signature = inspect.signature(RegistryFactory.register_public)

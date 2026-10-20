@@ -3,8 +3,6 @@
 Category ``.permitted()`` runtime stays on Zero ``tests/legacy/``.
 """
 
-import types
-
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
@@ -56,39 +54,11 @@ class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertIsNot(isolated, live)
         self.assertEqual(isolated.records, ())
 
-    def test_core_module_has_no_historical_import_or_global(self):
-        import trusts.core as core
-
-        forbidden = {
-            'Trust',
-            'Content',
-            'Junction',
-            'TrustUserPermission',
-            'TrustGroupPermission',
-            'Group',
-            'Role',
-            'Category',
-        }
-        self.assertFalse(forbidden.intersection(vars(core)))
-        imported = {
-            value.__name__
-            for value in vars(core).values()
-            if isinstance(value, types.ModuleType)
-        }
-        self.assertTrue(
-            all(
-                name == 'trusts.core' or not name.startswith('trusts.')
-                for name in imported
-            ),
-            imported,
-        )
-
     def test_trusts_does_not_import_or_discover_tests_category(self):
         import trusts.apps as trusts_apps
-        import trusts.core as core
         import trusts.models as trusts_models
 
-        for module in (trusts_apps, core, trusts_models):
+        for module in (trusts_apps, trusts_models):
             self.assertNotIn('Category', vars(module))
             self.assertNotIn('Ticket', vars(module))
 

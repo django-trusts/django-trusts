@@ -2,8 +2,7 @@
 
 ``RegistryFactory`` stays the registration front end. ``Registry``
 takes records, delegations, the shared condition store, stored user
-conditions, and the user override as data. It does not import
-``trusts.core``. Core re-exports it as ``_FrozenRegistry``.
+conditions, and the user override as data.
 """
 
 import ast
@@ -16,12 +15,9 @@ from django.db import connection, models
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
-from trusts.compile.nodes import Along
+from trusts.compile.factory import RegistryFactory
+from trusts.compile.nodes import Along, Ref
 from trusts.plan.recursions import GrantReach
-from trusts.core import (
-    Ref,
-    RegistryFactory,
-)
 from trusts.plan.registry import Registry
 
 
@@ -44,31 +40,21 @@ def _built_from(registry):
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class RegistryInjectionSpikeTest(SimpleTestCase):
-    def test_module_does_not_import_core_or_compile(self):
-        import trusts.compile.factory as factory_module
-        import trusts.core as core
+    def test_registry_module_does_not_import_compile(self):
         import trusts.plan.registry as registry_module
 
-        for module in (registry_module, factory_module):
-            tree = ast.parse(Path(module.__file__).read_text())
-            imported = []
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    imported.extend(alias.name for alias in node.names)
-                elif isinstance(node, ast.ImportFrom) and node.module:
-                    imported.append(node.module)
-            for name in imported:
-                self.assertFalse(
-                    name == 'trusts.core' or name.startswith('trusts.core.'),
-                    '%s imports %s' % (module.__name__, name),
-                )
-                if module is registry_module:
-                    self.assertFalse(
-                        name == 'trusts.compile'
-                        or name.startswith('trusts.compile.'),
-                        name,
-                    )
-        self.assertIs(core._FrozenRegistry, Registry)
+        tree = ast.parse(Path(registry_module.__file__).read_text())
+        imported = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.append(node.module)
+        for name in imported:
+            self.assertFalse(
+                name == 'trusts.compile' or name.startswith('trusts.compile.'),
+                name,
+            )
         self.assertTrue(registry_module.__file__.endswith('registry.py'))
 
     def test_direct_trusts_registry_still_registers(self):

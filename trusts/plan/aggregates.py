@@ -2,8 +2,8 @@
 
 These combine several registries. Single-registry grants stay in
 ``trusts.plan.contents``. This module may import other ``plan`` modules,
-``commons``, and ``errors``. It does not import ``trusts.core``,
-``trusts.compile``, ``trusts.backends``, or ``trusts.apps``.
+``commons``, and ``errors``. It does not import ``trusts.compile``,
+``trusts.backends``, or ``trusts.apps``.
 """
 
 __all__ = []

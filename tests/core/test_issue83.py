@@ -5,7 +5,6 @@ Group/Junction contribution, and no deletion of legacy registry
 machinery. Structural and behavioral tests only — no source-token or
 ``inspect.getsource`` assertions.
 """
-import types
 from contextlib import contextmanager
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -450,13 +449,6 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
         registry.register(content=j.folder.rows.content, user=j.user, permission=j.permission)
         with self.assertRaises(TrustsConfigurationError):
             registry.register(content=j.folder.rows.content, user=j.user, permission=j.permission)
-
-    def test_core_module_has_no_historical_import_or_global(self):
-        import trusts.core as core
-        forbidden = {'Trust', 'Content', 'Junction', 'Receipt', 'TrustUserPermission', 'TrustGroupPermission', 'Group', 'Role'}
-        self.assertFalse(forbidden.intersection(vars(core)))
-        imported = {value.__name__ for value in vars(core).values() if isinstance(value, types.ModuleType)}
-        self.assertTrue(all((name == 'trusts.core' or not name.startswith('trusts.') for name in imported)), imported)
 
 class _TerminalProjectionMixin(object):
     """Shared object / queryset / enumeration / all-match assertions."""

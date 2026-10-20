@@ -5,7 +5,6 @@ authorization, and authorized-content filtering. Ordinary test-only
 models; no historical Trusts types required.
 """
 
-import types
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -517,55 +516,6 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         import trusts
         self.assertIsNone(getattr(trusts, 'TrustsRegistry', None))
         self.assertIsNone(getattr(trusts, 'RelationPlan', None))
-
-    def test_core_module_has_no_historical_import_or_global(self):
-        import trusts.core as core
-
-        forbidden = {
-            'Trust',
-            'Content',
-            'Junction',
-            'TrustUserPermission',
-            'TrustGroupPermission',
-            'Group',
-            'Role',
-        }
-        self.assertFalse(forbidden.intersection(vars(core)))
-
-        imported = {
-            value.__name__
-            for value in vars(core).values()
-            if isinstance(value, types.ModuleType)
-        }
-        allowed_trusts_modules = {
-            'trusts.core', 'trusts.errors',
-            'trusts.plan.rewrites', 'trusts.compile.factory',
-            'trusts.compile.nodes',
-            'trusts.compile.paths',             'trusts.compile.visitors',
-            'trusts.commons',
-            'trusts.plan.contents',
-            'trusts.plan.relations',
-            'trusts.plan.recursions',
-            'trusts.plan.handles',
-            'trusts.plan.registry',
-            'trusts.plan.standards',
-            'trusts.plan.aggregates',
-        }
-        self.assertTrue(
-            all(
-                name in allowed_trusts_modules or not name.startswith('trusts.')
-                for name in imported
-            ),
-            imported,
-        )
-        for value in vars(core).values():
-            module = getattr(value, '__module__', None)
-            if isinstance(module, str):
-                self.assertFalse(
-                    module.startswith('trusts.')
-                    and module not in allowed_trusts_modules,
-                    module,
-                )
 
     def test_instances_are_isolated(self):
         left = self._registry()

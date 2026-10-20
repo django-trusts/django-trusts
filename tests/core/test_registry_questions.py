@@ -21,7 +21,7 @@ from django.test.utils import isolate_apps
 from tests.core.test_issue282 import _tables
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.compile.factory import RegistryFactory
-from trusts.core import Ref
+from trusts.compile.nodes import Ref
 from trusts.plan.aggregates import _compile_common_permissions, instance_match
 from trusts.plan.contents import _compile_granted
 from trusts.plan.registry import Question

@@ -11,8 +11,10 @@ from django.db import connection, models
 from django.db.models.query import QuerySet
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
-from trusts.compile.nodes import permission_in
-from trusts.core import All, Equal, PermissionIn, PlanQueryCompiler, Ref, TrustsConfigurationError, RegistryFactory
+from trusts.compile.factory import RegistryFactory
+from trusts.compile.nodes import All, Equal, PermissionIn, Ref, permission_in
+from trusts.errors import TrustsConfigurationError
+from trusts.plan.relations import PlanQueryCompiler
 from trusts.query import AuthorizedManager
 from tests.apps import listed_relationship, built_registries
 
@@ -95,8 +97,7 @@ def _tables(*model_classes):
 
 def _register_team(registry, grant):
     """Accepted GH team spelling. Do not change this registration."""
-    from trusts.compile.nodes import permission_in
-    from trusts.core import All, Equal, Ref
+    from trusts.compile.nodes import All, Equal, Ref, permission_in
     t = Ref(grant)
     return registry.register(content=t.repository, user=t.team.members, permission=t.operation, condition=All(permission_in(t.team.permission_bundles.operations), Equal(t.team.organization, t.repository.organization)))
 
@@ -154,13 +155,6 @@ def _register_site_grant(registry, grant):
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ClosedPredicateRegistrationTest(TestCase):
-
-    def test_core_exports_closed_predicate_nodes(self):
-        import trusts.core as core
-        self.assertTrue(hasattr(core, 'All'))
-        self.assertTrue(hasattr(core, 'Equal'))
-        self.assertTrue(hasattr(core, 'permission_in'))
-        self.assertIs(permission_in, PermissionIn)
 
     def test_accepted_gh_team_mapping_registers_with_zero_sql(self):
         _Account, _Organization, _Team, _Operation, _Bundle, Repository, TeamRepoGrant, _Direct = _gh_models()

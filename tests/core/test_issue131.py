@@ -31,8 +31,6 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
 
     def test_register_is_the_public_donation_verb(self):
         handle = _handle()
-        import trusts.core as core
-        self.assertFalse(hasattr(core, 'BackendHandle'))
         self.assertTrue(callable(handle.register))
         self.assertTrue(callable(handle.register_public))
         self.assertTrue(callable(handle.register_permission_condition))
@@ -182,8 +180,6 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
         self.assertFalse(hasattr(backend, 'register_relationship'))
         self.assertFalse(hasattr(backend, 'register_ordered_fold'))
         self.assertFalse(hasattr(backend, 'register_strategy'))
-        import trusts.core as core
-        self.assertFalse(hasattr(core, 'BackendHandle'))
 
     def test_register_matches_internal_ref_record(self):
         via_ref = RegistryFactory()

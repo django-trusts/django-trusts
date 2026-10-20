@@ -57,7 +57,6 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertNotIn('family-local OR', rst)
         self.assertNotIn('Until the OrderedFold engine leaves Core', rst)
         self.assertNotIn('strategy=OrderedFold', rst)
-        self.assertNotIn('from trusts.core import Ref', rst)
         self.assertNotIn('.registry.register(', rst)
         self.assertIn('o.confidential != True', rst)
         self.assertIn('confidential = models.BooleanField(default=False)', rst)
