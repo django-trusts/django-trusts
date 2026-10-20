@@ -7,7 +7,7 @@ from django.core.exceptions import PermissionDenied
 from django.http import HttpRequest
 from django.test import SimpleTestCase, TestCase, override_settings
 import tests as tests_module
-from tests.apps import live_config, override_apps_ready, built_registries, as_catalog
+from tests.apps import live_config, override_apps_ready, built_registries
 from tests.backends import MixinOnlyBackend
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
@@ -26,6 +26,7 @@ from trusts.plan.registry import Registry
 from trusts.plan.contents import granted
 from trusts.plan.aggregates import _compiler_applies, common_permissions
 from trusts.decorators import _declared_authorization_guards, authorization_required
+from trusts.compile.catalogs import Catalog
 HOST = HOST_BACKEND
 DOCUMENT = DOCUMENT_BACKEND
 MIXIN = 'tests.backends.MixinOnlyBackend'
@@ -130,7 +131,6 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         self.fold_handle.register_public(trust=DocumentAltGrant, user='user', permission='permission', content='document')
         self.fold_owner = _bind(FoldFamilyConfig, ready=False)
         from tests.backends import MixinOnlyBackend
-        from trusts.compile.catalogs import Catalog
         self._saved_fold_catalog = catalogs.get(MixinOnlyBackend)
         built_fold = self.fold_registry.build_registry()
         catalogs[MixinOnlyBackend] = Catalog(cls=MixinOnlyBackend, path=MIXIN, family='ordered_fold', registry=built_fold)
@@ -248,7 +248,7 @@ class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         from trusts.compile.nodes import Ref
         j = Ref(DocumentGrant)
         isolated.register(content=j.document, user=j.user, permission=j.permission)
-        self.assertEqual(as_catalog(isolated).records, isolated.records)
+        self.assertEqual(Catalog(cls=type(isolated), path=isolated.path, family=isolated.family, registry=isolated.build_registry()).records, isolated.records)
         published = catalogs[HostTrustModelBackend]
         self.assertIsInstance(published.records, tuple)
 

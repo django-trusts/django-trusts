@@ -26,7 +26,8 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.apps import render_configured_policy, listed_relationship, built_registries, as_catalog
+from tests.apps import render_configured_policy, listed_relationship, built_registries
+from trusts.compile.catalogs import Catalog
 
 
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
@@ -34,7 +35,6 @@ class _ListedBackend(TrustModelBackendMixin, ModelBackend):
 
 def _seal_factory(backend_cls, factory):
     from trusts.backends import catalogs
-    from trusts.compile.catalogs import Catalog
     built = factory.build_registry()
     catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built)
 
@@ -461,7 +461,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         self._assert_unique(rows, [self.spec])
         self._assert_unique(self._authorized(handle, self.alice, self.change), [self.spec])
         self._assert_unique(self._authorized(handle, self.bob, self.delete), [])
-        enumerated = list(as_catalog(handle).permissions_for(self.alice, self.spec))
+        enumerated = list(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).permissions_for(self.alice, self.spec))
         self.assertEqual({_code(row) for row in enumerated}, {self.read_code, self.change_code})
         self.assertEqual(len(enumerated), 2)
 

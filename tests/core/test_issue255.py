@@ -33,7 +33,8 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _compile_queryset, _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import PermittedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.apps import render_configured_policy, built_registries, as_catalog
+from tests.apps import render_configured_policy, built_registries
+from trusts.compile.catalogs import Catalog
 
 HOST = 'tests.backends.HostTrustModelBackend'
 MODEL_BACKEND = 'django.contrib.auth.backends.ModelBackend'
@@ -186,7 +187,6 @@ def _seal_document_factory(factory):
     """This test filled ``factory``. Pass that built registry into Catalog."""
     from tests.myapp.backends import DocumentBackend
     from trusts.backends import catalogs
-    from trusts.compile.catalogs import Catalog
     previous = catalogs.get(DocumentBackend)
     family = DocumentBackend.family if previous is None else previous.family
     built = factory.build_registry()
@@ -331,7 +331,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
                 app_label = 'documents'
         handle = _export_handle('documents.backends.UuidNodeBackend')
         handle.register_public(trust=UuidNodeGrant, user='user', permission='permission', content='node', along=('node__parent', 2))
-        record = as_catalog(handle).plan_for(UuidNode).records[0]
+        record = Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).plan_for(UuidNode).records[0]
         self.assertEqual(record.content_target, 'ident')
         self.assertNotEqual(record.content_target, UuidNode._meta.pk.attname)
         self.assertEqual(record.along.walk_ident, 'ident')
@@ -350,7 +350,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
     def test_content_pk_literal_stays_const_beside_an_along_reverse(self):
         handle = _export_handle('documents.backends.LiteralFolderBackend')
         handle.register_public(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
-        record = as_catalog(handle).plan_for(Folder).records[0]
+        record = Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).plan_for(Folder).records[0]
         _sql, params = _compile_queryset(FolderGrant.objects.filter(folder__pk=5), 'default', record=record, expr=None, records=(record,), reverse_users=True)
         self.assertEqual(params, [{'const': 5, 'hint': 'id'}])
         document = _load_policy_sql_document(render_configured_policy(handle))

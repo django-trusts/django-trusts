@@ -21,7 +21,8 @@ from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
-from tests.apps import built_registries, as_catalog
+from tests.apps import built_registries
+from trusts.compile.catalogs import Catalog
 
 
 def _j1_models():
@@ -282,9 +283,9 @@ class _SplitCompiler(object):
 
     def group_exists(self, plan, candidates, user, permission):
         if isinstance(permission, models.Model):
-            group_plan = as_catalog(self.group_registry).plan_for(candidates, user=user, permission=permission)
+            group_plan = Catalog(cls=type(self.group_registry), path=self.group_registry.path, family=self.group_registry.family, registry=self.group_registry.build_registry()).plan_for(candidates, user=user, permission=permission)
         else:
-            group_plan = as_catalog(self.group_registry).plan_for(candidates, user=user)
+            group_plan = Catalog(cls=type(self.group_registry), path=self.group_registry.path, family=self.group_registry.family, registry=self.group_registry.build_registry()).plan_for(candidates, user=user)
         if not group_plan.records:
             return None
         return group_plan.content_exists(user, permission)
@@ -320,7 +321,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
         j = Ref(FolderGrant)
         record = registry.register(content=j.folder.rows.content, user=j.user, permission=j.permission)
         _assert_record(self, record, root=FolderGrant, path=('folder', 'rows', 'content'), model=Payload, lookup='folder__rows__content')
-        self.assertEqual(as_catalog(registry).plan_for(Payload).records, (record,))
+        self.assertEqual(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(Payload).records, (record,))
         self.assertEqual(registry.records, (record,))
         _assert_no_historical_names(Folder, Payload, Row, FolderGrant)
 
@@ -349,8 +350,8 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
         depth2 = registry.register(content=j.holder.items.image.image, user=j.user, permission=j.permission)
         _assert_record(self, depth1, root=Grant, path=('holder', 'items', 'image'), model=Image, lookup='holder__items__image')
         _assert_record(self, depth2, root=Grant, path=('holder', 'items', 'image', 'image'), model=ImageMeta, lookup='holder__items__image__image')
-        self.assertEqual(as_catalog(registry).plan_for(Image).records, (depth1,))
-        self.assertEqual(as_catalog(registry).plan_for(ImageMeta).records, (depth2,))
+        self.assertEqual(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(Image).records, (depth1,))
+        self.assertEqual(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(ImageMeta).records, (depth2,))
 
     def test_d2_registers_both_documented_depths(self):
         self._assert_both_dependent_depths(_d2_models)
@@ -467,8 +468,8 @@ class _TerminalProjectionMixin(object):
         self.assertFalse(registry.build_registry().has_permission(self.alice, granted, self.write))
         self.assertFalse(registry.build_registry().has_permission(self.bob, granted, self.read))
         self.assertFalse(registry.build_registry().has_permission(self.alice, other, self.read))
-        self.assertEqual(_pks(as_catalog(registry).permissions_for(self.alice, granted)), {self.read.pk})
-        self.assertEqual(_pks(as_catalog(registry).permissions_for(self.alice, other)), {self.write.pk})
+        self.assertEqual(_pks(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(self.alice, granted)), {self.read.pk})
+        self.assertEqual(_pks(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(self.alice, other)), {self.write.pk})
         expected = [granted, sibling]
         qs = registry.build_registry().filter_authorized(Model.objects.order_by('pk'), self.alice, self.read)
         self.assertIsInstance(qs, QuerySet)
@@ -491,7 +492,7 @@ class _TerminalProjectionMixin(object):
         group_only = common_permissions(built_registries((handle,)), granted_qs, self.alice, kind='group')
         self.assertIsInstance(group_only, QuerySet)
         self.assertEqual(list(group_only), [])
-        plan = as_catalog(registry).plan_for(granted, user=self.alice, permission=self.read)
+        plan = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(granted, user=self.alice, permission=self.read)
         with self.assertNumQueries(1):
             self.assertEqual(_pks(plan.common_permissions(self.alice, granted)), {self.read.pk})
         with self.assertNumQueries(1):

@@ -17,7 +17,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.backends import ModelBackend
 from django.test import SimpleTestCase, TestCase, override_settings
 from tests.apps import (
-    as_catalog, configured_catalog, empty_catalogs, live_config,
+    configured_catalog, empty_catalogs, live_config,
     override_apps_ready, sweep_listed_backends,
 )
 from tests.core import KernelHostRequiredMixin
@@ -31,6 +31,7 @@ from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.backends import TrustModelBackendMixin
 from trusts.compile.factory import RegistryFactory
+from trusts.compile.catalogs import Catalog
 HOST = HOST_BACKEND
 DOCUMENT = DOCUMENT_BACKEND
 MIXIN = 'tests.backends.MixinOnlyBackend'
@@ -50,12 +51,12 @@ class StandaloneIndependenceTest(SimpleTestCase):
         self.assertTrue(apps.ready)
         first = RegistryFactory()
         second = RegistryFactory()
-        self.assertEqual(as_catalog(first).records, ())
+        self.assertEqual(Catalog(cls=type(first), path=first.path, family=first.family, registry=first.build_registry()).records, ())
         _contribute_document(second)
-        self.assertEqual(len(as_catalog(second).plan_for(Document).records), 1)
+        self.assertEqual(len(Catalog(cls=type(second), path=second.path, family=second.family, registry=second.build_registry()).plan_for(Document).records), 1)
         _contribute_document(first)
         self.assertEqual(len(first.records), 1)
-        self.assertEqual(as_catalog(first).records, first.records)
+        self.assertEqual(Catalog(cls=type(first), path=first.path, family=first.family, registry=first.build_registry()).records, first.records)
         self.assertIsNot(first.records[0], second.records[0])
 
     def test_build_is_repeatable_and_register_does_not_inspect_apps_ready(self):
@@ -72,7 +73,7 @@ class StandaloneIndependenceTest(SimpleTestCase):
             with self.assertRaises(TrustsConfigurationError):
                 registry.register(content=Ref(DocumentGrant).document, user=Ref(DocumentGrant).user, permission=Ref(DocumentGrant).permission)
         self.assertEqual(registry.records, before)
-        self.assertIs(as_catalog(registry).plan_for(Document).records[0], before[0])
+        self.assertIs(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(Document).records[0], before[0])
 
 class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
 
@@ -88,16 +89,16 @@ class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
                 registry.register(**kwargs)
             self.assertNotIn('frozen', str(ctx.exception).lower())
         self.assertEqual(registry.records, before)
-        self.assertEqual(len(as_catalog(registry).plan_for(Document).records), 1)
+        self.assertEqual(len(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(Document).records), 1)
 
 class BuiltPlanProjectionsTest(KernelHostRequiredMixin, TestCase):
 
     def test_built_plan_still_projects(self):
         registry = RegistryFactory()
         _contribute_document(registry)
-        before = as_catalog(registry).plan_for(Document)
+        before = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(Document)
         registry.build_registry()
-        plan = as_catalog(registry).plan_for(Document)
+        plan = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(Document)
         self.assertEqual(plan.records, before.records)
         user = get_user_model()(pk=1)
         permission = Permission(pk=1)
@@ -250,5 +251,5 @@ class HandleBuildRegistrySignalTest(SimpleTestCase):
         self.assertIsNot(first, second)
         self.assertEqual(first.records, ())
         _contribute_document(registry)
-        self.assertEqual(as_catalog(handle).records, registry.records)
+        self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).records, registry.records)
         self.assertEqual(first.records, ())

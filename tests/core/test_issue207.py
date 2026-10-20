@@ -28,7 +28,7 @@ from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
-from tests.apps import as_catalog
+from trusts.compile.catalogs import Catalog
 ROOT = Path(__file__).resolve().parents[2]
 
 def _handle(registry=None, path='tests.core.issue207'):
@@ -62,7 +62,7 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         handle = _handle()
         with self.assertRaises(TypeError):
             handle.register_public(DocumentGrant, user='user', permission='permission', content='document')
-        self.assertEqual(as_catalog(handle).records, ())
+        self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).records, ())
 
     def test_honest_contextual_typing_does_not_prove_attributes(self):
         hints = get_type_hints(RegistryFactory.register_public)
@@ -221,7 +221,7 @@ class RegisterNormalizeTest(SimpleTestCase):
         handle = _handle()
         with self.assertRaises(TrustsConfigurationError):
             handle.register_public(trust=TeamRepoGrant, user=lambda t: t.team.organization, permission=lambda t: t.operation, content=lambda t: t.repository)
-        self.assertEqual(as_catalog(handle).records, ())
+        self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).records, ())
 
 class RegisterOnceAtRegistrationTest(TestCase):
 
@@ -241,8 +241,8 @@ class RegisterOnceAtRegistrationTest(TestCase):
         ct = ContentType.objects.get_for_model(Document)
         perm, _created = Permission.objects.get_or_create(content_type=ct, codename='change_document', defaults={'name': 'Can change document'})
         DocumentGrant.objects.create(document=document, user=alice, permission=perm)
-        self.assertTrue(registry.build_registry().has_permission(alice, document, perm))
-        list(as_catalog(registry).permissions_for(alice, document))
+        self.assertTrue(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).has_perm(alice, '%s.%s' % (perm.content_type.app_label, perm.codename), document))
+        list(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(alice, document))
         list(registry.build_registry().filter_authorized(Document.objects.all(), alice, perm))
         self.assertEqual((user.calls, permission.calls, content.calls), (1, 1, 1))
         self.assertEqual(registry.records[0].user_path, ('user',))
@@ -268,14 +268,14 @@ class RegisterFailClosedTest(TestCase):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
                         handle.register_public(trust=DocumentGrant, user=builder, permission=lambda t: t.permission, content=lambda t: t.document)
-                self.assertEqual(as_catalog(handle).records, ())
+                self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).records, ())
 
     def test_failed_third_role_does_not_partially_mutate(self):
         handle = _handle()
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError):
                 handle.register_public(trust=DocumentGrant, user=lambda t: t.user, permission=lambda t: t.permission, content=lambda t: t.not_a_field)
-        self.assertEqual(as_catalog(handle).records, ())
+        self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).records, ())
 
     def test_register_after_build_invokes_builder(self):
         registry = RegistryFactory()
@@ -295,4 +295,4 @@ class RegisterFailClosedTest(TestCase):
         resolve.assert_called()
         validate.assert_called()
         self.assertEqual(registry.records, (record,))
-        self.assertEqual(as_catalog(registry).records, (record,))
+        self.assertEqual(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).records, (record,))
