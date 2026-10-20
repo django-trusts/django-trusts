@@ -57,7 +57,7 @@ from trusts.compile.resolution import (
 from trusts.errors import TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
-from trusts.compile.catalogs import Catalog, CatalogShape, plan_table
+from trusts.compile.catalogs import Catalog, CatalogShape, relation_plan
 from trusts.plan.conditions import (
     ConditionRegistry,
     Expr,
@@ -189,6 +189,37 @@ class PublicRegistration:
     sponsor: object | None = None
     condition: object | None = None
     along: object | None = None
+
+
+def plan_table(records, delegations, catalog_user, user_conditions,
+               user_rules, override_q):
+    """Selectable keys in first-seen order. ``None`` is the default plan."""
+    users, perms, order = {}, {}, []
+    observed = [
+        (record.content_model, record.user_model, record.permission_model)
+        for record in records]
+    observed.extend(
+        (record.content_model, record.delegate_model, None)
+        for record in delegations)
+    for content, user, perm in observed:
+        seen = users.get(content)
+        if seen is None:
+            order.append(content)
+            users[content] = seen = []
+            perms[content] = []
+        if user not in seen:
+            seen.append(user)
+        if perm is not None and perm not in perms[content]:
+            perms[content].append(perm)
+    table = {
+        (content, user, perm): relation_plan(
+            records, delegations, content, user, perm, catalog_user,
+            user_conditions, user_rules, override_q)
+        for content in order
+        for user in (None, *users[content])
+        for perm in (None, *perms[content])}
+    table[None] = relation_plan(records, delegations, None, None, None, catalog_user, user_conditions, user_rules, override_q)
+    return table
 
 
 class Compiler(object):
