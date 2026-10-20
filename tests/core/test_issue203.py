@@ -189,8 +189,8 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
                     fresh.register_permission_condition(self.Note, 'open', lambda u, p, o: o.title == Decimal('1.5'))
                 with self.assertRaises(PermissionConditionError):
                     fresh.register_permission_condition(self.Note, 'partial_203', lambda u, p, o: o.owner == self.Note.objects)
-                self.assertIsNone(fresh.get_permission_condition_record(self.Note, 'open'))
-                self.assertIsNone(fresh.get_permission_condition_record(self.Note, 'partial_203'))
+                self.assertIsNone(fresh.conditions.get_permission_condition_record(self.Note, 'open'))
+                self.assertIsNone(fresh.conditions.get_permission_condition_record(self.Note, 'partial_203'))
             self.assertEqual(len(log.calls), 1)
             with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, OPEN, opened))

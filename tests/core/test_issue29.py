@@ -80,14 +80,14 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         expr = u == o.not_a_field
         with self.assertRaises(TypeError):
             registry.register_permission_condition(Note, 'missing', expr)
-        self.assertIsNone(registry.get_permission_condition_record(Note, 'missing'))
+        self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'missing'))
         _store_expr(registry, Note, 'missing', expr)
-        record = registry.get_permission_condition_record(Note, 'missing')
+        record = registry.conditions.get_permission_condition_record(Note, 'missing')
         self.assertIs(record.expr, expr)
         self.assertIs(record.model, Note)
         errors = _messages_with_id(
             permission_condition_check_messages(
-                registry.iter_permission_conditions(),
+                registry.conditions.iter_permission_conditions(),
             ),
             CHECK_ID_INVALID_EXPR,
         )
@@ -106,7 +106,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         self.assertEqual(
             _messages_with_id(
                 permission_condition_check_messages(
-                    registry.iter_permission_conditions(),
+                    registry.conditions.iter_permission_conditions(),
                 ),
                 CHECK_ID_INVALID_EXPR,
             ),
@@ -118,7 +118,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         _store_expr(registry, Note, 'deferred_bad', bad)
         errors = _messages_with_id(
             permission_condition_check_messages(
-                registry.iter_permission_conditions(),
+                registry.conditions.iter_permission_conditions(),
             ),
             CHECK_ID_INVALID_EXPR,
         )
@@ -133,7 +133,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         _store_expr(registry, Note, 'types', o.status == 1)
         errors = _messages_with_id(
             permission_condition_check_messages(
-                registry.iter_permission_conditions(),
+                registry.conditions.iter_permission_conditions(),
             ),
             CHECK_ID_INVALID_EXPR,
         )
@@ -156,7 +156,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         self.assertEqual(o.source, 'object')
         self.assertFalse(hasattr(record, 'func'))
         messages = permission_condition_check_messages(
-            registry.iter_permission_conditions(),
+            registry.conditions.iter_permission_conditions(),
         )
         self.assertEqual(len(log.calls), 1)
         self.assertEqual(
@@ -174,7 +174,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         with self.assertRaises(PermissionConditionError) as boom:
             registry.register_permission_condition(Note, 'boom', exploding)
         self.assertIn('builder boom', str(boom.exception))
-        self.assertIsNone(registry.get_permission_condition_record(Note, 'boom'))
+        self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'boom'))
 
         with self.assertRaises(PermissionConditionError):
             registry.register_permission_condition(
@@ -219,7 +219,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         log = _BuilderLog()
         record = registry.register_permission_condition(Note, 'own', log)
         self.assertEqual(len(log.calls), 1)
-        self.assertIs(registry.get_permission_condition_record(Note, 'own'), record)
+        self.assertIs(registry.conditions.get_permission_condition_record(Note, 'own'), record)
 
 
 class ManagePyCheckLifecycleTest(SimpleTestCase):

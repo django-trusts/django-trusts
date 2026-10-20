@@ -333,7 +333,10 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
         image_rec = registry.register(content=j.holder.items.image, user=j.user, permission=j.permission)
         _assert_record(self, item_rec, root=Grant, path=('holder', 'items'), model=Item, lookup='holder__items')
         _assert_record(self, image_rec, root=Grant, path=('holder', 'items', 'image'), model=Image, lookup='holder__items__image')
-        self.assertEqual(registry.records_for_root(Grant), (item_rec, image_rec))
+        self.assertEqual(
+            tuple(row for row in registry.records if row.root is Grant),
+            (item_rec, image_rec),
+        )
 
     def test_d1o_registers_gateway_plus_reverse_o2o_suffix(self):
         _holder, _owner, _tag, _item, Image, _meta, _extra, _profile, Grant, _w, _wg = _d1o_models()

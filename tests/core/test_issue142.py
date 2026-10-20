@@ -110,7 +110,7 @@ class StageBRegisterCallableOnlyTest(SimpleTestCase):
         registry = RegistryFactory()
         with self.assertRaises(TypeError):
             registry.register_permission_condition(Note, 'own', u == o.owner)
-        self.assertIsNone(registry.get_permission_condition_record(Note, 'own'))
+        self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'own'))
         record = registry.register_permission_condition(
             Note, 'own', lambda u, p, o: u == o.owner,
         )

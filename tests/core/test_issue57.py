@@ -108,7 +108,10 @@ class TrustsRegistryTest(SimpleTestCase):
         self.assertEqual(record.content_target, Document._meta.pk.attname)
         self.assertEqual(record.user_target, User._meta.pk.attname)
         self.assertEqual(record.permission_target, Permission._meta.pk.attname)
-        self.assertEqual(registry.records_for_root(DocumentGrant), (record,))
+        self.assertEqual(
+            tuple(row for row in registry.records if row.root is DocumentGrant),
+            (record,),
+        )
         self.assertEqual(registry.records, (record,))
 
     def test_all_refs_share_the_same_root(self):
@@ -295,7 +298,10 @@ class TrustsRegistryTest(SimpleTestCase):
         with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
             _register(registry, DocumentGrant)
         self.assertEqual(registry.records, (first,))
-        self.assertEqual(registry.records_for_root(DocumentGrant), (first,))
+        self.assertEqual(
+            tuple(row for row in registry.records if row.root is DocumentGrant),
+            (first,),
+        )
 
         with self.assertRaisesRegex(TrustsConfigurationError, r'Conflicting'):
             _register(registry, DocumentGrant, content_attr='alt_document')

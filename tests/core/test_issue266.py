@@ -701,13 +701,6 @@ class DelegationRootGuardTest(TestCase):
         payload.update(extra)
         return handle.register_public(**payload)
 
-    def test_missing_root_lookup_fails_closed(self):
-        handle = _handle()
-        with self.assertNumQueries(0):
-            with self.assertRaisesRegex(TrustsConfigurationError, 'No delegated registration'):
-                handle.delegations_for_root(DocumentDelegation)
-        self.assertEqual(built_catalog(handle).delegations, ())
-
     def test_registry_after_build_accepts_delegation(self):
         handle = _handle()
         self.assertEqual(handle.delegations, ())
@@ -752,7 +745,9 @@ class DelegationRootGuardTest(TestCase):
         handle = _handle()
         self._register(handle)
         second = self._register(handle, content='delegate')
-        rows = handle.delegations_for_root(DocumentDelegation)
+        rows = tuple(
+            row for row in handle.delegations if row.root is DocumentDelegation
+        )
         self.assertEqual(rows, built_catalog(handle).delegations)
         self.assertEqual(len(rows), 2)
         self.assertIs(second.content_model, get_user_model())

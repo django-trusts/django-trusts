@@ -167,7 +167,7 @@ class ConditionGrammarTest(SimpleTestCase):
             registry.register_permission_condition(object, 'bad', 'not-a-condition')
         with self.assertRaises(TypeError):
             registry.register_permission_condition(object, 'expr', u == o.owner)
-        self.assertIsNone(registry.get_permission_condition_record(object, 'expr'))
+        self.assertIsNone(registry.conditions.get_permission_condition_record(object, 'expr'))
         with self.assertRaises(PermissionConditionError):
             registry.register_permission_condition(
                 object, 'truth', lambda u, p, o: True,
