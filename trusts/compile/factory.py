@@ -221,7 +221,7 @@ class RegistryFactory(object):
         self._rule_fragments = {}
         self._override_fragments = {}
         self.conditions = ConditionRegistry()
-        self.set_filter_lookup(RegistryConditionLookup(self))
+        self.set_filter_lookup(RegistryConditionLookup(self.conditions))
         self._explicit_compiler = compiler is not None
         self._compiler = compiler if self._explicit_compiler else PlanQueryCompiler()
         self.path = path

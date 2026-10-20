@@ -181,7 +181,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         registry = RegistryFactory()
         log = _BuilderLog()
         registry.register_permission_condition(Note, 'spy', log)
-        lookup = RegistryConditionLookup(registry)
+        lookup = RegistryConditionLookup(registry.conditions)
         self.assertIsInstance(lookup, ConditionLookup)
         registry.set_filter_lookup(lookup)
         self.assertIs(registry.filter_lookup, lookup)
