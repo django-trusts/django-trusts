@@ -52,6 +52,18 @@ _SILENCE_DOES_NOT_ENABLE_HINT = (
     'no fallback to the base grant.'
 )
 
+_E003_HINT = (
+    'Contribute an explicit AppConfig Ref on the intended exact backend '
+    'path. Silencing trusts.E003 suppresses only this diagnostic; it '
+    'never creates authorization.'
+)
+
+_E005_HINT = (
+    'Silencing this check ID suppresses only the early diagnostic. '
+    'GrantReach still fail-closes on the actual query connection; '
+    'there is no fallback grant.'
+)
+
 
 def _trusts_abstract_base(model, label):
     """Abstract base whose Django model label is ``label``."""
@@ -149,13 +161,6 @@ def check_query_compilers(app_configs, **kwargs):
                 id=CHECK_ID_MISSING_COMPILER,
             ))
     return messages
-
-
-_E003_HINT = (
-    'Contribute an explicit AppConfig Ref on the intended exact backend '
-    'path. Silencing trusts.E003 suppresses only this diagnostic; it '
-    'never creates authorization.'
-)
 
 
 def _is_concrete_model(model):
@@ -421,13 +426,6 @@ def check_permission_conditions(app_configs, **kwargs):
     return permission_condition_check_messages(
         iter_live_permission_conditions()
     )
-
-
-_E005_HINT = (
-    'Silencing this check ID suppresses only the early diagnostic. '
-    'GrantReach still fail-closes on the actual query connection; '
-    'there is no fallback grant.'
-)
 
 
 def _live_along_records():

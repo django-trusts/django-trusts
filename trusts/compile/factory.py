@@ -313,84 +313,6 @@ class RegistryFactory(object):
             return builtin_user_conditions(self.user_model)
         return tuple(self._user_conditions.values())
 
-    def _stored_user_conditions(self):
-        """``None`` when the registry still uses the built-in rule."""
-        if self._user_conditions is None:
-            return None
-        return tuple(self._user_conditions.values())
-
-    def _conditions_for_model(self, model):
-        """Conditions compiled for ``model``.
-
-        With no caller-set rules, the built-in ``is_active`` condition is
-        included only when ``model`` has that concrete boolean field.
-        A caller-set list is used as stored, including a replacement
-        ``is_active`` condition. Every inquiry uses this same list.
-        """
-        stored = self._stored_user_conditions()
-        if stored is not None:
-            return stored
-        return builtin_user_conditions(model)
-
-    def _rule_fragment(self, model, *, role, path=''):
-        """Registration-time ``(skip OR condition)`` for one model and role."""
-        model = model._meta.concrete_model
-        key = (model, role, path)
-        try:
-            return self._rule_fragments[key]
-        except KeyError:
-            compiled = compile_user_rules(
-                model, path, self._conditions_for_model(model),
-                role=role, values={},
-            )
-            self._rule_fragments[key] = compiled
-            return compiled
-
-    def _override_fragment(self, model):
-        """Registration-time ``(NOT skip AND override)`` for the checked user."""
-        model = model._meta.concrete_model
-        try:
-            return self._override_fragments[model]
-        except KeyError:
-            compiled = compile_override_q(
-                model, '', self._user_override, {},
-            )
-            self._override_fragments[model] = compiled
-            return compiled
-
-    def _clear_compiled_rules(self):
-        """Drop registration-time fragments after a successful rule edit."""
-        self._rule_fragments.clear()
-        self._override_fragments.clear()
-
-    def _compiled_subject(self, records, delegations, user_model):
-        if user_model is not None:
-            return user_model
-        models = {
-            record.user_model._meta.concrete_model for record in records
-        }
-        models.update(
-            record.delegate_model._meta.concrete_model
-            for record in delegations
-        )
-        if len(models) == 1:
-            return models.pop()
-        return None
-
-    def _require_user_model(self):
-        if self.user_model is None:
-            raise TrustsConfigurationError(
-                'RegistryFactory has no user model. Pass user_model '
-                'at construction.'
-            )
-
-    def _open_for_rules(self, kind):
-        if self._order or self._delegation_order:
-            raise TrustsConfigurationError(
-                'Record user conditions and the override before '
-                'register(). The catalog sweep checks this at ready().'
-            )
-
     def set_user_condition(self, name, expr, on='*'):
         """Set, replace, or remove one named user condition.
 
@@ -953,6 +875,106 @@ class RegistryFactory(object):
 
     _register_public = register_public
 
+    def build_registry(self):
+        """Build a query-time ``Registry`` from stored values.
+
+        Records, delegations, the shared condition store, stored user
+        conditions, the user override, and the bound condition lookup
+        are passed as data, all at once. No builders are injected.
+        """
+        registry = Registry(
+            records=self.records,
+            delegations=self.delegations,
+            conditions=self.conditions,
+            user_conditions=self._stored_user_conditions(),
+            user_override=self._user_override,
+            filter_lookup=self._filter_lookup,
+            compiler=self._compiler if self._explicit_compiler else None,
+            path=self.path or '',
+            family=self.family,
+            user_model=self.user_model,
+        )
+        self.frozen = True
+        return registry
+
+    def _stored_user_conditions(self):
+        """``None`` when the registry still uses the built-in rule."""
+        if self._user_conditions is None:
+            return None
+        return tuple(self._user_conditions.values())
+
+    def _conditions_for_model(self, model):
+        """Conditions compiled for ``model``.
+
+        With no caller-set rules, the built-in ``is_active`` condition is
+        included only when ``model`` has that concrete boolean field.
+        A caller-set list is used as stored, including a replacement
+        ``is_active`` condition. Every inquiry uses this same list.
+        """
+        stored = self._stored_user_conditions()
+        if stored is not None:
+            return stored
+        return builtin_user_conditions(model)
+
+    def _rule_fragment(self, model, *, role, path=''):
+        """Registration-time ``(skip OR condition)`` for one model and role."""
+        model = model._meta.concrete_model
+        key = (model, role, path)
+        try:
+            return self._rule_fragments[key]
+        except KeyError:
+            compiled = compile_user_rules(
+                model, path, self._conditions_for_model(model),
+                role=role, values={},
+            )
+            self._rule_fragments[key] = compiled
+            return compiled
+
+    def _override_fragment(self, model):
+        """Registration-time ``(NOT skip AND override)`` for the checked user."""
+        model = model._meta.concrete_model
+        try:
+            return self._override_fragments[model]
+        except KeyError:
+            compiled = compile_override_q(
+                model, '', self._user_override, {},
+            )
+            self._override_fragments[model] = compiled
+            return compiled
+
+    def _clear_compiled_rules(self):
+        """Drop registration-time fragments after a successful rule edit."""
+        self._rule_fragments.clear()
+        self._override_fragments.clear()
+
+    def _compiled_subject(self, records, delegations, user_model):
+        if user_model is not None:
+            return user_model
+        models = {
+            record.user_model._meta.concrete_model for record in records
+        }
+        models.update(
+            record.delegate_model._meta.concrete_model
+            for record in delegations
+        )
+        if len(models) == 1:
+            return models.pop()
+        return None
+
+    def _require_user_model(self):
+        if self.user_model is None:
+            raise TrustsConfigurationError(
+                'RegistryFactory has no user model. Pass user_model '
+                'at construction.'
+            )
+
+    def _open_for_rules(self, kind):
+        if self._order or self._delegation_order:
+            raise TrustsConfigurationError(
+                'Record user conditions and the override before '
+                'register(). The catalog sweep checks this at ready().'
+            )
+
     def _records_for(self, content_model, user_model=None, permission_model=None):
         chosen = []
         for record in self._order:
@@ -980,28 +1002,6 @@ class RegistryFactory(object):
                 continue
             chosen.append(record)
         return tuple(chosen)
-
-    def build_registry(self):
-        """Build a query-time ``Registry`` from stored values.
-
-        Records, delegations, the shared condition store, stored user
-        conditions, the user override, and the bound condition lookup
-        are passed as data, all at once. No builders are injected.
-        """
-        registry = Registry(
-            records=self.records,
-            delegations=self.delegations,
-            conditions=self.conditions,
-            user_conditions=self._stored_user_conditions(),
-            user_override=self._user_override,
-            filter_lookup=self._filter_lookup,
-            compiler=self._compiler if self._explicit_compiler else None,
-            path=self.path or '',
-            family=self.family,
-            user_model=self.user_model,
-        )
-        self.frozen = True
-        return registry
 
 
 def compile_recorder(recorder, *, path, family, compiler, user_model):

@@ -26,6 +26,14 @@ import trusts.plan.standards as standards
 _NO_PRESET = object()
 
 
+_BACKENDS_THAT_IGNORE_THE_OBJECT = (
+    'django.contrib.auth.backends.ModelBackend',
+    'django.contrib.auth.backends.AllowAllUsersModelBackend',
+    'django.contrib.auth.backends.RemoteUserBackend',
+    'django.contrib.auth.backends.AllowAllUsersRemoteUserBackend',
+)
+
+
 class Catalog(object):
     """Answers one backend class from the registry the sweep built.
 
@@ -256,104 +264,6 @@ class PreparedInquiry(object):
         return bool(self.qs.exists())
 
 
-def _content_model(obj):
-    return obj.model if isinstance(obj, QuerySet) else obj.__class__
-
-
-def _model_label(model):
-    meta = model._meta if isinstance(model, type) else getattr(model, '_meta', None)
-    if meta is None:
-        return model
-    return meta.label
-
-
-def _perm_codes(permission_qs):
-    return set(
-        '%s.%s' % (app, code)
-        for app, code in permission_qs.values_list(
-            'content_type__app_label', 'codename',
-        )
-    )
-
-
-def _plan_is_auth_permission(plan, sponsor_records=()):
-    """True when ``plan`` terminates on ``auth.Permission``."""
-    permission_model = plan.permission_model
-    if (
-        plan.records
-        and permission_model is not None
-        and permission_model._meta.concrete_model is Permission
-    ):
-        return True
-    for delegation in plan.delegations:
-        for ordinary in sponsor_records:
-            if not _sponsor_record_matches(ordinary, delegation):
-                continue
-            if ordinary.permission_model._meta.concrete_model is Permission:
-                return True
-    return False
-
-
-def _auth_permission_plan(registry, candidates, user):
-    """Applicable plan only when the permission terminal is auth.Permission."""
-    plan = registry.plan_for(candidates, user=user)
-    if not _plan_is_auth_permission(
-        plan, _ordinary_records(registry, candidates),
-    ):
-        return None
-    return plan
-
-
-def _auth_permission_plan_for_model(registry, model):
-    """Zero-SQL applicable auth.Permission plan for this content model."""
-    plan = registry.plan_for(model)
-    if not _plan_is_auth_permission(plan, _ordinary_records(registry, model)):
-        return None
-    return plan
-
-
-def _owns_selected_conditions(registry, model, conditions):
-    """True when every selected name is registered with a queryable expr."""
-    if not conditions:
-        return True
-    lookup = registry.filter_lookup
-    if lookup is None:
-        return False
-    for name in conditions:
-        record = lookup.record_for(model, name)
-        if record is None or record.expr is None:
-            return False
-    return True
-
-
-def _selected_condition_q(registry, model, permission, conditions, user, *, api):
-    """AND this registry's selected names, or None when any name is missing."""
-    lookup = registry.filter_lookup
-    if lookup is None:
-        return None
-    extra_q = None
-    for name in conditions:
-        record = lookup.record_for(model, name)
-        if record is None:
-            return None
-        if record.expr is None:
-            raise TrustsConfigurationError(
-                '%s condition %r on %s is unsupported.'
-                % (api, name, model._meta.label)
-            )
-        part = lookup.compile_q(model, '%s:%s' % (permission, name), user)
-        extra_q = part if extra_q is None else extra_q & part
-    return extra_q
-
-
-_BACKENDS_THAT_IGNORE_THE_OBJECT = (
-    'django.contrib.auth.backends.ModelBackend',
-    'django.contrib.auth.backends.AllowAllUsersModelBackend',
-    'django.contrib.auth.backends.RemoteUserBackend',
-    'django.contrib.auth.backends.AllowAllUsersRemoteUserBackend',
-)
-
-
 def relationship_catalogs():
     """Relationship catalogs from ``get_catalog()``, in listed-backend order."""
     return relationship_family(configured_catalogs())
@@ -524,6 +434,96 @@ def compile_permitted_users(content, perm, *, user_queryset=None, **skip_flags):
         for part in parts[1:]:
             combined |= part
     return bind_once(user_queryset.filter(combined).distinct())
+
+
+def _content_model(obj):
+    return obj.model if isinstance(obj, QuerySet) else obj.__class__
+
+
+def _model_label(model):
+    meta = model._meta if isinstance(model, type) else getattr(model, '_meta', None)
+    if meta is None:
+        return model
+    return meta.label
+
+
+def _perm_codes(permission_qs):
+    return set(
+        '%s.%s' % (app, code)
+        for app, code in permission_qs.values_list(
+            'content_type__app_label', 'codename',
+        )
+    )
+
+
+def _plan_is_auth_permission(plan, sponsor_records=()):
+    """True when ``plan`` terminates on ``auth.Permission``."""
+    permission_model = plan.permission_model
+    if (
+        plan.records
+        and permission_model is not None
+        and permission_model._meta.concrete_model is Permission
+    ):
+        return True
+    for delegation in plan.delegations:
+        for ordinary in sponsor_records:
+            if not _sponsor_record_matches(ordinary, delegation):
+                continue
+            if ordinary.permission_model._meta.concrete_model is Permission:
+                return True
+    return False
+
+
+def _auth_permission_plan(registry, candidates, user):
+    """Applicable plan only when the permission terminal is auth.Permission."""
+    plan = registry.plan_for(candidates, user=user)
+    if not _plan_is_auth_permission(
+        plan, _ordinary_records(registry, candidates),
+    ):
+        return None
+    return plan
+
+
+def _auth_permission_plan_for_model(registry, model):
+    """Zero-SQL applicable auth.Permission plan for this content model."""
+    plan = registry.plan_for(model)
+    if not _plan_is_auth_permission(plan, _ordinary_records(registry, model)):
+        return None
+    return plan
+
+
+def _owns_selected_conditions(registry, model, conditions):
+    """True when every selected name is registered with a queryable expr."""
+    if not conditions:
+        return True
+    lookup = registry.filter_lookup
+    if lookup is None:
+        return False
+    for name in conditions:
+        record = lookup.record_for(model, name)
+        if record is None or record.expr is None:
+            return False
+    return True
+
+
+def _selected_condition_q(registry, model, permission, conditions, user, *, api):
+    """AND this registry's selected names, or None when any name is missing."""
+    lookup = registry.filter_lookup
+    if lookup is None:
+        return None
+    extra_q = None
+    for name in conditions:
+        record = lookup.record_for(model, name)
+        if record is None:
+            return None
+        if record.expr is None:
+            raise TrustsConfigurationError(
+                '%s condition %r on %s is unsupported.'
+                % (api, name, model._meta.label)
+            )
+        part = lookup.compile_q(model, '%s:%s' % (permission, name), user)
+        extra_q = part if extra_q is None else extra_q & part
+    return extra_q
 
 
 def _require_saved_content(content):
