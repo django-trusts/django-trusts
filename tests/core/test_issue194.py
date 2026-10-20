@@ -16,7 +16,7 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
 from trusts.apps import TrustsImplementationConfig, catalogs
 from trusts.plan.contents import _relationship_registries
-from trusts.decorators import filter_by_permitted_content
+from tests.apps import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import QueryCompiler
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError

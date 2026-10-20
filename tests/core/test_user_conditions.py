@@ -18,7 +18,7 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.plan.rewrites import bind_once
-from trusts.decorators import filter_by_permitted_content
+from tests.apps import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError

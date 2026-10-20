@@ -477,7 +477,7 @@ class Registry(object):
                 current = related
         return tuple(found)
 
-    def _question_permitted(self, content_model, user, permission, *,
+    def _question_content_grant(self, content_model, user, permission, *,
                             family_registries=()):
         return self.filter_authorized(
             content_model._meta.concrete_model._default_manager.all(),
@@ -497,7 +497,7 @@ class Registry(object):
             Question(
                 'permitted', content_model, records, delegations,
                 partial(
-                    self._question_permitted, content_model,
+                    self._question_content_grant, content_model,
                     family_registries=family_registries,
                 ),
             ),

@@ -62,7 +62,6 @@ from django.db.models import (
 )
 from django.db.models.fields import GenericIPAddressField
 
-from trusts._meta_options import _ensure_permission_conditions_option
 from trusts.apps import user_model
 from trusts.errors import (
     PermissionConditionBooleanError,
@@ -72,8 +71,6 @@ from trusts.errors import (
 )
 from trusts.plan.relations import ConditionLookup
 from trusts.utils import parse_perm_code
-
-_ensure_permission_conditions_option()
 
 
 def permission_has_condition(perm):

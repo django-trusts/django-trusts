@@ -47,6 +47,34 @@ def built_registries(items):
     return tuple(built)
 
 
+def scoped_permitted_content(queryset, user, permission, *, content,
+                             registries, **skip_flags):
+    """Prefix filter for one explicit registry in a unit test.
+
+    The public filter walks ``get_catalog()`` and takes no registry
+    argument. This helper is the direct registry question.
+    """
+    from trusts.commons import _require_instance
+
+    user = _require_instance(user, 'user')
+    permission = _require_instance(permission, 'permission')
+    parts = []
+    for registry in built_registries(registries) or ():
+        if registry.family != 'relationship':
+            continue
+        parts.append(registry.filter_by_permitted_content(
+            queryset, user, permission, content=content, **skip_flags,
+        ))
+    if not parts:
+        return queryset.none()
+    if len(parts) == 1:
+        return parts[0]
+    combined = parts[0]
+    for part in parts[1:]:
+        combined = combined | part
+    return combined
+
+
 @contextmanager
 def override_catalog(backend_cls, factory, path):
     """Publish one catalog for ``backend_cls`` and restore the previous entry."""

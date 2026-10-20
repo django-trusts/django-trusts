@@ -297,7 +297,7 @@ class _PolicyVisitor(object):
         model = question.content_model
         if question.name == 'permitted':
             content['permitted'] = _sql_row(
-                self._compile_permitted(classifier, model))
+                self._compile_content_grant(classifier, model))
         elif question.name == 'has_perm':
             content['has_perm'] = _sql_row(
                 self._compile_has_perm(classifier, model))
@@ -410,7 +410,7 @@ class _PolicyVisitor(object):
 
     # -- per-question SQL bodies (formerly the six _compile_* fns) ----
 
-    def _compile_permitted(self, records, model):
+    def _compile_content_grant(self, records, model):
         from trusts.plan.contents import _compile_granted
         from trusts.plan.rewrites import bind_once
 
@@ -862,8 +862,8 @@ def _role_sentinel(record, role, alias):
     )
 
 
-def _compile_permitted(registry, alias, records, model, registries):
-    return _PolicyVisitor(registry, alias, registries)._compile_permitted(
+def _compile_content_grant(registry, alias, records, model, registries):
+    return _PolicyVisitor(registry, alias, registries)._compile_content_grant(
         records, model)
 
 

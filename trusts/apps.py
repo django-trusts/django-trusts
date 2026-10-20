@@ -12,8 +12,19 @@ string, read once in that sweep. Family is the backend class's
 import django.apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db.models import options as model_options
 
-from trusts._meta_options import _ensure_permission_conditions_option
+
+def _ensure_permission_conditions_option():
+    """Register ``Meta.permission_conditions`` once, before host models load."""
+    names = model_options.DEFAULT_NAMES
+    if 'permission_conditions' in names:
+        return
+    if isinstance(names, tuple):
+        model_options.DEFAULT_NAMES = names + ('permission_conditions',)
+    else:
+        names.append('permission_conditions')
+
 
 _ensure_permission_conditions_option()
 

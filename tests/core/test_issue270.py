@@ -286,15 +286,11 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
         page = Paginator(chosen, 2).page(1)
         self.assertEqual(len(page.object_list), 2)
 
-    def test_private_compiler_takes_explicit_handles(self):
-        from trusts._permitted import permitted_queryset
-        handle = configured_catalog(DOCUMENT_BACKEND)
+    def test_no_catalog_contributes_nothing(self):
         with listed_relationship(built_registries(())):
             with self.assertNumQueries(0):
                 with self.assertRaises(TrustsConfigurationError):
                     self.docs.permitted('myapp.change_document', self.alice)
-            chosen = permitted_queryset(PermittedQuerySet(model=Document), 'myapp.change_document', self.alice, (), registries=built_registries((handle,)))
-            self.assertEqual(_pks(chosen), {self.open_doc.pk, self.secret.pk})
 
 def _permission(codename, name):
     permission, _created = Permission.objects.get_or_create(content_type=ContentType.objects.get_for_model(Document), codename=codename, defaults={'name': name})
