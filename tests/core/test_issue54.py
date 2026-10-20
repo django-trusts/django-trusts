@@ -20,7 +20,7 @@ from tests.core import kernel_host_listed
 from tests.kernel_host.apps import KernelHostConfig
 from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import TrustsImplementationConfig
-from trusts.plan.contents import filter_by_permitted_content
+from trusts.decorators import filter_by_permitted_content
 from trusts.plan.relations import (
     ConditionLookup,
     PlanQueryCompiler,
@@ -145,7 +145,7 @@ class FilterAuthorizedScopesAliasTest(SimpleTestCase):
     def test_old_name_delegates_to_filter_by_permitted_content(self):
         import inspect
 
-        from trusts.plan.contents import filter_authorized_scopes
+        from trusts.decorators import filter_authorized_scopes
 
         self.assertEqual(
             inspect.signature(filter_authorized_scopes),
@@ -161,7 +161,7 @@ class FilterAuthorizedScopesAliasTest(SimpleTestCase):
         )
         handles = (object(),)
         with patch(
-            'trusts.plan.contents.filter_by_permitted_content',
+            'trusts.decorators.filter_by_permitted_content',
             return_value=sentinel,
         ) as called:
             result = filter_authorized_scopes(

@@ -133,7 +133,7 @@ class OwnerResolutionTest(SimpleTestCase):
 
     def test_authorized_and_filter_scopes_use_owners(self):
         from trusts.backends import configured_catalogs
-        from trusts.plan.contents import filter_by_permitted_content
+        from trusts.decorators import filter_by_permitted_content
         from trusts.query import AuthorizedQuerySet
 
         registries = configured_catalogs()

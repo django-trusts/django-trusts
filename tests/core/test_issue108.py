@@ -24,7 +24,7 @@ from trusts.backends import TrustModelBackendMixin, configured_catalogs
 from trusts.compile.factory import RegistryFactory
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.contents import filter_by_permitted_content
+from trusts.decorators import filter_by_permitted_content
 from trusts.query import AuthorizedManager, AuthorizedQuerySet
 
 
