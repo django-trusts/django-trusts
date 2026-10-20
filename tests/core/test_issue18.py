@@ -618,12 +618,12 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         self.assertEqual(record.content_path, ('node', 'children'))
         self.assertIs(record.content_model, self.Node)
         with self.assertNumQueries(0):
-            qs = filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registries=built_registries((self.handle,)))
+            qs = filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registry=self.handle.build_registry())
         self.assertIsInstance(qs, QuerySet)
         self.assertIsNone(qs._result_cache)
         with self.assertNumQueries(1):
             self.assertEqual(_pks(qs), {self.parent.pk})
-        self.assertFalse(filter_by_permitted_content(self.Node.objects.all(), self.stranger, self.add, content=self.Node, registries=built_registries((self.handle,))).exists())
+        self.assertFalse(filter_by_permitted_content(self.Node.objects.all(), self.stranger, self.add, content=self.Node, registry=self.handle.build_registry()).exists())
 
     def test_terminal_only_same_model_is_none(self):
         registry = RegistryFactory()
@@ -631,7 +631,7 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         registry.register(content=g.node, user=g.holder, permission=g.token)
         registry.path = 'issue18-terminal'
         handle = registry
-        qs = filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registries=built_registries((handle,)))
+        qs = filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registry=handle.build_registry())
         with self.assertNumQueries(0):
             self.assertFalse(qs.exists())
 
@@ -645,4 +645,4 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         with self.assertNumQueries(1):
             self.assertEqual(_pks(built_catalog(self.registry).permissions_for(self.holder, self.child)), {self.add.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registries=built_registries((self.handle,)))), {self.parent.pk})
+            self.assertEqual(_pks(filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registry=self.handle.build_registry())), {self.parent.pk})

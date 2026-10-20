@@ -968,11 +968,11 @@ class StaffPrefixFilterTest(TransactionTestCase):
             registry.register(content=grant.scope.rows.content, user=grant.user, permission=grant.permission)
             registry.path = 'staff-prefix'
             handle = registry
-            denied = filter_by_permitted_content(Scope.objects.all(), plain, read, content=payload, registries=built_registries((handle,)))
+            denied = filter_by_permitted_content(Scope.objects.all(), plain, read, content=payload, registry=handle.build_registry())
             with self.assertNumQueries(1):
                 self.assertFalse(denied.exists())
-            self.assertEqual(set(filter_by_permitted_content(Scope.objects.all(), staff, read, content=payload, registries=built_registries((handle,))).values_list('pk', flat=True)), {scope.pk})
-            self.assertEqual(set(filter_by_permitted_content(Scope.objects.all(), plain, read, content=payload, registries=built_registries((handle,)), skip_staff=True).values_list('pk', flat=True)), {scope.pk})
+            self.assertEqual(set(filter_by_permitted_content(Scope.objects.all(), staff, read, content=payload, registry=handle.build_registry()).values_list('pk', flat=True)), {scope.pk})
+            self.assertEqual(set(filter_by_permitted_content(Scope.objects.all(), plain, read, content=payload, registry=handle.build_registry(), skip_staff=True).values_list('pk', flat=True)), {scope.pk})
         finally:
             with connection.schema_editor() as editor:
                 editor.delete_model(Grant)
@@ -1238,7 +1238,7 @@ class SuperuserPrefixFilterTest(TransactionTestCase):
                 registry.register(content=grant.scope.rows.content, user=grant.user, permission=grant.permission)
                 registry.path = 'super-prefix'
                 handle = registry
-                chosen = filter_by_permitted_content(PrefixScope.objects.all(), user, read, content=payload, registries=built_registries((handle,)), **flags)
+                chosen = filter_by_permitted_content(PrefixScope.objects.all(), user, read, content=payload, registry=handle.build_registry(), **flags)
                 return chosen.filter(pk=scope.pk).exists()
             self.assertFalse(allows(active, override=False))
             self.assertTrue(allows(peer, override=False))

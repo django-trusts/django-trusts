@@ -19,7 +19,6 @@ from tests.support import (
     isolate_live_registry,
     live_config,
     override_apps_ready,
-    built_registries,
     empty_catalogs,
     sweep_listed_backends,
 )
@@ -241,7 +240,7 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
         qs = Document.objects.all()
         parts = [
             granted(registry, qs, self.alice, self.change, kind='complete')
-            for registry in built_registries((self.host, self.document, extra))
+            for registry in (self.host, self.document, extra.build_registry())
         ]
         pred = None
         for part in parts:

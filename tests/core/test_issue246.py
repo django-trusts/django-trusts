@@ -339,7 +339,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         with listed_relationship(built_registries((self.handle,))):
             listed = sorted(self.Paper.objects.authorized(self.alice, self.change), key=lambda row: row.pk)
         self.assertEqual(listed, [self.paper_a, self.paper_c, self.paper_d])
-        folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, registries=built_registries((self.handle,)))
+        folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, registry=self.handle.build_registry())
         self.assertEqual(list(folders), [self.folder_a])
 
     def test_permission_and_membership_do_not_feed_group_permissions(self):
@@ -512,8 +512,8 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
                 sql = str(rows.query)
                 with self.subTest(authorized_sql=label):
                     self.assertEqual(len(_group_permission_aliases(sql)), 1, sql)
-        read_folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.read, content=self.Paper, registries=built_registries((self.handle,)))
-        change_folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, registries=built_registries((self.handle,)))
+        read_folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.read, content=self.Paper, registry=self.handle.build_registry())
+        change_folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, registry=self.handle.build_registry())
         with self.subTest('scope read'):
             self.assertEqual(list(read_folders), [self.folder])
         with self.subTest('scope change'):
