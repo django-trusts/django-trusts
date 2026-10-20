@@ -1,4 +1,4 @@
-from tests.support import configured_catalog, unbound_named_filters
+from tests.support import built_catalog, configured_catalog, unbound_named_filters
 """#151 C1: construct-time self-bind of Core's private condition lookup.
 
 Library-only proofs. Applications register builders; they do not import
@@ -92,18 +92,13 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
 
         registry = RegistryFactory()
         lookup = registry.filter_lookup
-        built = registry.build_registry()
-        self.assertIs(built.filter_lookup, lookup)
+        built = built_catalog(registry)
+        self.assertIsNot(built.filter_lookup, lookup)
         self.assertIs(registry.filter_lookup, lookup)
         self.assertIs(lookup.conditions, registry.conditions)
-        self.assertNotIn(
-            'set_filter_lookup',
-            inspect.getsource(RegistryFactory.build_registry),
-        )
-        self.assertNotIn(
-            'RegistryConditionLookup',
-            inspect.getsource(RegistryFactory.build_registry),
-        )
+        source = inspect.getsource(RegistryFactory.build)
+        self.assertNotIn('set_filter_lookup', source)
+        self.assertIn('FrozenConditionLookup', source)
         self.assertNotIn(
             'set_filter_lookup',
             inspect.getsource(TrustsImplementationConfig.ready),
@@ -277,9 +272,13 @@ class NamedConditionCompilationTest(TransactionTestCase):
             registry.register_permission_condition(
                 Note, 'owned', lambda u, p, o: u == o.owner,
             )
-            built = registry.build_registry()
-        self.assertIs(built.filter_lookup, lookup)
+            built = built_catalog(registry)
+        self.assertIsNot(built.filter_lookup, lookup)
         self.assertIs(registry.filter_lookup, lookup)
+        self.assertIs(
+            built.get_permission_condition_record(Note, 'owned'),
+            registry.get_permission_condition_record(Note, 'owned'),
+        )
         self.assertIsNotNone(
             registry.get_permission_condition_record(Note, 'owned'),
         )

@@ -38,8 +38,8 @@ class _ListedBackend(TrustModelBackendMixin, ModelBackend):
 
 def _seal_factory(backend_cls, factory):
     from trusts.backends import catalogs
-    built = factory.build_registry()
-    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built)
+    built = factory.build()
+    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, shape=built)
 
 @contextmanager
 def _installed(handle):
@@ -220,8 +220,8 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
             self.assertEqual(list(self.Repository.objects.authorized(self.owner, self.read)), [self.specs])
             self.assertEqual(list(self.Organization.objects.authorized(self.owner, self.read)), [])
             self.assertEqual(list(self.Repository.objects.authorized(self.owner, self.manage)), [])
-            self.assertEqual(list(self.handle.build_registry().filter_authorized(self.Team.objects.all(), self.owner, self.manage)), [])
-            self.assertEqual(list(self.handle.build_registry().filter_authorized(self.Widget.objects.all(), self.owner, self.read)), [])
+            self.assertEqual(list(built_catalog(self.handle).filter_authorized(self.Team.objects.all(), self.owner, self.manage)), [])
+            self.assertEqual(list(built_catalog(self.handle).filter_authorized(self.Widget.objects.all(), self.owner, self.read)), [])
             for obj, permission, expected in ((self.acme, self.manage, ['owner-267']), (self.specs, self.read, ['owner-267']), (self.acme, self.read, []), (self.specs, self.manage, [])):
                 with self.subTest(obj=obj.name, perm=permission.codename):
                     self.assertEqual(list(obj.get_permitted_users(permission).values_list('username', flat=True)), expected)
@@ -414,8 +414,8 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         with self.assertNumQueries(0):
             registry.register(content=self._ref(self.OperationGrant).organization, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
             registry.register(content=self._ref(self.OperationGrant).repository, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
-        self.assertTrue(registry.build_registry().has_permission(self.owner, self.org, operation))
-        self.assertTrue(registry.build_registry().has_permission(self.owner, self.repo, operation))
+        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.org, operation))
+        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.repo, operation))
         registry.path = 'tests.core.issue267-operation'
         handle = registry
         document = _load_policy_sql_document(render_configured_policy(handle))
@@ -433,10 +433,10 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         grant = self._ref(self.TypedGrant)
         registry.register(content=grant.organization, user=grant.user, permission=grant.permit)
         registry.register(content=grant.repository, user=grant.user, permission=grant.permit)
-        self.assertTrue(registry.build_registry().has_permission(self.owner, self.org, org_permit))
-        self.assertTrue(registry.build_registry().has_permission(self.owner, self.repo, repo_permit))
-        self.assertTrue(registry.build_registry().has_permission(self.owner, self.org, repo_permit))
-        self.assertTrue(registry.build_registry().has_permission(self.owner, self.repo, org_permit))
+        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.org, org_permit))
+        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.repo, repo_permit))
+        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.org, repo_permit))
+        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.repo, org_permit))
         registry.path = 'tests.core.issue267-typed'
         handle = registry
         document = _load_policy_sql_document(render_configured_policy(handle))

@@ -109,9 +109,9 @@ class Issue300BooleanFieldTest(KernelHostRequiredMixin, TestCase):
         handle = _document_handle()
         content = GuideDocument(title='note-300', pk=1)
         with self.assertRaises(TrustsConfigurationError):
-            granted(handle.build_registry(), content, None, permission)
+            granted(built_catalog(handle), content, None, permission)
         with self.assertRaises(TrustsConfigurationError):
-            granted(handle.build_registry(), content, object(), permission)
+            granted(built_catalog(handle), content, object(), permission)
 
 class Issue300BindOnceTest(SimpleTestCase):
 
@@ -403,9 +403,9 @@ class Issue300UserAnnotationTest(TransactionTestCase):
             handle.register_public(trust=NoteGrant, user='user', permission='permission', content='note')
             candidates = Note.objects.annotate(a=Value(1, output_field=CharField()))
             with override_settings(TRUSTS_SQL_BIND_ONCE=False):
-                plain = handle.build_registry().filter_authorized(candidates, user, permission)
+                plain = built_catalog(handle).filter_authorized(candidates, user, permission)
                 plain_values = list(plain.values_list('a', flat=True))
-            bound = handle.build_registry().filter_authorized(candidates, user, permission)
+            bound = built_catalog(handle).filter_authorized(candidates, user, permission)
             bound_values = list(bound.values_list('a', flat=True))
             self.assertEqual(plain_values, ['1'])
             self.assertEqual(bound_values, ['1'])
@@ -457,19 +457,19 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
             candidates = RetargetNode.objects.order_by('pk')
             with patch('trusts.plan.recursions._render_reach_sql', _render_parenthesized_depth):
                 with override_settings(TRUSTS_SQL_BIND_ONCE=False):
-                    plain = handle.build_registry().filter_authorized(candidates, user, permission)
+                    plain = built_catalog(handle).filter_authorized(candidates, user, permission)
                     plain_rows = list(plain)
                     plain_sql = plain.query.sql_with_params()
                     plain_has = built_catalog(handle).has_perm(user, '%s.%s' % (permission.content_type.app_label, permission.codename), node)
                     plain_doc = _load_policy_sql_document(render_configured_policy(handle))
                 bind_once_module._warned = False
                 with self.assertLogs('trusts', level='WARNING') as logs:
-                    bound = handle.build_registry().filter_authorized(candidates, user, permission)
+                    bound = built_catalog(handle).filter_authorized(candidates, user, permission)
                     bound_rows = list(bound)
                     bound_sql = bound.query.sql_with_params()
                     bound_has = built_catalog(handle).has_perm(user, '%s.%s' % (permission.content_type.app_label, permission.codename), node)
                     bound_doc = _load_policy_sql_document(render_configured_policy(handle))
-                    list(handle.build_registry().filter_authorized(candidates, user, permission))
+                    list(built_catalog(handle).filter_authorized(candidates, user, permission))
                     render_configured_policy(handle)
             self.assertEqual(len(logs.records), 1)
             message = logs.records[0].getMessage()
@@ -533,7 +533,7 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
                     user = _role_sentinel(records[0], 'user', 'default')
                     permission = _role_sentinel(records[0], 'permission', 'default')
                     queryset = _content_manager(ReviewDocument).all()
-                    granted = _compile_granted(handle.build_registry(), queryset, user, permission, kind='complete')
+                    granted = _compile_granted(built_catalog(handle), queryset, user, permission, kind='complete')
                     raw_sql, raw_params = bind_once(queryset.filter(granted).distinct()).query.sql_with_params()
                     self._assert_cardinality_and_order(permitted, raw_params)
                     self.assertEqual(raw_sql.count('%s'), len(raw_params))

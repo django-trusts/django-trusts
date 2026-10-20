@@ -471,19 +471,19 @@ class _TerminalProjectionMixin(object):
         self.assertEqual(_pks(built_catalog(registry).permissions_for(self.alice, granted)), {self.read.pk})
         self.assertEqual(_pks(built_catalog(registry).permissions_for(self.alice, other)), {self.write.pk})
         expected = [granted, sibling]
-        qs = registry.build_registry().filter_authorized(Model.objects.order_by('pk'), self.alice, self.read)
+        qs = built_catalog(registry).filter_authorized(Model.objects.order_by('pk'), self.alice, self.read)
         self.assertIsInstance(qs, QuerySet)
         with self.assertNumQueries(1):
             self.assertEqual(list(qs), expected)
         granted_qs = Model.objects.filter(pk__in=[granted.pk, sibling.pk])
         mixed_qs = Model.objects.order_by('pk')
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(handle.build_registry(), granted, self.alice, self.read))
+            self.assertTrue(all_match(built_catalog(handle), granted, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(handle.build_registry(), granted_qs, self.alice, self.read))
+            self.assertTrue(all_match(built_catalog(handle), granted_qs, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(all_match(handle.build_registry(), mixed_qs, self.alice, self.read))
-        group_only = _compile_common_permissions(handle.build_registry(), granted_qs, self.alice, kind='group')
+            self.assertFalse(all_match(built_catalog(handle), mixed_qs, self.alice, self.read))
+        group_only = _compile_common_permissions(built_catalog(handle), granted_qs, self.alice, kind='group')
         self.assertIsInstance(group_only, QuerySet)
         self.assertEqual(list(group_only), [])
         plan = built_catalog(registry).plan_for(granted, user=self.alice, permission=self.read)
@@ -724,25 +724,25 @@ class TrustsRegistryDependentGrammarGroupSplitTest(TransactionTestCase):
         many = self.Payload.objects.order_by('pk')
         alice_only = self.Payload.objects.filter(pk=self.pay_a.pk)
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(self.handle.build_registry(), self.pay_a, self.alice, self.read))
+            self.assertTrue(all_match(built_catalog(self.handle), self.pay_a, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(all_match(self.handle.build_registry(), self.pay_a, self.alice, self.read, kind='group'))
+            self.assertFalse(all_match(built_catalog(self.handle), self.pay_a, self.alice, self.read, kind='group'))
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(self.handle.build_registry(), self.pay_a, self.carol, self.read, kind='group'))
+            self.assertTrue(all_match(built_catalog(self.handle), self.pay_a, self.carol, self.read, kind='group'))
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(self.handle.build_registry(), self.pay_a, self.carol, self.read))
+            self.assertTrue(all_match(built_catalog(self.handle), self.pay_a, self.carol, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(all_match(self.handle.build_registry(), many, self.alice, self.read))
+            self.assertFalse(all_match(built_catalog(self.handle), many, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(_compile_common_permissions(self.handle.build_registry(), alice_only, self.alice)), {self.read.pk})
+            self.assertEqual(_pks(_compile_common_permissions(built_catalog(self.handle), alice_only, self.alice)), {self.read.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(list(_compile_common_permissions(self.handle.build_registry(), alice_only, self.alice, kind='group')), [])
+            self.assertEqual(list(_compile_common_permissions(built_catalog(self.handle), alice_only, self.alice, kind='group')), [])
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(_compile_common_permissions(self.handle.build_registry(), alice_only, self.carol, kind='group')), {self.read.pk})
+            self.assertEqual(_pks(_compile_common_permissions(built_catalog(self.handle), alice_only, self.carol, kind='group')), {self.read.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(list(_compile_common_permissions(self.handle.build_registry(), many, self.alice)), [])
-        self.assertFalse(all_match(self.handle.build_registry(), self.pay_b, self.alice, self.read))
-        self.assertFalse(all_match(self.handle.build_registry(), self.pay_b, self.carol, self.read))
+            self.assertEqual(list(_compile_common_permissions(built_catalog(self.handle), many, self.alice)), [])
+        self.assertFalse(all_match(built_catalog(self.handle), self.pay_b, self.alice, self.read))
+        self.assertFalse(all_match(built_catalog(self.handle), self.pay_b, self.carol, self.read))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class TrustsRegistryDependentGrammarToFieldTest(TransactionTestCase):
@@ -804,8 +804,8 @@ class TrustsRegistryDependentGrammarToFieldTest(TransactionTestCase):
             self.assertFalse(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), img_b1))
             self.assertFalse(built_catalog(registry).has_perm(bob, '%s.%s' % (read.content_type.app_label, read.codename), img_a1))
             self.assertFalse(built_catalog(registry).has_perm(alice, '%s.%s' % (write.content_type.app_label, write.codename), img_a1))
-            sql = str(registry.build_registry().filter_authorized(CodedImage.objects.order_by('pk'), alice, read).query).lower()
+            sql = str(built_catalog(registry).filter_authorized(CodedImage.objects.order_by('pk'), alice, read).query).lower()
             self.assertIn('exists', sql)
             self.assertIn('holder', sql)
             with self.assertNumQueries(1):
-                self.assertEqual(list(registry.build_registry().filter_authorized(CodedImage.objects.order_by('pk'), alice, read)), [img_a1, img_a2])
+                self.assertEqual(list(built_catalog(registry).filter_authorized(CodedImage.objects.order_by('pk'), alice, read)), [img_a1, img_a2])

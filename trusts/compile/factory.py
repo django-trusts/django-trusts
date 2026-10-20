@@ -58,19 +58,20 @@ from trusts.compile.resolution import (
 from trusts.errors import TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
-from trusts.compile.catalogs import Catalog
+from trusts.compile.catalogs import Catalog, CatalogShape
 from trusts.backends import TrustModelBackendMixin, catalogs, recorders
 from trusts.plan.conditions import (
     ConditionRegistry,
     Expr,
+    FrozenConditionLookup,
     RegistryConditionLookup,
 )
-from trusts.plan.registry import Registry
 from trusts.plan.relations import PlanQueryCompiler, bind_checked_user
 from trusts.plan.standards import (
     UserCondition,
     assert_concrete_booleans,
     builtin_user_conditions,
+    compile_override_q,
     compile_user_rules,
     concrete_rule,
     normalize_on,
@@ -201,9 +202,9 @@ class RegistryFactory(object):
     store several records when they terminate on different content
     models, or when the same bindings use a different closed condition.
 
-        ``build_registry()`` freezes this factory and returns a fresh
-        ``Registry`` from the records already stored. A later build
-        returns another registry from those same records. ``register``,
+        ``build()`` freezes this factory and returns a fresh
+        ``CatalogShape`` from the records already stored. A later build
+        returns another shape from those same records. ``register``,
         ``register_delegation``, ``register_permission_condition``,
         ``set_user_condition``, ``set_user_override``, and
         ``set_filter_lookup`` raise ``TrustsConfigurationError``.
@@ -250,8 +251,11 @@ class RegistryFactory(object):
         if lookup is None:
             self._filter_lookup = None
             return
-        record_for = getattr(lookup, 'record_for', None)
-        compile_q = getattr(lookup, 'compile_q', None)
+        try:
+            record_for = lookup.record_for
+            compile_q = lookup.compile_q
+        except AttributeError:
+            record_for = compile_q = None
         if not callable(record_for) or not callable(compile_q):
             raise TrustsConfigurationError(
                 'ConditionLookup must provide record_for and compile_q; '
@@ -865,27 +869,39 @@ class RegistryFactory(object):
 
     _register_public = register_public
 
-    def build_registry(self):
-        """Build a query-time ``Registry`` from stored values.
+    def build(self):
+        """Freeze this factory and return its ``CatalogShape``.
 
-        Records, delegations, the shared condition store, stored user
-        conditions, the user override, and the bound condition lookup
-        are passed as data, all at once. No builders are injected.
+        Condition rows are a tuple taken once. The default condition
+        lookup is rebuilt over that tuple, so the shape does not share
+        this factory's mutable store. User-rule and override fragments
+        are compiled here. A later call builds another shape from the
+        same stored rows.
         """
-        registry = Registry(
-            records=self.records,
-            delegations=self.delegations,
-            conditions=self.conditions,
-            user_conditions=self._stored_user_conditions(),
-            user_override=self._user_override,
-            filter_lookup=self._filter_lookup,
-            compiler=self._compiler if self._explicit_compiler else None,
-            path=self.path or '',
-            family=self.family,
-            user_model=self.user_model,
+        rows = tuple(self.conditions.iter_permission_conditions())
+        lookup = self._filter_lookup
+        if type(lookup) is RegistryConditionLookup and lookup.conditions is self.conditions:
+            lookup = FrozenConditionLookup(rows)
+        stored = self._stored_user_conditions()
+        model = self.user_model
+        primary = compile_user_rules(
+            model, '', None if stored is None else stored, role='user', values={},
+        )
+        absent = primary if stored is not None else compile_user_rules(
+            model, '', (), role='user', values={},
+        )
+        override_q = None if self._user_override is None else compile_override_q(
+            model, '', self._user_override, {},
         )
         self.frozen = True
-        return registry
+        return CatalogShape(
+            records=self.records, delegations=self.delegations, conditions=rows,
+            user_conditions=stored, user_override=self._user_override,
+            filter_lookup=lookup,
+            compiler=self._compiler if self._explicit_compiler else None,
+            path=self.path or '', family=self.family, user_model=model,
+            user_rules=(primary, absent), override_q=override_q,
+        )
 
     def _stored_user_conditions(self):
         """``None`` when the registry still uses the built-in rule."""
@@ -915,7 +931,7 @@ class RegistryFactory(object):
 
 
 def compile_recorder(recorder, *, path, family, compiler, user_model):
-    """Replay ``recorder.rows`` into one factory and return its registry.
+    """Replay ``recorder.rows`` into one factory and return its shape.
 
     ``user_model`` is the model the caller resolved. This is the only
     factory constructed for those rows.
@@ -938,7 +954,7 @@ def compile_recorder(recorder, *, path, family, compiler, user_model):
             raise TrustsConfigurationError(
                 'Unknown recorder row %r.' % (kind,)
             )
-    return built.build_registry()
+    return built.build()
 
 
 def build_configured_catalogs(paths, user_model):
@@ -966,20 +982,20 @@ def build_configured_catalogs(paths, user_model):
     for path, cls in chosen:
         if cls not in recorders:
             cls()
-        registry = compile_recorder(
+        shape = compile_recorder(
             recorders[cls],
             path=path,
             family=cls.family,
             compiler=cls.query_compiler,
             user_model=user_model,
         )
-        pending.append((cls, path, cls.family, registry))
-    for cls, path, family, registry in pending:
+        pending.append((cls, path, cls.family, shape))
+    for cls, path, family, shape in pending:
         catalogs[cls] = Catalog(
             cls=cls,
             path=path,
             family=family,
-            registry=registry,
+            shape=shape,
         )
 
 

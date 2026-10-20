@@ -244,7 +244,7 @@ class RegisterOnceAtRegistrationTest(TestCase):
         DocumentGrant.objects.create(document=document, user=alice, permission=perm)
         self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (perm.content_type.app_label, perm.codename), document))
         list(built_catalog(registry).permissions_for(alice, document))
-        list(registry.build_registry().filter_authorized(Document.objects.all(), alice, perm))
+        list(built_catalog(registry).filter_authorized(Document.objects.all(), alice, perm))
         self.assertEqual((user.calls, permission.calls, content.calls), (1, 1, 1))
         self.assertEqual(registry.records[0].user_path, ('user',))
         self.assertIsInstance(registry.records[0].user_field, str)

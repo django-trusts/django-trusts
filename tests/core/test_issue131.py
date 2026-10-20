@@ -255,14 +255,14 @@ class CMethodsNamedFilterLifecycleTest(SimpleTestCase):
         log = _PredicateLog()
         record = backend.register_permission_condition(Document, 'non_confidential', log)
         self.assertEqual(len(log.calls), 1)
-        self.assertIs(backend.build_registry().get_permission_condition_record(Document, 'non_confidential'), record)
+        self.assertIs(built_catalog(backend).get_permission_condition_record(Document, 'non_confidential'), record)
         self.assertEqual(len(log.calls), 1)
 
     def test_non_callable_predicate_is_rejected(self):
         backend = _handle()
         with self.assertRaises(TypeError):
             backend.register_permission_condition(Document, 'non_confidential', 'not-a-predicate')
-        self.assertIsNone(backend.build_registry().get_permission_condition_record(Document, 'non_confidential'))
+        self.assertIsNone(built_catalog(backend).get_permission_condition_record(Document, 'non_confidential'))
 
 class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
 

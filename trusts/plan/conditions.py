@@ -1184,16 +1184,10 @@ class ConditionRegistry(object):
         registered trees that are not valid V1 fail closed.
         """
         cond = permission_condition_code(perm)
-        record = self.get_permission_condition_record(model, cond)
-        if record is None:
-            raise _unknown_condition_error(model, cond)
-        if record.expr is None:
-            raise PermissionConditionError(
-                'Permission condition %r on %s is unbound.'
-                % (cond, _condition_model_label(model))
-            )
-        grant = perm.split(':', 1)[0] if isinstance(perm, str) else perm
-        return compile_expression_q(record.expr, model, user, grant)
+        return compile_stored_condition_q(
+            self.get_permission_condition_record(model, cond),
+            model, perm, user,
+        )
 
     def evaluate_permission_condition(self, model, cond_code, user, perm, obj):
         """Evaluate one registered condition against a real object.
@@ -1201,16 +1195,9 @@ class ConditionRegistry(object):
         Unregistered codes raise ``AttributeError``. Unbound records
         fail closed. The builder is never invoked here.
         """
-        record = self.get_permission_condition_record(model, cond_code)
-        if record is None:
-            raise _unknown_condition_error(model, cond_code)
-        if record.expr is None:
-            raise PermissionConditionError(
-                'Permission condition %r on %s is unbound.'
-                % (cond_code, _condition_model_label(model))
-            )
-        return evaluate_registered_expression(
-            record.expr, user, perm, obj, model=model,
+        return evaluate_stored_condition(
+            self.get_permission_condition_record(model, cond_code),
+            model, cond_code, user, perm, obj,
         )
 
 
@@ -1230,4 +1217,57 @@ class RegistryConditionLookup(ConditionLookup):
     def compile_q(self, model, perm_string, user):
         return self.conditions.compile_registered_condition_q(
             model, perm_string, user,
+        )
+
+
+def compile_stored_condition_q(record, model, perm, user):
+    """Compile one stored condition record, or raise fail-closed."""
+    cond = permission_condition_code(perm)
+    if record is None:
+        raise _unknown_condition_error(model, cond)
+    if record.expr is None:
+        raise PermissionConditionError(
+            'Permission condition %r on %s is unbound.'
+            % (cond, _condition_model_label(model))
+        )
+    grant = perm.split(':', 1)[0] if isinstance(perm, str) else perm
+    return compile_expression_q(record.expr, model, user, grant)
+
+
+def evaluate_stored_condition(record, model, cond_code, user, perm, obj):
+    """Evaluate one stored condition record, or raise fail-closed."""
+    if record is None:
+        raise _unknown_condition_error(model, cond_code)
+    if record.expr is None:
+        raise PermissionConditionError(
+            'Permission condition %r on %s is unbound.'
+            % (cond_code, _condition_model_label(model))
+        )
+    return evaluate_registered_expression(
+        record.expr, user, perm, obj, model=model,
+    )
+
+
+class FrozenConditionLookup(ConditionLookup):
+    """``ConditionLookup`` over condition rows frozen at ``build()``.
+
+    The rows are a tuple taken once from the factory store. This lookup
+    does not share that mutable store.
+    """
+
+    __slots__ = ('_index',)
+
+    def __init__(self, rows):
+        self._index = {
+            (_condition_model_key(model), code): record
+            for model, code, record in rows
+        }
+
+    def record_for(self, model, cond_code):
+        return self._index.get((_condition_model_key(model), cond_code))
+
+    def compile_q(self, model, perm_string, user):
+        cond = permission_condition_code(perm_string)
+        return compile_stored_condition_q(
+            self.record_for(model, cond), model, perm_string, user,
         )

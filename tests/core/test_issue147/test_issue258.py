@@ -42,6 +42,7 @@ from trusts.inspect.yaml import (
     _load_policy_yaml,
 )
 from tests.support import (
+    built_catalog,
     render_configured_policy,
     render_published_subjects,
 )
@@ -272,7 +273,7 @@ class PolicyLockConfigurationTest(SimpleTestCase):
         self.assertEqual(empty['backends'], [])
 
         handle = _document_handle('documents.backends.FilterlessBackend')
-        populated = handle.build_registry()
+        populated = built_catalog(handle)
 
         class _NoFilterRegistry(object):
             def __init__(self, inner):

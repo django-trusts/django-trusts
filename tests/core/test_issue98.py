@@ -342,9 +342,9 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
 
     def _object_list_agree(self, principal, operation, obj, expected):
         with self.assertNumQueries(1):
-            via_obj = self.registry.build_registry().has_permission(principal, obj, operation)
+            via_obj = built_catalog(self.registry).has_permission(principal, obj, operation)
         with self.assertNumQueries(1):
-            via_list = obj in list(self.registry.build_registry().filter_authorized(self.Repository.objects.filter(pk=obj.pk), principal, operation))
+            via_list = obj in list(built_catalog(self.registry).filter_authorized(self.Repository.objects.filter(pk=obj.pk), principal, operation))
         with listed_relationship(self._handles()):
             with self.assertNumQueries(1):
                 via_manager = obj in list(self.Repository.objects.filter(pk=obj.pk).authorized(principal, operation))
@@ -406,24 +406,24 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
 
     def test_query_construction_is_lazy_and_fixed_count(self):
         with self.assertNumQueries(0):
-            qs = self.registry.build_registry().filter_authorized(self.Repository.objects.all(), self.member, self.read)
+            qs = built_catalog(self.registry).filter_authorized(self.Repository.objects.all(), self.member, self.read)
             enumerated = built_catalog(self.registry).permissions_for(self.member, self.repo_a)
         self.assertIsInstance(qs, QuerySet)
         self.assertIsInstance(enumerated, QuerySet)
         self.assertIsNone(qs._result_cache)
         with self.assertNumQueries(1):
             self.assertEqual(_pks(qs), {self.repo_a.pk})
-        page = self.registry.build_registry().filter_authorized(self.Repository.objects.order_by('pk'), self.member, self.read)[:1]
+        page = built_catalog(self.registry).filter_authorized(self.Repository.objects.order_by('pk'), self.member, self.read)[:1]
         with self.assertNumQueries(1):
             self.assertEqual(list(page), [self.repo_a])
-        sql = str(self.registry.build_registry().filter_authorized(self.Repository.objects.all(), self.member, self.read).query).lower().replace('_', '').replace('"', '')
+        sql = str(built_catalog(self.registry).filter_authorized(self.Repository.objects.all(), self.member, self.read).query).lower().replace('_', '').replace('"', '')
         self.assertIn('exists', sql)
         self.assertIn('teamrepogrant', sql)
 
     def test_unregistered_content_fails_closed(self):
         empty = RegistryFactory()
-        self.assertFalse(empty.build_registry().has_permission(self.member, self.repo_a, self.read))
-        missing = empty.build_registry().filter_authorized(self.Repository.objects.all(), self.member, self.read)
+        self.assertFalse(built_catalog(empty).has_permission(self.member, self.repo_a, self.read))
+        missing = built_catalog(empty).filter_authorized(self.Repository.objects.all(), self.member, self.read)
         self.assertEqual(list(missing), [])
         self.assertEqual(list(built_catalog(empty).permissions_for(self.member, self.repo_a)), [])
 
@@ -450,8 +450,8 @@ class ClosedPredicateEqualToFieldAuthorizationTest(TransactionTestCase):
 
     def test_matching_to_field_same_object_allows_and_split_denies(self):
         with self.assertNumQueries(1):
-            self.assertTrue(self.registry.build_registry().has_permission(self.holder, self.doc_same, self.read))
+            self.assertTrue(built_catalog(self.registry).has_permission(self.holder, self.doc_same, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(self.registry.build_registry().has_permission(self.holder, self.doc_other, self.read))
+            self.assertFalse(built_catalog(self.registry).has_permission(self.holder, self.doc_other, self.read))
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(self.registry.build_registry().filter_authorized(self.Document.objects.all(), self.holder, self.read)), {self.doc_same.pk})
+            self.assertEqual(_pks(built_catalog(self.registry).filter_authorized(self.Document.objects.all(), self.holder, self.read)), {self.doc_same.pk})

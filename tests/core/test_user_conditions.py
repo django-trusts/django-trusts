@@ -174,9 +174,8 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
             def register(registry):
                 registry.register(content=grant.note, user=grant.user, permission=grant.permission)
             preview = RegistryFactory(user_model=get_user_model())
-            built = preview.build_registry()
-            built.plan_for(Note, user=plain)
-            self.assertTrue(built._rule_fragments)
+            built = built_catalog(preview)
+            self.assertIsNotNone(built.plan_for(Note, user=plain).user_rules)
             added = RegistryFactory(user_model=get_user_model())
             added.set_user_condition('staff', lambda u: u.is_staff)
             register(added)
@@ -297,7 +296,7 @@ class UserOverrideTest(TransactionTestCase):
             handle = registry
 
             def holds(user):
-                predicate = granted(handle.build_registry(), note, user, read)
+                predicate = granted(built_catalog(handle), note, user, read)
                 if predicate is None:
                     return False
                 return bind_once(Note.objects.filter(pk=note.pk).filter(predicate)).exists()
@@ -380,7 +379,7 @@ class UserConditionTargetTest(TransactionTestCase):
             def holds(handle, user, **skip):
                 from trusts.plan.relations import user_skip_params
                 inquiry = user_skip_params(user, skip, subjects=built_registries((handle,)))
-                predicate = granted(handle.build_registry(), note, user, read, skipped=inquiry.values)
+                predicate = granted(built_catalog(handle), note, user, read, skipped=inquiry.values)
                 if predicate is None:
                     return False
                 return bind_once(TargetNote.objects.filter(pk=note.pk).filter(predicate)).exists()
@@ -388,7 +387,7 @@ class UserConditionTargetTest(TransactionTestCase):
             def sql_for(handle, user, **skip):
                 from trusts.plan.relations import user_skip_params
                 inquiry = user_skip_params(user, skip, subjects=built_registries((handle,)))
-                predicate = granted(handle.build_registry(), note, user, read, skipped=inquiry.values)
+                predicate = granted(built_catalog(handle), note, user, read, skipped=inquiry.values)
                 return bind_once(TargetNote.objects.filter(pk=note.pk).filter(predicate)).query.sql_with_params()[0]
             staff_delegate = User.objects.create_user('tgt-staff-del', password='x')
             staff_delegate.is_staff = True
@@ -961,11 +960,11 @@ class StaffPrefixFilterTest(TransactionTestCase):
             registry.register(content=grant.scope.rows.content, user=grant.user, permission=grant.permission)
             registry.path = 'staff-prefix'
             handle = registry
-            denied = filter_by_permitted_content(Scope.objects.all(), plain, read, content=payload, registry=handle.build_registry())
+            denied = filter_by_permitted_content(Scope.objects.all(), plain, read, content=payload, registry=built_catalog(handle))
             with self.assertNumQueries(1):
                 self.assertFalse(denied.exists())
-            self.assertEqual(set(filter_by_permitted_content(Scope.objects.all(), staff, read, content=payload, registry=handle.build_registry()).values_list('pk', flat=True)), {scope.pk})
-            self.assertEqual(set(filter_by_permitted_content(Scope.objects.all(), plain, read, content=payload, registry=handle.build_registry(), skip_staff=True).values_list('pk', flat=True)), {scope.pk})
+            self.assertEqual(set(filter_by_permitted_content(Scope.objects.all(), staff, read, content=payload, registry=built_catalog(handle)).values_list('pk', flat=True)), {scope.pk})
+            self.assertEqual(set(filter_by_permitted_content(Scope.objects.all(), plain, read, content=payload, registry=built_catalog(handle), skip_staff=True).values_list('pk', flat=True)), {scope.pk})
         finally:
             with connection.schema_editor() as editor:
                 editor.delete_model(Grant)
@@ -978,7 +977,7 @@ def _seal_document_factory(factory):
     from trusts.backends import catalogs
     previous = catalogs.get(DocumentBackend)
     family = DocumentBackend.family if previous is None else previous.family
-    catalogs[DocumentBackend] = Catalog(cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family, registry=factory.build_registry())
+    catalogs[DocumentBackend] = Catalog(cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family, shape=factory.build())
     return previous
 
 def _restore_document_catalog(previous):
@@ -1231,7 +1230,7 @@ class SuperuserPrefixFilterTest(TransactionTestCase):
                 registry.register(content=grant.scope.rows.content, user=grant.user, permission=grant.permission)
                 registry.path = 'super-prefix'
                 handle = registry
-                chosen = filter_by_permitted_content(PrefixScope.objects.all(), user, read, content=payload, registry=handle.build_registry(), **flags)
+                chosen = filter_by_permitted_content(PrefixScope.objects.all(), user, read, content=payload, registry=built_catalog(handle), **flags)
                 return chosen.filter(pk=scope.pk).exists()
             self.assertFalse(allows(active, override=False))
             self.assertTrue(allows(peer, override=False))
@@ -1418,17 +1417,17 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
             self.assertNotIn('is_active', forward_sql)
             registry.path = 'columnless'
             handle = registry
-            predicate = granted(handle.build_registry(), note, delegate, permission)
+            predicate = granted(built_catalog(handle), note, delegate, permission)
             self.assertIsNotNone(predicate)
             matched = bind_once(note_model.objects.filter(pk=note.pk).filter(predicate))
             self.assertTrue(matched.exists())
             self.assertNotIn('is_active', matched.query.sql_with_params()[0])
-            denied = granted(handle.build_registry(), note, outsider, permission)
+            denied = granted(built_catalog(handle), note, outsider, permission)
             if denied is not None:
                 self.assertFalse(bind_once(note_model.objects.filter(pk=note.pk).filter(denied)).exists())
-            found = set(lock_permitted_users_queryset(handle.build_registry(), note, permission).values_list('pk', flat=True))
+            found = set(lock_permitted_users_queryset(built_catalog(handle), note, permission).values_list('pk', flat=True))
             self.assertEqual(found, {holder.pk, sponsor.pk, delegate.pk})
-            reverse_sql = str(lock_permitted_users_queryset(handle.build_registry(), note, permission).query)
+            reverse_sql = str(lock_permitted_users_queryset(built_catalog(handle), note, permission).query)
             self.assertNotIn('is_active', reverse_sql)
         finally:
             self._drop(user_model, note_model, grant_model, link_model)

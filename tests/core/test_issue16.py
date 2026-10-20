@@ -21,7 +21,7 @@ from trusts.plan.conditions import ConditionLookup, ConditionRecord, ConditionRe
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 
-from tests.support import override_catalog
+from tests.support import built_catalog, override_catalog
 
 def _store_expr(registry, model, code, expr):
     store = getattr(registry, 'conditions', registry)
@@ -161,7 +161,9 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         record = registry.register_permission_condition(Note, 'own', log)
         self.assertEqual(len(log.calls), 1)
         self.assertIs(registry.get_permission_condition_record(Note, 'own'), record)
-        self.assertIs(registry.build_registry().conditions, registry.conditions)
+        catalog = built_catalog(registry)
+        self.assertIs(catalog.get_permission_condition_record(Note, 'own'), record)
+        self.assertIsNot(catalog.filter_lookup, registry.filter_lookup)
 
     def test_handle_add_named_filter_after_build_still_registers(self):
         Note, _Memo = _note_models()
@@ -172,7 +174,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         record = handle.register_permission_condition(Note, 'own', log)
         self.assertIs(registry.get_permission_condition_record(Note, 'own'), record)
         self.assertEqual(len(log.calls), 1)
-        registry.build_registry()
+        built_catalog(registry)
         late_factory = RegistryFactory()
         late_factory.path = handle.path
         late_handle = late_factory

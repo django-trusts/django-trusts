@@ -504,10 +504,10 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
             document for document in self.Document.objects.order_by('pk')
             if built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), document)
         ]
-        folder_qs = self.registry.build_registry().filter_authorized(
+        folder_qs = built_catalog(self.registry).filter_authorized(
             self.Folder.objects.order_by('pk'), self.alice, self.folder_read,
         )
-        document_qs = self.registry.build_registry().filter_authorized(
+        document_qs = built_catalog(self.registry).filter_authorized(
             self.Document.objects.order_by('pk'), self.alice, self.read,
         )
         self.assertEqual(expected_folders, [self.folder_a])
@@ -537,7 +537,7 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
             folder=self.folder_a, user=self.alice, permission=self.read,
         )
         with self.assertNumQueries(0):
-            qs = self.registry.build_registry().filter_authorized(
+            qs = built_catalog(self.registry).filter_authorized(
                 self.Document.objects.all(), self.alice, self.read,
             )
             plan = built_catalog(self.registry).plan_for(
@@ -553,7 +553,7 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
         self.assertIsNotNone(exists)
         with self.assertNumQueries(1):
             self.assertEqual(_pks(qs), {self.doc_a1.pk, self.doc_a2.pk})
-        page = self.registry.build_registry().filter_authorized(
+        page = built_catalog(self.registry).filter_authorized(
             self.Document.objects.order_by('pk'), self.alice, self.read,
         )[:1]
         with self.assertNumQueries(1):
@@ -610,7 +610,7 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
                 list(combined),
                 [self.doc_a1, self.doc_a2, self.doc_b1],
             )
-        trustee_only = self.registry.build_registry().filter_authorized(
+        trustee_only = built_catalog(self.registry).filter_authorized(
             self.Document.objects.order_by('pk'), self.alice, self.read,
         )
         self.assertEqual(list(trustee_only), [self.doc_a1, self.doc_a2])
@@ -637,13 +637,13 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
             built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), self.doc_a1),
         )
         self.assertEqual(
-            _pks(self.registry.build_registry().filter_authorized(
+            _pks(built_catalog(self.registry).filter_authorized(
                 self.Document.objects.all(), self.alice, self.read,
             )),
             {self.doc_a1.pk, self.doc_a2.pk},
         )
         self.assertEqual(
-            _pks(self.registry.build_registry().filter_authorized(
+            _pks(built_catalog(self.registry).filter_authorized(
                 self.Document.objects.all(), self.alice, self.write,
             )),
             {self.doc_b1.pk},
@@ -656,7 +656,7 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
             _pks(built_catalog(self.registry).permissions_for(self.alice, self.doc_b1)),
             {self.write.pk},
         )
-        sql = str(self.registry.build_registry().filter_authorized(
+        sql = str(built_catalog(self.registry).filter_authorized(
             self.Document.objects.all(), self.alice, self.read,
         ).query).upper()
         self.assertIn('EXISTS', sql)
@@ -676,7 +676,7 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
             built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_b1),
         )
         self.assertEqual(
-            _pks(self.registry.build_registry().filter_authorized(
+            _pks(built_catalog(self.registry).filter_authorized(
                 self.Document.objects.all(), self.alice, self.write,
             )),
             {self.doc_b1.pk},
@@ -771,12 +771,12 @@ class TrustsRegistryToFieldHopTest(TransactionTestCase):
             self.assertFalse(built_catalog(registry).has_perm(bob, '%s.%s' % (read.content_type.app_label, read.codename), doc_a1))
             self.assertFalse(built_catalog(registry).has_perm(alice, '%s.%s' % (write.content_type.app_label, write.codename), doc_a1))
 
-            folder_sql = str(registry.build_registry().filter_authorized(
+            folder_sql = str(built_catalog(registry).filter_authorized(
                 CodedFolder.objects.order_by('pk'), alice, read_folder,
             ).query).lower()
             self.assertIn('exists', folder_sql)
             self.assertIn('code', folder_sql)
-            document_sql = str(registry.build_registry().filter_authorized(
+            document_sql = str(built_catalog(registry).filter_authorized(
                 CodedDocument.objects.order_by('pk'), alice, read,
             ).query).lower()
             self.assertIn('exists', document_sql)
@@ -784,14 +784,14 @@ class TrustsRegistryToFieldHopTest(TransactionTestCase):
 
             with self.assertNumQueries(1):
                 self.assertEqual(
-                    list(registry.build_registry().filter_authorized(
+                    list(built_catalog(registry).filter_authorized(
                         CodedFolder.objects.order_by('pk'), alice, read_folder,
                     )),
                     [folder_alpha],
                 )
             with self.assertNumQueries(1):
                 self.assertEqual(
-                    list(registry.build_registry().filter_authorized(
+                    list(built_catalog(registry).filter_authorized(
                         CodedDocument.objects.order_by('pk'), alice, read,
                     )),
                     [doc_a1, doc_a2],

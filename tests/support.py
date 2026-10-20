@@ -25,13 +25,13 @@ def built_catalog(factory):
         cls=type(factory),
         path=factory.path,
         family=factory.family,
-        registry=factory.build_registry(),
+        shape=factory.build(),
     )
 
 
 def built_registries(items):
-    """Build each factory. Callers pass factories."""
-    return tuple(item.build_registry() for item in items)
+    """Build a catalog for each factory. Callers pass factories."""
+    return tuple(built_catalog(item) for item in items)
 
 
 def scoped_permitted_content(queryset, user, permission, *, content,
@@ -57,7 +57,7 @@ def override_catalog(backend_cls, factory, path):
         cls=backend_cls,
         path=path,
         family=factory.family,
-        registry=factory.build_registry(),
+        shape=factory.build(),
     )
     try:
         yield catalogs[backend_cls]
@@ -142,16 +142,16 @@ def _publish_catalog(backend_cls, factory, *, path=None):
     if factory is None:
         catalogs.pop(backend_cls, None)
         return None
-    built = factory.build_registry()
+    shape = factory.build()
     catalogs[backend_cls] = Catalog(
         cls=backend_cls,
         path=path or factory.path or (
             '%s.%s' % (backend_cls.__module__, backend_cls.__qualname__)
         ),
         family=factory.family,
-        registry=built,
+        shape=shape,
     )
-    return built
+    return shape
 
 
 @contextmanager
@@ -249,14 +249,14 @@ def listed_relationship(factories):
     for cls, factory in zip(classes, factories):
         listing = '%s.%s' % (cls.__module__, cls.__name__)
         paths.append(listing)
-        subject = factory.build_registry()
-        prepared.append((cls, subject.path or listing, subject))
-    for cls, path, subject in prepared:
+        shape = factory.build()
+        prepared.append((cls, shape.path or listing, shape))
+    for cls, path, shape in prepared:
         catalogs[cls] = Catalog(
             cls=cls,
             path=path,
-            family=subject.family,
-            registry=subject,
+            family=shape.family,
+            shape=shape,
         )
     with override_settings(AUTHENTICATION_BACKENDS=tuple(paths)):
         try:
@@ -307,7 +307,7 @@ def unbound_named_filters(backend_cls):
         cls=backend_cls,
         path=factory.path,
         family=factory.family,
-        registry=factory.build_registry(),
+        shape=factory.build(),
     )
     try:
         yield catalogs[backend_cls]

@@ -16,6 +16,7 @@ from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
 from tests.support import (
+    built_catalog,
     listed_relationship,
     live_config,
     scoped_permitted_content,
@@ -167,7 +168,7 @@ class ConditionLookupBindTest(TestCase):
         with self.assertNumQueries(0):
             registry.set_filter_lookup(None)
         self.assertIsNone(registry.filter_lookup)
-        registry.build_registry()
+        built_catalog(registry)
         with self.assertRaises(TrustsConfigurationError):
             registry.set_filter_lookup(override)
 
@@ -396,7 +397,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
 
     def _filter(self, queryset, user=None, permission=None, content=None, registry=None):
         if registry is None:
-            registry = self.handle.build_registry()
+            registry = built_catalog(self.handle)
         return scoped_permitted_content(
             queryset,
             self.alice if user is None else user,
@@ -406,7 +407,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
         )
 
     def test_prefix_folder_is_create_under_scope_without_naming_zero(self):
-        qs = self._filter(self.Folder.objects.all(), registry=self.handle.build_registry())
+        qs = self._filter(self.Folder.objects.all(), registry=built_catalog(self.handle))
         self.assertIsInstance(qs, QuerySet)
         self.assertIsNone(qs._result_cache)
         with self.assertNumQueries(1):
@@ -416,21 +417,21 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
 
     def test_prefix_row_correlates_and_terminal_is_none(self):
         self.assertEqual(
-            _pks(self._filter(self.Row.objects.all(), registry=self.handle.build_registry())),
+            _pks(self._filter(self.Row.objects.all(), registry=built_catalog(self.handle))),
             {self.row.pk},
         )
-        qs = self._filter(self.Payload.objects.all(), registry=self.handle.build_registry())
+        qs = self._filter(self.Payload.objects.all(), registry=built_catalog(self.handle))
         with self.assertNumQueries(0):
             self.assertFalse(qs.exists())
 
     def test_unknown_terminal_empty_handles_and_off_path_are_none(self):
         cases = (
             self._filter(
-                self.Folder.objects.all(), content=self.Other, registry=self.handle.build_registry(),
+                self.Folder.objects.all(), content=self.Other, registry=built_catalog(self.handle),
             ),
-            self._filter(self.Folder.objects.all(), registry=RegistryFactory(family='ordered_fold').build_registry()),
+            self._filter(self.Folder.objects.all(), registry=built_catalog(RegistryFactory(family='ordered_fold'))),
             self._filter(
-                self.Other.objects.all(), content=self.Payload, registry=self.handle.build_registry(),
+                self.Other.objects.all(), content=self.Payload, registry=built_catalog(self.handle),
             ),
         )
         for qs in cases:
@@ -447,7 +448,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
                     self.alice,
                     'add_payload',
                     content=self.Payload,
-                    registry=self.handle.build_registry(),
+                    registry=built_catalog(self.handle),
                 )
             with self.assertRaises(TrustsConfigurationError):
                 scoped_permitted_content(
@@ -455,20 +456,20 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
                     self.alice,
                     None,
                     content=self.Payload,
-                    registry=self.handle.build_registry(),
+                    registry=built_catalog(self.handle),
                 )
 
     def test_wrong_user_and_wrong_permission_deny(self):
         self.assertFalse(
             self._filter(
-                self.Folder.objects.all(), user=self.bob, registry=self.handle.build_registry(),
+                self.Folder.objects.all(), user=self.bob, registry=built_catalog(self.handle),
             ).exists()
         )
         self.assertFalse(
             self._filter(
                 self.Folder.objects.all(),
                 permission=self.change,
-                registry=self.handle.build_registry(),
+                registry=built_catalog(self.handle),
             ).exists()
         )
 
@@ -616,7 +617,7 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
             handle = registry
             qs = scoped_permitted_content(
                 Scope.objects.order_by('pk'), alice, add,
-                content=Payload, registry=handle.build_registry(),
+                content=Payload, registry=built_catalog(handle),
             )
             self.assertIsInstance(qs, QuerySet)
             self.assertIsNone(qs._result_cache)
@@ -630,6 +631,6 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
             self.assertFalse(
                 scoped_permitted_content(
                     Scope.objects.all(), bob, add,
-                    content=Payload, registry=handle.build_registry(),
+                    content=Payload, registry=built_catalog(handle),
                 ).exists()
             )

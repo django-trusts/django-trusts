@@ -38,8 +38,8 @@ class _PairDocumentBackend(TrustModelBackendMixin, ModelBackend):
 def _seal_factory(backend_cls, factory):
     """Construct this class's catalog from a factory this test filled."""
     from trusts.backends import catalogs
-    built = factory.build_registry()
-    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built)
+    built = factory.build()
+    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, shape=built)
     return built
 
 def _document_host_handle():
