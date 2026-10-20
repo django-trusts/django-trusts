@@ -358,9 +358,9 @@ class _AlongProjectionMixin(object):
         granted_qs = Model.objects.filter(pk__in=[row.pk for row in granted_rows])
         mixed_qs = Model.objects.order_by('pk')
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(built_registries((handle,)), granted_qs, self.alice, self.read))
+            self.assertTrue(all_match(built_registries((handle,))[0], granted_qs, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(all_match(built_registries((handle,)), mixed_qs, self.alice, self.read))
+            self.assertFalse(all_match(built_registries((handle,))[0], mixed_qs, self.alice, self.read))
         with self.assertNumQueries(1):
             self.assertEqual(_pks(common_permissions(built_registries((handle,)), granted_qs, self.alice)), {self.read.pk})
         with self.assertNumQueries(1):
@@ -756,7 +756,9 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         dir_reg.register(content=k.node, user=k.user, permission=k.permission)
         handles = (_direct_handle(rec_reg, 'tests.along.a'), _direct_handle(dir_reg, 'tests.along.b'))
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(self.Node.objects.filter(granted(built_registries(handles), self.Node.objects.all(), self.alice, self.read)).distinct()), {granted_node.pk, child.pk, direct.pk})
+            left, right = built_registries(handles)
+            combined = granted(left, self.Node.objects.all(), self.alice, self.read) | granted(right, self.Node.objects.all(), self.alice, self.read)
+            self.assertEqual(_pks(self.Node.objects.filter(combined).distinct()), {granted_node.pk, child.pk, direct.pk})
 
     def test_non_recursive_sql_and_results_unchanged(self):
         node = self.Node.objects.create(title='n')

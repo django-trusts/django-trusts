@@ -123,14 +123,14 @@ class Catalog(object):
             if overlay is None:
                 return None, False
             part = granted(
-                (registry,), candidates, user, binding, kind='complete',
+                registry, candidates, user, binding, kind='complete',
                 permission_model=Permission, skipped=skipped,
             )
             if part is None:
                 return None, True
             return part & overlay, True
         part = granted(
-            (registry,), candidates, user, binding, kind='complete',
+            registry, candidates, user, binding, kind='complete',
             permission_model=Permission, skipped=skipped,
         )
         if part is None:
@@ -140,7 +140,7 @@ class Catalog(object):
     def complete_grant_q(self, candidates, user, permission, *, skipped=()):
         """This catalog's complete grant predicate, or None when it grants nothing."""
         return granted(
-            (self._registry,), candidates, user, permission,
+            self._registry, candidates, user, permission,
             kind='complete', skipped=skipped,
         )
 

@@ -285,7 +285,7 @@ class PolicyLockConfigurationTest(SimpleTestCase):
             def complete_grant_q(self, candidates, user, permission, *,
                                  skipped=()):
                 return granted(
-                    (self._inner,), candidates, user, permission,
+                    self._inner, candidates, user, permission,
                     kind='complete', skipped=skipped,
                 )
 
@@ -567,11 +567,11 @@ class PolicyLockSentinelTest(SimpleTestCase):
         )
         from trusts.plan.aggregates import _compile_common_permissions
 
-        def hide_group(handles, instance, user, kind='complete'):
+        def hide_group(registry, instance, user, kind='complete'):
             if kind == 'group':
                 return None
             return _compile_common_permissions(
-                built_registries(handles), instance, user, kind=kind,
+                registry, instance, user, kind=kind,
             )
 
         with patch(

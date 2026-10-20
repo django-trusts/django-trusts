@@ -76,65 +76,53 @@ def _apply_checked_user(grant, plan, user, values, permission, content_identity,
     ).predicate
 
 
-def _compile_granted(registries, candidates, user, permission, *, kind='complete',
+def _compile_granted(registry, candidates, user, permission, *, kind='complete',
                      permission_model=None, skipped=()):
-    """OR ordinary predicates and one-level delegated predicates.
+    """Ordinary predicate and one-level delegated predicate for ``registry``.
 
-    ``registries`` owns the direct and delegation branches being projected.
-    A delegation's sponsor rows are that same registry's ordinary records.
+    A delegation's sponsor rows are this registry's ordinary records.
     """
-    registries = tuple(registries)
     if permission_model is None and isinstance(permission, Model):
         permission_model = permission._meta.concrete_model
-    parts = []
     content_identity = _candidate_model(candidates)
-    for registry in registries:
-        compiler = answering_compiler(registry)
-        plan = _plan_for_permission(registry, candidates, user, permission)
-        if kind == 'complete':
-            fn = compiler.complete_exists
-        else:
-            fn = compiler.group_exists
-        part = _as_q(fn(plan, candidates, user, permission))
-        delegated = None
-        if kind == 'complete' and plan.delegations:
-            delegated = _delegated_content_exists(
-                tuple(plan.delegations),
-                _ordinary_records(registry, candidates, permission_model),
-                user, permission,
-                content_identity=content_identity,
-                skipped=skipped,
-            )
-        wrapped = _apply_checked_user(
-            _or_q(part, delegated), plan, user, skipped, permission,
-            content_identity, permission_model, complete=(kind == 'complete'),
+    compiler = answering_compiler(registry)
+    plan = _plan_for_permission(registry, candidates, user, permission)
+    if kind == 'complete':
+        fn = compiler.complete_exists
+    else:
+        fn = compiler.group_exists
+    part = _as_q(fn(plan, candidates, user, permission))
+    delegated = None
+    if kind == 'complete' and plan.delegations:
+        delegated = _delegated_content_exists(
+            tuple(plan.delegations),
+            _ordinary_records(registry, candidates, permission_model),
+            user, permission,
+            content_identity=content_identity,
+            skipped=skipped,
         )
-        if wrapped is not None:
-            parts.append(wrapped)
-    if not parts:
-        return None
-    if len(parts) == 1:
-        return parts[0]
-    return reduce(or_, parts)
+    return _apply_checked_user(
+        _or_q(part, delegated), plan, user, skipped, permission,
+        content_identity, permission_model, complete=(kind == 'complete'),
+    )
 
 
-def granted(registries, candidates, user, permission, *, kind='complete',
+def granted(registry, candidates, user, permission, *, kind='complete',
             permission_model=None, skipped=()):
-    """OR each applicable relationship-family registry's complete (or group) predicate.
+    """This relationship-family registry's complete (or group) predicate.
 
-    A valid compiler returning ``None`` is inapplicable and is omitted.
-    Compiler exceptions propagate. An empty result is ``None``.
+    A valid compiler returning ``None`` is inapplicable. Compiler
+    exceptions propagate. An empty result is ``None``. A registry whose
+    family is not relationship returns ``None``.
 
     ``permission`` may be a permission instance or an unevaluated lookup
     (``Subquery`` / ``OuterRef``). Expressions are not passed to
     ``plan_for``; the plan is selected by content and user terminals.
-
-    Only relationship-family registries participate. Each one sponsors
-    from its own ordinary records.
     """
-    participating = relationship_family(registries)
+    if registry.family != 'relationship':
+        return None
     return _compile_granted(
-        participating, candidates, user, permission, kind=kind,
+        registry, candidates, user, permission, kind=kind,
         permission_model=permission_model,
         skipped=skipped,
     )
@@ -326,60 +314,52 @@ def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
 
 
 def _compile_permitted_content_queryset(
-    queryset, user, permission, *, content, subjects, skipped=(),
+    queryset, user, permission, *, content, registry, skipped=(),
 ):
-    """Compile the permitted-content queryset for resolved subjects.
+    """Compile the permitted-content queryset for one registry.
 
-    ``subjects`` owns the ordinary and delegation branches being listed.
-    A delegation uses that same subject's ordinary grants. Callers resolve
-    subjects and apply the inactive-user gate before this helper runs.
+    A delegation uses this registry's ordinary grants. Callers apply the
+    inactive-user gate before this helper runs.
     """
-    subjects = tuple(subjects)
     scope_model = queryset.model._meta.concrete_model
-
-    parts = []
     content_identity = _candidate_model(content)
-    for registry in subjects:
-        plan = _plan_for_permission(registry, content, user, permission)
-        if plan.content_identity is not None:
-            content_identity = plan.content_identity
-        plan_parts = []
-        for record in plan.records:
-            for lookup, target_attname in _scope_prefix_lookups(
-                record, scope_model,
-            ):
-                plan_parts.append(_ordinary_prefix_predicate(
-                    record, lookup, target_attname, user, permission,
-                    content_identity,
-                ))
-        if plan.delegations:
-            plan_parts.extend(_delegated_prefix_predicates(
-                tuple(plan.delegations),
-                _ordinary_records(
-                    registry, content, permission._meta.concrete_model,
-                ),
-                user, permission, scope_model,
-                content_identity=content_identity,
-                skipped=skipped,
+    plan = _plan_for_permission(registry, content, user, permission)
+    if plan.content_identity is not None:
+        content_identity = plan.content_identity
+    plan_parts = []
+    for record in plan.records:
+        for lookup, target_attname in _scope_prefix_lookups(
+            record, scope_model,
+        ):
+            plan_parts.append(_ordinary_prefix_predicate(
+                record, lookup, target_attname, user, permission,
+                content_identity,
             ))
-        grant = None
-        if plan_parts:
-            grant = (
-                plan_parts[0] if len(plan_parts) == 1
-                else reduce(or_, plan_parts)
-            )
-        wrapped = _apply_checked_user(
-            grant, plan, user, skipped, permission, content_identity,
-            permission._meta.concrete_model
-            if isinstance(permission, Model) else plan.permission_model,
-            complete=True,
+    if plan.delegations:
+        plan_parts.extend(_delegated_prefix_predicates(
+            tuple(plan.delegations),
+            _ordinary_records(
+                registry, content, permission._meta.concrete_model,
+            ),
+            user, permission, scope_model,
+            content_identity=content_identity,
+            skipped=skipped,
+        ))
+    grant = None
+    if plan_parts:
+        grant = (
+            plan_parts[0] if len(plan_parts) == 1
+            else reduce(or_, plan_parts)
         )
-        if wrapped is not None:
-            parts.append(wrapped)
-    if not parts:
+    wrapped = _apply_checked_user(
+        grant, plan, user, skipped, permission, content_identity,
+        permission._meta.concrete_model
+        if isinstance(permission, Model) else plan.permission_model,
+        complete=True,
+    )
+    if wrapped is None:
         return queryset.none()
-    granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
-    return bind_once(queryset.filter(granted_q).distinct())
+    return bind_once(queryset.filter(wrapped).distinct())
 
 
 def _shift_outer_ref(value):

@@ -43,7 +43,7 @@ class CompilerFailureTest(KernelHostRequiredMixin, TestCase):
         handle = [registry, setattr(registry, 'path', 'tests.backends.RaisingCompilerBackend')][0]
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
-            granted(built_registries((handle,)), Document, User(), Permission(), kind='complete')
+            granted(built_registries((handle,))[0], Document, User(), Permission(), kind='complete')
         self.assertIn('compiler exploded', str(ctx.exception))
 
     def test_missing_compiler_fails_loud(self):
@@ -80,12 +80,13 @@ class CoordinatorQueryCountTest(KernelHostRequiredMixin, TestCase):
 
     def test_coordinator_one_sql_noncoordinator_zero(self):
         qs = Document.objects.all()
-        pred = granted(built_registries((self.host, self.document)), qs, self.alice, self.change, kind='complete')
+        host_q = granted(built_registries((self.host,))[0], qs, self.alice, self.change, kind='complete')
+        document_q = granted(built_registries((self.document,))[0], qs, self.alice, self.change, kind='complete')
+        pred = document_q if host_q is None else host_q | document_q
         self.assertIsNotNone(pred)
         with self.assertNumQueries(1):
             self.assertEqual(_pks(qs.filter(pred).distinct()), {self.doc.pk})
-        empty = granted(built_registries((self.host,)), qs, self.alice, self.change, kind='complete')
-        self.assertIsNone(empty)
+        self.assertIsNone(host_q)
 
 class CoreCommonPermissionsProjectionTest(KernelHostRequiredMixin, TestCase):
 

@@ -304,7 +304,7 @@ class UserOverrideTest(TransactionTestCase):
             handle = [registry, setattr(registry, 'path', 'user-override')][0]
 
             def holds(user):
-                predicate = granted(built_registries((handle,)), note, user, read)
+                predicate = granted(built_registries((handle,))[0], note, user, read)
                 if predicate is None:
                     return False
                 return bind_once(Note.objects.filter(pk=note.pk).filter(predicate)).exists()
@@ -387,7 +387,7 @@ class UserConditionTargetTest(TransactionTestCase):
             def holds(handle, user, **skip):
                 from trusts.plan.relations import user_skip_params
                 inquiry = user_skip_params(user, skip, subjects=built_registries((handle,)))
-                predicate = granted(built_registries((handle,)), note, user, read, skipped=inquiry.values)
+                predicate = granted(built_registries((handle,))[0], note, user, read, skipped=inquiry.values)
                 if predicate is None:
                     return False
                 return bind_once(TargetNote.objects.filter(pk=note.pk).filter(predicate)).exists()
@@ -395,7 +395,7 @@ class UserConditionTargetTest(TransactionTestCase):
             def sql_for(handle, user, **skip):
                 from trusts.plan.relations import user_skip_params
                 inquiry = user_skip_params(user, skip, subjects=built_registries((handle,)))
-                predicate = granted(built_registries((handle,)), note, user, read, skipped=inquiry.values)
+                predicate = granted(built_registries((handle,))[0], note, user, read, skipped=inquiry.values)
                 return bind_once(TargetNote.objects.filter(pk=note.pk).filter(predicate)).query.sql_with_params()[0]
             staff_delegate = User.objects.create_user('tgt-staff-del', password='x')
             staff_delegate.is_staff = True
@@ -1421,12 +1421,12 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
             forward_sql = str(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(holder, note).query)
             self.assertNotIn('is_active', forward_sql)
             handle = [registry, setattr(registry, 'path', 'columnless')][0]
-            predicate = granted(built_registries((handle,)), note, delegate, permission)
+            predicate = granted(built_registries((handle,))[0], note, delegate, permission)
             self.assertIsNotNone(predicate)
             matched = bind_once(note_model.objects.filter(pk=note.pk).filter(predicate))
             self.assertTrue(matched.exists())
             self.assertNotIn('is_active', matched.query.sql_with_params()[0])
-            denied = granted(built_registries((handle,)), note, outsider, permission)
+            denied = granted(built_registries((handle,))[0], note, outsider, permission)
             if denied is not None:
                 self.assertFalse(bind_once(note_model.objects.filter(pk=note.pk).filter(denied)).exists())
             found = set(lock_permitted_users_queryset(built_registries((handle,))[0], note, permission).values_list('pk', flat=True))

@@ -478,11 +478,11 @@ class _TerminalProjectionMixin(object):
         granted_qs = Model.objects.filter(pk__in=[granted.pk, sibling.pk])
         mixed_qs = Model.objects.order_by('pk')
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(built_registries((handle,)), granted, self.alice, self.read))
+            self.assertTrue(all_match(built_registries((handle,))[0], granted, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(built_registries((handle,)), granted_qs, self.alice, self.read))
+            self.assertTrue(all_match(built_registries((handle,))[0], granted_qs, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(all_match(built_registries((handle,)), mixed_qs, self.alice, self.read))
+            self.assertFalse(all_match(built_registries((handle,))[0], mixed_qs, self.alice, self.read))
         with self.assertNumQueries(1):
             self.assertEqual(_pks(common_permissions(built_registries((handle,)), granted, self.alice)), {self.read.pk})
         with self.assertNumQueries(1):
@@ -729,15 +729,15 @@ class TrustsRegistryDependentGrammarGroupSplitTest(TransactionTestCase):
         many = self.Payload.objects.order_by('pk')
         alice_only = self.Payload.objects.filter(pk=self.pay_a.pk)
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(built_registries((self.handle,)), self.pay_a, self.alice, self.read))
+            self.assertTrue(all_match(built_registries((self.handle,))[0], self.pay_a, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(all_match(built_registries((self.handle,)), self.pay_a, self.alice, self.read, kind='group'))
+            self.assertFalse(all_match(built_registries((self.handle,))[0], self.pay_a, self.alice, self.read, kind='group'))
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(built_registries((self.handle,)), self.pay_a, self.carol, self.read, kind='group'))
+            self.assertTrue(all_match(built_registries((self.handle,))[0], self.pay_a, self.carol, self.read, kind='group'))
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(built_registries((self.handle,)), self.pay_a, self.carol, self.read))
+            self.assertTrue(all_match(built_registries((self.handle,))[0], self.pay_a, self.carol, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(all_match(built_registries((self.handle,)), many, self.alice, self.read))
+            self.assertFalse(all_match(built_registries((self.handle,))[0], many, self.alice, self.read))
         with self.assertNumQueries(1):
             self.assertEqual(_pks(common_permissions(built_registries((self.handle,)), alice_only, self.alice)), {self.read.pk})
         with self.assertNumQueries(1):
@@ -746,8 +746,8 @@ class TrustsRegistryDependentGrammarGroupSplitTest(TransactionTestCase):
             self.assertEqual(_pks(common_permissions(built_registries((self.handle,)), alice_only, self.carol, kind='group')), {self.read.pk})
         with self.assertNumQueries(1):
             self.assertEqual(list(common_permissions(built_registries((self.handle,)), many, self.alice)), [])
-        self.assertFalse(all_match(built_registries((self.handle,)), self.pay_b, self.alice, self.read))
-        self.assertFalse(all_match(built_registries((self.handle,)), self.pay_b, self.carol, self.read))
+        self.assertFalse(all_match(built_registries((self.handle,))[0], self.pay_b, self.alice, self.read))
+        self.assertFalse(all_match(built_registries((self.handle,))[0], self.pay_b, self.carol, self.read))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class TrustsRegistryDependentGrammarToFieldTest(TransactionTestCase):
