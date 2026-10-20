@@ -223,7 +223,7 @@ def plan_table(records, delegations, catalog_user, user_conditions,
 
 
 class Compiler(object):
-    """The backend is the registry. Compiler only builds the Catalog.
+    """Build the Catalog.
 
     It records every registration call through its recorder. ``register``
     performs zero SQL. ``compile`` freezes this compiler and returns a

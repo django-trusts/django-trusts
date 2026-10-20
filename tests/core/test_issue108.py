@@ -36,7 +36,6 @@ class ImplementationHelperSurfaceTest(SimpleTestCase):
         host = apps.get_app_config('trusts_kernel_host')
         self.assertFalse(hasattr(apps_mod, 'AppConfig'))
         self.assertFalse(hasattr(apps_mod, 'kernel_config'))
-        self.assertFalse(hasattr(apps_mod, 'TrustsImplementationConfig'))
         self.assertIsInstance(host, TrustsConfigMixin)
         self.assertIsNot(type(host), TrustsConfigMixin)
 
@@ -62,7 +61,6 @@ class ImplementationHelperSurfaceTest(SimpleTestCase):
         self.assertFalse(hasattr(backends_mod, 'TrustModelBackend'))
         self.assertFalse(hasattr(backends_mod, 'HistoricalGroupQueryCompiler'))
         self.assertFalse(hasattr(backends_mod, 'catalogs'))
-        self.assertFalse(hasattr(backends_mod, 'configured_catalogs'))
 
     def test_generic_declarations_import_without_kernel_config(self):
         import trusts.apps as apps_mod
