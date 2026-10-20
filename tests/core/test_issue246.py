@@ -140,8 +140,8 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
     def _grant_model(self):
 
         class GroupPaperGrant(models.Model):
-            group = models.ForeignKey('auth.Group', on_delete=models.CASCADE)
-            paper = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            group = models.ForeignKey(Group, on_delete=models.CASCADE)
+            paper = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
 
             class Meta:
                 app_label = 'trusts_tests'
@@ -188,8 +188,8 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
 
         class CrewPaper(models.Model):
             crew = models.ForeignKey(Crew, on_delete=models.CASCADE)
-            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
-            paper = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
+            paper = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
 
             class Meta:
                 app_label = 'trusts_tests'
@@ -222,14 +222,14 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
         self.assertNotIn('permissions', expected.group_path)
 
         class Station(models.Model):
-            group = models.ForeignKey('auth.Group', on_delete=models.CASCADE)
+            group = models.ForeignKey(Group, on_delete=models.CASCADE)
 
             class Meta:
                 app_label = 'trusts_tests'
 
         class StationGrant(models.Model):
             station = models.ForeignKey(Station, on_delete=models.CASCADE)
-            paper = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            paper = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
 
             class Meta:
                 app_label = 'trusts_tests'
@@ -241,9 +241,9 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
     def test_permission_registration_is_not_via_group(self):
 
         class Direct(models.Model):
-            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
             permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
-            paper = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            paper = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
 
             class Meta:
                 app_label = 'trusts_tests'

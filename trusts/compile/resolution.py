@@ -15,7 +15,6 @@ from django.contrib.auth.models import Group, Permission
 
 from trusts.plan.hops import (
     lookup_text,
-    materialize_related_model,
     path_text,
     resolved_hop,
 )
@@ -159,7 +158,6 @@ _SUFFIX_MAX = 2
 
 def _m2m_related_model(field):
     """Related model of a many-to-many field. Metadata only (zero SQL)."""
-    materialize_related_model(field)
     related = getattr(field, 'related_model', None)
     if not _is_model_class(related):
         remote = getattr(field, 'remote_field', None)

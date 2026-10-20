@@ -9,7 +9,6 @@ register methods own duplicate/rule checks and append the shapes.
 
 import dataclasses
 
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
@@ -341,7 +340,7 @@ def _document_models():
     class DocumentGrant(models.Model):
         document = models.ForeignKey(Document, on_delete=models.CASCADE)
         user = models.ForeignKey(
-            settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+            get_user_model(), on_delete=models.CASCADE,
         )
         permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
 
@@ -361,7 +360,7 @@ def _group_models():
     class GroupGrant(models.Model):
         document = models.ForeignKey(GroupDocument, on_delete=models.CASCADE)
         user = models.ForeignKey(
-            settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+            get_user_model(), on_delete=models.CASCADE,
         )
         group = models.ForeignKey(Group, on_delete=models.CASCADE)
 
@@ -381,11 +380,11 @@ def _share_models():
     class Share(models.Model):
         document = models.ForeignKey(ShareDocument, on_delete=models.CASCADE)
         delegate = models.ForeignKey(
-            settings.AUTH_USER_MODEL, related_name='share_delegates',
+            get_user_model(), related_name='share_delegates',
             on_delete=models.CASCADE,
         )
         sponsor = models.ForeignKey(
-            settings.AUTH_USER_MODEL, related_name='share_sponsors',
+            get_user_model(), related_name='share_sponsors',
             on_delete=models.CASCADE,
         )
 
@@ -405,7 +404,7 @@ def _other_grant_models():
     class OtherGrant(models.Model):
         document = models.ForeignKey(OtherDocument, on_delete=models.CASCADE)
         user = models.ForeignKey(
-            settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+            get_user_model(), on_delete=models.CASCADE,
         )
         permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
 
@@ -529,7 +528,7 @@ def _prefix_models():
     class ShapeGrant(models.Model):
         scope = models.ForeignKey(ShapeScope, on_delete=models.CASCADE)
         user = models.ForeignKey(
-            settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+            get_user_model(), on_delete=models.CASCADE,
         )
         permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
 
