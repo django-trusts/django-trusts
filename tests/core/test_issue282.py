@@ -41,9 +41,13 @@ class _PairBackend(TrustModelBackendMixin, ModelBackend):
 
 def _seal_factory(backend_cls, factory):
     from trusts.backends import catalogs
-    from trusts.compile.catalogs import Catalog
-    built = factory.build()
-    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, shape=built)
+    from tests.support import built_catalog
+    catalogs[backend_cls] = built_catalog(
+        factory,
+        cls=backend_cls,
+        path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__),
+        family=backend_cls.family,
+    )
 
 @contextmanager
 def _listed(handle):

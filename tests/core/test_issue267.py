@@ -30,7 +30,6 @@ from trusts.decorators import _declared_authorization_guards, authorization_requ
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import render_configured_policy, built_catalog, install_class_handle
-from trusts.compile.catalogs import Catalog
 
 
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
@@ -38,8 +37,12 @@ class _ListedBackend(TrustModelBackendMixin, ModelBackend):
 
 def _seal_factory(backend_cls, factory):
     from trusts.backends import catalogs
-    built = factory.build()
-    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, shape=built)
+    catalogs[backend_cls] = built_catalog(
+        factory,
+        cls=backend_cls,
+        path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__),
+        family=backend_cls.family,
+    )
 
 @contextmanager
 def _installed(handle):

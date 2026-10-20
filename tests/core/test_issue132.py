@@ -17,6 +17,7 @@ from tests.support import (
     live_config,
     replay_recorder,
     bound_handle,
+    built_catalog,
 )
 from tests.backends import HostTrustModelBackend
 from tests.core import KernelHostRequiredMixin
@@ -98,11 +99,14 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
         with self.assertNumQueries(0):
             self._assert_public_deny()
             from trusts.backends import catalogs
-            from trusts.compile.catalogs import Catalog
             cls = type(self.document_backend)
             saved = catalogs.get(cls)
-            factory = extra
-            catalogs[cls] = Catalog(cls=cls, path=extra.path, family=cls.family if saved is None else saved.family, shape=factory.build())
+            catalogs[cls] = built_catalog(
+                extra,
+                cls=cls,
+                path=extra.path,
+                family=cls.family if saved is None else saved.family,
+            )
             try:
                 with bound_handle(self.document_backend, extra):
                     self.assertFalse(self.document_backend.has_perm(self.alice, '%s:always' % PERM, self.report))

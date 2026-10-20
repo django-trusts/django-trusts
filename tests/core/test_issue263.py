@@ -32,16 +32,17 @@ from tests.support import (
     built_catalog,
     install_class_handle,
 )
-from trusts.compile.catalogs import Catalog
-
-
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
     """Settings-listed probe. The test installs a registry for one block."""
 
 def _seal_factory(backend_cls, factory):
     from trusts.backends import catalogs
-    built = factory.build()
-    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, shape=built)
+    catalogs[backend_cls] = built_catalog(
+        factory,
+        cls=backend_cls,
+        path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__),
+        family=backend_cls.family,
+    )
 
 @contextmanager
 def _listed(handle):

@@ -34,7 +34,6 @@ from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _compile_queryset, _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import PermittedManager, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import render_configured_policy, built_catalog
-from trusts.compile.catalogs import Catalog
 
 HOST = 'tests.backends.HostTrustModelBackend'
 MODEL_BACKEND = 'django.contrib.auth.backends.ModelBackend'
@@ -189,9 +188,10 @@ def _seal_document_factory(factory):
     from trusts.backends import catalogs
     previous = catalogs.get(DocumentBackend)
     family = DocumentBackend.family if previous is None else previous.family
-    built = factory.build()
-    catalogs[DocumentBackend] = Catalog(cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family, shape=built)
-    return built
+    catalogs[DocumentBackend] = built_catalog(
+        factory, cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family,
+    )
+    return catalogs[DocumentBackend]
 
 @contextmanager
 def _document_registry():

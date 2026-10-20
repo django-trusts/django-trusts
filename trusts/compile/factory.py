@@ -210,7 +210,7 @@ class RegistryFactory(object):
     """
 
     def __init__(self, *, compiler=None, path='', family='relationship',
-                 user_model=None):
+                 user_model=None, cls=None):
         self._by_root = {}
         self._order = []
         self._delegations_by_root = {}
@@ -226,6 +226,7 @@ class RegistryFactory(object):
         self.path = path
         self.family = family
         self.user_model = user_model
+        self.cls = cls
 
     @property
     def compiler(self):
@@ -847,6 +848,7 @@ class RegistryFactory(object):
             user_conditions=stored, user_override=self._user_override,
             filter_lookup=lookup,
             compiler=self._compiler if self._explicit_compiler else None,
+            cls=self.cls if self.cls is not None else type(self),
             path=self.path or '', family=self.family, user_model=model,
             user_rules=(primary, absent), override_q=override_q,
         )
@@ -878,14 +880,15 @@ class RegistryFactory(object):
             )
 
 
-def compile_recorder(recorder, *, path, family, compiler, user_model):
+def compile_recorder(recorder, *, path, family, compiler, user_model, cls):
     """Replay ``recorder.rows`` into one factory and return its shape.
 
-    ``user_model`` is the model the caller resolved. This is the only
-    factory constructed for those rows.
+    ``user_model`` is the model the caller resolved and ``cls`` the
+    backend class. This is the only factory constructed for those rows.
     """
     built = RegistryFactory(
         compiler=compiler, path=path, family=family, user_model=user_model,
+        cls=cls,
     )
     recorder.freeze()
     for entry in recorder.rows:
@@ -930,21 +933,16 @@ def build_configured_catalogs(paths, user_model):
     for path, cls in chosen:
         if cls not in recorders:
             cls()
-        shape = compile_recorder(
+        pending.append(compile_recorder(
             recorders[cls],
             path=path,
             family=cls.family,
             compiler=cls.query_compiler,
             user_model=user_model,
-        )
-        pending.append((cls, path, cls.family, shape))
-    for cls, path, family, shape in pending:
-        catalogs[cls] = Catalog(
             cls=cls,
-            path=path,
-            family=family,
-            shape=shape,
-        )
+        ))
+    for shape in pending:
+        catalogs[shape.cls] = Catalog(shape)
 
 
 def probe_along_capabilities(connection):

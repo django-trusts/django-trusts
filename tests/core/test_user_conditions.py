@@ -27,7 +27,6 @@ from trusts.plan.contents import granted
 from trusts.decorators import _declared_authorization_guards, authorization_required
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import PermittedQuerySet, PermittedUsersManagerMixin
-from trusts.compile.catalogs import Catalog
 urlpatterns = [path('admin/', admin.site.urls)]
 
 def _permission(model, codename):
@@ -977,7 +976,7 @@ def _seal_document_factory(factory):
     from trusts.backends import catalogs
     previous = catalogs.get(DocumentBackend)
     family = DocumentBackend.family if previous is None else previous.family
-    catalogs[DocumentBackend] = Catalog(cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family, shape=factory.build())
+    catalogs[DocumentBackend] = built_catalog(factory, cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family)
     return previous
 
 def _restore_document_catalog(previous):
