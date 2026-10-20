@@ -97,7 +97,7 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
             cls = type(self.document_backend)
             saved = catalogs.get(cls)
             factory = extra
-            catalogs[cls] = Catalog(cls=cls, path=extra.path, family=cls.family if saved is None else saved.family, registry=factory.build_registry(), family_registries=built_registries(() if saved is None else saved.family_registries))
+            catalogs[cls] = Catalog(cls=cls, path=extra.path, family=cls.family if saved is None else saved.family, registry=factory.build_registry())
             try:
                 with bound_handle(self.document_backend, extra):
                     self.assertFalse(self.document_backend.has_perm(self.alice, '%s:always' % PERM, self.report))

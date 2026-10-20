@@ -67,7 +67,6 @@ def override_catalog(backend_cls, factory, path):
         path=path,
         family=getattr(factory, 'family', 'relationship'),
         registry=factory.build_registry(),
-        family_registries=(),
     )
     try:
         yield catalogs[backend_cls]
@@ -286,7 +285,7 @@ def override_apps_ready(ready, apps_registry=None):
 _MISSING = object()
 
 
-def _publish_catalog(backend_cls, factory, *, path=None, peers=()):
+def _publish_catalog(backend_cls, factory, *, path=None):
     """Store one catalog for ``backend_cls``. ``factory`` is the registration object."""
     from trusts.backends import catalogs
     from trusts.compile.catalogs import Catalog
@@ -302,7 +301,6 @@ def _publish_catalog(backend_cls, factory, *, path=None, peers=()):
         ),
         family=factory.family,
         registry=built,
-        family_registries=tuple(built_registries(tuple(peers)) or ()),
     )
     return built
 
@@ -314,8 +312,7 @@ def bound_handle(backend, factory):
 
     cls = type(backend)
     previous = catalogs.get(cls, _MISSING)
-    peers = () if previous is _MISSING else previous.family_registries
-    _publish_catalog(cls, factory, peers=peers)
+    _publish_catalog(cls, factory)
     try:
         yield
     finally:
@@ -430,16 +427,11 @@ def listed_relationship(factories):
             subject = factory.build_registry()
         prepared.append((cls, subject.path or listing, subject))
     for cls, path, subject in prepared:
-        peers = tuple(
-            other for _cls, _path, other in prepared
-            if other.family == subject.family and other is not subject
-        )
         catalogs[cls] = Catalog(
             cls=cls,
             path=path,
             family=subject.family,
             registry=subject,
-            family_registries=peers,
         )
     with override_settings(AUTHENTICATION_BACKENDS=tuple(paths)):
         try:
@@ -491,13 +483,11 @@ def unbound_named_filters(backend_cls):
     )
     replay_recorder(factory, backend_cls)
     factory.set_filter_lookup(None)
-    peers = () if live is None else tuple(live.family_registries)
     catalogs[backend_cls] = Catalog(
         cls=backend_cls,
         path=factory.path,
         family=factory.family,
         registry=factory.build_registry(),
-        family_registries=peers,
     )
     try:
         yield catalogs[backend_cls]

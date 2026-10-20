@@ -21,7 +21,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
-from tests.apps import render_configured_policy, built_registries
+from tests.apps import render_configured_policy
 
 
 def _handle(path='tests.core.issue282'):
@@ -43,7 +43,7 @@ def _seal_factory(backend_cls, factory):
     from trusts.backends import catalogs
     from trusts.compile.catalogs import Catalog
     built = factory.build_registry()
-    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built, family_registries=built_registries(()))
+    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built)
 
 @contextmanager
 def _listed(handle):

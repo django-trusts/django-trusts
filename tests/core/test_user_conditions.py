@@ -986,7 +986,7 @@ def _seal_document_factory(factory):
     from trusts.compile.catalogs import Catalog
     previous = catalogs.get(DocumentBackend)
     family = DocumentBackend.family if previous is None else previous.family
-    catalogs[DocumentBackend] = Catalog(cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family, registry=factory.build_registry(), family_registries=built_registries(() if previous is None else previous.family_registries))
+    catalogs[DocumentBackend] = Catalog(cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family, registry=factory.build_registry())
     return previous
 
 def _restore_document_catalog(previous):

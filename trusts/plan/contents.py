@@ -77,23 +77,17 @@ def _apply_checked_user(grant, plan, user, values, permission, content_identity,
 
 
 def _compile_granted(registries, candidates, user, permission, *, kind='complete',
-                     family_registries=None, permission_model=None,
-                     skipped=()):
+                     permission_model=None, skipped=()):
     """OR ordinary predicates and one-level delegated predicates.
 
     ``registries`` owns the direct and delegation branches being projected.
-    ``family_registries`` supplies the complete ordinary-authority union inside
-    each delegation branch and defaults to the same registries.
+    A delegation's sponsor rows are that same registry's ordinary records.
     """
     registries = tuple(registries)
-    family_registries = (
-        registries if family_registries is None else tuple(family_registries)
-    )
     if permission_model is None and isinstance(permission, Model):
         permission_model = permission._meta.concrete_model
     parts = []
     content_identity = _candidate_model(candidates)
-    sponsor_records = None
     for registry in registries:
         compiler = answering_compiler(registry)
         plan = _plan_for_permission(registry, candidates, user, permission)
@@ -104,12 +98,10 @@ def _compile_granted(registries, candidates, user, permission, *, kind='complete
         part = _as_q(fn(plan, candidates, user, permission))
         delegated = None
         if kind == 'complete' and plan.delegations:
-            if sponsor_records is None:
-                sponsor_records = _ordinary_records(
-                    family_registries, candidates, permission_model,
-                )
             delegated = _delegated_content_exists(
-                tuple(plan.delegations), sponsor_records, user, permission,
+                tuple(plan.delegations),
+                _ordinary_records(registry, candidates, permission_model),
+                user, permission,
                 content_identity=content_identity,
                 skipped=skipped,
             )
@@ -127,8 +119,7 @@ def _compile_granted(registries, candidates, user, permission, *, kind='complete
 
 
 def granted(registries, candidates, user, permission, *, kind='complete',
-            family_registries=None, permission_model=None,
-            skipped=()):
+            permission_model=None, skipped=()):
     """OR each applicable relationship-family registry's complete (or group) predicate.
 
     A valid compiler returning ``None`` is inapplicable and is omitted.
@@ -138,15 +129,12 @@ def granted(registries, candidates, user, permission, *, kind='complete',
     (``Subquery`` / ``OuterRef``). Expressions are not passed to
     ``plan_for``; the plan is selected by content and user terminals.
 
-    Only relationship-family registries participate.
+    Only relationship-family registries participate. Each one sponsors
+    from its own ordinary records.
     """
     participating = relationship_family(registries)
     return _compile_granted(
         participating, candidates, user, permission, kind=kind,
-        family_registries=(
-            participating if family_registries is None
-            else relationship_family(family_registries)
-        ),
         permission_model=permission_model,
         skipped=skipped,
     )
@@ -338,18 +326,15 @@ def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
 
 
 def _compile_permitted_content_queryset(
-    queryset, user, permission, *, content, subjects, family_registries,
-    skipped=(),
+    queryset, user, permission, *, content, subjects, skipped=(),
 ):
     """Compile the permitted-content queryset for resolved subjects.
 
     ``subjects`` owns the ordinary and delegation branches being listed.
-    ``family_registries`` supplies the ordinary grants a delegation may
-    use. Callers resolve relationship subjects and apply the inactive-user
-    gate before this helper runs.
+    A delegation uses that same subject's ordinary grants. Callers resolve
+    subjects and apply the inactive-user gate before this helper runs.
     """
     subjects = tuple(subjects)
-    family_registries = tuple(family_registries)
     scope_model = queryset.model._meta.concrete_model
 
     parts = []
@@ -371,7 +356,7 @@ def _compile_permitted_content_queryset(
             plan_parts.extend(_delegated_prefix_predicates(
                 tuple(plan.delegations),
                 _ordinary_records(
-                    family_registries, content, permission._meta.concrete_model,
+                    registry, content, permission._meta.concrete_model,
                 ),
                 user, permission, scope_model,
                 content_identity=content_identity,
@@ -404,18 +389,17 @@ def _shift_outer_ref(value):
     return value
 
 
-def _ordinary_records(registries, content, permission_model=None):
-    """Applicable ordinary records across relationship registries."""
+def _ordinary_records(registry, content, permission_model=None):
+    """Applicable ordinary records on this registry's own plan."""
     records = []
-    for registry in registries:
-        plan = registry.plan_for(content)
-        for record in plan.records:
-            if (
-                permission_model is not None
-                and record.permission_model is not permission_model
-            ):
-                continue
-            records.append(record)
+    plan = registry.plan_for(content)
+    for record in plan.records:
+        if (
+            permission_model is not None
+            and record.permission_model is not permission_model
+        ):
+            continue
+        records.append(record)
     return tuple(records)
 
 

@@ -24,6 +24,7 @@ from tests.core.test_issue147.test_sql_export import (
     _handle,
 )
 from trusts.errors import TrustsConfigurationError
+from trusts.plan.contents import granted
 from trusts.inspect.snapshot import (
     _const_from_json,
     _json_const,
@@ -258,7 +259,6 @@ class PolicyLockConfigurationTest(SimpleTestCase):
             family = 'relationship'
             records = ()
             delegations = ()
-            family_registries = ()
 
         with self.assertRaises(TrustsConfigurationError) as ctx:
             render_published_subjects(_MissingPath())
@@ -277,11 +277,17 @@ class PolicyLockConfigurationTest(SimpleTestCase):
                 self.family = inner.family
                 self.records = inner.records
                 self.delegations = inner.delegations
-                self.family_registries = ()
                 self.iter_permission_conditions = None
 
             def walk_questions(self, visitor):
                 return self._inner.walk_questions(visitor)
+
+            def complete_grant_q(self, candidates, user, permission, *,
+                                 skipped=()):
+                return granted(
+                    (self._inner,), candidates, user, permission,
+                    kind='complete', skipped=skipped,
+                )
 
             def __getattr__(self, name):
                 return getattr(self._inner, name)
@@ -528,7 +534,10 @@ class PolicyLockSentinelTest(SimpleTestCase):
 
     def test_missing_grant_or_permission_query_fails_closed(self):
         handle = _document_handle('documents.backends.MissingQueryBackend')
-        with patch('trusts.inspect.snapshot._compile_granted', return_value=None):
+        with patch(
+            'trusts.compile.catalogs.Catalog.complete_grant_q',
+            return_value=None,
+        ):
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 render_configured_policy(handle)
         self.assertIn('no grant', str(ctx.exception))

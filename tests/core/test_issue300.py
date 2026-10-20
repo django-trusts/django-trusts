@@ -531,7 +531,7 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
                     user = _role_sentinel(records[0], 'user', 'default')
                     permission = _role_sentinel(records[0], 'permission', 'default')
                     queryset = _content_manager(ReviewDocument).all()
-                    granted = _compile_granted(built_registries((handle,)), queryset, user, permission, kind='complete', family_registries=built_registries((handle,)))
+                    granted = _compile_granted(built_registries((handle,)), queryset, user, permission, kind='complete')
                     raw_sql, raw_params = bind_once(queryset.filter(granted).distinct()).query.sql_with_params()
                     self._assert_cardinality_and_order(permitted, raw_params)
                     self.assertEqual(raw_sql.count('%s'), len(raw_params))

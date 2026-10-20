@@ -44,8 +44,6 @@ from trusts.backends import configured_catalogs
 from trusts.plan.hops import resolved_hop
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.contents import relationship_family
-from trusts.plan.delegations import _sponsor_record_matches
 from trusts.inspect.format import _format_policy_sql
 from trusts.inspect.yaml import (
     PolicyYamlError,
@@ -69,7 +67,6 @@ from trusts.plan.rewrites import BoundBool
 from trusts.plan.standards import SkipFlag
 from trusts.plan.conditions import ModelIdentity
 from trusts.compile.factory import RegisteredDelegation
-from trusts.plan.contents import _compile_granted
 from trusts.plan.rewrites import bind_once
 from trusts.plan.rewrites import bound_exists_query
 from trusts.plan.aggregates import _compile_common_permissions
@@ -264,12 +261,11 @@ class _PolicyVisitor(object):
     """Snapshot visitor: renders each walked question to policy SQL.
 
     Supplies the alias and the user/permission/content sentinels for one
-    catalog. ``subject`` is that catalog. Peers are the catalog's own
-    ``family_registries``. ``visit(question)`` is the single visitor
-    method :meth:`Registry.walk_questions` calls; it accumulates the
-    same document structure (and key order) the hard-coded projection
-    produced. The six ``_compile_*`` methods below are its per-question
-    bodies.
+    catalog. ``subject`` is that catalog. ``visit(question)`` is the
+    single visitor method :meth:`Registry.walk_questions` calls; it
+    accumulates the same document structure (and key order) the
+    hard-coded projection produced. The six ``_compile_*`` methods
+    below are its per-question bodies.
     """
 
     def __init__(self, catalog, alias, *, trust_ids=None):
@@ -279,13 +275,6 @@ class _PolicyVisitor(object):
         self._contents = {}
         self._classifier_records = {}
         self._ordinary_records = {}
-
-    def _peers(self):
-        """This catalog plus the peer registries the sweep stored."""
-        return (self.subject,) + tuple(self.subject.family_registries)
-
-    def _all_registries(self):
-        return self._peers()
 
     def content_for(self, label):
         return self._contents[label]
@@ -397,7 +386,7 @@ class _PolicyVisitor(object):
                 row['or_group'] = True
             trusts.append(row)
         classifier_records = _policy_classifier_records(
-            records, delegations, self._all_registries(), model,
+            records, delegations, model,
         )
         _require_shared_terminals(classifier_records, label)
         content = {'model': label}
@@ -414,38 +403,32 @@ class _PolicyVisitor(object):
 
     def _compile_content_grant(self, records, model):
 
-        subject, alias, peers = self.subject, self.alias, self._peers()
+        subject, alias = self.subject, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         queryset = _content_manager(model).all()
-        granted = _compile_granted(
-            (subject,), queryset, user, permission, kind='complete',
-            family_registries=peers,
-        )
-        if granted is None:
+        predicate = subject.complete_grant_q(queryset, user, permission)
+        if predicate is None:
             raise TrustsConfigurationError(
                 'Policy SQL found no grant for %s.' % _model_label(model)
             )
-        queryset = bind_once(queryset.filter(granted).distinct())
+        queryset = bind_once(queryset.filter(predicate).distinct())
         return _compile_queryset(
             queryset, alias, record=records[0], expr=None, records=records,
         )
 
     def _compile_has_perm(self, records, model):
 
-        subject, alias, peers = self.subject, self.alias, self._peers()
+        subject, alias = self.subject, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         instance = _content_sentinel(model, alias)
-        granted = _compile_granted(
-            (subject,), instance, user, permission, kind='complete',
-            family_registries=peers,
-        )
-        if granted is None:
+        predicate = subject.complete_grant_q(instance, user, permission)
+        if predicate is None:
             raise TrustsConfigurationError(
                 'Policy SQL found no grant for %s.' % _model_label(model)
             )
-        exists = _content_manager(model).filter(pk=instance.pk).filter(granted)
+        exists = _content_manager(model).filter(pk=instance.pk).filter(predicate)
         compiled = bound_exists_query(exists)
         return _compile_queryset(
             _Query(compiled),
@@ -454,19 +437,12 @@ class _PolicyVisitor(object):
 
     def _compile_get_all_permissions(self, records, model):
 
-        subject, alias, peers = self.subject, self.alias, self._peers()
+        subject, alias = self.subject, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         instance = _content_sentinel(model, alias)
-        plan = self.subject.plan_for(model)
-        if plan.delegations:
-            queryset = _compile_common_permissions(
-                (subject,), instance, user, kind='complete',
-                family_registries=peers,
-            )
-        else:
-            queryset = _compile_common_permissions(
-                (subject,), instance, user, kind='complete',
-            )
+        queryset = _compile_common_permissions(
+            (subject,), instance, user, kind='complete',
+        )
         if queryset is None:
             raise TrustsConfigurationError(
                 'Policy SQL found no permissions query for %s.'
@@ -483,7 +459,7 @@ class _PolicyVisitor(object):
         _populate_reverse_along_identity(content, records, alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         queryset = lock_permitted_users_queryset(
-            subject, content, permission, subjects=self._peers(),
+            subject, content, permission,
         )
         return _compile_queryset(
             queryset, alias, record=records[0], expr=None, records=records,
@@ -496,8 +472,6 @@ class _PolicyVisitor(object):
         subject, alias = self.subject, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
-        listed = relationship_family((subject,))
-        peers = relationship_family(self._peers())
         rows = []
         for prefix in _permitted_content_prefix_models(subject, model):
             queryset = _compile_permitted_content_queryset(
@@ -505,8 +479,7 @@ class _PolicyVisitor(object):
                 user,
                 permission,
                 content=model,
-                subjects=listed,
-                family_registries=peers,
+                subjects=(subject,),
             )
             if queryset.query.is_empty():
                 continue
@@ -768,30 +741,14 @@ def _delegation_relation(record, role):
     }
 
 
-def _policy_classifier_records(records, delegations, registries, model):
+def _policy_classifier_records(records, delegations, model):
     """Ordinary records that classify policy-lock bind placeholders.
 
-    A delegation-only backend has no permission terminal of its own. Its
-    requested-permission and user sentinels therefore come from compatible
-    ordinary sponsor grants across the rendered relationship registries. This
-    is also the exact ordinary-only union used by the runtime compiler, so a
-    delegated row can never become a sponsor record here.
+    A delegation-only content group has no permission terminal of its
+    own. Sentinels come from this catalog's ordinary records. A
+    delegated row is not a sponsor record.
     """
-    selected = list(records)
-    seen = {id(record) for record in selected}
-    for registry in registries:
-        if registry is None:
-            continue
-        plan = registry.plan_for(model)
-        for ordinary in plan.records:
-            if id(ordinary) in seen:
-                continue
-            for delegation in delegations:
-                if not _sponsor_record_matches(ordinary, delegation):
-                    continue
-                selected.append(ordinary)
-                seen.add(id(ordinary))
-                break
+    selected = tuple(records)
     if not selected:
         raise TrustsConfigurationError(
             'Policy SQL found no ordinary sponsor grant for delegated '
@@ -809,7 +766,7 @@ def _policy_classifier_records(records, delegations, registries, model):
                 'terminals to share one model and target.'
                 % _model_label(model)
             )
-    return tuple(selected)
+    return selected
 
 
 def _content_manager(model):
