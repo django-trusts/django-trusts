@@ -33,6 +33,9 @@ PERM = 'myapp.change_document'
 
 def _permission(model, codename):
     ct = ContentType.objects.get_for_model(model)
+    suffix = '_' + ct.model
+    if not codename.endswith(suffix):
+        codename = codename + suffix
     permission, _created = Permission.objects.get_or_create(content_type=ct, codename=codename, defaults={'name': codename})
     return permission
 
@@ -214,8 +217,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             inactive = User.objects.create_user('inactive-reg-284', password='x')
             inactive.is_active = False
             inactive.save(update_fields=['is_active'])
-            ct = ContentType.objects.get_for_model(Note)
-            read, _created = Permission.objects.get_or_create(content_type=ct, codename='read_note_284', defaults={'name': 'read note 284'})
+            read = _permission(Note, 'read_note_284')
             note = Note.objects.create(title='n')
             folder = Folder.objects.create(title='f')
             Row.objects.create(folder=folder, note=note)
@@ -229,20 +231,20 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             grant = Ref(NoteGrant)
             registry.register(content=grant.note, user=grant.user, permission=grant.permission)
             self.assertEqual(_pks(built_catalog(registry).permissions_for(alice, note)), {read.pk})
-            self.assertTrue(registry.build_registry().has_permission(alice, note, read))
+            self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), note))
             self.assertEqual(_pks(registry.build_registry().filter_authorized(Note.objects.all(), alice, read)), {note.pk})
             with self.assertNumQueries(3):
                 self.assertEqual(list(built_catalog(registry).permissions_for(inactive, note)), [])
-                self.assertFalse(registry.build_registry().has_permission(inactive, note, read))
+                self.assertFalse(built_catalog(registry).has_perm(inactive, '%s.%s' % (read.content_type.app_label, read.codename), note))
                 self.assertFalse(registry.build_registry().filter_authorized(Note.objects.all(), inactive, read).exists())
             self.assertEqual(_pks(built_catalog(registry).permissions_for(inactive, note, skip_is_active=True)), {read.pk})
-            self.assertTrue(registry.build_registry().has_permission(inactive, note, read, skip_is_active=True))
+            self.assertTrue(built_catalog(registry).has_perm(inactive, '%s.%s' % (read.content_type.app_label, read.codename), note, skip_is_active=True))
             self.assertEqual(_pks(registry.build_registry().filter_authorized(Note.objects.all(), inactive, read, skip_is_active=True)), {note.pk})
             account_registry = RegistryFactory()
             account_grant = Ref(AccountGrant)
             account_registry.register(content=account_grant.note, user=account_grant.account, permission=account_grant.action)
             self.assertEqual(_pks(built_catalog(account_registry).permissions_for(account, note)), {read.pk})
-            self.assertTrue(account_registry.build_registry().has_permission(account, note, read))
+            self.assertTrue(built_catalog(account_registry).has_perm(account, '%s.%s' % (read.content_type.app_label, read.codename), note))
             account_sql = str(built_catalog(account_registry).permissions_for(account, note).query)
             self.assertNotIn('is_active', account_sql)
             active_sql = str(built_catalog(registry).permissions_for(alice, note).query)
@@ -346,7 +348,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             grant = Ref(LocalUserGrant)
             registry.register(content=grant.note, user=grant.holder, permission=grant.action)
             self.assertEqual(_pks(built_catalog(registry).permissions_for(visible, note)), {read.pk})
-            self.assertTrue(registry.build_registry().has_permission(visible, note, read))
+            self.assertTrue(built_catalog(registry).has_perm(visible, '%s.%s' % (read.content_type.app_label, read.codename), note))
             scope_registry = RegistryFactory()
             scope_grant = Ref(FolderGrant)
             scope_registry.register(content=scope_grant.folder.identity_rows.note, user=scope_grant.holder, permission=scope_grant.permission)
@@ -357,7 +359,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 with self.assertNumQueries(0):
                     for include_inactive in (False, True):
                         self.assertEqual(list(built_catalog(registry).permissions_for(holder, note, skip_is_active=include_inactive)), [])
-                        self.assertFalse(registry.build_registry().has_permission(holder, note, read, skip_is_active=include_inactive))
+                        self.assertFalse(built_catalog(registry).has_perm(holder, '%s.%s' % (read.content_type.app_label, read.codename), note, skip_is_active=include_inactive))
                         self.assertFalse(registry.build_registry().filter_authorized(Note.objects.all(), holder, read, skip_is_active=include_inactive).exists())
                         self.assertFalse(filter_by_permitted_content(Folder.objects.all(), holder, read, content=Note, registries=built_registries((handle,)), skip_is_active=include_inactive).exists())
                         self.assertFalse(backend.has_perm(holder, 'myapp.change_document', note, skip_is_active=include_inactive))

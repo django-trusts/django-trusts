@@ -68,6 +68,9 @@ def _tables(*model_classes):
 
 def _perm(model, codename, *, proxy=False):
     ct = ContentType.objects.get_for_model(model, for_concrete_model=not proxy)
+    suffix = '_' + ct.model
+    if not codename.endswith(suffix):
+        codename = codename + suffix
     permission, _created = Permission.objects.get_or_create(content_type=ct, codename=codename, defaults={'name': codename})
     return permission
 
@@ -233,8 +236,8 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
 
     def test_custom_codename_stays_a_same_model_instance_grant(self):
         with _installed(self.handle):
-            self.assertTrue(self.handle.build_registry().has_permission(self.owner, self.specs, self.publish))
-            self.assertFalse(self.handle.build_registry().has_permission(self.owner, self.acme, self.publish))
+            self.assertTrue(built_catalog(self.handle).has_perm(self.owner, '%s.%s' % (self.publish.content_type.app_label, self.publish.codename), self.specs))
+            self.assertFalse(built_catalog(self.handle).has_perm(self.owner, '%s.%s' % (self.publish.content_type.app_label, self.publish.codename), self.acme))
             self.assertIn(self.publish_code, self.owner.get_all_permissions(self.specs))
             self.assertNotIn(self.publish_code, self.owner.get_all_permissions(self.acme))
             self.assertEqual(list(self.Repository.objects.authorized(self.owner, self.publish)), [self.specs])
@@ -251,9 +254,9 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
     def test_proxy_uses_its_own_content_type(self):
         proxy = self.OrganizationProxy.objects.get(pk=self.acme.pk)
         with _installed(self.handle):
-            self.assertTrue(self.handle.build_registry().has_permission(self.owner, proxy, self.operate))
-            self.assertFalse(self.handle.build_registry().has_permission(self.owner, proxy, self.manage))
-            self.assertFalse(self.handle.build_registry().has_permission(self.owner, self.acme, self.operate))
+            self.assertTrue(built_catalog(self.handle).has_perm(self.owner, '%s.%s' % (self.operate.content_type.app_label, self.operate.codename), proxy))
+            self.assertFalse(built_catalog(self.handle).has_perm(self.owner, '%s.%s' % (self.manage.content_type.app_label, self.manage.codename), proxy))
+            self.assertFalse(built_catalog(self.handle).has_perm(self.owner, '%s.%s' % (self.operate.content_type.app_label, self.operate.codename), self.acme))
             self.assertFalse(self.owner.has_perm(self.manage_code, proxy))
             self.assertEqual(self.owner.get_all_permissions(proxy), {self.operate_code})
             self.assertEqual(list(self.OrganizationProxy.objects.authorized(self.owner, self.operate)), [proxy])

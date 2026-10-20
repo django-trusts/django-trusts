@@ -252,6 +252,9 @@ def _perm(codename, model=None):
         ct, _created = ContentType.objects.get_or_create(app_label='trusts_tests', model='payload')
     else:
         ct = ContentType.objects.get_for_model(model, for_concrete_model=False)
+    suffix = '_' + ct.model
+    if not codename.endswith(suffix):
+        codename = codename + suffix
     permission, _created = Permission.objects.get_or_create(content_type=ct, codename=codename, defaults={'name': codename})
     return permission
 
@@ -462,11 +465,11 @@ class _TerminalProjectionMixin(object):
 
     def _assert_terminal(self, registry, Model, granted, sibling, other):
         handle = _direct_handle(registry)
-        self.assertTrue(registry.build_registry().has_permission(self.alice, granted, self.read))
-        self.assertTrue(registry.build_registry().has_permission(self.alice, sibling, self.read))
-        self.assertFalse(registry.build_registry().has_permission(self.alice, granted, self.write))
-        self.assertFalse(registry.build_registry().has_permission(self.bob, granted, self.read))
-        self.assertFalse(registry.build_registry().has_permission(self.alice, other, self.read))
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), granted))
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), sibling))
+        self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), granted))
+        self.assertFalse(built_catalog(registry).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), granted))
+        self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), other))
         self.assertEqual(_pks(built_catalog(registry).permissions_for(self.alice, granted)), {self.read.pk})
         self.assertEqual(_pks(built_catalog(registry).permissions_for(self.alice, other)), {self.write.pk})
         expected = [granted, sibling]
@@ -500,8 +503,8 @@ class _TerminalProjectionMixin(object):
             self.assertEqual(list(plan.common_permissions(self.alice, mixed_qs)), [])
 
     def _assert_shared_row(self, registry, granted, other_scope):
-        self.assertFalse(registry.build_registry().has_permission(self.alice, granted, self.write))
-        self.assertFalse(registry.build_registry().has_permission(self.alice, other_scope, self.read))
+        self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), granted))
+        self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), other_scope))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class TrustsRegistryJ1ProjectionTest(_TerminalProjectionMixin, TransactionTestCase):
@@ -535,8 +538,8 @@ class TrustsRegistryJ1ProjectionTest(_TerminalProjectionMixin, TransactionTestCa
     def test_j1_projections_agree_and_stay_one_sql(self):
         self._assert_terminal(self.registry, self.Payload, self.pay_a1, self.pay_a2, self.pay_b1)
         self._assert_shared_row(self.registry, self.pay_a1, self.pay_b1)
-        self.assertTrue(self.registry.build_registry().has_permission(self.bob, self.pay_b1, self.read))
-        self.assertTrue(self.registry.build_registry().has_permission(self.alice, self.pay_b1, self.write))
+        self.assertTrue(built_catalog(self.registry).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.pay_b1))
+        self.assertTrue(built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), self.pay_b1))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class TrustsRegistryD1ProjectionTest(_TerminalProjectionMixin, TransactionTestCase):
@@ -803,11 +806,11 @@ class TrustsRegistryDependentGrammarToFieldTest(TransactionTestCase):
             img_a2 = CodedImage.objects.create(item=item_a2, title='A2')
             img_b1 = CodedImage.objects.create(item=item_b1, title='B1')
             CodedGrant.objects.create(holder=holder_a, user=alice, permission=read)
-            self.assertTrue(registry.build_registry().has_permission(alice, img_a1, read))
-            self.assertTrue(registry.build_registry().has_permission(alice, img_a2, read))
-            self.assertFalse(registry.build_registry().has_permission(alice, img_b1, read))
-            self.assertFalse(registry.build_registry().has_permission(bob, img_a1, read))
-            self.assertFalse(registry.build_registry().has_permission(alice, img_a1, write))
+            self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), img_a1))
+            self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), img_a2))
+            self.assertFalse(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), img_b1))
+            self.assertFalse(built_catalog(registry).has_perm(bob, '%s.%s' % (read.content_type.app_label, read.codename), img_a1))
+            self.assertFalse(built_catalog(registry).has_perm(alice, '%s.%s' % (write.content_type.app_label, write.codename), img_a1))
             sql = str(registry.build_registry().filter_authorized(CodedImage.objects.order_by('pk'), alice, read).query).lower()
             self.assertIn('exists', sql)
             self.assertIn('holder', sql)
