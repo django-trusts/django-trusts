@@ -168,6 +168,9 @@ class ConditionLookupBindTest(TestCase):
         with self.assertNumQueries(0):
             registry.set_filter_lookup(None)
         self.assertIsNone(registry.filter_lookup)
+        registry.build_registry()
+        with self.assertRaises(TrustsConfigurationError):
+            registry.set_filter_lookup(override)
 
     def test_missing_methods_raise_and_do_not_partial_bind(self):
         registry = RegistryFactory()

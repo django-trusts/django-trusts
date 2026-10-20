@@ -497,8 +497,8 @@ def unbound_named_filters(backend_cls):
         family=backend_cls.family,
         user_model=standards.user_model,
     )
-    replay_recorder(factory, backend_cls)
     factory.set_filter_lookup(None)
+    replay_recorder(factory, backend_cls)
     catalogs[backend_cls] = Catalog(
         cls=backend_cls,
         path=factory.path,

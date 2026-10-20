@@ -215,6 +215,7 @@ class RegistryFactory(object):
         self._delegations_by_root = {}
         self._delegation_order = []
         self._filter_lookup = None
+        self.frozen = False
         self._user_conditions = None
         self._user_override = None
         self._rule_fragments = {}
@@ -244,8 +245,12 @@ class RegistryFactory(object):
         Both ``record_for`` and ``compile_q`` must be callable. A missing
         method raises ``TrustsConfigurationError`` and does not bind
         (no partial bind). ``lookup is None`` clears the binding.
-        Methods are not invoked at bind time.
+        Methods are not invoked at bind time. A built factory is frozen.
         """
+        if self.frozen:
+            raise TrustsConfigurationError(
+                'set_filter_lookup refused: this factory is frozen.'
+            )
         if lookup is None:
             self._filter_lookup = None
             return
@@ -983,7 +988,7 @@ class RegistryFactory(object):
         conditions, the user override, and the bound condition lookup
         are passed as data, all at once. No builders are injected.
         """
-        return Registry(
+        registry = Registry(
             records=self.records,
             delegations=self.delegations,
             conditions=self.conditions,
@@ -995,6 +1000,8 @@ class RegistryFactory(object):
             family=self.family,
             user_model=self.user_model,
         )
+        self.frozen = True
+        return registry
 
 
 def compile_recorder(recorder, *, path, family, compiler, user_model):
