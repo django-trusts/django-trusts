@@ -44,7 +44,6 @@ from trusts.inspect.yaml import (
 from tests.support import (
     render_configured_policy,
     render_published_subjects,
-    built_registries,
 )
 
 

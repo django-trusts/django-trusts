@@ -1,4 +1,4 @@
-from tests.support import listed_relationship, configured_catalog, built_registries, replay_recorder
+from tests.support import listed_relationship, configured_catalog, replay_recorder
 """#138: authorization_required Trusts-only pk guard."""
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -326,7 +326,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
 
     def _assert_both_orders(self, primary, extra, view, pk, expect_ok):
         for handles in ((primary, extra), (extra, primary)):
-            with listed_relationship(built_registries(handles)):
+            with listed_relationship(handles):
                 if expect_ok:
                     self.assertEqual(view(_request(self.alice), pk=pk), 'ok')
                 else:
@@ -358,7 +358,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
             self.OtherPermission.objects.create(pk=self.change.pk, label='collide')
             self.OtherPermissionGrant.objects.create(document=self.open_doc, user=self.bob, permission_id=self.change.pk)
             for handles in ((primary, extra), (extra, primary)):
-                with listed_relationship(built_registries(handles)):
+                with listed_relationship(handles):
                     with self.assertRaises(PermissionDenied):
                         _edit(_request(self.bob), pk=self.open_doc.pk)
                     self.assertEqual(_edit(_request(self.alice), pk=self.open_doc.pk), 'ok')
@@ -377,7 +377,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
         @authorization_required(Document, 'myapp.change_document', names)
         def _split(request, pk):
             return 'no'
-        with listed_relationship(built_registries((handle_a, handle_b))):
+        with listed_relationship((handle_a, handle_b)):
             messages = self._e008_messages('split_a_138', 'split_b_138')
             self.assertTrue(messages)
             self.assertIsInstance(messages[0], Error)
@@ -402,7 +402,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
         @authorization_required(Document, 'myapp.change_document', ('only_other_138',))
         def _other(request, pk):
             return 'no'
-        with listed_relationship(built_registries((primary, extra))):
+        with listed_relationship((primary, extra)):
             messages = self._e008_messages('only_other_138')
             self.assertTrue(messages)
             self.assertIsInstance(messages[0], Error)

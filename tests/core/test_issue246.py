@@ -22,7 +22,6 @@ from tests.support import (
     render_configured_policy,
     scoped_permitted_content as filter_by_permitted_content,
     listed_relationship,
-    built_registries,
     bound_handle,
     built_catalog,
 )
@@ -336,7 +335,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
             self.assertEqual(self.backend.get_group_permissions(self.alice, self.paper_c), {self.change_code})
         granted = self.registry.build_registry().filter_authorized(self.Paper.objects.order_by('pk'), self.alice, self.change)
         self.assertEqual(list(granted), [self.paper_a, self.paper_c, self.paper_d])
-        with listed_relationship(built_registries((self.handle,))):
+        with listed_relationship((self.handle,)):
             listed = sorted(self.Paper.objects.authorized(self.alice, self.change), key=lambda row: row.pk)
         self.assertEqual(listed, [self.paper_a, self.paper_c, self.paper_d])
         folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, registry=self.handle.build_registry())
@@ -353,7 +352,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
             self.assertEqual(self.backend.get_all_permissions(self.alice, self.paper_b), {self.write_code})
             self.assertEqual(self.backend.get_group_permissions(self.alice, self.paper_b), set())
             self.assertTrue(self.backend.has_perm(self.alice, self.write_code, self.paper_b))
-        with listed_relationship(built_registries((self.handle,))):
+        with listed_relationship((self.handle,)):
             self.assertEqual(list(self.Paper.objects.authorized(self.carol, self.add)), [self.paper_a])
             self.assertEqual(list(self.Paper.objects.authorized(self.alice, self.write)), [self.paper_b])
 
@@ -693,7 +692,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
                 catalogs[cls] = saved
 
     def _authorized(self, handle, expectations):
-        with listed_relationship(built_registries((handle,))):
+        with listed_relationship((handle,)):
             for user, perm, expected in expectations:
                 with self.subTest(user=user.username, perm=perm.codename, authorized=True):
                     rows = self.Paper.objects.authorized(user, perm)

@@ -28,7 +28,7 @@ from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
 from trusts.plan.aggregates import _compile_common_permissions, all_match, instance_match
 from trusts.query import AuthorizedManager
-from tests.support import listed_relationship, built_registries
+from tests.support import listed_relationship
 
 
 def _long_path_models():
@@ -376,7 +376,7 @@ class LongPathAuthorizationTest(TransactionTestCase):
             via_obj = self.registry.build_registry().has_permission(principal, obj, token)
         with self.assertNumQueries(1):
             via_list = obj in list(self.registry.build_registry().filter_authorized(self.Artifact.objects.filter(pk=obj.pk), principal, token))
-        with listed_relationship(built_registries(self._handles())):
+        with listed_relationship(self._handles()):
             with self.assertNumQueries(1):
                 via_manager = obj in list(self.Artifact.objects.filter(pk=obj.pk).authorized(principal, token))
         enumerated = {row.pk for row in built_catalog(self.registry).permissions_for(principal, obj)}

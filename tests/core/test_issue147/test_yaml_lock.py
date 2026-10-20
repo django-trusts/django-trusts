@@ -37,7 +37,7 @@ from trusts.inspect.yaml import (
     dump_policy_yaml,
     _load_policy_yaml,
 )
-from tests.support import render_configured_policy, built_registries
+from tests.support import render_configured_policy
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -297,7 +297,7 @@ class PolicyCompositionTest(SimpleTestCase):
         watcher = threading.Thread(target=watch)
         watcher.start()
         try:
-            payload = render_configured_policy(*built_registries(self._handles()))
+            payload = render_configured_policy(*self._handles())
         finally:
             stop.set()
             watcher.join()
@@ -322,9 +322,9 @@ class PolicyCompositionTest(SimpleTestCase):
         return [_document_handle(), or_handle]
 
     def test_lockfile_composition_matches_golden(self):
-        payload = render_configured_policy(*built_registries(self._handles()))
+        payload = render_configured_policy(*self._handles())
         self.assertEqual(payload, GOLDEN_COMPOSITION)
-        self.assertEqual(payload, render_configured_policy(*built_registries(self._handles())))
+        self.assertEqual(payload, render_configured_policy(*self._handles()))
         document = _load_policy_sql_document(payload)
         self.assertEqual(document['schema_version'], 1)
         self.assertNotIn('lockfile', document)

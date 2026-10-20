@@ -15,7 +15,6 @@ from tests.support import (
     listed_relationship,
     configured_catalog,
     live_config,
-    built_registries,
     replay_recorder,
     bound_handle,
 )
@@ -115,7 +114,7 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
             host_factory = _replay_listed(HOST_BACKEND)
             document_factory = _replay_listed(DOCUMENT_BACKEND)
             for bundled in ((host_factory, document_factory, extra), (extra, host_factory, document_factory)):
-                with listed_relationship(built_registries(bundled)):
+                with listed_relationship(bundled):
                     qs = Repository.objects.authorized(self.alice, self.change)
                     self.assertIsInstance(qs, AuthorizedQuerySet)
                     self.assertIsNone(qs._result_cache)

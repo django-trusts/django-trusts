@@ -8,13 +8,11 @@ from django.contrib.auth.backends import ModelBackend
 from django.test import override_settings
 from django.utils.module_loading import import_string
 
-from tests.apps import junction_content_field
 from trusts.backends import TrustModelBackendMixin, catalogs, recorders
 from trusts.compile.catalogs import Catalog
 from trusts.compile.factory import RegistryFactory, build_configured_catalogs
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import render_policy_sql_bytes
-from trusts.plan.registry import Registry
 import trusts.plan.standards as standards
 
 
@@ -70,26 +68,12 @@ def override_catalog(backend_cls, factory, path):
             catalogs[backend_cls] = saved
 
 
-def configured_catalog(path, explicit=None):
-    """Catalog stored for one ``AUTHENTICATION_BACKENDS`` dotted path.
+def configured_catalog(path):
+    """Catalog stored for one ``AUTHENTICATION_BACKENDS`` dotted path."""
 
-    The optional second argument is that path when a caller still passes
-    an app config as the first argument. The config does not own paths.
-    """
-
-    if explicit is not None:
-        path = explicit
-    if not isinstance(path, str):
-        raise TrustsConfigurationError(
-            'configured_catalog takes the dotted AUTHENTICATION_BACKENDS '
-            'path, not %r' % (path,)
-        )
     cls = import_string(path)
-    catalog = catalogs.get(cls) if isinstance(cls, type) else None
+    catalog = catalogs.get(cls)
     if catalog is None or catalog.path != path:
-        for stored in catalogs.values():
-            if stored.path == path:
-                return stored
         raise TrustsConfigurationError(
             '%r is not a configured Trusts backend' % (path,)
         )
@@ -128,13 +112,6 @@ def live_config(apps_registry=None):
         raise TrustsConfigurationError(
             'TrustsImplementationConfig is not installed.'
         ) from exc
-
-
-def junction_group_content_ref(root_ref, junction_model):
-    """J1 content ref: TUP → Trust ← Junction → Group/content."""
-    rev = junction_model._meta.get_field('trust').remote_field.get_accessor_name()
-    content_name = junction_content_field(junction_model).name
-    return getattr(getattr(root_ref.trust, rev), content_name)
 
 
 @contextmanager
@@ -272,14 +249,7 @@ def listed_relationship(factories):
     for cls, factory in zip(classes, factories):
         listing = '%s.%s' % (cls.__module__, cls.__name__)
         paths.append(listing)
-        if isinstance(factory, Catalog):
-            raise TypeError(
-                'listed_relationship takes a registry or factory, not a catalog.'
-            )
-        if isinstance(factory, Registry):
-            subject = factory
-        else:
-            subject = factory.build_registry()
+        subject = factory.build_registry()
         prepared.append((cls, subject.path or listing, subject))
     for cls, path, subject in prepared:
         catalogs[cls] = Catalog(
