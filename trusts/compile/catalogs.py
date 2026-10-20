@@ -4,12 +4,6 @@ from functools import reduce
 from operator import or_
 
 from django.contrib.auth import get_backends
-from django.contrib.auth.backends import (
-    AllowAllUsersModelBackend,
-    AllowAllUsersRemoteUserBackend,
-    ModelBackend,
-    RemoteUserBackend,
-)
 from django.contrib.auth.models import Permission
 from django.db import router
 from django.db.models import Model, Q, QuerySet, Subquery
@@ -372,10 +366,10 @@ def _selected_condition_q(registry, model, permission, conditions, user, *, api)
 
 
 _BACKENDS_THAT_IGNORE_THE_OBJECT = (
-    ModelBackend,
-    AllowAllUsersModelBackend,
-    RemoteUserBackend,
-    AllowAllUsersRemoteUserBackend,
+    'django.contrib.auth.backends.ModelBackend',
+    'django.contrib.auth.backends.AllowAllUsersModelBackend',
+    'django.contrib.auth.backends.RemoteUserBackend',
+    'django.contrib.auth.backends.AllowAllUsersRemoteUserBackend',
 )
 
 
@@ -603,7 +597,9 @@ def _backend_predicate(backend, content, perm, *, skipped=()):
                 content, perm, skipped=skipped,
             )
         return backend.permitted_users_predicate(content, perm)
-    if type(backend) in _BACKENDS_THAT_IGNORE_THE_OBJECT:
+    if '%s.%s' % (
+        type(backend).__module__, type(backend).__qualname__,
+    ) in _BACKENDS_THAT_IGNORE_THE_OBJECT:
         return None
     raise TrustsConfigurationError(
         '%s may grant an object permission but cannot express an exact '
