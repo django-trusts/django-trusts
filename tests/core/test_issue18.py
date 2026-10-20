@@ -10,7 +10,10 @@ Core must resolve every hop from Django ``_meta`` / stored path metadata.
 This module does not import ``trusts.zero`` and does not special-case
 Zero class names, app labels, field names, or path length.
 """
+import ast
+import inspect
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import patch
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
@@ -19,6 +22,7 @@ from django.db.models import options as model_options
 from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
+import trusts
 from trusts.compile.nodes import permission_in
 from tests.support import scoped_permitted_content as filter_by_permitted_content, built_catalog
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan
@@ -30,6 +34,31 @@ from trusts.plan.aggregates import _compile_common_permissions, all_match, insta
 from trusts.query import AuthorizedManager
 from tests.support import listed_relationship
 from trusts.backends import TrustModelBackendMixin
+
+
+def _plan_imports_compile(node):
+    """Names by which a plan module imports trusts.compile."""
+
+    if isinstance(node, ast.Import):
+        return [
+            alias.name for alias in node.names
+            if alias.name == 'trusts.compile' or alias.name.startswith('trusts.compile.')
+        ]
+    if not isinstance(node, ast.ImportFrom):
+        return []
+    module = node.module or ''
+    if module == 'trusts.compile' or module.startswith('trusts.compile.'):
+        return [module]
+    if module == 'trusts' and any(alias.name == 'compile' for alias in node.names):
+        return ['trusts.compile']
+    if node.level and (
+        module == 'compile'
+        or module.startswith('compile.')
+        or module.endswith('.compile')
+        or (not module and any(alias.name == 'compile' for alias in node.names))
+    ):
+        return ['.' * node.level + (module or 'compile')]
+    return []
 
 
 def _long_path_models():
@@ -222,26 +251,14 @@ class CoreImportBoundaryTest(SimpleTestCase):
         self.assertFalse(hasattr(trusts, 'ROOT_PK'))
 
     def test_plan_package_does_not_import_compile(self):
-        import ast
-        import inspect
-        from pathlib import Path
-        import trusts
         root = Path(inspect.getfile(trusts)).resolve().parent / 'plan'
         forbidden = []
         for path in sorted(root.rglob('*.py')):
             tree = ast.parse(path.read_text())
             for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    names = [alias.name for alias in node.names]
-                elif isinstance(node, ast.ImportFrom):
-                    names = [node.module or '']
-                else:
-                    continue
-                if any((
-                    name == 'trusts.compile' or name.startswith('trusts.compile.')
-                    for name in names
-                )):
-                    forbidden.append('%s imports %s' % (path.name, ', '.join(names)))
+                hits = _plan_imports_compile(node)
+                if hits:
+                    forbidden.append('%s imports %s' % (path.name, ', '.join(hits)))
         self.assertEqual(forbidden, [])
 
 class PermissionConditionsMetaOptionTest(SimpleTestCase):
