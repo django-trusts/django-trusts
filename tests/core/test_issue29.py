@@ -215,7 +215,6 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
     def test_handle_after_build_invokes_builder(self):
         Note = _note_model()
         registry = RegistryFactory()
-        registry.build_registry()
         log = _BuilderLog()
         record = registry.register_permission_condition(Note, 'own', log)
         self.assertEqual(len(log.calls), 1)

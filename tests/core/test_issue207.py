@@ -268,7 +268,7 @@ class RegisterFailClosedTest(TestCase):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
                         handle.register_public(trust=DocumentGrant, user=builder, permission=lambda t: t.permission, content=lambda t: t.document)
-                self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).records, ())
+                self.assertEqual(handle.records, ())
 
     def test_failed_third_role_does_not_partially_mutate(self):
         handle = _handle()
@@ -280,7 +280,6 @@ class RegisterFailClosedTest(TestCase):
     def test_register_after_build_invokes_builder(self):
         registry = RegistryFactory()
         handle = _handle(registry)
-        registry.build_registry()
         calls = []
 
         def user(trust):

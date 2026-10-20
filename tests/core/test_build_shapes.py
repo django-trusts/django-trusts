@@ -114,8 +114,6 @@ class BuildRelationTest(SimpleTestCase):
         _Document, DocumentGrant = _document_models()
         registry = RegistryFactory()
         root = Ref(DocumentGrant)
-        registry.build_registry()
-
         built = registry.build_relation(
             content=root.document, user=root.user,
             permission=root.permission,

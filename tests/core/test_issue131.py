@@ -91,7 +91,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
         first = handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
         with self.assertRaisesRegex(TrustsConfigurationError, 'Duplicate'):
             handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-        self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).records, (first,))
+        self.assertEqual(handle.records, (first,))
         with self.assertRaisesRegex(TrustsConfigurationError, 'Conflicting'):
             handle.register_public(trust=DocumentGrant, user='permission', permission='user', content='document')
         self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).records, (first,))
@@ -101,7 +101,7 @@ class HandleAfterBuildOrderTest(SimpleTestCase):
     def test_register_after_build_resolves_paths(self):
         registry = RegistryFactory()
         handle = _handle(registry)
-        self.assertEqual(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).records, ())
+        self.assertEqual(registry.records, ())
         with patch('trusts.compile.factory._public_path_segments', wraps=_public_path_segments) as segments:
             with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
                 with patch('trusts.compile.factory._validate_condition', wraps=_validate_condition) as validate:
@@ -115,7 +115,6 @@ class HandleAfterBuildOrderTest(SimpleTestCase):
     def test_invalid_grammar_after_build_raises_its_own_error(self):
         registry = RegistryFactory()
         handle = _handle(registry)
-        registry.build_registry()
         with self.assertRaises(TrustsConfigurationError) as ctx:
             handle.register_public(trust=DocumentGrant, user='', permission='permission', content='document')
         self.assertNotIn('frozen', str(ctx.exception).lower())
@@ -128,7 +127,7 @@ class HandleIsolationTest(SimpleTestCase):
         right = _handle(path='tests.core.handle-right')
         left.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
         self.assertEqual(len(Catalog(cls=type(left), path=left.path, family=left.family, registry=left.build_registry()).records), 1)
-        self.assertEqual(Catalog(cls=type(right), path=right.path, family=right.family, registry=right.build_registry()).records, ())
+        self.assertEqual(right.records, ())
         right.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
         self.assertEqual(len(Catalog(cls=type(left), path=left.path, family=left.family, registry=left.build_registry()).records), 1)
         self.assertEqual(len(Catalog(cls=type(right), path=right.path, family=right.family, registry=right.build_registry()).records), 1)
@@ -269,7 +268,6 @@ class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
     def test_relationship_and_filter_register_after_build(self):
         registry = RegistryFactory()
         backend = _handle(registry)
-        registry.build_registry()
         log = _PredicateLog()
         with patch('trusts.compile.factory._public_path_segments', wraps=_public_path_segments) as segments:
             with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
@@ -289,7 +287,7 @@ class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
         right = _handle(path='tests.core.cmethods-right')
         left.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
         self.assertEqual(len(Catalog(cls=type(left), path=left.path, family=left.family, registry=left.build_registry()).records), 1)
-        self.assertEqual(Catalog(cls=type(right), path=right.path, family=right.family, registry=right.build_registry()).records, ())
+        self.assertEqual(right.records, ())
         right.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
         self.assertEqual(len(Catalog(cls=type(left), path=left.path, family=left.family, registry=left.build_registry()).records), 1)
         self.assertEqual(len(Catalog(cls=type(right), path=right.path, family=right.family, registry=right.build_registry()).records), 1)

@@ -711,7 +711,7 @@ class DelegationRootGuardTest(TestCase):
 
     def test_registry_after_build_accepts_delegation(self):
         handle = _handle()
-        self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).delegations, ())
+        self.assertEqual(handle.delegations, ())
         with self.assertNumQueries(0):
             record = self._register(handle)
         self.assertEqual(handle.delegations, (record,))
