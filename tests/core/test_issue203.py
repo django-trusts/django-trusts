@@ -184,10 +184,13 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
             with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, PERM, secret))
             with self.assertNumQueries(0):
+                fresh = RegistryFactory(path='tests.core.issue203-reject')
                 with self.assertRaises(PermissionConditionError):
-                    self.handle.register_permission_condition(self.Note, 'open', lambda u, p, o: o.title == Decimal('1.5'))
+                    fresh.register_permission_condition(self.Note, 'open', lambda u, p, o: o.title == Decimal('1.5'))
                 with self.assertRaises(PermissionConditionError):
-                    self.handle.register_permission_condition(self.Note, 'partial_203', lambda u, p, o: o.owner == self.Note.objects)
+                    fresh.register_permission_condition(self.Note, 'partial_203', lambda u, p, o: o.owner == self.Note.objects)
+                self.assertIsNone(fresh.get_permission_condition_record(self.Note, 'open'))
+                self.assertIsNone(fresh.get_permission_condition_record(self.Note, 'partial_203'))
             self.assertEqual(len(log.calls), 1)
             with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, OPEN, opened))
