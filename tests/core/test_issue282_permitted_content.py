@@ -21,13 +21,13 @@ from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from tests.support import (
     render_configured_policy,
     scoped_permitted_content as filter_by_permitted_content,
+    built_catalog,
 )
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.aggregates import common_permissions
 from trusts.decorators import authorization_required
 from trusts.query import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
 from tests.support import built_registries
-from trusts.compile.catalogs import Catalog
 
 
 
@@ -71,7 +71,7 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     ]
     test.assertEqual(len(rows), 1)
     row = rows[0]
-    record = Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).plan_for(content_model).records[0]
+    record = built_catalog(handle).plan_for(content_model).records[0]
     queryset = filter_by_permitted_content(
         prefix_model._default_manager.all(),
         _role_sentinel(record, 'user', 'default'),

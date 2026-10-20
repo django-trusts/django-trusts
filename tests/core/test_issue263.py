@@ -30,6 +30,7 @@ from tests.support import (
     render_configured_policy,
     listed_relationship,
     built_registries,
+    built_catalog,
 )
 from trusts.compile.catalogs import Catalog
 
@@ -417,7 +418,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
                 self.assertIs(user.has_perm(self.read_code, both), self.read_code in codes)
                 self.assertFalse(user.has_perm(self.read_code, mixed))
                 self.assertFalse(user.has_perm(self.read_code, self.secret))
-            catalog = Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry())
+            catalog = built_catalog(handle)
             self.assertTrue(catalog.has_perm(self.alice, self.read_code, self.spec))
             self.assertTrue(catalog.has_perm(self.alice, self.change_code, self.notes))
             self.assertFalse(catalog.has_perm(self.alice, self.delete_code, self.spec))
@@ -466,7 +467,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         self._assert_unique(rows, [self.spec])
         self._assert_unique(self._authorized(handle, self.alice, self.change), [self.spec])
         self._assert_unique(self._authorized(handle, self.bob, self.delete), [])
-        enumerated = list(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).permissions_for(self.alice, self.spec))
+        enumerated = list(built_catalog(handle).permissions_for(self.alice, self.spec))
         self.assertEqual({_code(row) for row in enumerated}, {self.read_code, self.change_code})
         self.assertEqual(len(enumerated), 2)
 
@@ -492,7 +493,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
             self.assertEqual(self.alice.get_all_permissions(self.spec), {self.add_code})
             self.assertTrue(self.alice.has_perm(self.add_code, self.spec))
             self.assertFalse(self.bob.has_perm(self.add_code, self.spec))
-            self.assertTrue(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).has_perm(self.alice, self.read_code, self.secret))
+            self.assertTrue(built_catalog(handle).has_perm(self.alice, self.read_code, self.secret))
             self.assertEqual(set(self.secret.get_permitted_users(self.read).values_list('pk', flat=True)), {self.alice.pk})
             self.assertEqual(set(self.spec.get_permitted_users(self.add).values_list('pk', flat=True)), {self.alice.pk})
         self._assert_unique(self._authorized(handle, self.alice, self.read), [self.secret])

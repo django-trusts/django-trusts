@@ -22,6 +22,7 @@ from tests.support import (
     live_config,
     override_apps_ready,
     sweep_listed_backends,
+    built_catalog,
 )
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
@@ -34,7 +35,6 @@ from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.backends import TrustModelBackendMixin
 from trusts.compile.factory import RegistryFactory
-from trusts.compile.catalogs import Catalog
 HOST = HOST_BACKEND
 DOCUMENT = DOCUMENT_BACKEND
 MIXIN = 'tests.backends.MixinOnlyBackend'
@@ -56,10 +56,10 @@ class StandaloneIndependenceTest(SimpleTestCase):
         second = RegistryFactory()
         self.assertEqual(first.records, ())
         _contribute_document(second)
-        self.assertEqual(len(Catalog(cls=type(second), path=second.path, family=second.family, registry=second.build_registry()).plan_for(Document).records), 1)
+        self.assertEqual(len(built_catalog(second).plan_for(Document).records), 1)
         _contribute_document(first)
         self.assertEqual(len(first.records), 1)
-        self.assertEqual(Catalog(cls=type(first), path=first.path, family=first.family, registry=first.build_registry()).records, first.records)
+        self.assertEqual(built_catalog(first).records, first.records)
         self.assertIsNot(first.records[0], second.records[0])
 
     def test_build_is_repeatable_and_register_does_not_inspect_apps_ready(self):
@@ -76,7 +76,7 @@ class StandaloneIndependenceTest(SimpleTestCase):
             with self.assertRaises(TrustsConfigurationError):
                 registry.register(content=Ref(DocumentGrant).document, user=Ref(DocumentGrant).user, permission=Ref(DocumentGrant).permission)
         self.assertEqual(registry.records, before)
-        self.assertIs(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(Document).records[0], before[0])
+        self.assertIs(built_catalog(registry).plan_for(Document).records[0], before[0])
 
 class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
 
@@ -91,16 +91,16 @@ class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
                 registry.register(**kwargs)
             self.assertNotIn('frozen', str(ctx.exception).lower())
         self.assertEqual(registry.records, before)
-        self.assertEqual(len(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(Document).records), 1)
+        self.assertEqual(len(built_catalog(registry).plan_for(Document).records), 1)
 
 class BuiltPlanProjectionsTest(KernelHostRequiredMixin, TestCase):
 
     def test_built_plan_still_projects(self):
         registry = RegistryFactory()
         _contribute_document(registry)
-        before = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(Document)
+        before = built_catalog(registry).plan_for(Document)
         registry.build_registry()
-        plan = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(Document)
+        plan = built_catalog(registry).plan_for(Document)
         self.assertEqual(plan.records, before.records)
         user = get_user_model()(pk=1)
         permission = Permission(pk=1)
@@ -254,5 +254,5 @@ class HandleBuildRegistrySignalTest(SimpleTestCase):
         self.assertEqual(first.records, ())
         fresh = RegistryFactory(path='tests.core.builder')
         _contribute_document(fresh)
-        self.assertEqual(Catalog(cls=type(fresh), path=fresh.path, family=fresh.family, registry=fresh.build_registry()).records, fresh.records)
+        self.assertEqual(built_catalog(fresh).records, fresh.records)
         self.assertEqual(first.records, ())

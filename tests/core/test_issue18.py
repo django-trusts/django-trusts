@@ -20,7 +20,7 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 from trusts.compile.nodes import permission_in
-from tests.support import scoped_permitted_content as filter_by_permitted_content
+from tests.support import scoped_permitted_content as filter_by_permitted_content, built_catalog
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
@@ -29,7 +29,6 @@ from trusts.plan.contents import granted
 from trusts.plan.aggregates import all_match, common_permissions, instance_match
 from trusts.query import AuthorizedManager
 from tests.support import listed_relationship, built_registries
-from trusts.compile.catalogs import Catalog
 
 
 def _long_path_models():
@@ -378,7 +377,7 @@ class LongPathAuthorizationTest(TransactionTestCase):
         with listed_relationship(built_registries(self._handles())):
             with self.assertNumQueries(1):
                 via_manager = obj in list(self.Artifact.objects.filter(pk=obj.pk).authorized(principal, token))
-        enumerated = {row.pk for row in Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).permissions_for(principal, obj)}
+        enumerated = {row.pk for row in built_catalog(self.registry).permissions_for(principal, obj)}
         self.assertEqual(via_obj, expected)
         self.assertEqual(via_list, expected)
         self.assertEqual(via_manager, expected)
@@ -413,7 +412,7 @@ class LongPathAuthorizationTest(TransactionTestCase):
         self.hall.badges.add(self.read)
         with self.assertNumQueries(0):
             qs = self.registry.build_registry().filter_authorized(self.Artifact.objects.all(), self.actor, self.read)
-            enumerated = Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).permissions_for(self.actor, self.artifact)
+            enumerated = built_catalog(self.registry).permissions_for(self.actor, self.artifact)
         self.assertIsInstance(qs, QuerySet)
         self.assertIsInstance(enumerated, QuerySet)
         self.assertIsNone(qs._result_cache)
@@ -543,7 +542,7 @@ class MembershipGroupExistsTest(TransactionTestCase):
 
     def test_membership_user_hop_is_not_a_group_slice(self):
         handle = self._handle(self.membership)
-        plan = Catalog(cls=type(self.membership), path=self.membership.path, family=self.membership.family, registry=self.membership.build_registry()).plan_for(self.folder, user=self.member, permission=self.read)
+        plan = built_catalog(self.membership).plan_for(self.folder, user=self.member, permission=self.read)
         self.assertEqual(plan.records[0].user_path, ('desk', 'holders'))
         self.assertFalse(plan.records[0].via_group)
         with self.assertNumQueries(0):
@@ -556,7 +555,7 @@ class MembershipGroupExistsTest(TransactionTestCase):
 
     def test_fk_user_hop_is_not_group_slice(self):
         handle = self._handle(self.trustee)
-        plan = Catalog(cls=type(self.trustee), path=self.trustee.path, family=self.trustee.family, registry=self.trustee.build_registry()).plan_for(self.folder, user=self.owner, permission=self.read)
+        plan = built_catalog(self.trustee).plan_for(self.folder, user=self.owner, permission=self.read)
         self.assertEqual(plan.records[0].user_path, ('owner',))
         with self.assertNumQueries(0):
             self.assertIsNone(self.compiler.group_exists(plan, self.folder, self.owner, self.read))
@@ -639,6 +638,6 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         with self.assertNumQueries(1):
             self.assertEqual(_pks(self.registry.build_registry().filter_authorized(self.Node.objects.all(), self.holder, self.add)), {self.child.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).permissions_for(self.holder, self.child)), {self.add.pk})
+            self.assertEqual(_pks(built_catalog(self.registry).permissions_for(self.holder, self.child)), {self.add.pk})
         with self.assertNumQueries(1):
             self.assertEqual(_pks(filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registries=built_registries((self.handle,)))), {self.parent.pk})

@@ -24,6 +24,7 @@ from tests.support import (
     listed_relationship,
     built_registries,
     bound_handle,
+    built_catalog,
 )
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
@@ -161,7 +162,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
         ref = Ref(Grant)
         with self.assertRaisesRegex(TrustsConfigurationError, 'not both'):
             registry.register(content=ref.paper, user=ref.group.user, permission=ref.paper, group=ref.group)
-        self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).records, ())
+        self.assertEqual(built_catalog(handle).records, ())
         self.assertEqual(registry.records, ())
 
     def test_one_of_permission_or_group_is_required(self):
@@ -175,7 +176,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
         ref = Ref(Grant)
         with self.assertRaisesRegex(TrustsConfigurationError, 'requires permission= or group='):
             registry.register(content=ref.paper, user=ref.group.user)
-        self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).records, ())
+        self.assertEqual(built_catalog(handle).records, ())
         self.assertEqual(registry.records, ())
 
     def test_group_path_must_end_at_auth_group(self):
@@ -201,7 +202,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
             handle.register_public(trust=Grant, user='group__user', group=lambda t: t.group.permissions, content='paper')
         with self.assertRaisesRegex(TrustsConfigurationError, 'user_set'):
             handle.register_public(trust=Grant, user=lambda t: t.group.user_set, group='group', content='paper')
-        self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).records, ())
+        self.assertEqual(built_catalog(handle).records, ())
 
     def test_public_group_registration_matches_ref_and_compiler_hop(self):
         Grant = self._grant_model()
@@ -522,7 +523,7 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
                 self.assertEqual(len(_group_permission_aliases(sql)), 1, sql)
 
     def test_common_permissions_omit_change(self):
-        plan = Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).plan_for(self.paper, user=self.alice)
+        plan = built_catalog(self.registry).plan_for(self.paper, user=self.alice)
         for label, target in (('instance', self.paper), ('queryset', self.one)):
             with self.subTest(label):
                 self.assertEqual(self._permission_codes(plan.common_permissions(self.alice, target)), {self.read_code})

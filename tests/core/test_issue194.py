@@ -7,7 +7,7 @@ from django.core.exceptions import PermissionDenied
 from django.http import HttpRequest
 from django.test import SimpleTestCase, TestCase, override_settings
 import tests as tests_module
-from tests.support import live_config, override_apps_ready, built_registries
+from tests.support import live_config, override_apps_ready, built_registries, built_catalog
 from tests.backends import MixinOnlyBackend
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
@@ -249,7 +249,7 @@ class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         fresh = RegistryFactory()
         j = Ref(DocumentGrant)
         fresh.register(content=j.document, user=j.user, permission=j.permission)
-        self.assertEqual(Catalog(cls=type(fresh), path=fresh.path, family=fresh.family, registry=fresh.build_registry()).records, fresh.records)
+        self.assertEqual(built_catalog(fresh).records, fresh.records)
         published = catalogs[HostTrustModelBackend]
         self.assertIsInstance(published.records, tuple)
 

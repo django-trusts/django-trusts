@@ -20,7 +20,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import PermittedManager, PermittedQuerySet, PermittedUsersMixin
-from tests.support import render_configured_policy
+from tests.support import render_configured_policy, built_catalog
 from trusts.compile.catalogs import Catalog
 
 
@@ -151,8 +151,8 @@ class DelegationRegistrationTest(TestCase):
         self.assertEqual(record.sponsor_field, 'sponsor')
         self.assertEqual(record.content_field, 'document')
         self.assertIs(record.condition_permission_model, Permission)
-        self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).records, ())
-        self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).delegations, (record,))
+        self.assertEqual(built_catalog(handle).records, ())
+        self.assertEqual(built_catalog(handle).delegations, (record,))
 
     def test_one_argument_condition_is_row_only(self):
         handle = _handle()
@@ -204,8 +204,8 @@ class DelegationRegistrationTest(TestCase):
                     with self.assertRaises(TrustsConfigurationError):
                         handle.register_public(trust=DocumentDelegation, content='document', condition=lambda *args: calls.append(args), **extra)
                 self.assertEqual(calls, [])
-                self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).records, ())
-                self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).delegations, ())
+                self.assertEqual(built_catalog(handle).records, ())
+                self.assertEqual(built_catalog(handle).delegations, ())
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ReverseOneToOneDelegationQueryTest(TransactionTestCase):
@@ -424,7 +424,7 @@ class TwoRootDelegationTest(TransactionTestCase):
         self.assertEqual(self.personal.content_path, ('sponsor', 'personal_profile_two', 'personal_organization_two', 'repositories'))
         self.assertIs(self.personal.content_model, self.Repository)
         self.assertIsNone(self.personal.condition)
-        roots = [record.root for record in Catalog(cls=type(self.handle), path=self.handle.path, family=self.handle.family, registry=self.handle.build_registry()).delegations]
+        roots = [record.root for record in built_catalog(self.handle).delegations]
         self.assertEqual(roots, [self.PersonalDelegation, self.ApprovedDelegation])
         with _listed(self.handle):
             self.assertTrue(self.delegate.has_perm(self.code, self.own))
@@ -597,7 +597,7 @@ class OrdinaryReverseOneToOneGrantTest(TransactionTestCase):
     def test_prefix_registers_and_covers_that_organization_only(self):
         self.assertEqual(self.record.content_path, ('profile', 'personal_organization_ord', 'repositories'))
         self.assertIs(self.record.content_model, self.Repository)
-        self.assertEqual(Catalog(cls=type(self.handle), path=self.handle.path, family=self.handle.family, registry=self.handle.build_registry()).delegations, ())
+        self.assertEqual(built_catalog(self.handle).delegations, ())
         with _listed(self.handle):
             self.assertTrue(self.user.has_perm(self.code, self.own))
             self.assertEqual(set(self.Repository.objects.permitted(self.read, self.user)), {self.own, self.sibling})
@@ -683,8 +683,8 @@ class ReverseOneToOneGrammarTest(TestCase):
                 with self.assertNumQueries(0):
                     with self.assertRaisesRegex(TrustsConfigurationError, 'not a valid content terminal or gateway'):
                         handle.register_public(trust=trust, content=content, **extra)
-                self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).records, ())
-                self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).delegations, ())
+                self.assertEqual(built_catalog(handle).records, ())
+                self.assertEqual(built_catalog(handle).delegations, ())
 
     def test_two_prefix_chain_registers(self):
         _principal, _profile, _organization, repository, delegation, _grant = self._models()
@@ -707,7 +707,7 @@ class DelegationRootGuardTest(TestCase):
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'No delegated registration'):
                 handle.delegations_for_root(DocumentDelegation)
-        self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).delegations, ())
+        self.assertEqual(built_catalog(handle).delegations, ())
 
     def test_registry_after_build_accepts_delegation(self):
         handle = _handle()
@@ -715,14 +715,14 @@ class DelegationRootGuardTest(TestCase):
         with self.assertNumQueries(0):
             record = self._register(handle)
         self.assertEqual(handle.delegations, (record,))
-        self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).delegations, (record,))
+        self.assertEqual(built_catalog(handle).delegations, (record,))
 
     def test_delegate_and_sponsor_must_share_a_principal_model(self):
         handle = _handle()
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'same principal model'):
                 self._register(handle, sponsor='document')
-        self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).delegations, ())
+        self.assertEqual(built_catalog(handle).delegations, ())
 
     def test_refs_from_two_roots_are_rejected(self):
         registry = RegistryFactory()
@@ -739,7 +739,7 @@ class DelegationRootGuardTest(TestCase):
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'Duplicate delegated registration'):
                 self._register(handle)
-        self.assertEqual(len(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).delegations), 1)
+        self.assertEqual(len(built_catalog(handle).delegations), 1)
 
     def test_same_root_same_content_terminal_remains_a_conflict(self):
         handle = _handle()
@@ -747,14 +747,14 @@ class DelegationRootGuardTest(TestCase):
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'Conflicting delegated registration'):
                 self._register(handle, condition=lambda relationship: relationship.delegate == relationship.sponsor)
-        self.assertEqual(len(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).delegations), 1)
+        self.assertEqual(len(built_catalog(handle).delegations), 1)
 
     def test_same_root_different_content_terminal_is_stored(self):
         handle = _handle()
         self._register(handle)
         second = self._register(handle, content='delegate')
         rows = handle.delegations_for_root(DocumentDelegation)
-        self.assertEqual(rows, Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).delegations)
+        self.assertEqual(rows, built_catalog(handle).delegations)
         self.assertEqual(len(rows), 2)
         self.assertIs(second.content_model, get_user_model())
         self.assertEqual(second.content_path, ('delegate',))

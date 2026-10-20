@@ -11,7 +11,7 @@ from django.db import connection, models
 from django.http import HttpRequest
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import path, reverse
-from tests.support import render_configured_policy, configured_catalog, built_registries
+from tests.support import render_configured_policy, configured_catalog, built_registries, built_catalog
 from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
@@ -108,11 +108,11 @@ class UserConditionRegistrationTest(TransactionTestCase):
                 registry.set_user_condition('where', lambda u: u.is_active, on='group')
             grant = Ref(Grant)
             registry.register(content=grant.note, user=grant.user, permission=grant.permission)
-            active_sql = str(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(alice, note).query)
+            active_sql = str(built_catalog(registry).permissions_for(alice, note).query)
             self.assertIn('is_active', active_sql)
             self.assertIn('is_superuser', active_sql)
-            plain = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(alice, note)
-            skipped = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(inactive, note, skip_staff=True, skip_is_active=True)
+            plain = built_catalog(registry).permissions_for(alice, note)
+            skipped = built_catalog(registry).permissions_for(inactive, note, skip_staff=True, skip_is_active=True)
             self.assertEqual(set(skipped.values_list('pk', flat=True)), {read.pk})
             self.assertEqual(skipped.query.sql_with_params()[0], plain.query.sql_with_params()[0])
             self.assertIn('is_superuser', str(skipped.query))
@@ -120,11 +120,11 @@ class UserConditionRegistrationTest(TransactionTestCase):
             open_registry = RegistryFactory(user_model=get_user_model())
             open_registry.set_user_condition('is_active', None)
             open_registry.register(content=grant.note, user=grant.user, permission=grant.permission)
-            allowed = Catalog(cls=type(open_registry), path=open_registry.path, family=open_registry.family, registry=open_registry.build_registry()).permissions_for(inactive, note)
+            allowed = built_catalog(open_registry).permissions_for(inactive, note)
             self.assertEqual(set(allowed.values_list('pk', flat=True)), {read.pk})
             self.assertNotIn('is_active', str(allowed.query))
             with self.assertRaises(TypeError):
-                Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(alice, note, allow_inactive=True)
+                built_catalog(registry).permissions_for(alice, note, allow_inactive=True)
             with self.assertRaises(TrustsConfigurationError):
                 registry.set_user_condition('again', lambda u: u.is_active)
         finally:
@@ -176,7 +176,7 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
                 registry.register(content=grant.note, user=grant.user, permission=grant.permission)
             preview = RegistryFactory(user_model=get_user_model())
             built = preview.build_registry()
-            Catalog(cls=type(built), path=built.path, family=built.family, registry=built.build_registry()).plan_for(Note, user=plain)
+            built_catalog(built).plan_for(Note, user=plain)
             self.assertTrue(built._rule_fragments)
             added = RegistryFactory(user_model=get_user_model())
             added.set_user_condition('staff', lambda u: u.is_staff)
@@ -184,14 +184,14 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
             self.assertFalse(added._override_fragments)
             register(added)
             self.assertFalse(added.build_registry().has_permission(plain, note, read))
-            self.assertIn('is_staff', str(Catalog(cls=type(added), path=added.path, family=added.family, registry=added.build_registry()).permissions_for(plain, note).query))
+            self.assertIn('is_staff', str(built_catalog(added).permissions_for(plain, note).query))
             replaced = RegistryFactory(user_model=get_user_model())
             replaced.set_user_condition('staff', lambda u: u.is_staff)
             replaced.set_user_condition('staff', lambda u: u.is_superuser)
             self.assertFalse(replaced._rule_fragments)
             register(replaced)
             self.assertFalse(replaced.build_registry().has_permission(staff, note, read))
-            replaced_sql = str(Catalog(cls=type(replaced), path=replaced.path, family=replaced.family, registry=replaced.build_registry()).permissions_for(staff, note).query)
+            replaced_sql = str(built_catalog(replaced).permissions_for(staff, note).query)
             self.assertIn('is_superuser', replaced_sql)
             self.assertNotIn('is_staff', replaced_sql)
             removed = RegistryFactory(user_model=get_user_model())
@@ -199,7 +199,7 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
             self.assertFalse(removed._rule_fragments)
             register(removed)
             self.assertTrue(removed.build_registry().has_permission(inactive, note, read))
-            self.assertNotIn('is_active', str(Catalog(cls=type(removed), path=removed.path, family=removed.family, registry=removed.build_registry()).permissions_for(inactive, note).query))
+            self.assertNotIn('is_active', str(built_catalog(removed).permissions_for(inactive, note).query))
             override = RegistryFactory(user_model=get_user_model())
             override.set_user_override('superuser', lambda u: u.is_superuser)
             self.assertFalse(override._override_fragments)
@@ -284,20 +284,20 @@ class UserOverrideTest(TransactionTestCase):
             registry.register(content=grant.note, user=grant.user, permission=grant.permission)
             link = Ref(Link)
             registry.register_delegation(content=link.note, delegate=link.delegate, sponsor=link.sponsor)
-            allowed = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(superuser, note)
+            allowed = built_catalog(registry).permissions_for(superuser, note)
             allowed_ids = set(allowed.values_list('pk', flat=True))
             self.assertIn(read.pk, allowed_ids)
             self.assertNotIn(other.pk, allowed_ids)
             self.assertIn('is_superuser', str(allowed.query))
             self.assertTrue(registry.build_registry().has_permission(superuser, note, read))
             self.assertFalse(registry.build_registry().has_permission(superuser, note, other))
-            self.assertEqual(set(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(holder, note).values_list('pk', flat=True)), {read.pk})
+            self.assertEqual(set(built_catalog(registry).permissions_for(holder, note).values_list('pk', flat=True)), {read.pk})
             self.assertFalse(registry.build_registry().has_permission(delegate, note, read))
-            self.assertEqual(list(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(inactive, note)), [])
-            skipped = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(inactive, note, skip_is_active=True)
+            self.assertEqual(list(built_catalog(registry).permissions_for(inactive, note)), [])
+            skipped = built_catalog(registry).permissions_for(inactive, note, skip_is_active=True)
             self.assertEqual(list(skipped), [])
             self.assertIn('is_superuser', str(skipped.query))
-            without = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(superuser, note, skip_superuser=True)
+            without = built_catalog(registry).permissions_for(superuser, note, skip_superuser=True)
             self.assertEqual(list(without), [])
             self.assertEqual(without.query.sql_with_params()[0], allowed.query.sql_with_params()[0])
             self.assertIn('is_superuser', str(without.query))
@@ -411,7 +411,7 @@ class UserConditionTargetTest(TransactionTestCase):
             self.assertIn('is_staff', delegated_sql)
             self.assertNotIn('sponsor__is_staff', delegated_sql)
             self.assertIn('delegate', delegated_sql)
-            own = str(Catalog(cls=type(staff_registry), path=staff_registry.path, family=staff_registry.family, registry=staff_registry.build_registry()).permissions_for(staff, note).query)
+            own = str(built_catalog(staff_registry).permissions_for(staff, note).query)
             self.assertIn('is_staff', own)
             sponsor_registry = open_registry(lambda registry: registry.set_user_condition('sponsor_not_super', lambda u: ~u.is_superuser, on='sponsor'))
             sponsor_handle = [sponsor_registry, setattr(sponsor_registry, 'path', 'user-target-sponsor')][0]
@@ -425,7 +425,7 @@ class UserConditionTargetTest(TransactionTestCase):
             TargetLink.objects.create(note=note, delegate=actor, sponsor=plain)
             self.assertTrue(holds(sponsor_handle, actor))
             self.assertTrue(holds(sponsor_handle, superuser))
-            checked_qs = Catalog(cls=type(sponsor_registry), path=sponsor_registry.path, family=sponsor_registry.family, registry=sponsor_registry.build_registry()).permissions_for(superuser, note)
+            checked_qs = built_catalog(sponsor_registry).permissions_for(superuser, note)
             production_qs = common_permissions(built_registries((sponsor_handle,)), note, superuser)
             self.assertEqual(set(checked_qs.values_list('pk', flat=True)), set(production_qs.values_list('pk', flat=True)))
             self.assertEqual(str(checked_qs.query), str(production_qs.query))
@@ -636,10 +636,10 @@ class SkipKeywordTest(TransactionTestCase):
             registry.set_user_condition('staff', lambda u: u.is_superuser)
             grant = Ref(SkipGrant)
             registry.register(content=grant.note, user=grant.user, permission=grant.permission)
-            denied = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(alice, note)
+            denied = built_catalog(registry).permissions_for(alice, note)
             with self.assertNumQueries(1):
                 self.assertEqual(list(denied), [])
-            skipped = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(alice, note, skip_staff=True)
+            skipped = built_catalog(registry).permissions_for(alice, note, skip_staff=True)
             self.assertEqual(set(skipped.values_list('pk', flat=True)), {read.pk})
             self.assertEqual(skipped.query.sql_with_params()[0], denied.query.sql_with_params()[0])
             self.assertIn('is_superuser', str(skipped.query))
@@ -682,21 +682,21 @@ class SkipKeywordTest(TransactionTestCase):
             registry.register(content=grant.note, user=grant.user, permission=grant.permission)
             for value in (True, False):
                 with self.assertRaises(TypeError) as ctx:
-                    Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(alice, note, skip_nope=value)
+                    built_catalog(registry).permissions_for(alice, note, skip_nope=value)
                 self.assertIn('skip_nope', str(ctx.exception))
             with self.assertRaises(TypeError) as ctx:
-                Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(inactive, note, skip_nope=True)
+                built_catalog(registry).permissions_for(inactive, note, skip_nope=True)
             self.assertIn('skip_nope', str(ctx.exception))
             removed = RegistryFactory(user_model=get_user_model())
             removed.set_user_condition('is_active', None)
             removed.register(content=grant.note, user=grant.user, permission=grant.permission)
             with self.assertRaises(TypeError) as ctx:
-                Catalog(cls=type(removed), path=removed.path, family=removed.family, registry=removed.build_registry()).permissions_for(alice, note, skip_is_active=True)
+                built_catalog(removed).permissions_for(alice, note, skip_is_active=True)
             self.assertIn('skip_is_active', str(ctx.exception))
             with self.assertRaises(TypeError) as ctx:
-                Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(alice, note, skip_superuser=True)
+                built_catalog(registry).permissions_for(alice, note, skip_superuser=True)
             self.assertIn('skip_superuser', str(ctx.exception))
-            self.assertEqual(set(Catalog(cls=type(removed), path=removed.path, family=removed.family, registry=removed.build_registry()).permissions_for(alice, note).values_list('pk', flat=True)), {read.pk})
+            self.assertEqual(set(built_catalog(removed).permissions_for(alice, note).values_list('pk', flat=True)), {read.pk})
         finally:
             with connection.schema_editor() as editor:
                 editor.delete_model(UnknownGrant)
@@ -736,16 +736,16 @@ class SkipKeywordTest(TransactionTestCase):
             registry.set_user_override('staff', lambda u: u.is_staff)
             grant = Ref(OverrideGrant)
             registry.register(content=grant.note, user=grant.user, permission=grant.permission)
-            allowed = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(staff, note)
+            allowed = built_catalog(registry).permissions_for(staff, note)
             self.assertEqual(set(allowed.values_list('pk', flat=True)), {read.pk})
             self.assertIn('is_staff', str(allowed.query))
-            skipped = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(staff, note, skip_staff=True)
+            skipped = built_catalog(registry).permissions_for(staff, note, skip_staff=True)
             self.assertEqual(list(skipped), [])
             self.assertEqual(skipped.query.sql_with_params()[0], allowed.query.sql_with_params()[0])
             self.assertIn('is_staff', str(skipped.query))
-            self.assertEqual(list(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(superuser, note)), [])
+            self.assertEqual(list(built_catalog(registry).permissions_for(superuser, note)), [])
             with self.assertRaises(TypeError) as ctx:
-                Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(staff, note, skip_superuser=True)
+                built_catalog(registry).permissions_for(staff, note, skip_superuser=True)
             self.assertIn('skip_superuser', str(ctx.exception))
         finally:
             with connection.schema_editor() as editor:
@@ -1301,9 +1301,9 @@ class PlainUserWithoutSuperuserTest(KernelHostRequiredMixin, TransactionTestCase
             quiet = PlainPrincipal.objects.create(username='quiet-plain', is_active=False)
             PlainNoteGrant.objects.create(user=holder, note=note, permission=permission)
             PlainNoteGrant.objects.create(user=quiet, note=note, permission=permission)
-            self.assertTrue(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).has_perm(holder, '%s.%s' % (permission.content_type.app_label, permission.codename), note))
-            self.assertFalse(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).has_perm(outsider, '%s.%s' % (permission.content_type.app_label, permission.codename), note))
-            self.assertFalse(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).has_perm(quiet, '%s.%s' % (permission.content_type.app_label, permission.codename), note))
+            self.assertTrue(built_catalog(registry).has_perm(holder, '%s.%s' % (permission.content_type.app_label, permission.codename), note))
+            self.assertFalse(built_catalog(registry).has_perm(outsider, '%s.%s' % (permission.content_type.app_label, permission.codename), note))
+            self.assertFalse(built_catalog(registry).has_perm(quiet, '%s.%s' % (permission.content_type.app_label, permission.codename), note))
 
             class PlainManager(PermittedUsersManagerMixin, models.Manager):
                 pass
@@ -1418,7 +1418,7 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
             self.assertTrue(registry.build_registry().has_permission(holder, note, permission))
             self.assertTrue(registry.build_registry().has_permission(sponsor, note, permission))
             self.assertFalse(registry.build_registry().has_permission(outsider, note, permission))
-            forward_sql = str(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(holder, note).query)
+            forward_sql = str(built_catalog(registry).permissions_for(holder, note).query)
             self.assertNotIn('is_active', forward_sql)
             handle = [registry, setattr(registry, 'path', 'columnless')][0]
             predicate = granted(built_registries((handle,))[0], note, delegate, permission)
