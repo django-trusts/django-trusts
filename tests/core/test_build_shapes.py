@@ -18,6 +18,7 @@ from django.db.models import Q
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
+from trusts.backends import TrustModelBackendMixin
 from trusts.compile.catalogs import Catalog, CatalogShape
 from trusts.compile.factory import (
     PublicRegistration,
@@ -417,7 +418,7 @@ def _other_grant_models():
 
 
 class CatalogFromShapeTest(TransactionTestCase):
-    """A catalog answers from a shape built in the test, not from a factory."""
+    """A catalog answers from literal shape fields, including a build_relation row."""
 
     def test_shape_answers_and_an_empty_shape_denies(self):
         Scope, Payload, Row, Grant = _prefix_models()
@@ -440,29 +441,27 @@ class CatalogFromShapeTest(TransactionTestCase):
             )
             Grant.objects.create(scope=scope, user=holder, permission=read)
             code = '%s.%s' % (content_type.app_label, read.codename)
-            factory = RegistryFactory(user_model=User, path='shape-answers')
             grant = Ref(Grant)
-            factory.register(
-                content=grant.scope.rows.content, user=grant.user,
+            record = RegistryFactory.build_relation(
+                content=grant.scope.rows.content,
+                user=grant.user,
                 permission=grant.permission,
             )
-            frozen = factory.build()
-            shape = CatalogShape(
-                records=frozen.records,
-                delegations=frozen.delegations,
-                conditions=frozen.conditions,
-                user_conditions=frozen.user_conditions,
-                user_override=frozen.user_override,
-                filter_lookup=frozen.filter_lookup,
-                compiler=frozen.compiler,
-                cls=frozen.cls,
-                path=frozen.path,
-                family=frozen.family,
-                user_model=frozen.user_model,
-                user_rules=frozen.user_rules,
-                override_q=frozen.override_q,
-            )
-            catalog = Catalog(shape)
+            catalog = Catalog(CatalogShape(
+                records=(record,),
+                delegations=(),
+                conditions=(),
+                user_conditions=None,
+                user_override=None,
+                filter_lookup=FrozenConditionLookup(()),
+                compiler=None,
+                cls=TrustModelBackendMixin,
+                path='shape-answers',
+                family='relationship',
+                user_model=User,
+                user_rules=(Q(), Q()),
+                override_q=None,
+            ))
             self.assertTrue(catalog.has_perm(holder, code, payload))
             self.assertFalse(catalog.has_perm(outsider, code, payload))
             self.assertEqual(
@@ -487,7 +486,7 @@ class CatalogFromShapeTest(TransactionTestCase):
                 records=(), delegations=(), conditions=(),
                 user_conditions=None, user_override=None,
                 filter_lookup=FrozenConditionLookup(()),
-                compiler=None, cls=RegistryFactory, path='empty-shape',
+                compiler=None, cls=TrustModelBackendMixin, path='empty-shape',
                 family='relationship', user_model=User,
                 user_rules=(Q(), Q()), override_q=None,
             ))
