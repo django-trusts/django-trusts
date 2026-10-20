@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import TypeVar
 
 import django.apps
+from django.contrib.auth import get_user_model
 from django.db.models import Model
 from django.db.models import options as model_options
 
@@ -131,15 +132,8 @@ class TrustsConfigMixin(django.apps.AppConfig):
         # recorder still raises.
         if self.recorder.frozen:
             return
-        # ``get_user_model()`` and the catalog build touch the app
-        # registry. ``Apps.populate`` phase 1 imports this module before
-        # models are ready, so these imports stay in ``ready``.
-        #
-        # ``install_policy_commands`` and ``trusts.inspect.checks`` import
-        # ``django.contrib.auth.models.Permission``. That import raises
-        # ``AppRegistryNotReady`` at module level during phase 1, so they
-        # stay here as well. ``install_policy_commands`` is idempotent.
-        from django.contrib.auth import get_user_model
+        # Compiler imports Permission through the factory chain.
+        # Apps.populate phase 1 imports this module before that is safe.
         from trusts.compile.factory import Compiler
         from trusts.inspect.commands import install_policy_commands
         import trusts.inspect.checks  # noqa: F401
@@ -161,7 +155,6 @@ def installed_user_model():
     """Auth user model once the app registry is ready, else ``None``."""
     if not django.apps.apps.ready:
         return None
-    from django.contrib.auth import get_user_model
     return get_user_model()
 
 
