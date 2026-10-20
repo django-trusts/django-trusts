@@ -24,7 +24,6 @@ from django.test.utils import isolate_apps
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from trusts.decorators import _declared_authorization_guards, authorization_required
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
@@ -280,8 +279,8 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
                 self.assertEqual(publish_allowed(_request(self.owner), pk=self.specs.pk), 'ok')
                 with self.assertRaises(PermissionDenied):
                     publish_denied(_request(self.owner), pk=self.acme.pk)
-                with self.assertNumQueries(0):
-                    with self.assertRaises(TrustsConfigurationError):
+                with self.assertNumQueries(1):
+                    with self.assertRaises(PermissionDenied):
                         missing(_request(self.owner), pk=self.widget.pk)
         finally:
             for model, permission in ((self.Organization, self.manage_code), (self.Organization, self.read_code), (self.Repository, self.read_code), (self.Repository, self.manage_code), (self.Repository, self.publish_code), (self.Organization, self.publish_code), (self.Widget, 'trusts_tests.view_widget')):

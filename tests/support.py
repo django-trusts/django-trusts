@@ -1,4 +1,5 @@
 import sys
+import types
 from contextlib import contextmanager
 
 from django.apps import apps as django_apps
@@ -32,7 +33,7 @@ def scoped_permitted_content(queryset, user, permission, *, content,
                              registry, **skip_flags):
     """Prefix filter for one explicit registry in a unit test.
 
-    The public filter walks ``get_catalog()`` and takes no registry
+    The public filter ORs listed backends and takes no registry
     argument. This helper is the direct registry question.
     """
     if registry.family != 'relationship':
@@ -317,9 +318,9 @@ def install_writable_registry(config, path, contribute=None):
 def listed_relationship(factories):
     """Publish these factories as the catalogs inquiry and the lockfile see.
 
-    One factory is installed on every mixin config, so the app that
-    contains a model answers from it. Several factories are what
-    ``installed_catalogs`` returns. A model still reads its own app.
+    One factory is installed on every mixin config. Several factories
+    are zipped onto the first mixin configs. Each listed backend's
+    module is that config's module, so the backend reads that catalog.
     """
 
     built = []
@@ -375,10 +376,25 @@ def unbound_named_filters(backend_cls):
 
 
 def _inquiry_backend_classes(count):
+    """Backend classes for the catalogs ``_publish_built`` just stored.
 
-    module = sys.modules[__name__]
-    while len(_inquiry_backend_classes.cache) < count:
-        index = len(_inquiry_backend_classes.cache)
+    Each class lives in a submodule of a mixin app so construction finds
+    that app. A host with fewer mixin apps than catalogs reuses the last
+    app; ``installed_catalogs`` still lists every catalog for the lockfile.
+    """
+    configs = mixin_configs()
+    if not configs:
+        raise TrustsConfigurationError(
+            'listed_relationship needs a TrustsConfigMixin app.'
+        )
+    built = []
+    for index in range(count):
+        config = configs[min(index, len(configs) - 1)]
+        module_name = '%s.listed_inquiry' % config.name
+        module = sys.modules.get(module_name)
+        if module is None:
+            module = types.ModuleType(module_name)
+            sys.modules[module_name] = module
 
         class Backend(TrustModelBackendMixin, ModelBackend):
             pass
@@ -386,12 +402,10 @@ def _inquiry_backend_classes(count):
         name = 'ListedInquiryBackend%d' % index
         Backend.__name__ = name
         Backend.__qualname__ = name
-        Backend.__module__ = __name__
+        Backend.__module__ = module_name
         setattr(module, name, Backend)
-        _inquiry_backend_classes.cache.append(Backend)
-    return _inquiry_backend_classes.cache[:count]
-
-_inquiry_backend_classes.cache = []
+        built.append(Backend)
+    return built
 
 
 def forget_models(*model_classes):

@@ -476,8 +476,7 @@ class TwoRootDelegationTest(TransactionTestCase):
         lone.register(trust=self.PersonalDelegation, delegate='delegate', sponsor='sponsor', content=_TWO_PREFIX)
         with _listed(lone):
             self.assertFalse(self.delegate.has_perm(self.code, self.own))
-            with self.assertRaisesRegex(TrustsConfigurationError, 'no applicable auth.Permission plan'):
-                self.Repository.objects.permitted(self.read, self.delegate)
+            self.assertEqual(list(self.Repository.objects.permitted(self.read, self.delegate)), [])
             self.assertNotIn(self.delegate, set(self.own.get_permitted_users(self.read)))
 
     def test_enumeration_and_policy_lock_have_one_branch_per_root(self):

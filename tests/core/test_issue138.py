@@ -187,10 +187,11 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
         @authorization_required(DocumentGrant, 'myapp.change_documentgrant')
         def _unsupported(request, pk):
             return 'no'
+        granted = DocumentGrant.objects.order_by('pk').first()
         for user in (self.alice, self.superuser):
-            with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError):
-                    _unsupported(_request(user), pk=1)
+            with self.assertNumQueries(1):
+                with self.assertRaises(PermissionDenied):
+                    _unsupported(_request(user), pk=granted.pk)
 
     def test_system_check_reports_unknown_guard_condition(self):
         entry = (Document, 'myapp.change_document', ('missing_check_138',))
@@ -368,7 +369,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
                     _edit(_request(self.bob), pk=self.open_doc.pk)
                 self.assertEqual(_edit(_request(self.alice), pk=self.open_doc.pk), 'ok')
             with listed_relationship((extra,)):
-                with self.assertRaises(TrustsConfigurationError):
+                with self.assertRaises(PermissionDenied):
                     _edit(_request(self.bob), pk=self.open_doc.pk)
 
     def test_e008_split_names_across_backends_fail_closed(self):

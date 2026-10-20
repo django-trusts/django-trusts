@@ -140,6 +140,9 @@ class TrustsConfigMixin(django.apps.AppConfig):
         self.recorder.freeze()
         self.recorder.play(compiler.get_recorder_target())
         self.catalog = compiler.compile()
+        from django.contrib.auth.models import UserManager
+        from trusts.backends import manager_with_perm
+        UserManager.with_perm = manager_with_perm
 
 
 def installed_catalogs():
@@ -150,10 +153,3 @@ def installed_catalogs():
             found.append(config.get_catalog())
     return tuple(found)
 
-
-def catalog_for_model(model):
-    """Catalog owned by the app that contains ``model``, or ``None``."""
-    config = django.apps.apps.get_containing_app_config(model.__module__)
-    if not isinstance(config, TrustsConfigMixin):
-        return None
-    return config.get_catalog()
