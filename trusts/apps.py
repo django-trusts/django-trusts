@@ -38,9 +38,6 @@ class TrustsImplementationConfig(django.apps.AppConfig):
         # ``get_user_model()``). ``Apps.populate`` phase 1 imports this
         # module before the registry is ready, so they cannot sit at
         # module level:
-        # trusts.apps → trusts.backends → auth.models.Permission
-        # → AbstractBaseUser → AppRegistryNotReady.
-        from trusts.backends import TrustModelBackendMixin  # noqa: F401
         from trusts.compile.factory import build_configured_catalogs
         from trusts.inspect.commands import install_policy_commands
         import trusts.inspect.checks  # noqa: F401
