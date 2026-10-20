@@ -15,6 +15,7 @@ from django.db import connection, models
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
+from trusts.compile.catalogs import Catalog
 from trusts.compile.factory import RegistryFactory
 from trusts.compile.nodes import Along, Ref
 from trusts.plan.recursions import GrantReach
@@ -76,7 +77,10 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
         self.assertEqual(built_registry.delegations, registry.delegations)
 
         live = built_catalog(registry).plan_for(Document)
-        built = built_catalog(built_registry).plan_for(Document)
+        built = Catalog(
+            cls=type(built_registry), path=built_registry.path,
+            family=built_registry.family, registry=built_registry,
+        ).plan_for(Document)
         self.assertEqual(built.records, live.records)
         self.assertIs(built.records[0], live.records[0])
         self.assertEqual(built.delegations, live.delegations)
@@ -110,7 +114,10 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
         )
         built_registry = _built_from(registry)
         live = built_catalog(registry).plan_for(Folder)
-        built = built_catalog(built_registry).plan_for(Folder)
+        built = Catalog(
+            cls=type(built_registry), path=built_registry.path,
+            family=built_registry.family, registry=built_registry,
+        ).plan_for(Folder)
         self.assertIsNotNone(built.records[0].along)
         User = get_user_model()
         user = User(pk=1)

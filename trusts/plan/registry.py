@@ -167,12 +167,6 @@ class Registry(object):
             user_override_q=override,
         )
 
-    # -- names the builder exposes; a built registry exposes them too --
-
-    def build_registry(self):
-        """Return ``self``: a built registry is already query-time data."""
-        return self
-
     def compile_registered_condition_q(self, model, perm, user):
         """Compile a registered ``:condition`` to ``Q`` from this registry."""
         return self.conditions.compile_registered_condition_q(model, perm, user)
