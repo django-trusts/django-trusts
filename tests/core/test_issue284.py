@@ -460,7 +460,7 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
             self.handle.register_permission_condition(Sheet, 'unexpired', lambda user, permission, content: content.expires_on == content.as_of)
             from tests.apps import install_class_handle
             install_class_handle(_AcceptanceBackend, self.handle)
-            from trusts.apps import catalogs
+            from trusts.installed import catalogs
             from trusts.compile.catalogs import Catalog
             factory = self.handle
             catalogs[_AcceptanceBackend] = Catalog(cls=_AcceptanceBackend, path='%s.%s' % (_AcceptanceBackend.__module__, _AcceptanceBackend.__qualname__), family=_AcceptanceBackend.family, registry=factory.build_registry(), family_registries=built_registries(()))
@@ -475,7 +475,7 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
     def tearDown(self):
         from tests.apps import install_class_handle
         install_class_handle(_AcceptanceBackend, None)
-        from trusts.apps import catalogs
+        from trusts.installed import catalogs
         catalogs.pop(_AcceptanceBackend, None)
         if getattr(self, '_settings', None) is not None:
             self._settings.disable()

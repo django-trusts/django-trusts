@@ -14,8 +14,9 @@ from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
-from trusts.apps import TrustsImplementationConfig, catalogs
-from trusts.plan.contents import _relationship_registries
+from trusts.apps import TrustsImplementationConfig
+from trusts.installed import catalogs
+from trusts.plan.contents import relationship_family
 from tests.apps import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import QueryCompiler
 from trusts.plan.relations import PlanQueryCompiler
@@ -105,12 +106,12 @@ class ProtectedFactorySurfaceTest(SimpleTestCase):
         from tests.backends import HostTrustModelBackend
         catalog = HostTrustModelBackend().get_catalog()
         self.assertIs(catalogs[HostTrustModelBackend], catalog)
-        self.assertIs(catalog._registry.build_registry(), catalog._registry)
+        self.assertIs(catalog.policy().build_registry(), catalog.policy())
 
     def test_unowned_factory_defaults_to_relationship_family(self):
         built = RegistryFactory(path=MIXIN).build_registry()
         self.assertEqual(built.family, 'relationship')
-        self.assertEqual(_relationship_registries((built,)), (built,))
+        self.assertEqual(relationship_family((built,)), (built,))
 
 class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
 
@@ -123,7 +124,7 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         self.fold_doc = Document.objects.create(title='fold-194')
         DocumentGrant.objects.create(document=self.rel_doc, user=self.alice, permission=self.change)
         DocumentAltGrant.objects.create(document=self.fold_doc, user=self.alice, permission=self.change)
-        self.rel_handle = catalogs[DocumentBackend]._registry
+        self.rel_handle = catalogs[DocumentBackend].policy()
         self.fold_registry = RegistryFactory(path=MIXIN, family='ordered_fold')
         self.fold_handle = self.fold_registry
         self.fold_handle.register_public(trust=DocumentAltGrant, user='user', permission='permission', content='document')
@@ -139,7 +140,7 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
 
     def tearDown(self):
         from tests.backends import MixinOnlyBackend
-        from trusts.apps import catalogs
+        from trusts.installed import catalogs
         if self._saved_fold_catalog is None:
             catalogs.pop(MixinOnlyBackend, None)
         else:
@@ -215,7 +216,7 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
         self.backend = DocumentBackend()
 
     def test_inapplicable_compiler_is_zero_sql(self):
-        live = catalogs[DocumentBackend]._registry
+        live = catalogs[DocumentBackend].policy()
         silent = Registry(records=live.records, delegations=live.delegations, conditions=live.conditions, user_conditions=live.user_conditions, user_override=live.user_override, condition_lookup=live.condition_lookup, compiler=_NeverAppliesCompiler(), path=live.path, family=live.family)
         from tests.apps import bound_handle
         cls = type(self.backend)
@@ -248,7 +249,7 @@ class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         j = Ref(DocumentGrant)
         isolated.register(content=j.document, user=j.user, permission=j.permission)
         self.assertEqual(isolated.build_registry().records, isolated.records)
-        published = catalogs[HostTrustModelBackend]._registry
+        published = catalogs[HostTrustModelBackend].policy()
         self.assertIs(published.build_registry(), published)
 
     def test_unconfigured_path_still_fails_loud(self):

@@ -251,7 +251,7 @@ class AuthorizationRequiredReadinessPreflightTest(
             return 'ok'
 
         from tests.apps import configured_catalog
-        registry = configured_catalog(DOCUMENT_BACKEND)._registry
+        registry = configured_catalog(DOCUMENT_BACKEND).policy()
         previous = registry.condition_lookup
         try:
             registry.condition_lookup = None

@@ -13,8 +13,8 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Exists, F, Model, OuterRef, Q
 
 from trusts.plan.rewrites import bind_once
-from trusts.plan.hops import _lookup_text, _path_text, _resolved_hop
-from trusts.plan.predicates import _bind_record_qs, _bind_terminal
+from trusts.plan.hops import lookup_text, path_text, resolved_hop
+from trusts.plan.predicates import bind_record_qs, bind_terminal
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.delegations import (
     _matched_delegation_q,
@@ -52,11 +52,11 @@ def _plan_for_permission(registry, candidates, user, permission):
     return registry.plan_for(candidates, user=user)
 
 
-def _relationship_registries(registries):
-    """Keep registries whose catalog family is relationship."""
+def relationship_family(items):
+    """Keep catalogs or registries whose family is relationship."""
     return tuple(
-        registry for registry in registries
-        if registry.family == 'relationship'
+        item for item in items
+        if item.family == 'relationship'
     )
 
 
@@ -144,12 +144,12 @@ def granted(registries, candidates, user, permission, *, kind='complete',
 
     Only relationship-family registries participate.
     """
-    participating = _relationship_registries(registries)
+    participating = relationship_family(registries)
     return _compile_granted(
         participating, candidates, user, permission, kind=kind,
         family_registries=(
             participating if family_registries is None
-            else _relationship_registries(family_registries)
+            else relationship_family(family_registries)
         ),
         permission_model=permission_model,
         skipped=skipped,
@@ -190,7 +190,7 @@ def _prefix_partial_suffix(record, lookup):
 def _exact_prefix_exists(record, lookup, target_attname, user, permission,
                         content_identity):
     """Grant row whose stored prefix is the outer row."""
-    inner = _bind_record_qs(
+    inner = bind_record_qs(
         record,
         user=user,
         permission=permission,
@@ -257,7 +257,7 @@ def _prefix_sponsor_q(record, sponsor_records, permission, content_identity,
                 binding = OuterRef(lookup)
             else:
                 binding = _shift_outer_ref(candidate)
-            parts.append(Exists(_bind_record_qs(
+            parts.append(Exists(bind_record_qs(
                 ordinary,
                 content_identity=content_identity,
                 user=OuterRef(record.sponsor_field),
@@ -294,7 +294,7 @@ def _delegation_prefix_exists(record, sponsor_records, user, permission,
 
     def bound():
         combined = Q(**{
-            record.delegate_field: _bind_terminal(user, 'delegate'),
+            record.delegate_field: bind_terminal(user, 'delegate'),
         })
         combined &= _delegation_prefix_reach_q(
             record, user, lookup, target_attname, candidate, position,
@@ -435,7 +435,7 @@ def _reject_unsupported_delegated_suffix(walk):
     raise TrustsConfigurationError(
         'Delegated along= cannot compile suffix path %r; the walk '
         'identity is not one column of the content row.'
-        % _path_text(walk.suffix_path)
+        % path_text(walk.suffix_path)
     )
 
 
@@ -475,7 +475,7 @@ def _delegation_sponsor_q(record, sponsor_records, permission, content_identity,
         if not _sponsor_record_matches(ordinary, record):
             continue
         if ordinary.along is None:
-            inner = _bind_record_qs(
+            inner = bind_record_qs(
                 ordinary,
                 content_identity=content_identity,
                 user=OuterRef(record.sponsor_field),
@@ -534,7 +534,7 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
 
         def bound(record=record):
             combined = Q(**{
-                record.delegate_field: _bind_terminal(user, 'delegate'),
+                record.delegate_field: bind_terminal(user, 'delegate'),
             })
             combined &= _delegation_reaches(record, forward=True, user=user)
             return combined
@@ -593,9 +593,9 @@ def _scope_prefix_lookups(record, scope_model):
             field = current._meta.get_field(name)
         except FieldDoesNotExist:
             return ()
-        related, target_attname = _resolved_hop(field, 'content', path)
+        related, target_attname = resolved_hop(field, 'content', path)
         if related._meta.concrete_model is scope_model and index != last:
-            lookups.append((_lookup_text(path[:index + 1]), target_attname))
+            lookups.append((lookup_text(path[:index + 1]), target_attname))
         current = related
     return tuple(lookups)
 

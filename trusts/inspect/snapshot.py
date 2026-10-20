@@ -35,17 +35,16 @@ import uuid
 from decimal import Decimal
 from pathlib import Path
 
-from django.contrib.auth import get_backends
 from django.core import checks as django_checks
 from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
-from trusts.apps import user_model
-from trusts.backends import TrustModelBackendMixin
-from trusts.plan.hops import _resolved_hop
+from trusts.installed import user_model
+from trusts.backends import configured_catalogs
+from trusts.plan.hops import resolved_hop
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.contents import _relationship_registries
+from trusts.plan.contents import relationship_family
 from trusts.plan.delegations import _sponsor_record_matches
 from trusts.inspect.format import _format_policy_sql
 from trusts.inspect.yaml import (
@@ -55,6 +54,28 @@ from trusts.inspect.yaml import (
     parse_canonical_float,
     _load_policy_yaml,
 )
+from django.conf import settings
+from django.db.utils import DEFAULT_DB_ALIAS
+from trusts.plan.conditions import compile_expression_q
+from django.contrib.auth.models import Permission
+from django.db import connections
+from trusts.plan import conditions as _ir
+from trusts.plan.rewrites import BindTable
+from trusts.plan.recursions import (
+        GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
+        _PrefixInForwardWalk,
+    )
+from trusts.plan.rewrites import BoundBool
+from trusts.plan.standards import SkipFlag
+from trusts.plan.conditions import ModelIdentity
+from trusts.compile.factory import RegisteredDelegation
+from trusts.plan.contents import _compile_granted
+from trusts.plan.rewrites import bind_once
+from trusts.plan.rewrites import bound_exists_query
+from trusts.plan.aggregates import _compile_common_permissions
+from trusts.plan.users import lock_permitted_users_queryset
+from trusts.plan.contents import _compile_permitted_content_queryset
+from trusts.plan.rewrites import _AlongOnce
 
 SCHEMA_VERSION = 1
 CHECK_ID_POLICY_LOCK = 'trusts.E009'
@@ -147,8 +168,6 @@ def resolve_policy_database(override=None):
     ``DATABASES`` key selects that alias. Any other value is a
     configuration error. The alias is not written into the document.
     """
-    from django.conf import settings
-    from django.db.utils import DEFAULT_DB_ALIAS
 
     if override is not None:
         alias = override
@@ -323,7 +342,6 @@ class _PolicyVisitor(object):
         return content
 
     def _ensure_content(self, model, records, delegations):
-        from trusts.compile.factory import RegisteredDelegation
 
         label = _model_label(model)
         existing = self._contents.get(label)
@@ -411,8 +429,6 @@ class _PolicyVisitor(object):
     # -- per-question SQL bodies (formerly the six _compile_* fns) ----
 
     def _compile_content_grant(self, records, model):
-        from trusts.plan.contents import _compile_granted
-        from trusts.plan.rewrites import bind_once
 
         registry, alias, registries = self.registry, self.alias, self.registries
         user = _role_sentinel(records[0], 'user', alias)
@@ -432,8 +448,6 @@ class _PolicyVisitor(object):
         )
 
     def _compile_has_perm(self, records, model):
-        from trusts.plan.contents import _compile_granted
-        from trusts.plan.rewrites import bound_exists_query
 
         registry, alias, registries = self.registry, self.alias, self.registries
         user = _role_sentinel(records[0], 'user', alias)
@@ -455,7 +469,6 @@ class _PolicyVisitor(object):
         )
 
     def _compile_get_all_permissions(self, records, model):
-        from trusts.plan.aggregates import _compile_common_permissions
 
         registry, alias, registries = self.registry, self.alias, self.registries
         user = _role_sentinel(records[0], 'user', alias)
@@ -480,7 +493,6 @@ class _PolicyVisitor(object):
         )
 
     def _compile_get_permitted_users(self, records, model):
-        from trusts.plan.users import lock_permitted_users_queryset
 
         registry, alias, registries = self.registry, self.alias, self.registries
         content = _content_sentinel(model, alias)
@@ -496,13 +508,12 @@ class _PolicyVisitor(object):
 
     def _compile_filter_by_permitted_content(self, records, model):
         """One statement per proper prefix, the queryset that actually runs."""
-        from trusts.plan.contents import _compile_permitted_content_queryset
 
         registry, alias, registries = self.registry, self.alias, self.registries
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
-        listed = _relationship_registries((registry,))
-        peers = _relationship_registries(registries)
+        listed = relationship_family((registry,))
+        peers = relationship_family(registries)
         rows = []
         for prefix in _permitted_content_prefix_models(registry, model):
             queryset = _compile_permitted_content_queryset(
@@ -526,7 +537,6 @@ class _PolicyVisitor(object):
         return rows
 
     def _compile_get_group_permissions(self, records, model):
-        from trusts.plan.aggregates import _compile_common_permissions
 
         registry, alias = self.registry, self.alias
         user = _role_sentinel(records[0], 'user', alias)
@@ -545,7 +555,6 @@ class _PolicyVisitor(object):
 
 
 def _build_document(registries, alias):
-    from django.conf import settings
 
     engine = (settings.DATABASES.get(alias) or {}).get('ENGINE')
     if not isinstance(engine, str) or engine == '':
@@ -901,7 +910,7 @@ def _permitted_content_prefix_models(registry, model):
         last = len(path) - 1
         for index, name in enumerate(path):
             field = current._meta.get_field(name)
-            related, _target = _resolved_hop(field, 'content', path)
+            related, _target = resolved_hop(field, 'content', path)
             concrete = related._meta.concrete_model
             if index != last and concrete not in seen:
                 seen.add(concrete)
@@ -1118,7 +1127,6 @@ def _project_named_filters(registry, alias):
 
 
 def _compile_named_filter(model, expr, alias):
-    from trusts.plan.conditions import compile_expression_q
 
     compiled = compile_expression_q(
         expr, model,
@@ -1131,19 +1139,7 @@ def _compile_named_filter(model, expr, alias):
 
 def _configured_registries():
     """Built registries of listed mixin backends, via ``get_catalog()``."""
-    found = []
-    seen = set()
-    for backend in get_backends():
-        if not isinstance(backend, TrustModelBackendMixin):
-            continue
-        if type(backend) in seen:
-            continue
-        seen.add(type(backend))
-        catalog = backend.get_catalog()
-        if catalog is None:
-            continue
-        found.append(catalog._registry)
-    return tuple(found)
+    return tuple(catalog.policy() for catalog in configured_catalogs())
 
 
 def _any_sentinel_user(alias):
@@ -1156,7 +1152,6 @@ def _any_sentinel_user(alias):
 
 
 def _any_sentinel_permission(alias):
-    from django.contrib.auth.models import Permission
 
     return _sentinel(Permission, Permission._meta.pk.attname, alias=alias)
 
@@ -1241,7 +1236,6 @@ def _text_sentinel(field):
 
 
 def _datetime_sentinel():
-    from django.conf import settings
 
     if getattr(settings, 'USE_TZ', False):
         return datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)
@@ -1249,7 +1243,6 @@ def _datetime_sentinel():
 
 
 def _fallback_sentinel(field, alias):
-    from django.db import connections
 
     connection = connections[alias]
     candidates = (
@@ -1284,7 +1277,6 @@ def _fallback_sentinel(field, alias):
 def _compile_queryset(
     queryset, alias, *, record, expr, records=None, reverse_users=False,
 ):
-    from django.db import connections
 
     _ctx.record = record
     _ctx.composition_records = tuple(records) if records else None
@@ -1384,7 +1376,6 @@ def _lockfile_enforcement_applies(location):
 
 
 def _filter_queues(expr):
-    from trusts.plan import conditions as _ir
 
     queues = {}
 
@@ -1407,7 +1398,6 @@ def _filter_queues(expr):
 
 
 def _comparison_symbol(node):
-    from trusts.plan import conditions as _ir
 
     left = node.left
     right = node.right
@@ -1522,11 +1512,6 @@ def _classify_compiled(node, sql, params, query=None):
 
 
 def _symbol_for_new_param(node, query=None):
-    from trusts.plan.rewrites import BindTable
-    from trusts.plan.recursions import (
-        GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
-        _PrefixInForwardWalk,
-    )
 
     if isinstance(node, BindTable):
         column = node.next_column()
@@ -1561,8 +1546,6 @@ def _symbol_for_new_param(node, query=None):
         return _with_hint(
             {'const': _json_const(node.bound)}, 'along bound',
         )
-    from trusts.plan.rewrites import BoundBool
-    from trusts.plan.standards import SkipFlag
     if isinstance(node, SkipFlag):
         return _with_hint(
             {'const': _json_const(node.value)}, 'skip_%s' % node.name,
@@ -1646,16 +1629,11 @@ def _value_hint(node, query):
 
 def _const_hint(node, value):
     """Readable label for one constant placeholder."""
-    from trusts.plan.recursions import (
-        GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
-        _PrefixInForwardWalk,
-    )
 
     if isinstance(node, Value):
         return 'literal'
     if isinstance(node, Lookup):
         lhs = getattr(node, 'lhs', None)
-        from trusts.plan.rewrites import _AlongOnce
         if isinstance(lhs, _AlongOnce):
             lhs = lhs.inner
         if isinstance(lhs, (
@@ -1791,7 +1769,6 @@ def _json_const(value):
     mappings as ordinary mappings and quotes every string inside them,
     so YAML 1.1 does not reinterpret dates, bool words, or decimals.
     """
-    from trusts.plan.conditions import ModelIdentity
 
     if isinstance(value, bool) or value is None or isinstance(value, str):
         return value
@@ -1846,7 +1823,6 @@ def _json_const(value):
 
 def _const_from_json(value):
     """Inverse of :func:`_json_const` for one recorded constant value."""
-    from trusts.plan.conditions import ModelIdentity
 
     if isinstance(value, dict):
         kind = value.get('type')
@@ -1932,7 +1908,6 @@ def _load_policy_sql_document(payload):
 
 
 def _configured_lock_override():
-    from django.conf import settings
 
     if not settings.configured:
         return None
@@ -1940,7 +1915,6 @@ def _configured_lock_override():
 
 
 def _usable_base_dir():
-    from django.conf import settings
 
     if not settings.configured:
         return None

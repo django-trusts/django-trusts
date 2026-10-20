@@ -21,7 +21,7 @@ from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
-from trusts.compile.catalogs import Catalog
+from trusts.compile.catalogs import Catalog, grant_q
 from trusts.query import PermittedManager, PermittedQuerySet, PermittedUsersMixin
 from trusts.plan.users import lock_permitted_users_queryset
 from tests.apps import built_registries
@@ -43,7 +43,7 @@ class _GrantBackend(TrustModelBackendMixin, ModelBackend):
 
 def _seal_factory(backend_cls, factory, family_registries=()):
     """Construct this class's catalog from a factory this test filled."""
-    from trusts.apps import catalogs
+    from trusts.installed import catalogs
     from trusts.compile.catalogs import Catalog
     built = factory.build_registry()
     catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built, family_registries=built_registries(tuple(family_registries)))
@@ -60,7 +60,7 @@ def _document_host_handle():
 @contextmanager
 def _listed(handle):
     from tests.apps import install_class_handle
-    from trusts.apps import catalogs
+    from trusts.installed import catalogs
     install_class_handle(_PairDocumentBackend, handle)
     _seal_factory(_PairDocumentBackend, handle)
     with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue266._PairDocumentBackend',)):
@@ -105,7 +105,7 @@ def _indirect_content_models():
         objects = PermittedManager()
 
         def get_permitted_users(self, perm):
-            from trusts.plan.users import compile_permitted_users
+            from trusts.query import compile_permitted_users
             return compile_permitted_users(self, perm, user_queryset=Principal.objects.all())
 
         class Meta:
@@ -330,7 +330,7 @@ def _two_prefix_models():
         objects = PermittedManager()
 
         def get_permitted_users(self, perm):
-            from trusts.plan.users import compile_permitted_users
+            from trusts.query import compile_permitted_users
             return compile_permitted_users(self, perm, user_queryset=Principal.objects.all())
 
         class Meta:
@@ -554,7 +554,7 @@ def _ordinary_prefix_models():
         objects = PermittedManager()
 
         def get_permitted_users(self, perm):
-            from trusts.plan.users import compile_permitted_users
+            from trusts.query import compile_permitted_users
             return compile_permitted_users(self, perm, user_queryset=Principal.objects.all())
 
         class Meta:
@@ -793,7 +793,7 @@ class DelegatedAuthorityLiveTest(TestCase):
         if not kernel_host_listed():
             handle = _document_host_handle()
             from tests.apps import install_class_handle
-            from trusts.apps import catalogs
+            from trusts.installed import catalogs
             install_class_handle(_PairDocumentBackend, handle)
             _seal_factory(_PairDocumentBackend, handle)
             self.addCleanup(lambda: install_class_handle(_PairDocumentBackend, None))
@@ -879,7 +879,7 @@ class DelegatedAuthorityLiveTest(TestCase):
         )
         parts = []
         for catalog in catalogs:
-            part = catalog.complete_grant_q(
+            part = grant_q(catalog, 
                 Document.objects.all(), self.delegate, self.change,
             )
             if part is not None:
@@ -916,7 +916,7 @@ class DelegatedAuthorityLiveTest(TestCase):
         grant_handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
         delegation_handle = _handle('tests.core.issue266.split-delegations')
         delegation_handle.register_public(trust=DocumentDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
-        from trusts.apps import catalogs
+        from trusts.installed import catalogs
         grant_built = _seal_factory(_GrantBackend, grant_handle)
         _seal_factory(_PairDocumentBackend, delegation_handle, family_registries=built_registries((grant_built,)))
         self.addCleanup(lambda: catalogs.pop(_PairDocumentBackend, None))

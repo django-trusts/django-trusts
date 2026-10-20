@@ -173,7 +173,7 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
             )
 
     def test_owned_unbound_named_condition_raises_on_instance_at_zero_sql(self):
-        registry = configured_catalog(DOCUMENT_BACKEND)._registry
+        registry = configured_catalog(DOCUMENT_BACKEND).policy()
         previous = registry.condition_lookup
         qs = Document.objects.filter(pk=self.document.pk)
         try:
@@ -222,7 +222,7 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
 class ImplementationOwnershipReadyTest(TestCase):
     def test_non_mixin_path_is_skipped_at_ready_with_zero_sql(self):
         from tests.backends import HostTrustModelBackend
-        from trusts.apps import catalogs
+        from trusts.installed import catalogs
 
         config = _bind(NonMixinOwnerConfig, ready=False)
         before = catalogs[HostTrustModelBackend]

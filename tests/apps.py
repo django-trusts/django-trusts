@@ -2,9 +2,6 @@ from contextlib import contextmanager
 
 from django.apps import AppConfig
 
-from trusts.plan.hops import _require_instance
-
-
 ZERO_BACKEND = 'trusts.zero.backends.TrustModelBackend'
 
 
@@ -56,8 +53,6 @@ def scoped_permitted_content(queryset, user, permission, *, content,
     The public filter walks ``get_catalog()`` and takes no registry
     argument. This helper is the direct registry question.
     """
-    user = _require_instance(user, 'user')
-    permission = _require_instance(permission, 'permission')
     parts = []
     for registry in built_registries(registries) or ():
         if registry.family != 'relationship':
@@ -78,7 +73,7 @@ def scoped_permitted_content(queryset, user, permission, *, content,
 @contextmanager
 def override_catalog(backend_cls, factory, path):
     """Publish one catalog for ``backend_cls`` and restore the previous entry."""
-    from trusts.apps import catalogs
+    from trusts.installed import catalogs
     from trusts.compile.catalogs import Catalog
 
     saved = catalogs.get(backend_cls, _MISSING)
@@ -106,7 +101,7 @@ def configured_catalog(path, explicit=None):
     """
     from django.utils.module_loading import import_string
 
-    from trusts.apps import catalogs
+    from trusts.installed import catalogs
     from trusts.errors import TrustsConfigurationError
 
     if explicit is not None:
@@ -131,7 +126,7 @@ def configured_catalog(path, explicit=None):
 @contextmanager
 def empty_catalogs():
     """Clear built catalogs for one sweep, then restore them."""
-    from trusts.apps import catalogs
+    from trusts.installed import catalogs
 
     saved = dict(catalogs)
     catalogs.clear()
@@ -310,7 +305,7 @@ _MISSING = object()
 
 def _publish_catalog(backend_cls, factory, *, path=None, peers=()):
     """Store one catalog for ``backend_cls``. ``factory`` is the registration object."""
-    from trusts.apps import catalogs
+    from trusts.installed import catalogs
     from trusts.compile.catalogs import Catalog
 
     if factory is None:
@@ -332,7 +327,7 @@ def _publish_catalog(backend_cls, factory, *, path=None, peers=()):
 @contextmanager
 def bound_handle(backend, factory):
     """Publish ``factory`` as this backend class's catalog for one block."""
-    from trusts.apps import catalogs
+    from trusts.installed import catalogs
 
     cls = type(backend)
     previous = catalogs.get(cls, _MISSING)
@@ -384,7 +379,7 @@ def listed_relationship(factories):
     """
     from django.test import override_settings
 
-    from trusts.apps import catalogs
+    from trusts.installed import catalogs
 
     from trusts.compile.catalogs import Catalog
     from trusts.compile.factory import RegistryFactory
@@ -399,7 +394,7 @@ def listed_relationship(factories):
         path = '%s.%s' % (cls.__module__, cls.__name__)
         paths.append(path)
         if isinstance(factory, Catalog):
-            registry = factory._registry
+            registry = factory.policy()
             family = factory.family
         elif isinstance(factory, Registry):
             registry = factory

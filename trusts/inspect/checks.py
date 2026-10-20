@@ -22,15 +22,21 @@ from django.core import checks as django_checks
 
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
-from django.contrib.auth import get_backends
-
-from trusts.backends import TrustModelBackendMixin
+from trusts.backends import TrustModelBackendMixin, configured_catalogs
+from trusts.query import relationship_catalogs
 from trusts.decorators import _declared_authorization_guards
-from trusts.errors import PermissionConditionError
+from trusts.errors import PermissionConditionError, TrustsCompilerError
 from trusts.plan.conditions import (
     obsolete_legacy_callback_setting_enabled,
     validate_expression,
 )
+from django.conf import settings
+from django.utils.module_loading import import_string
+from trusts.plan.aggregates import compiler_for_class
+from django.db import connections
+from django.db.utils import OperationalError
+from trusts.compile.factory import probe_along_capabilities
+from trusts.plan.walk import along_connection_supported
 
 
 CHECK_ID_INVALID_EXPR = 'trusts.E001'
@@ -47,15 +53,11 @@ _SILENCE_DOES_NOT_ENABLE_HINT = (
 )
 
 
-def _trusts_abstract_base(model, name):
+def _trusts_abstract_base(model, label):
+    """Abstract base whose Django model label is ``label``."""
     for base in model.__mro__:
         meta = getattr(base, '_meta', None)
-        if (
-            meta is not None
-            and meta.abstract
-            and base.__name__ == name
-            and meta.app_label == 'trusts'
-        ):
+        if meta is not None and meta.abstract and meta.label == label:
             return base
     return None
 
@@ -65,7 +67,7 @@ def _historical_content_class(apps_registry):
         Trust = apps_registry.get_model('trusts', 'Trust')
     except LookupError:
         return None
-    return _trusts_abstract_base(Trust, 'Content')
+    return _trusts_abstract_base(Trust, 'trusts.Content')
 
 
 def _model_label(model):
@@ -118,12 +120,7 @@ def check_query_compilers(app_configs, **kwargs):
     hides only this diagnostic; ``ContentQuerySet.permitted()`` still
     raises and does not fall back or omit the broken route.
     """
-    from django.conf import settings
-    from django.utils.module_loading import import_string
 
-    from trusts.backends import TrustModelBackendMixin
-    from trusts.errors import TrustsCompilerError
-    from trusts.plan.aggregates import compiler_for_class
 
     messages = []
     seen = []
@@ -168,24 +165,6 @@ def _is_concrete_model(model):
     return not opts.abstract and not opts.proxy
 
 
-def _built_catalogs():
-    """Catalogs of listed mixin backends. Missing catalogs are skipped."""
-    found = []
-    seen = set()
-    for backend in get_backends():
-        if not isinstance(backend, TrustModelBackendMixin):
-            continue
-        cls = type(backend)
-        if cls in seen:
-            continue
-        seen.add(cls)
-        catalog = backend.get_catalog()
-        if catalog is None:
-            continue
-        found.append(catalog)
-    return tuple(found)
-
-
 def _covered_content_models():
     """Content terminals that already have a plan record on a built catalog.
 
@@ -194,10 +173,11 @@ def _covered_content_models():
     to hold the declaration.
     """
     covered = set()
-    for catalog in _built_catalogs():
-        for record in catalog.records:
+    for catalog in configured_catalogs():
+        policy = catalog.policy()
+        for record in policy.records:
             covered.add(record.content_model)
-        for record in catalog.delegations:
+        for record in policy.delegations:
             covered.add(record.content_model)
     return covered
 
@@ -231,9 +211,9 @@ def _junction_content_model(model):
 def check_missing_declarations(app_configs, **kwargs):
     """Report structurally detectable missing Content/Junction declarations.
 
-    Walks already-loaded models from the default Apps registry. Does not
-    import host modules, does not call ``registry.register``, and issues
-    zero SQL. ``app_configs`` is ignored so a subset
+    Walks already-loaded models from the default Apps registry. Host
+    modules stay unloaded, ``registry.register`` is not called, and the
+    check issues zero SQL. ``app_configs`` is ignored so a subset
     ``manage.py check trusts`` still reports project models. Abstract
     and proxy models are excluded. Manual dependents that are neither
     Content nor Junction are outside this domain.
@@ -241,9 +221,8 @@ def check_missing_declarations(app_configs, **kwargs):
     Silencing ``trusts.E003`` hides only this diagnostic; undeclared
     terminals still fail closed at runtime.
     """
-    from django.apps import apps as django_apps
 
-    if not _built_catalogs():
+    if not configured_catalogs():
         return []
 
     covered = _covered_content_models()
@@ -253,7 +232,7 @@ def check_missing_declarations(app_configs, **kwargs):
     for model in django_apps.get_models():
         if not _is_concrete_model(model):
             continue
-        if _trusts_abstract_base(model, 'Content') is not None:
+        if _trusts_abstract_base(model, 'trusts.Content') is not None:
             terminal = model._meta.concrete_model
             if terminal in covered:
                 continue
@@ -269,7 +248,7 @@ def check_missing_declarations(app_configs, **kwargs):
                 id=CHECK_ID_MISSING_DECLARATION,
             ))
             continue
-        if _trusts_abstract_base(model, 'Junction') is not None:
+        if _trusts_abstract_base(model, 'trusts.Junction') is not None:
             content_model, error = _junction_content_model(model)
             if error is not None:
                 key = ('junction-malformed', model)
@@ -302,8 +281,8 @@ def check_missing_declarations(app_configs, **kwargs):
 
 def _iter_catalog_permission_conditions():
     """Yield condition records from built catalogs."""
-    for catalog in _built_catalogs():
-        yield from catalog.iter_permission_conditions()
+    for catalog in configured_catalogs():
+        yield from catalog.policy().iter_permission_conditions()
 
 
 def iter_live_permission_conditions(apps_registry=None):
@@ -317,7 +296,6 @@ def iter_live_permission_conditions(apps_registry=None):
     catalog registry (same record identity, not merely the same
     model/code).
     """
-    from django.apps import apps as django_apps
 
     seen_records = set()
     for model, cond_code, record in _iter_catalog_permission_conditions():
@@ -358,14 +336,6 @@ def check_obsolete_legacy_callback_setting(app_configs, **kwargs):
     return _messages_for_obsolete_callback_setting()
 
 
-def _authorization_check_registries():
-    """Relationship-family catalogs for E008, via ``get_catalog()``."""
-    return tuple(
-        catalog for catalog in _built_catalogs()
-        if catalog.family == 'relationship'
-    )
-
-
 @django_checks.register()
 def check_authorization_required_conditions(app_configs, **kwargs):
     """Report unsupported or incomplete ``authorization_required`` guards.
@@ -381,7 +351,7 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     the superuser shortcut and never falls back to an unconditioned
     grant.
     """
-    catalogs = _authorization_check_registries()
+    catalogs = relationship_catalogs()
     messages = []
     seen = set()
     for model, _permission, conditions in _declared_authorization_guards:
@@ -463,8 +433,8 @@ _E005_HINT = (
 
 def _live_along_records():
     found = []
-    for catalog in _built_catalogs():
-        for record in catalog.records:
+    for catalog in configured_catalogs():
+        for record in catalog.policy().records:
             if record.along is not None:
                 found.append(record)
     return found
@@ -486,14 +456,9 @@ def check_along_renderer(app_configs, **kwargs):
     if not databases:
         return []
 
-    from django.apps import apps as django_apps
-    from django.db import connections
-    from django.db.utils import OperationalError
 
-    from trusts.compile.factory import probe_along_capabilities
-    from trusts.plan.walk import along_connection_supported
 
-    if not _built_catalogs():
+    if not configured_catalogs():
         return []
     along_records = _live_along_records()
     if not along_records:

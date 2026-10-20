@@ -13,17 +13,18 @@ from django.db.models import Model
 from django.db.models.query import QuerySet
 from django.http import Http404
 
-from trusts.plan.hops import _require_instance
+from trusts.plan.hops import require_instance
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.relations import bind_checked_user
 from trusts.plan.rewrites import bind_once
 from trusts.query import (
-    _assert_authorization_preflight,
-    _authorization_grant_q,
-    _codename_binding,
-    _guard_conditions,
-    _guard_permission_string,
-    _relationship_catalogs,
+    assert_authorization_preflight,
+    authorization_grant_q,
+    catalog_skip_names,
+    codename_binding,
+    guard_conditions,
+    guard_permission_string,
+    relationship_catalogs,
 )
 
 
@@ -64,21 +65,18 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
     ready-time sweep participate, in ``get_backends()`` order. A backend
     with no catalog contributes nothing.
 
-    Noun-blind: this builder does not import or name Zero schema models
-    and does not use a compiler's historical group
-    OR. Explicit ``group=`` records participate through the same prefix
-    correlation. Membership shape is not a group.
     """
     if not isinstance(queryset, QuerySet):
         raise TrustsConfigurationError(
             'filter_by_permitted_content requires a QuerySet, not %r.'
             % (queryset,)
         )
-    catalogs = _relationship_catalogs()
-    user = _require_instance(user, 'user')
-    permission = _require_instance(permission, 'permission')
+    catalogs = relationship_catalogs()
+    user = require_instance(user, 'user')
+    permission = require_instance(permission, 'permission')
     inquiry = bind_checked_user(
-        user, skip_flags=skip_flags, registries=catalogs,
+        user, skip_flags=skip_flags,
+        skip_names=catalog_skip_names(catalogs),
     )
     if not catalogs or inquiry.denied:
         return queryset.none()
@@ -136,7 +134,7 @@ def authorization_required(model, permission, conditions=(), **skip_flags):
     """
     model = _guard_model(model)
     _guard_permission(model, permission)
-    conditions = _guard_conditions(conditions, api='authorization_required')
+    conditions = guard_conditions(conditions, api='authorization_required')
     _remember_authorization_guard(model, permission, conditions)
 
     def decorator(view_func):
@@ -160,7 +158,7 @@ def _guard_model(model):
 
 
 def _guard_permission(model, permission):
-    app_label, codename = _guard_permission_string(
+    app_label, codename = guard_permission_string(
         permission, api='authorization_required',
     )
     if app_label.lower() != model._meta.app_label.lower():
@@ -198,7 +196,7 @@ def _coerce_pk(model, raw):
 
 def _authorize_candidate(request, view_kwargs, model, permission, conditions,
                          skip_flags):
-    catalogs = _relationship_catalogs()
+    catalogs = relationship_catalogs()
     user = request.user
     raw_pk = view_kwargs.get('pk', None) if 'pk' in view_kwargs else None
     if 'pk' not in view_kwargs:
@@ -210,19 +208,20 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
             'authorization_required cannot authorize before Django apps '
             'are ready.'
         )
-    _assert_authorization_preflight(
+    assert_authorization_preflight(
         catalogs, model, conditions, api='authorization_required',
     )
     inquiry = bind_checked_user(
-        user, skip_flags=skip_flags, registries=catalogs,
+        user, skip_flags=skip_flags,
+        skip_names=catalog_skip_names(catalogs),
     )
     if inquiry.denied:
         raise PermissionDenied
 
     candidates = model._default_manager.filter(pk=pk)
     app_label, codename = permission.split('.', 1)
-    binding = _codename_binding(model, app_label, codename)
-    granted_q = _authorization_grant_q(
+    binding = codename_binding(model, app_label, codename)
+    granted_q = authorization_grant_q(
         catalogs, candidates, user, model, permission, conditions, binding,
         api='authorization_required', skipped=inquiry.values,
     )

@@ -131,7 +131,7 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
         one = self._granted_qs(self.open_one)
         two = self._granted_qs(self.open_two)
         both = self._granted_qs(self.open_one, self.open_two)
-        from trusts.apps import catalogs, recorders, user_model
+        from trusts.installed import catalogs, recorders, user_model
         from trusts.compile.catalogs import Catalog
         from trusts.compile.factory import compile_recorder
 
@@ -156,21 +156,21 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
             path=alt_path,
             family=_AltGrantBackend.family,
             registry=built,
-            family_registries=(saved_document._registry, saved_host._registry),
+            family_registries=(saved_document.policy(), saved_host.policy()),
         )
         catalogs[DocumentBackend] = Catalog(
             cls=DocumentBackend,
             path=saved_document.path,
             family=saved_document.family,
-            registry=saved_document._registry,
-            family_registries=(saved_host._registry, built),
+            registry=saved_document.policy(),
+            family_registries=(saved_host.policy(), built),
         )
         catalogs[HostTrustModelBackend] = Catalog(
             cls=HostTrustModelBackend,
             path=saved_host.path,
             family=saved_host.family,
-            registry=saved_host._registry,
-            family_registries=(saved_document._registry, built),
+            registry=saved_host.policy(),
+            family_registries=(saved_document.policy(), built),
         )
         mixin = _AltGrantBackend()
         try:

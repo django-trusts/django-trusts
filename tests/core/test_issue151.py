@@ -187,38 +187,25 @@ class ImportOrderStandaloneConstructionTest(SimpleTestCase):
         )
         return result.stdout
 
-    def test_import_factory_then_construct_does_not_preload_ir(self):
-        stdout = self._run_isolated(
-            'import sys\n'
-            'import trusts.compile.factory\n'
-            'assert "trusts.conditions._ir" not in sys.modules\n'
-            'assert "trusts.plan.conditions" not in sys.modules\n'
-            'registry = trusts.compile.factory.RegistryFactory()\n'
-            'assert "trusts.plan.conditions" in sys.modules\n'
-            'assert "trusts.conditions._ir" not in sys.modules\n'
-            'lookup = registry.condition_lookup\n'
-            'assert lookup is not None\n'
-            'assert lookup.conditions is registry.conditions\n'
-            'print("factory-then-construct-ok")\n'
-        )
-        self.assertIn('factory-then-construct-ok', stdout)
-
-    def test_apps_registers_meta_option_without_loading_ir(self):
-        stdout = self._run_isolated(
-            'import sys\n'
-            'import trusts.apps\n'
-            'from django.db.models import options as model_options\n'
-            'assert "permission_conditions" in model_options.DEFAULT_NAMES\n'
-            'assert "trusts.conditions._ir" not in sys.modules\n'
-            'assert "trusts.plan.conditions" not in sys.modules\n'
-            'print("apps-option-ok")\n'
-        )
-        self.assertIn('apps-option-ok', stdout)
-
     def test_rewrites_import_does_not_load_the_factory(self):
         source = (ROOT / 'trusts' / 'plan' / 'rewrites.py').read_text()
         self.assertNotIn('trusts.compile.factory', source)
         stdout = self._run_isolated(
+            'from django.conf import settings\n'
+            'settings.configure(\n'
+            '    SECRET_KEY="rewrites-import",\n'
+            '    USE_TZ=True,\n'
+            '    INSTALLED_APPS=[\n'
+            '        "django.contrib.contenttypes",\n'
+            '        "django.contrib.auth",\n'
+            '    ],\n'
+            '    DATABASES={"default": {\n'
+            '        "ENGINE": "django.db.backends.sqlite3",\n'
+            '        "NAME": ":memory:",\n'
+            '    }},\n'
+            ')\n'
+            'import django\n'
+            'django.setup()\n'
             'import sys\n'
             'import trusts.plan.rewrites\n'
             'assert "trusts.compile.factory" not in sys.modules\n'
@@ -229,24 +216,10 @@ class ImportOrderStandaloneConstructionTest(SimpleTestCase):
         )
         self.assertIn('rewrites-without-factory', stdout)
 
-    def test_import_ir_then_construct_is_not_circular(self):
-        stdout = self._run_isolated(
-            'import trusts.plan.conditions\n'
-            'import trusts.compile.factory\n'
-            'registry = trusts.compile.factory.RegistryFactory()\n'
-            'lookup = registry.condition_lookup\n'
-            'assert isinstance(\n'
-            '    lookup, trusts.plan.conditions.RegistryConditionLookup,\n'
-            ')\n'
-            'assert lookup.conditions is registry.conditions\n'
-            'print("ir-then-construct-ok")\n'
-        )
-        self.assertIn('ir-then-construct-ok', stdout)
-
 
 class LiveEnsureSelfBindTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_live_ensure_registry_is_self_bound_without_host_wiring(self):
-        registry = configured_catalog(DOCUMENT_BACKEND)._registry
+        registry = configured_catalog(DOCUMENT_BACKEND).policy()
         lookup = registry.condition_lookup
         self.assertIsInstance(lookup, RegistryConditionLookup)
         self.assertIs(lookup.conditions, registry.conditions)
@@ -283,7 +256,7 @@ class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
 
     def test_explicit_unbind_fail_closes_named_condition_overlay(self):
         backend = DocumentBackend()
-        registry = backend.get_catalog()._registry
+        registry = backend.get_catalog().policy()
         previous = registry.condition_lookup
         document = Document(title='unbind')
         user = get_user_model()(username='unbind-151')

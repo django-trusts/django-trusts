@@ -981,12 +981,12 @@ class _LiveRegistryRestoreMixin(object):
 
     def setUp(self):
         super().setUp()
-        from trusts.apps import catalogs
+        from trusts.installed import catalogs
         self.live = live_config()
         self._saved_catalogs = dict(catalogs)
 
     def tearDown(self):
-        from trusts.apps import catalogs
+        from trusts.installed import catalogs
         catalogs.clear()
         catalogs.update(self._saved_catalogs)
         super().tearDown()

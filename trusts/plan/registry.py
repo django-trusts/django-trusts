@@ -15,7 +15,7 @@ from functools import partial
 from django.db.models import QuerySet
 
 from trusts.plan.hops import (
-    _concrete_model, _content_model, _require_instance, _resolved_hop,
+    concrete_model, content_model, require_instance, resolved_hop,
 )
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.relations import (
@@ -31,6 +31,16 @@ from trusts.plan.standards import (
     compile_user_rules,
     condition_names,
 )
+from django.db.models import Model
+from trusts.plan.aggregates import all_match, instance_match
+from trusts.plan.contents import _compile_granted
+from trusts.plan.rewrites import bind_once
+from trusts.plan.contents import _compile_permitted_content_queryset
+from trusts.plan.aggregates import _compile_common_permissions
+from trusts.plan.users import permitted_users_predicate_for_registry
+from trusts.plan.users import _plan_user_model
+from trusts.plan.conditions import ConditionRegistry
+from trusts.plan.conditions import RegistryConditionLookup
 
 
 _CONDITION_LOOKUP_UNSET = object()
@@ -95,7 +105,6 @@ class Registry(object):
         if conditions is None:
             # Stay lazy: importing this module must not load the
             # condition IR unless a store or lookup must be created.
-            from trusts.plan.conditions import ConditionRegistry
 
             conditions = ConditionRegistry()
         self.conditions = conditions
@@ -104,7 +113,6 @@ class Registry(object):
         )
         self.user_override = user_override
         if condition_lookup is _CONDITION_LOOKUP_UNSET:
-            from trusts.plan.conditions import RegistryConditionLookup
 
             condition_lookup = RegistryConditionLookup(self.conditions)
         # An explicit None stays unbound (set_condition_lookup(None)
@@ -124,16 +132,16 @@ class Registry(object):
         Lowered rows and rule data come from construction. ``content``,
         ``user``, and ``permission`` are the runtime parameters.
         """
-        content_model = _content_model(content)
+        content_model = content_model(content)
         user_model = None
         if user is not None:
-            user_model = _concrete_model(
-                _require_instance(user, 'user'),
+            user_model = concrete_model(
+                require_instance(user, 'user'),
             )
         permission_model = None
         if permission is not None:
-            permission_model = _concrete_model(
-                _require_instance(permission, 'permission'),
+            permission_model = concrete_model(
+                require_instance(permission, 'permission'),
             )
         records = self._records_for(
             content_model, user_model, permission_model,
@@ -245,13 +253,11 @@ class Registry(object):
         (every row must hold). Delegations via family_registries are included.
         The compiler bound at construction compiles the grant.
         """
-        from django.db.models import Model
 
-        from trusts.plan.aggregates import all_match, instance_match
 
-        user = _require_instance(user, 'user')
+        user = require_instance(user, 'user')
         if isinstance(permission, Model):
-            permission = _require_instance(permission, 'permission')
+            permission = require_instance(permission, 'permission')
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         family_registries = self._with_family_registries(family_registries)
         if isinstance(content, QuerySet):
@@ -264,7 +270,7 @@ class Registry(object):
                 permission_model=permission_model, skipped=values,
             )
             return False if matched is None else bool(matched)
-        content = _require_instance(content, 'content')
+        content = require_instance(content, 'content')
         if denied:
             return False
         if (self._project and extra_q is None
@@ -286,15 +292,13 @@ class Registry(object):
     def filter_authorized(self, queryset, user, permission, *, family_registries=(),
                           skipped=None, **skip_flags):
         """Q2: rows of ``queryset`` ``user`` may access for ``permission``."""
-        from trusts.plan.contents import _compile_granted
-        from trusts.plan.rewrites import bind_once
 
         if not isinstance(queryset, QuerySet):
             raise TrustsConfigurationError(
                 'filter_authorized requires a QuerySet, not %r.' % (queryset,)
             )
-        user = _require_instance(user, 'user')
-        permission = _require_instance(permission, 'permission')
+        user = require_instance(user, 'user')
+        permission = require_instance(permission, 'permission')
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if denied:
             return queryset.none()
@@ -316,15 +320,14 @@ class Registry(object):
                                     content, family_registries=(),
                                     skipped=None, **skip_flags):
         """Q2 variant: scope rows that are a proper prefix of ``content``."""
-        from trusts.plan.contents import _compile_permitted_content_queryset
 
         if not isinstance(queryset, QuerySet):
             raise TrustsConfigurationError(
                 'filter_by_permitted_content requires a QuerySet, not %r.'
                 % (queryset,)
             )
-        user = _require_instance(user, 'user')
-        permission = _require_instance(permission, 'permission')
+        user = require_instance(user, 'user')
+        permission = require_instance(permission, 'permission')
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if denied:
             return queryset.none()
@@ -343,9 +346,8 @@ class Registry(object):
         ``get_group_permissions``; ``'complete'`` is ``get_all_permissions``.
         The compiler bound at construction compiles the grant.
         """
-        from trusts.plan.aggregates import _compile_common_permissions
 
-        user = _require_instance(user, 'user')
+        user = require_instance(user, 'user')
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         plan = self.plan_for(content, user=user)
         if denied:
@@ -378,7 +380,6 @@ class Registry(object):
         ``accepts_permission`` is the singular-permission callable;
         omitted means ``auth.Permission``.
         """
-        from trusts.plan.users import permitted_users_predicate_for_registry
 
         family_registries = self._with_family_registries(family_registries)
         return permitted_users_predicate_for_registry(
@@ -390,8 +391,6 @@ class Registry(object):
 
     def permitted_users(self, content, perm, *, family_registries=(), **skip_flags):
         """Q3: lazy user queryset permitted on ``content`` for ``perm``."""
-        from trusts.plan.rewrites import bind_once
-        from trusts.plan.users import _plan_user_model
 
         denied, values = self._resolve_skipped(
             None, skip_flags, None, require_user=False,
@@ -469,7 +468,7 @@ class Registry(object):
             last = len(path) - 1
             for index, name in enumerate(path):
                 field = current._meta.get_field(name)
-                related, _target = _resolved_hop(field, 'content', path)
+                related, _target = resolved_hop(field, 'content', path)
                 concrete = related._meta.concrete_model
                 if index != last and concrete not in seen:
                     seen.add(concrete)

@@ -47,7 +47,7 @@ class _BoundBackend(TrustModelBackendMixin, ModelBackend):
         self._factory = handle
 
     def has_perm(self, user_obj, perm, obj=None, **skip_flags):
-        from trusts.apps import catalogs
+        from trusts.installed import catalogs
         from trusts.compile.catalogs import Catalog
         cls = type(self)
         if cls not in catalogs:

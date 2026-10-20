@@ -11,7 +11,7 @@ __all__ = []
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Q
 
-from trusts.plan.predicates import _compile_predicate
+from trusts.plan.predicates import compile_predicate
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.relations import bind_checked_user
 
@@ -94,7 +94,7 @@ def _matched_delegation_q(record, sponsor_q, permission, skipped, bound):
     if eligibility is None:
         return None
     combined = bound()
-    condition = _compile_predicate(
+    condition = compile_predicate(
         record.condition, record, permission=permission,
     )
     if condition is not None:

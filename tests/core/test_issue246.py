@@ -298,7 +298,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
     @contextmanager
     def _backend(self):
         from tests.apps import bound_handle
-        from trusts.apps import catalogs
+        from trusts.installed import catalogs
         from trusts.compile.catalogs import Catalog
         cls = type(self.backend)
         saved = catalogs.get(cls)
@@ -459,7 +459,7 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
     @contextmanager
     def _backend(self):
         from tests.apps import bound_handle
-        from trusts.apps import catalogs
+        from trusts.installed import catalogs
         from trusts.compile.catalogs import Catalog
         cls = type(self.backend)
         saved = catalogs.get(cls)
@@ -661,7 +661,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         granted_codes = _codes(granted)
         one = self.Paper.objects.filter(pk=paper.pk)
         from tests.apps import bound_handle
-        from trusts.apps import catalogs
+        from trusts.installed import catalogs
         from trusts.compile.catalogs import Catalog
         cls = type(backend)
         saved = catalogs.get(cls)
