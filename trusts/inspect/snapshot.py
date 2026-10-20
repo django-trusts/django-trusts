@@ -470,7 +470,7 @@ class _PolicyVisitor(object):
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         rows = []
-        for prefix in catalog._permitted_content_prefix_models(model):
+        for prefix in catalog.permitted_content_prefix_models(model):
             queryset = _compile_permitted_content_queryset(
                 _content_manager(prefix).all(),
                 user,

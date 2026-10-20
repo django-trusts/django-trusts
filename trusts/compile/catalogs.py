@@ -594,7 +594,7 @@ class Catalog(object):
             for model in order
         )
 
-    def _permitted_content_prefix_models(self, model):
+    def permitted_content_prefix_models(self, model):
         """Concrete models that are a proper prefix of ``model``'s path."""
         plan = self.plan_for(model)
         legs = tuple(plan.records) + tuple(plan.delegations or ())
@@ -653,7 +653,7 @@ class Catalog(object):
             'get_permitted_users', content_model, records, delegations,
             self.permitted_users,
         ))
-        if self._permitted_content_prefix_models(content_model):
+        if self.permitted_content_prefix_models(content_model):
             descriptors.append(Question(
                 'filter_by_permitted_content', content_model, records,
                 delegations,
