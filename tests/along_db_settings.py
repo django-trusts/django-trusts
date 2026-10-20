@@ -3,7 +3,9 @@
 The kernel settings mark ``myapp`` and ``trusts_tests`` as unmigrated.
 Django syncs those apps before ``auth`` migrations, and PostgreSQL and
 MySQL then reject the foreign key to ``auth_user``. These jobs only need
-``auth`` and the kernel host, so the along tests migrate in dependency order.
+``auth``, the kernel host, and the trusts app. ``ready`` registers
+``Meta.permission_conditions`` before ``isolate_apps`` imports
+``tests.models``.
 """
 
 import os
@@ -22,5 +24,6 @@ INSTALLED_APPS = (
     'django.contrib.contenttypes',
     'django.contrib.auth',
     'tests.kernel_host.apps.KernelHostConfig',
+    'trusts.apps.TrustsImplementationConfig',
 )
 MIGRATION_MODULES = {}

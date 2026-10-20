@@ -29,6 +29,7 @@ class TrustsImplementationConfig(django.apps.AppConfig):
         import trusts.inspect.checks  # noqa: F401
 
         install_policy_commands()
+        _ensure_permission_conditions_option()
         model = get_user_model()
         standards.user_model = model
         build_configured_catalogs(
@@ -38,7 +39,7 @@ class TrustsImplementationConfig(django.apps.AppConfig):
 
 
 def _ensure_permission_conditions_option():
-    """Register ``Meta.permission_conditions`` once, before host models load."""
+    """Register ``Meta.permission_conditions`` once, from ``ready``."""
     names = model_options.DEFAULT_NAMES
     if 'permission_conditions' in names:
         return
@@ -46,6 +47,3 @@ def _ensure_permission_conditions_option():
         model_options.DEFAULT_NAMES = names + ('permission_conditions',)
     else:
         names.append('permission_conditions')
-
-
-_ensure_permission_conditions_option()
