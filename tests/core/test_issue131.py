@@ -26,7 +26,8 @@ from tests.support import built_catalog
 def _handle(registry=None, path='tests.core.handle-a'):
     if registry is None:
         registry = RegistryFactory()
-    return [registry, setattr(registry, 'path', path)][0]
+    registry.path = path
+    return registry
 
 class HandleRegisterSurfaceTest(SimpleTestCase):
 

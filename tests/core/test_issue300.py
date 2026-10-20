@@ -24,7 +24,7 @@ from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.plan.users import _trusts_eligibility_q
-from tests.support import render_configured_policy, built_registries, built_catalog
+from tests.support import render_configured_policy, built_catalog
 
 
 def _document_rows():
@@ -109,9 +109,9 @@ class Issue300BooleanFieldTest(KernelHostRequiredMixin, TestCase):
         handle = _document_handle()
         content = GuideDocument(title='note-300', pk=1)
         with self.assertRaises(TrustsConfigurationError):
-            granted(built_registries((handle,))[0], content, None, permission)
+            granted(handle.build_registry(), content, None, permission)
         with self.assertRaises(TrustsConfigurationError):
-            granted(built_registries((handle,))[0], content, object(), permission)
+            granted(handle.build_registry(), content, object(), permission)
 
 class Issue300BindOnceTest(SimpleTestCase):
 
@@ -398,7 +398,8 @@ class Issue300UserAnnotationTest(TransactionTestCase):
             note = Note.objects.create(title='kept')
             NoteGrant.objects.create(note=note, user=user, permission=permission)
             registry = RegistryFactory()
-            handle = [registry, setattr(registry, 'path', 'tests.annotation.a')][0]
+            registry.path = 'tests.annotation.a'
+            handle = registry
             handle.register_public(trust=NoteGrant, user='user', permission='permission', content='note')
             candidates = Note.objects.annotate(a=Value(1, output_field=CharField()))
             with override_settings(TRUSTS_SQL_BIND_ONCE=False):
@@ -453,7 +454,8 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
             node = RetargetNode.objects.create()
             RetargetGrant.objects.create(node=node, user=user, permission=permission)
             registry = RegistryFactory()
-            handle = [registry, setattr(registry, 'path', 'tests.along.retarget')][0]
+            registry.path = 'tests.along.retarget'
+            handle = registry
             handle.register_public(trust=RetargetGrant, user='user', permission='permission', content='node', along=('node__parent', 4))
             candidates = RetargetNode.objects.order_by('pk')
             with patch('trusts.plan.recursions._render_reach_sql', _render_parenthesized_depth):
@@ -534,7 +536,7 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
                     user = _role_sentinel(records[0], 'user', 'default')
                     permission = _role_sentinel(records[0], 'permission', 'default')
                     queryset = _content_manager(ReviewDocument).all()
-                    granted = _compile_granted(built_registries((handle,))[0], queryset, user, permission, kind='complete')
+                    granted = _compile_granted(handle.build_registry(), queryset, user, permission, kind='complete')
                     raw_sql, raw_params = bind_once(queryset.filter(granted).distinct()).query.sql_with_params()
                     self._assert_cardinality_and_order(permitted, raw_params)
                     self.assertEqual(raw_sql.count('%s'), len(raw_params))

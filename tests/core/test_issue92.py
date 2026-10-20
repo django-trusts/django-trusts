@@ -24,7 +24,7 @@ from tests.support import (
 )
 from trusts.inspect.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
 from trusts.inspect.format import _format_policy_sql, _tokenize_policy_sql
-from trusts.plan.aggregates import all_match, common_permissions
+from trusts.plan.aggregates import _compile_common_permissions, all_match
 from trusts.plan.users import lock_permitted_users_queryset
 from trusts.plan.walk import _render_reach_sql
 from trusts.compile.nodes import Along
@@ -63,7 +63,8 @@ def _pks(rows):
     return {row.pk for row in rows}
 
 def _direct_handle(registry, path='tests.along.direct'):
-    return [registry, setattr(registry, 'path', path)][0]
+    registry.path = path
+    return registry
 
 def _plan_text(qs):
     sql, params = qs.query.sql_with_params()
@@ -366,13 +367,13 @@ class _AlongProjectionMixin(object):
         granted_qs = Model.objects.filter(pk__in=[row.pk for row in granted_rows])
         mixed_qs = Model.objects.order_by('pk')
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(built_registries((handle,))[0], granted_qs, self.alice, self.read))
+            self.assertTrue(all_match(handle.build_registry(), granted_qs, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(all_match(built_registries((handle,))[0], mixed_qs, self.alice, self.read))
+            self.assertFalse(all_match(handle.build_registry(), mixed_qs, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(common_permissions(built_registries((handle,)), granted_qs, self.alice)), {self.read.pk})
+            self.assertEqual(_pks(_compile_common_permissions(handle.build_registry(), granted_qs, self.alice)), {self.read.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(list(common_permissions(built_registries((handle,)), mixed_qs, self.alice)), [])
+            self.assertEqual(list(_compile_common_permissions(handle.build_registry(), mixed_qs, self.alice)), [])
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
@@ -399,8 +400,8 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         granted_qs = self.Node.objects.filter(pk__in=[root.pk, child.pk, leaf.pk])
         with patch.object(connections[granted_qs.db], 'vendor', 'mysql'):
             handle = _direct_handle(registry)
-            common = common_permissions(built_registries((handle,)), granted_qs, self.alice)
-            on_root = common_permissions(built_registries((handle,)), root, self.alice)
+            common = _compile_common_permissions(handle.build_registry(), granted_qs, self.alice)
+            on_root = _compile_common_permissions(handle.build_registry(), root, self.alice)
         self.assertEqual(_pks(common), {self.read.pk})
         self.assertEqual(_pks(on_root), {self.read.pk})
         nested_sql, nested_params = common.query.sql_with_params()
@@ -535,7 +536,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
 
     def _locked_user_pks(self, registry, content):
         handle = _direct_handle(registry)
-        queryset = lock_permitted_users_queryset(built_registries((handle,))[0], content, self.read)
+        queryset = lock_permitted_users_queryset(handle.build_registry(), content, self.read)
         return (queryset, list(queryset.order_by('pk').values_list('pk', flat=True)))
 
     def test_formatted_sql_matches_unformatted_results_on_every_backend(self):

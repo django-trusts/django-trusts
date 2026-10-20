@@ -187,10 +187,11 @@ class CompilerProtocolTest(KernelHostRequiredMixin, _LiveRegistryRestoreMixin, S
     def test_raising_compiler_propagates(self):
         User = get_user_model()
         registry = RegistryFactory(compiler=RaisingCompilerBackend.query_compiler)
-        handle = [registry, setattr(registry, 'path', RAISING)][0]
+        registry.path = RAISING
+        handle = registry
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
-            granted(built_registries((handle,))[0], Document, User(), Permission(), kind='complete')
+            granted(handle.build_registry(), Document, User(), Permission(), kind='complete')
         self.assertIn('compiler exploded', str(ctx.exception))
 
 class CompilerCheckQueryCountTest(TestCase):
@@ -235,7 +236,8 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
     def test_aggregate_ors_both_complete_proofs_in_one_statement(self):
         isolated = RegistryFactory()
         _contribute_document(isolated)
-        extra = [isolated, setattr(isolated, 'path', MIXIN)][0]
+        isolated.path = MIXIN
+        extra = isolated
         qs = Document.objects.all()
         parts = [
             granted(registry, qs, self.alice, self.change, kind='complete')
@@ -271,11 +273,12 @@ class CompilerIsolationTest(KernelHostRequiredMixin, TestCase):
         User = get_user_model()
         live = live_config()
         registry = RegistryFactory(compiler=RaisingCompilerBackend.query_compiler)
-        handle = [registry, setattr(registry, 'path', RAISING)][0]
+        registry.path = RAISING
+        handle = registry
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
-            granted(built_registries((configured_catalog(HOST),))[0], Document, User(), Permission(), kind='complete')
-            granted(built_registries((handle,))[0], Document, User(), Permission(), kind='complete')
+            granted(configured_catalog(HOST), Document, User(), Permission(), kind='complete')
+            granted(handle.build_registry(), Document, User(), Permission(), kind='complete')
         self.assertIn('compiler exploded', str(ctx.exception))
 
     def test_mixin_only_alone_does_not_inherit_document_plan(self):

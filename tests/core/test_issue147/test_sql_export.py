@@ -188,7 +188,8 @@ class FolderGrant(models.Model):
 def _handle(path, registry=None):
     if registry is None:
         registry = RegistryFactory()
-    return [registry, setattr(registry, 'path', path)][0]
+    registry.path = path
+    return registry
 
 def _non_confidential(user, permission, obj):
     del user, permission

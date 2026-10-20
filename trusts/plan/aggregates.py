@@ -18,7 +18,6 @@ from trusts.plan.contents import (
     _delegation_reaches,
     _delegation_sponsor_q,
     _ordinary_records,
-    relationship_family,
 )
 from trusts.plan.delegations import (
     _compatible_sponsor_records,
@@ -28,10 +27,8 @@ from trusts.plan.relations import (
     _candidate_model,
     _or_q,
     answering_compiler,
-    bind_checked_user,
     candidate_queryset,
 )
-from django.contrib.auth.models import Permission
 
 
 def compiler_for_class(cls):
@@ -44,25 +41,6 @@ def compiler_for_class(cls):
     if not callable(complete) or not callable(group):
         raise TrustsCompilerError('%r is not query-capable' % (cls,))
     return compiler
-
-
-def any_plan_records(registries, content):
-    """True when any registry declares an ordinary or delegated plan.
-
-    Aggregate **support** gate across configured Trusts paths. A
-    declaration on one registry establishes that the content terminal is
-    known; it does not compile a grant and does not authorize through
-    another registry's compiler. Empty ``registries`` is False. Does not
-    consult ``historical_fallback`` or historical model names.
-    Construction issues no SQL. Relationship records only; a
-    non-relationship plan on another family is not a Core support
-    declaration.
-    """
-    for registry in registries:
-        plan = registry.plan_for(content)
-        if plan.records or plan.delegations:
-            return True
-    return False
 
 
 def _compiler_applies(compiler, plan):
@@ -177,63 +155,6 @@ def _compile_common_permissions(registry, candidates, user, *, kind='complete',
     ).exclude(
         Exists(qs.filter(~wrapped)),
     ).distinct())
-
-
-def common_permissions(registries, candidates, user, *, kind='complete',
-                       **skip_flags):
-    """Permission queryset held on every candidate via the aggregate proof.
-
-    Core-owned aggregate: fold-family registries are omitted. One SQL when
-    evaluated. ``None`` when no remaining registry applies so the caller
-    may use the undeclared fallback. Uses nested ``OuterRef`` so the permission
-    identity is the outer permission row, not the candidate.
-    Applicability is ``compiler.applies(plan)``. Only relationship-family
-    registries participate.
-    ``RelationPlan.common_permissions`` is not this function.
-    ``skip_<name>`` is a bound parameter on the registered rules.
-    Anonymous, unauthenticated, and ``None`` are an empty queryset when
-    a registry applies, and ``None`` only when no registry applies.
-    """
-    participating = relationship_family(registries)
-    inquiry = bind_checked_user(
-        user, skip_flags=skip_flags, subjects=participating)
-    if inquiry.denied:
-        return _anonymous_common_permissions(participating, candidates)
-    if len(participating) != 1:
-        return None
-    return _compile_common_permissions(
-        participating[0], candidates, user, kind=kind,
-        skipped=inquiry.values,
-    )
-
-
-def _anonymous_common_permissions(registries, candidates):
-    """Empty permission queryset for an inquiry denied before SQL.
-
-    ``None`` stays the undeclared-fallback signal when no registry applies.
-    An applicable registry does not compile a grant for this user.
-    """
-    permission_model = None
-    applicable = False
-    for registry in registries:
-        if registry is None:
-            continue
-        compiler = answering_compiler(registry)
-        plan = registry.plan_for(candidates)
-        if not _compiler_applies(compiler, plan):
-            continue
-        if not plan.records and not plan.delegations:
-            continue
-        applicable = True
-        if plan.permission_model is not None:
-            permission_model = plan.permission_model
-            break
-    if not applicable:
-        return None
-    if permission_model is None:
-
-        permission_model = Permission
-    return permission_model._default_manager.none()
 
 
 def _delegated_user_exists(delegations, sponsor_records, content, permission,

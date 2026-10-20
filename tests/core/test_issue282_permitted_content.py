@@ -24,7 +24,7 @@ from tests.support import (
     built_catalog,
 )
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.aggregates import common_permissions
+from trusts.plan.aggregates import _compile_common_permissions
 from trusts.decorators import authorization_required
 from trusts.query import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
 from tests.support import built_registries
@@ -1206,17 +1206,17 @@ class AlongSurfaceAgreementTest(TransactionTestCase):
         past_only = self.Trust.objects.filter(pk=self.past.pk)
         mixed = self.Trust.objects.filter(pk__in=[self.child.pk, self.past.pk])
         self.assertEqual(
-            set(common_permissions(
-                built_registries((self.handle,)), child_only, self.alice,
+            set(_compile_common_permissions(
+                self.handle.build_registry(), child_only, self.alice,
             ).values_list('pk', flat=True)),
             {self.change.pk},
         )
         self.assertEqual(
-            list(common_permissions(built_registries((self.handle,)), past_only, self.alice)),
+            list(_compile_common_permissions(self.handle.build_registry(), past_only, self.alice)),
             [],
         )
         self.assertEqual(
-            list(common_permissions(built_registries((self.handle,)), mixed, self.alice)),
+            list(_compile_common_permissions(self.handle.build_registry(), mixed, self.alice)),
             [],
         )
 
