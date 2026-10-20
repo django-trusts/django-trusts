@@ -25,7 +25,7 @@ from tests.support import render_configured_policy, install_class_handle
 
 
 def _handle(path='tests.core.issue282'):
-    return RegistryFactory(path=path)
+    return RegistryFactory(cls=TrustModelBackendMixin, path=path)
 
 def _contribute_m2m(field, model):
     if not hasattr(field, 'm2m_field_name'):

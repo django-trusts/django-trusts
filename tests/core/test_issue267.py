@@ -77,7 +77,7 @@ def _code(permission):
     return '%s.%s' % (permission.content_type.app_label, permission.codename)
 
 def _handle(path):
-    return RegistryFactory(path=path)
+    return RegistryFactory(cls=TrustModelBackendMixin, path=path)
 
 def _request(user):
     request = HttpRequest()
@@ -413,7 +413,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
     def test_terminal_without_content_type_keeps_primary_key_identity(self):
         operation = self.Operation.objects.create(code='review')
         self.OperationGrant.objects.create(user=self.owner, organization=self.org, repository=self.repo, operation=operation)
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         with self.assertNumQueries(0):
             registry.register(content=self._ref(self.OperationGrant).organization, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
             registry.register(content=self._ref(self.OperationGrant).repository, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
@@ -432,7 +432,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         repo_permit = self.TypedPermit.objects.create(content_type=repo_ct, codename='read_repository')
         self.TypedGrant.objects.create(user=self.owner, organization=self.org, repository=self.repo, permit=repo_permit)
         self.TypedGrant.objects.create(user=self.owner, organization=self.org, repository=self.repo, permit=org_permit)
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         grant = self._ref(self.TypedGrant)
         registry.register(content=grant.organization, user=grant.user, permission=grant.permit)
         registry.register(content=grant.repository, user=grant.user, permission=grant.permit)
@@ -451,7 +451,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         read = _perm(self.Repository, 'read_repository')
         self.DirectGrant.objects.create(user=self.owner, organization=self.org, permission=manage)
         self.DirectGrant.objects.create(user=self.owner, organization=self.org, permission=read)
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         grant = self._ref(self.DirectGrant)
         registry.register(content=grant.organization, user=grant.user, permission=grant.permission)
         catalog = built_catalog(registry)

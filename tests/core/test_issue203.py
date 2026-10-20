@@ -113,7 +113,7 @@ def _note_models():
     return (Tag, Note, NoteGrant)
 
 def _handle(note_grant):
-    handle = RegistryFactory(path='tests.core.issue203')
+    handle = RegistryFactory(cls=TrustModelBackendMixin, path='tests.core.issue203')
     handle.register_public(trust=note_grant, user='user', permission='permission', content='note')
     return handle
 
@@ -186,7 +186,7 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
             with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, PERM, secret))
             with self.assertNumQueries(0):
-                fresh = RegistryFactory(path='tests.core.issue203-reject')
+                fresh = RegistryFactory(cls=TrustModelBackendMixin, path='tests.core.issue203-reject')
                 with self.assertRaises(PermissionConditionError):
                     fresh.register_permission_condition(self.Note, 'open', lambda u, p, o: o.title == Decimal('1.5'))
                 with self.assertRaises(PermissionConditionError):

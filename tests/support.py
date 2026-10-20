@@ -225,7 +225,7 @@ def isolate_live_registry(config, registry, path):
 def install_writable_registry(config, path, contribute=None):
     """Install a standalone factory as the catalog for one live path."""
 
-    registry = RegistryFactory(path=path)
+    registry = RegistryFactory(cls=TrustModelBackendMixin, path=path)
     if contribute is not None:
         contribute(registry)
     isolate_live_registry(config, registry, path)

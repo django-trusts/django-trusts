@@ -14,6 +14,7 @@ from trusts.conditions import (
     permission_has_condition,
 )
 from trusts.compile.factory import RegistryFactory
+from trusts.backends import TrustModelBackendMixin
 
 
 PUBLIC_SURFACE_NAMES = (
@@ -107,7 +108,7 @@ class StageBRegisterCallableOnlyTest(SimpleTestCase):
                 app_label = 'trusts_tests'
 
         u, _p, o = condition_refs()
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         with self.assertRaises(TypeError):
             registry.register_permission_condition(Note, 'own', u == o.owner)
         self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'own'))

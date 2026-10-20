@@ -798,6 +798,8 @@ class RegistryFactory(object):
         fragments are compiled here. A later call builds another shape
         from the same stored rows.
         """
+        if self.cls is None:
+            raise TrustsConfigurationError('RegistryFactory.build() needs a backend class.')
         rows = tuple(self.conditions.iter_permission_conditions())
         lookup = FrozenConditionLookup(rows)
         stored = self._stored_user_conditions()
@@ -806,17 +808,14 @@ class RegistryFactory(object):
             model, '', None if stored is None else stored, role='user', values={},
         )
         absent = primary if stored is not None else compile_user_rules(
-            model, '', (), role='user', values={},
-        )
+            model, '', (), role='user', values={})
         slot = self._user_override
         override_q = None
         if slot is not None:
             seen = set()
             candidates = [model] if model is not None else []
             candidates.extend(record.user_model for record in self.records)
-            candidates.extend(
-                record.delegate_model for record in self.delegations
-            )
+            candidates.extend(record.delegate_model for record in self.delegations)
             for candidate in candidates:
                 concrete = candidate._meta.concrete_model
                 if concrete in seen:
@@ -831,7 +830,7 @@ class RegistryFactory(object):
             user_conditions=stored, user_override=self._user_override,
             filter_lookup=lookup,
             compiler=self.compiler if self._explicit_compiler else None,
-            cls=self.cls if self.cls is not None else type(self),
+            cls=self.cls,
             path=self.path or '', family=self.family, user_model=model,
             user_rules=(primary, absent), override_q=override_q,
         )

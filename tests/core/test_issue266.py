@@ -24,7 +24,7 @@ from tests.support import render_configured_policy, built_catalog, install_class
 
 
 def _handle(path='tests.core.issue266'):
-    return RegistryFactory(path=path)
+    return RegistryFactory(cls=TrustModelBackendMixin, path=path)
 
 def _permission(model, codename):
     content_type = ContentType.objects.get_for_model(model)
@@ -719,7 +719,7 @@ class DelegationRootGuardTest(TestCase):
         self.assertEqual(built_catalog(handle).delegations, ())
 
     def test_refs_from_two_roots_are_rejected(self):
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         delegation = Ref(DocumentDelegation)
         grant = Ref(DocumentGrant)
         with self.assertNumQueries(0):

@@ -52,8 +52,8 @@ class StandaloneIndependenceTest(SimpleTestCase):
 
     def test_standalone_stays_writable_after_global_ready(self):
         self.assertTrue(apps.ready)
-        first = RegistryFactory()
-        second = RegistryFactory()
+        first = RegistryFactory(cls=TrustModelBackendMixin)
+        second = RegistryFactory(cls=TrustModelBackendMixin)
         self.assertEqual(first.records, ())
         _contribute_document(second)
         self.assertEqual(len(built_catalog(second).plan_for(Document).records), 1)
@@ -63,7 +63,7 @@ class StandaloneIndependenceTest(SimpleTestCase):
         self.assertIsNot(first.records[0], second.records[0])
 
     def test_build_is_repeatable_and_register_does_not_inspect_apps_ready(self):
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         _contribute_document(registry)
         before = registry.records
         first_build = built_catalog(registry)
@@ -81,7 +81,7 @@ class StandaloneIndependenceTest(SimpleTestCase):
 class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
 
     def test_valid_duplicate_conflict_and_malformed_all_raise(self):
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         j = Ref(DocumentGrant)
         registry.register(content=j.document, user=j.user, permission=j.permission)
         before = registry.records
@@ -96,7 +96,7 @@ class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
 class BuiltPlanProjectionsTest(KernelHostRequiredMixin, TestCase):
 
     def test_built_plan_still_projects(self):
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         _contribute_document(registry)
         before = built_catalog(registry).plan_for(Document)
         built_catalog(registry)
@@ -191,7 +191,7 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
         from tests.backends import HostTrustModelBackend
         from trusts.backends import catalogs
         first = catalogs[HostTrustModelBackend]
-        private = RegistryFactory()
+        private = RegistryFactory(cls=TrustModelBackendMixin)
         live_config().ready()
         self.assertIs(catalogs[HostTrustModelBackend], first)
         _contribute_document(private)
@@ -246,13 +246,13 @@ class HandleBuildRegistrySignalTest(SimpleTestCase):
     """A configured path holds a registry. The registry builds itself."""
 
     def test_factory_builds_a_fresh_registry(self):
-        registry = RegistryFactory(path='tests.core.builder')
+        registry = RegistryFactory(cls=TrustModelBackendMixin, path='tests.core.builder')
         handle = registry
         first = built_catalog(handle)
         second = built_catalog(handle)
         self.assertIsNot(first, second)
         self.assertEqual(first.records, ())
-        fresh = RegistryFactory(path='tests.core.builder')
+        fresh = RegistryFactory(cls=TrustModelBackendMixin, path='tests.core.builder')
         _contribute_document(fresh)
         self.assertEqual(built_catalog(fresh).records, fresh.records)
         self.assertEqual(first.records, ())

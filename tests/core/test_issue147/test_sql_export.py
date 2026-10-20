@@ -26,6 +26,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import CHECK_ID_POLICY_LOCK, CONVENTIONAL_LOCKFILE_NAME, _Symbol, _classify_compiled, _compile_get_all_permissions, _compile_get_permitted_users, _compile_has_perm, _compile_content_grant, _const_from_json, _json_const, _presented_const, _sentinel, _assign_ids, _load_policy_sql_document, _render_condition, _sql_row, _symbol_for_new_param, check_policy_sql_lockfile, render_policy_sql_bytes
 from trusts.inspect.yaml import dump_policy_yaml
+from trusts.backends import TrustModelBackendMixin
 GOLDEN_SQLITE = Path(__file__).with_name('golden_document_sqlite.yaml').read_bytes()
 GOLDEN_CONSTANTS = Path(__file__).with_name('golden_condition_constants_sqlite.yaml').read_bytes()
 GOLDEN_ALONG = Path(__file__).with_name('golden_along_sqlite.yaml').read_bytes()
@@ -186,7 +187,7 @@ class FolderGrant(models.Model):
 
 def _handle(path, registry=None):
     if registry is None:
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
     registry.path = path
     return registry
 

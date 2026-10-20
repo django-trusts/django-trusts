@@ -2,6 +2,7 @@
 
 Live one-path Trust/Content ``has_perm`` stays on Zero ``tests/legacy/``.
 """
+from trusts.backends import TrustModelBackendMixin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
@@ -38,7 +39,7 @@ class CompilerFailureTest(KernelHostRequiredMixin, TestCase):
 
     def test_raising_compiler_propagates_on_granted(self):
         User = get_user_model()
-        registry = RegistryFactory(compiler=RaisingCompilerBackend.query_compiler)
+        registry = RegistryFactory(cls=TrustModelBackendMixin, compiler=RaisingCompilerBackend.query_compiler)
         registry.path = 'tests.backends.RaisingCompilerBackend'
         handle = registry
         _contribute_document(handle)
@@ -63,7 +64,7 @@ class CompilerIsolationBackendTest(KernelHostRequiredMixin, TestCase):
         self.assertTrue(document.plan_for(Document).records)
 
     def test_mixin_only_alone_does_not_see_document_plan(self):
-        mixin = RegistryFactory(path='tests.backends.MixinOnlyBackend')
+        mixin = RegistryFactory(cls=TrustModelBackendMixin, path='tests.backends.MixinOnlyBackend')
         self.assertFalse(built_catalog(mixin).plan_for(Document).records)
 
 class CoordinatorQueryCountTest(KernelHostRequiredMixin, TestCase):
