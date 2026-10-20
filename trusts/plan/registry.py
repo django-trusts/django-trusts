@@ -54,8 +54,7 @@ class Question(object):
     ``content_model`` is the concrete content model for the group.
     ``records`` / ``delegations`` are that group's lowered rows, split
     by kind, in registration order. ``question`` is one of the four
-    registry question families pre-bound with the walk's ``family_registries``;
-    its call signature depends on ``name``:
+    registry question families; its call signature depends on ``name``:
 
     - ``permitted``: ``question(user, permission) -> QuerySet``
     - ``has_perm``: ``question(user, content, permission) -> bool``
@@ -196,17 +195,6 @@ class Registry(object):
 
     # -- question helpers ------------------------------------------------
 
-    def _with_family_registries(self, family_registries):
-        """This registry, then each other family registry, once."""
-        routes = []
-        seen = set()
-        for other in (self,) + tuple(family_registries or ()):
-            if other is None or id(other) in seen:
-                continue
-            seen.add(id(other))
-            routes.append(other)
-        return tuple(routes)
-
     def applies(self, plan):
         """Whether this registry's compiler will compile ``plan``."""
         compiler = answering_compiler(self)
@@ -230,20 +218,19 @@ class Registry(object):
     # Production semantics live in plan.contents / plan.aggregates /
     # plan.users. These methods call them on this registry. The
     # compiler is bound here. Omission stores ``PlanQueryCompiler``
-    # and projects simple questions. ``family_registries`` are other
-    # registries whose ordinary records may satisfy this registry's
-    # delegations; this registry is always included first. ``None`` is
-    # never returned: inapplicable is False / empty queryset / () as
-    # each question requires.
+    # and projects simple questions. A delegation uses this registry's
+    # ordinary records. ``None`` is never returned: inapplicable is
+    # False / empty queryset / () as each question requires.
 
-    def has_permission(self, user, content, permission, *, family_registries=(),
+    def has_permission(self, user, content, permission, *,
                        extra_q=None, permission_model=None,
                        skipped=None, **skip_flags):
         """Q1: does ``user`` hold ``permission`` on ``content``?
 
         ``content`` is one instance (instance check) or a QuerySet
-        (every row must hold). Delegations via family_registries are included.
-        The compiler bound at construction compiles the grant.
+        (every row must hold). A delegation uses this registry's
+        ordinary records. The compiler bound at construction compiles
+        the grant.
         """
 
 
@@ -251,14 +238,12 @@ class Registry(object):
         if isinstance(permission, Model):
             permission = require_instance(permission, 'permission')
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
-        family_registries = self._with_family_registries(family_registries)
         if isinstance(content, QuerySet):
             if denied:
                 return False
             matched = all_match(
                 (self,), content, user, permission,
                 kind='complete', extra_q=extra_q,
-                family_registries=family_registries,
                 permission_model=permission_model, skipped=values,
             )
             return False if matched is None else bool(matched)
@@ -276,12 +261,11 @@ class Registry(object):
         matched = instance_match(
             self, content, user, permission,
             kind='complete', extra_q=extra_q,
-            family_registries=family_registries,
             permission_model=permission_model, skipped=values,
         )
         return False if matched is None else bool(matched)
 
-    def filter_authorized(self, queryset, user, permission, *, family_registries=(),
+    def filter_authorized(self, queryset, user, permission, *,
                           skipped=None, **skip_flags):
         """Q2: rows of ``queryset`` ``user`` may access for ``permission``."""
 
@@ -300,17 +284,14 @@ class Registry(object):
                 return plan.filter_content(queryset, user, permission, skipped=values)
         granted_q = _compile_granted(
             (self,), queryset, user, permission,
-            kind='complete',
-            family_registries=self._with_family_registries(family_registries),
-            skipped=values,
+            kind='complete', skipped=values,
         )
         if granted_q is None:
             return queryset.none()
         return bind_once(queryset.filter(granted_q).distinct())
 
     def filter_by_permitted_content(self, queryset, user, permission, *,
-                                    content, family_registries=(),
-                                    skipped=None, **skip_flags):
+                                    content, skipped=None, **skip_flags):
         """Q2 variant: scope rows that are a proper prefix of ``content``."""
 
         if not isinstance(queryset, QuerySet):
@@ -323,14 +304,12 @@ class Registry(object):
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if denied:
             return queryset.none()
-        family_registries = self._with_family_registries(family_registries)
         return _compile_permitted_content_queryset(
             queryset, user, permission, content=content, subjects=(self,),
-            family_registries=family_registries,
             skipped=values,
         )
 
-    def permissions_for(self, user, content, *, kind='complete', family_registries=(),
+    def permissions_for(self, user, content, *, kind='complete',
                         skipped=None, **skip_flags):
         """Q4: permission rows ``user`` holds on ``content`` (QS or ()).
 
@@ -350,9 +329,7 @@ class Registry(object):
                 and not isinstance(content, QuerySet) and not plan.delegations):
             return plan.permissions(user, content, skipped=values)
         qs = _compile_common_permissions(
-            (self,), content, user, kind=kind,
-            family_registries=self._with_family_registries(family_registries),
-            skipped=values,
+            (self,), content, user, kind=kind, skipped=values,
         )
         if qs is None:
             if not (plan.records or plan.delegations) or plan.permission_model is None:
@@ -360,7 +337,7 @@ class Registry(object):
             return plan.permission_model._default_manager.none()
         return qs
 
-    def permitted_users_predicate(self, content, perm, *, family_registries=(),
+    def permitted_users_predicate(self, content, perm, *,
                                   skipped=(), filter_lookup=None,
                                   accepts_permission=None):
         """Q3 predicate: ``Q`` over candidate users, or ``None``.
@@ -370,14 +347,13 @@ class Registry(object):
         omitted means ``auth.Permission``.
         """
 
-        family_registries = self._with_family_registries(family_registries)
         return permitted_users_predicate_for_registry(
-            self, content, perm, family_registries=family_registries,
-            skipped=skipped, filter_lookup=filter_lookup,
+            self, content, perm, skipped=skipped,
+            filter_lookup=filter_lookup,
             accepts_permission=accepts_permission,
         )
 
-    def permitted_users(self, content, perm, *, family_registries=(), **skip_flags):
+    def permitted_users(self, content, perm, **skip_flags):
         """Q3: lazy user queryset permitted on ``content`` for ``perm``."""
 
         denied, values = self._resolve_skipped(
@@ -385,7 +361,7 @@ class Registry(object):
         )
         # require_user=False never denies; values carry skip_<name>.
         predicate = self.permitted_users_predicate(
-            content, perm, family_registries=family_registries, skipped=values,
+            content, perm, skipped=values,
         )
         plan = self.plan_for(content)
         if predicate is None:
@@ -412,10 +388,6 @@ class Registry(object):
     # return value of each ``visit`` call is collected and returned as a
     # tuple in the same order; a visitor may return ``None`` for a
     # question it omits (for example an empty prefix statement).
-    # ``family_registries`` are other registries whose ordinary records
-    # may satisfy this registry's delegations; they are pre-bound into
-    # each descriptor's question callable, never passed to the visitor
-    # separately.
 
     def _content_groups(self):
         """``(content_model, records, delegations)`` in document order."""
@@ -464,47 +436,42 @@ class Registry(object):
                 current = related
         return tuple(found)
 
-    def _question_content_grant(self, content_model, user, permission, *,
-                            family_registries=()):
+    def _question_content_grant(self, content_model, user, permission):
         return self.filter_authorized(
             content_model._meta.concrete_model._default_manager.all(),
-            user, permission, family_registries=family_registries,
+            user, permission,
         )
 
     def _question_filter_by_permitted_content(
-        self, content_model, queryset, user, permission, *, family_registries=(),
+        self, content_model, queryset, user, permission,
     ):
         return self.filter_by_permitted_content(
             queryset, user, permission, content=content_model,
-            family_registries=family_registries,
         )
 
-    def _descriptors_for(self, content_model, records, delegations, family_registries):
+    def _descriptors_for(self, content_model, records, delegations):
         descriptors = [
             Question(
                 'permitted', content_model, records, delegations,
-                partial(
-                    self._question_content_grant, content_model,
-                    family_registries=family_registries,
-                ),
+                partial(self._question_content_grant, content_model),
             ),
             Question(
                 'has_perm', content_model, records, delegations,
-                partial(self.has_permission, family_registries=family_registries),
+                self.has_permission,
             ),
             Question(
                 'get_all_permissions', content_model, records, delegations,
-                partial(self.permissions_for, family_registries=family_registries),
+                self.permissions_for,
             ),
         ]
         if any(getattr(record, 'via_group', False) for record in records):
             descriptors.append(Question(
                 'get_group_permissions', content_model, records, delegations,
-                partial(self.permissions_for, kind='group', family_registries=family_registries),
+                partial(self.permissions_for, kind='group'),
             ))
         descriptors.append(Question(
             'get_permitted_users', content_model, records, delegations,
-            partial(self.permitted_users, family_registries=family_registries),
+            self.permitted_users,
         ))
         if self._permitted_content_prefix_models(content_model):
             descriptors.append(Question(
@@ -512,12 +479,11 @@ class Registry(object):
                 delegations,
                 partial(
                     self._question_filter_by_permitted_content, content_model,
-                    family_registries=family_registries,
                 ),
             ))
         return tuple(descriptors)
 
-    def walk_questions(self, visitor, *, family_registries=()):
+    def walk_questions(self, visitor):
         """Walk every possible question, per content group, in order.
 
         See the section comment above for the visitor protocol.
@@ -532,11 +498,10 @@ class Registry(object):
                 'walk_questions visitor must supply a callable '
                 'visit(question), not %r.' % (visitor,)
             )
-        family_registries = tuple(family_registries or ())
         results = []
         for model, records, delegations in self._content_groups():
             for descriptor in self._descriptors_for(
-                model, records, delegations, family_registries,
+                model, records, delegations,
             ):
                 results.append(visit(descriptor))
         return tuple(results)

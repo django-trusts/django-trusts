@@ -489,7 +489,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         handle.register_public(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
         from trusts.compile.catalogs import Catalog
         built = handle.build_registry()
-        subject = Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=built, family_registries=())
+        subject = Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=built)
         record = built.plan_for(Folder).records[0]
         content = {'model': 'documents.Folder', 'permitted': _sql_row(_compile_content_grant(subject, 'default', (record,), Folder)), 'has_perm': _sql_row(_compile_has_perm(subject, 'default', (record,), Folder)), 'get_all_permissions': _sql_row(_compile_get_all_permissions(subject, 'default', (record,), Folder)), 'get_permitted_users': _sql_row(_compile_get_permitted_users(subject, 'default', (record,), Folder))}
         payload = dump_policy_yaml({'schema_version': 1, 'database': {'engine': 'django.db.backends.sqlite3'}, 'backends': [{'path': 'documents.backends.FolderAlongBackend', 'contents': [content]}]})

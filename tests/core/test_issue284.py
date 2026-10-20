@@ -463,7 +463,7 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
             from trusts.backends import catalogs
             from trusts.compile.catalogs import Catalog
             factory = self.handle
-            catalogs[_AcceptanceBackend] = Catalog(cls=_AcceptanceBackend, path='%s.%s' % (_AcceptanceBackend.__module__, _AcceptanceBackend.__qualname__), family=_AcceptanceBackend.family, registry=factory.build_registry(), family_registries=built_registries(()))
+            catalogs[_AcceptanceBackend] = Catalog(cls=_AcceptanceBackend, path='%s.%s' % (_AcceptanceBackend.__module__, _AcceptanceBackend.__qualname__), family=_AcceptanceBackend.family, registry=factory.build_registry())
             self.backend = _AcceptanceBackend()
             self._settings = override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue284._AcceptanceBackend',))
             self._settings.enable()

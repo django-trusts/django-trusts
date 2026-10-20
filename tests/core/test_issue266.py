@@ -13,18 +13,14 @@ from tests.core import kernel_host_listed
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from trusts.plan.aggregates import _compile_common_permissions
 from trusts.compile.factory import RegisteredDelegation
-from trusts.plan.contents import _compile_granted
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
-from trusts.compile.catalogs import Catalog
 from trusts.query import PermittedManager, PermittedQuerySet, PermittedUsersMixin
-from trusts.plan.users import lock_permitted_users_queryset
-from tests.apps import render_configured_policy, built_registries
+from tests.apps import render_configured_policy
 
 
 def _handle(path='tests.core.issue266'):
@@ -38,15 +34,12 @@ def _permission(model, codename):
 class _PairDocumentBackend(TrustModelBackendMixin, ModelBackend):
     """Stand-in for ``DocumentBackend`` when pair settings omit myapp."""
 
-class _GrantBackend(TrustModelBackendMixin, ModelBackend):
-    """Grant rows for a second class. Sponsors are that class's catalog."""
-
-def _seal_factory(backend_cls, factory, family_registries=()):
+def _seal_factory(backend_cls, factory):
     """Construct this class's catalog from a factory this test filled."""
     from trusts.backends import catalogs
     from trusts.compile.catalogs import Catalog
     built = factory.build_registry()
-    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built, family_registries=built_registries(tuple(family_registries)))
+    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built)
     return built
 
 def _document_host_handle():
@@ -855,47 +848,6 @@ class DelegatedAuthorityLiveTest(TestCase):
         relationship.allowed_permissions.add(self.change)
         self.assertFalse(self.second_delegate.has_perm('myapp.change_document', self.document))
 
-    def test_sponsor_grant_may_come_from_another_relationship_handle(self):
-        grant_handle = _handle('tests.core.issue266.grants')
-        grant_handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-        delegation_handle = _handle('tests.core.issue266.delegations')
-        delegation_handle.register_public(trust=DocumentDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
-        handles = (grant_handle, delegation_handle)
-        granted = _compile_granted(built_registries((delegation_handle,)), Document.objects.all(), self.delegate, self.change, family_registries=built_registries(handles))
-        self.assertIsNotNone(granted)
-        self.assertTrue(Document.objects.filter(granted).exists())
-        built = built_registries(handles)
-        catalogs = tuple(
-            Catalog(
-                cls=type(registry),
-                path=registry.path,
-                family=registry.family,
-                registry=registry,
-                family_registries=tuple(
-                    other for other in built if other is not registry
-                ),
-            )
-            for registry in built
-        )
-        parts = []
-        for catalog in catalogs:
-            part = catalog.complete_grant_q(
-                Document.objects.all(), self.delegate, self.change,
-            )
-            if part is not None:
-                parts.append(part)
-        self.assertTrue(parts)
-        permitted_q = parts[0]
-        for part in parts[1:]:
-            permitted_q = permitted_q | part
-        self.assertEqual(
-            list(Document.objects.filter(permitted_q)), [self.document],
-        )
-        permissions = _compile_common_permissions(built_registries((delegation_handle,)), self.document, self.delegate, family_registries=built_registries(handles))
-        self.assertEqual(list(permissions), [self.change])
-        users = lock_permitted_users_queryset(built_registries((delegation_handle,))[0], self.document, self.change, subjects=built_registries(handles))
-        self.assertEqual(list(users), [self.delegate])
-
     def test_policy_lock_exports_delegation_and_correlated_sql(self):
         handle = _handle('tests.core.issue266.policy')
         handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
@@ -906,29 +858,6 @@ class DelegatedAuthorityLiveTest(TestCase):
         self.assertEqual(delegation['delegate']['path'], 'delegate')
         self.assertEqual(delegation['sponsor']['path'], 'sponsor')
         self.assertEqual(delegation['content']['path'], 'document')
-        for operation in ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'):
-            sql = content[operation]['sql']
-            self.assertIn('myapp_documentdelegation', sql)
-            self.assertIn('myapp_documentgrant', sql)
-
-    def test_policy_lock_uses_a_sponsor_grant_from_another_handle(self):
-        grant_handle = _handle('tests.core.issue266.split-grants')
-        grant_handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-        delegation_handle = _handle('tests.core.issue266.split-delegations')
-        delegation_handle.register_public(trust=DocumentDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
-        from trusts.backends import catalogs
-        grant_built = _seal_factory(_GrantBackend, grant_handle)
-        _seal_factory(_PairDocumentBackend, delegation_handle, family_registries=built_registries((grant_built,)))
-        self.addCleanup(lambda: catalogs.pop(_PairDocumentBackend, None))
-        self.addCleanup(lambda: catalogs.pop(_GrantBackend, None))
-        with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue266._GrantBackend', 'tests.core.test_issue266._PairDocumentBackend')):
-            self.assertTrue(self.delegate.has_perm('myapp.change_document', self.document))
-            self.assertFalse(self.second_delegate.has_perm('myapp.change_document', self.document))
-        document = _load_policy_sql_document(render_configured_policy(grant_handle, delegation_handle))
-        by_path = {row['path']: row for row in document['backends']}
-        content = by_path['tests.core.issue266.split-delegations']['contents'][0]
-        self.assertNotIn('trusts', content)
-        self.assertEqual(content['delegations'][0]['sponsor']['path'], 'sponsor')
         for operation in ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'):
             sql = content[operation]['sql']
             self.assertIn('myapp_documentdelegation', sql)

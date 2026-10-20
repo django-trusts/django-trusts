@@ -29,17 +29,15 @@ _NO_PRESET = object()
 class Catalog(object):
     """Answers one backend class from the registry the sweep built.
 
-    ``family_registries`` are the other built registries of the same
-    family, fixed by the sweep. Callers outside the backend obtain this
-    object from ``TrustModelBackendMixin.get_catalog()``.
+    Callers outside the backend obtain this object from
+    ``TrustModelBackendMixin.get_catalog()``.
     """
 
-    def __init__(self, *, cls, path, family, registry, family_registries):
+    def __init__(self, *, cls, path, family, registry):
         self.cls = cls
         self.path = path
         self.family = family
         self._registry = registry
-        self.family_registries = tuple(family_registries)
 
     @property
     def records(self):
@@ -72,22 +70,17 @@ class Catalog(object):
     def permissions_for(self, user, content, *, kind='complete', skipped=None,
                         **skip_flags):
         return self._registry.permissions_for(
-            user, content, kind=kind,
-            family_registries=self.family_registries,
-            skipped=skipped, **skip_flags,
+            user, content, kind=kind, skipped=skipped, **skip_flags,
         )
 
     def walk_questions(self, visitor):
-        return self._registry.walk_questions(
-            visitor, family_registries=self.family_registries,
-        )
+        return self._registry.walk_questions(visitor)
 
     def filter_by_permitted_content(self, queryset, user, permission, *,
                                     content, skipped=None, **skip_flags):
         """Scope rows that are a proper prefix of ``content`` for this catalog."""
         return self._registry.filter_by_permitted_content(
             queryset, user, permission, content=content,
-            family_registries=self.family_registries,
             skipped=skipped, **skip_flags,
         )
 
@@ -95,11 +88,9 @@ class Catalog(object):
         """Zero-SQL ``(participating, owns_conditions)`` for this catalog.
 
         A catalog with no applicable ``auth.Permission`` plan contributes
-        nothing. Family peers supply ordinary sponsor records for a
-        delegation; they are not extra backends.
+        nothing.
         """
-        family = (self._registry,) + tuple(self.family_registries)
-        plan = _auth_permission_plan_for_model(self._registry, model, family)
+        plan = _auth_permission_plan_for_model(self._registry, model)
         if plan is None:
             return False, False
         return True, _owns_selected_conditions(
@@ -114,9 +105,8 @@ class Catalog(object):
         predicate is a ``Q`` when this catalog grants. ``owned`` is true
         when names were selected and this catalog registered every one.
         """
-        family = (self._registry,) + tuple(self.family_registries)
         registry = self._registry
-        if _auth_permission_plan(registry, candidates, user, family) is None:
+        if _auth_permission_plan(registry, candidates, user) is None:
             return None, False
         if conditions:
             overlay = _selected_condition_q(
@@ -126,16 +116,14 @@ class Catalog(object):
                 return None, False
             part = granted(
                 (registry,), candidates, user, binding, kind='complete',
-                family_registries=family, permission_model=Permission,
-                skipped=skipped,
+                permission_model=Permission, skipped=skipped,
             )
             if part is None:
                 return None, True
             return part & overlay, True
         part = granted(
             (registry,), candidates, user, binding, kind='complete',
-            family_registries=family, permission_model=Permission,
-            skipped=skipped,
+            permission_model=Permission, skipped=skipped,
         )
         if part is None:
             return None, False
@@ -145,27 +133,19 @@ class Catalog(object):
         """This catalog's complete grant predicate, or None when it grants nothing."""
         return granted(
             (self._registry,), candidates, user, permission,
-            kind='complete',
-            family_registries=(self._registry,) + tuple(self.family_registries),
-            skipped=skipped,
+            kind='complete', skipped=skipped,
         )
 
     def permitted_users_predicate(self, content, perm, *, skipped=(),
                                   accepts_permission=None):
         return self._registry.permitted_users_predicate(
-            content, perm,
-            family_registries=self.family_registries,
-            skipped=skipped,
+            content, perm, skipped=skipped,
             filter_lookup=self._registry.filter_lookup,
             accepts_permission=accepts_permission,
         )
 
     def permitted_users(self, content, perm, **skip_flags):
-        return self._registry.permitted_users(
-            content, perm,
-            family_registries=self.family_registries,
-            **skip_flags,
-        )
+        return self._registry.permitted_users(content, perm, **skip_flags)
 
     def has_perm(self, user_obj, permext, obj, **skip_flags):
         inquiry = bind_checked_user(
@@ -200,8 +180,7 @@ class Catalog(object):
             return PreparedInquiry(model, result=False)
         held = registry.has_permission(
             user_obj, obj, permission_binding(perm, model),
-            extra_q=extra_q, family_registries=self.family_registries,
-            permission_model=Permission,
+            extra_q=extra_q, permission_model=Permission,
             skipped=dict(skipped) if isinstance(skipped, dict) else {},
         )
         if not held:
@@ -315,18 +294,20 @@ def _plan_is_auth_permission(plan, sponsor_records=()):
     return False
 
 
-def _auth_permission_plan(registry, candidates, user, peers):
+def _auth_permission_plan(registry, candidates, user):
     """Applicable plan only when the permission terminal is auth.Permission."""
     plan = registry.plan_for(candidates, user=user)
-    if not _plan_is_auth_permission(plan, _ordinary_records(peers, candidates)):
+    if not _plan_is_auth_permission(
+        plan, _ordinary_records(registry, candidates),
+    ):
         return None
     return plan
 
 
-def _auth_permission_plan_for_model(registry, model, peers):
+def _auth_permission_plan_for_model(registry, model):
     """Zero-SQL applicable auth.Permission plan for this content model."""
     plan = registry.plan_for(model)
-    if not _plan_is_auth_permission(plan, _ordinary_records(peers, model)):
+    if not _plan_is_auth_permission(plan, _ordinary_records(registry, model)):
         return None
     return plan
 

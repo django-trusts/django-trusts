@@ -30,7 +30,6 @@ from trusts.backends import TrustModelBackendMixin
 from trusts.conditions import PermissionConditionError
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.factory import RegistryFactory
-from tests.apps import built_registries
 
 PERM = 'trusts_tests.change_note'
 OPEN = '%s:open' % PERM
@@ -52,7 +51,7 @@ class _BoundBackend(TrustModelBackendMixin, ModelBackend):
         cls = type(self)
         if cls not in catalogs:
             factory = self._factory
-            catalogs[cls] = Catalog(cls=cls, path='tests.core.issue203', family=self.family, registry=factory.build_registry(), family_registries=built_registries(()))
+            catalogs[cls] = Catalog(cls=cls, path='tests.core.issue203', family=self.family, registry=factory.build_registry())
         return super().has_perm(user_obj, perm, obj, **skip_flags)
 
 class _BuilderLog(object):

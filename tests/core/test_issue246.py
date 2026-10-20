@@ -303,7 +303,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         cls = type(self.backend)
         saved = catalogs.get(cls)
         factory = self.handle
-        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, registry=factory.build_registry(), family_registries=built_registries(() if saved is None else saved.family_registries))
+        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, registry=factory.build_registry())
         try:
             with bound_handle(self.backend, self.handle):
                 yield
@@ -464,7 +464,7 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
         cls = type(self.backend)
         saved = catalogs.get(cls)
         factory = self.handle
-        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, registry=factory.build_registry(), family_registries=built_registries(() if saved is None else saved.family_registries))
+        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, registry=factory.build_registry())
         try:
             with bound_handle(self.backend, self.handle):
                 yield
@@ -666,7 +666,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         cls = type(backend)
         saved = catalogs.get(cls)
         factory = handle
-        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, registry=factory.build_registry(), family_registries=built_registries(() if saved is None else saved.family_registries))
+        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, registry=factory.build_registry())
         try:
             with bound_handle(backend, handle):
                 for perm in granted:

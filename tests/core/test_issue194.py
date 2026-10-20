@@ -133,7 +133,7 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         from trusts.compile.catalogs import Catalog
         self._saved_fold_catalog = catalogs.get(MixinOnlyBackend)
         built_fold = self.fold_registry.build_registry()
-        catalogs[MixinOnlyBackend] = Catalog(cls=MixinOnlyBackend, path=MIXIN, family='ordered_fold', registry=built_fold, family_registries=built_registries(()))
+        catalogs[MixinOnlyBackend] = Catalog(cls=MixinOnlyBackend, path=MIXIN, family='ordered_fold', registry=built_fold)
         self.fold_handle = built_fold
         self.mixin = MixinOnlyBackend()
         self.document_backend = DocumentBackend()

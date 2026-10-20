@@ -40,7 +40,6 @@ def _reverse_checked(plan, exists, user_model, permission, content, values,
 
 
 def permitted_users_predicate_for_registry(registry, content, perm, *,
-                                           family_registries=(),
                                            skipped=(),
                                            filter_lookup=None,
                                            accepts_permission=None):
@@ -49,7 +48,7 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
     ``filter_lookup`` is that registry's named-filter lookup.
     ``accepts_permission`` is the backend's singular-permission
     callable; omitted means the mixin default (``auth.Permission``).
-    Ordinary rows come from each family registry.
+    Ordinary rows come from this registry.
     """
     plan = registry.plan_for(content)
     if not plan.records and not plan.delegations:
@@ -66,7 +65,7 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
             if isinstance(binding, Model) else Permission
         )
         sponsor_records = _ordinary_records(
-            tuple(family_registries), content, permission_model,
+            registry, content, permission_model,
         )
         delegated = _delegated_user_exists(
             plan.delegations, sponsor_records, content, binding,
@@ -96,8 +95,7 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
 
 
 
-def lock_permitted_users_queryset(registry, content, permission, *,
-                                  subjects=None):
+def lock_permitted_users_queryset(registry, content, permission):
     """Backend-local reverse queryset compiled into the policy lock.
 
     This is the backend branch (eligibility and complete grants), not
@@ -114,7 +112,6 @@ def lock_permitted_users_queryset(registry, content, permission, *,
     user_model = _plan_user_model(plan, content)
     exists = plan.user_exists(content, permission) if plan.records else None
     if plan.delegations:
-        family_registries = (registry,) if subjects is None else tuple(subjects)
         permission_model = (
             permission._meta.concrete_model
             if isinstance(permission, Model) else None
@@ -122,7 +119,7 @@ def lock_permitted_users_queryset(registry, content, permission, *,
         delegated = _delegated_user_exists(
             plan.delegations,
             _ordinary_records(
-                family_registries, content, permission_model,
+                registry, content, permission_model,
             ),
             content,
             permission,

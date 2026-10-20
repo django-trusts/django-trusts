@@ -190,7 +190,7 @@ def _seal_document_factory(factory):
     previous = catalogs.get(DocumentBackend)
     family = DocumentBackend.family if previous is None else previous.family
     built = factory.build_registry()
-    catalogs[DocumentBackend] = Catalog(cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family, registry=built, family_registries=built_registries(() if previous is None else previous.family_registries))
+    catalogs[DocumentBackend] = Catalog(cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family, registry=built)
     return built
 
 @contextmanager

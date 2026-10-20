@@ -1028,8 +1028,7 @@ def build_configured_catalogs(paths, user_model):
     """Build one catalog per listed mixin backend. A second call does nothing.
 
     Only classes named in ``paths`` (``AUTHENTICATION_BACKENDS`` order)
-    that subclass ``TrustModelBackendMixin`` are compiled. Peers of the
-    same family are fixed on that sweep.
+    that subclass ``TrustModelBackendMixin`` are compiled.
     """
     if catalogs:
         return
@@ -1059,17 +1058,11 @@ def build_configured_catalogs(paths, user_model):
         )
         pending.append((cls, path, cls.family, registry))
     for cls, path, family, registry in pending:
-        peers = tuple(
-            other
-            for _cls, _path, other_family, other in pending
-            if other_family == family and other is not registry
-        )
         catalogs[cls] = Catalog(
             cls=cls,
             path=path,
             family=family,
             registry=registry,
-            family_registries=peers,
         )
 
 

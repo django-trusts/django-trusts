@@ -74,8 +74,7 @@ def _compiler_applies(compiler, plan):
 
 
 def all_match(registries, candidates, user, permission, *, kind='complete',
-              extra_q=None, family_registries=None, permission_model=None,
-              skipped=()):
+              extra_q=None, permission_model=None, skipped=()):
     """True iff candidates are nonempty and no row lacks the aggregate proof.
 
     One SQL. ``None`` when no registry applies so the caller may use the
@@ -85,7 +84,6 @@ def all_match(registries, candidates, user, permission, *, kind='complete',
     registries = tuple(registries)
     granted_q = _compile_granted(
         registries, candidates, user, permission, kind=kind,
-        family_registries=family_registries,
         permission_model=permission_model,
         skipped=skipped,
     )
@@ -102,8 +100,7 @@ def all_match(registries, candidates, user, permission, *, kind='complete',
 
 
 def instance_match(registry, obj, user, permission, *, kind='complete', extra_q=None,
-                   family_registries=None, permission_model=None,
-                   skipped=()):
+                   permission_model=None, skipped=()):
     """One grant EXISTS for ``obj`` through ``registry`` only.
 
     ``None`` when the registry is inapplicable. ``extra_q`` is an optional
@@ -111,7 +108,6 @@ def instance_match(registry, obj, user, permission, *, kind='complete', extra_q=
     """
     granted_q = _compile_granted(
         (registry,), obj, user, permission, kind=kind,
-        family_registries=family_registries,
         permission_model=permission_model,
         skipped=skipped,
     )
@@ -125,15 +121,11 @@ def instance_match(registry, obj, user, permission, *, kind='complete', extra_q=
 
 
 def _compile_common_permissions(registries, candidates, user, *, kind='complete',
-                                family_registries=None,
                                 skipped=()):
-    """Permission queryset for the given registries. No family filter."""
+    """Permission queryset for the given registries. Each sponsors itself."""
     qs = candidate_queryset(candidates)
     perm_expr = OuterRef(OuterRef('pk'))
     registries = tuple(registries)
-    family_registries = (
-        registries if family_registries is None else tuple(family_registries)
-    )
     parts = []
     permission_model = None
     applicable = False
@@ -162,7 +154,7 @@ def _compile_common_permissions(registries, candidates, user, *, kind='complete'
         part = _as_q(fn(plan, qs, user, perm_expr))
         delegated = None
         if kind == 'complete' and plan.delegations:
-            sponsor_records = _ordinary_records(family_registries, candidates)
+            sponsor_records = _ordinary_records(registry, candidates)
             compatible_records = _compatible_sponsor_records(
                 plan.delegations, sponsor_records,
             )
@@ -231,7 +223,6 @@ def common_permissions(registries, candidates, user, *, kind='complete',
         return _anonymous_common_permissions(participating, candidates)
     return _compile_common_permissions(
         participating, candidates, user, kind=kind,
-        family_registries=participating,
         skipped=inquiry.values,
     )
 
