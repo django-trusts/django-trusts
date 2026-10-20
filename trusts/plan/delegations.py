@@ -11,7 +11,7 @@ __all__ = []
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Q
 
-from trusts.commons import _compile_predicate
+from trusts.plan.predicates import _compile_predicate
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.relations import bind_checked_user
 

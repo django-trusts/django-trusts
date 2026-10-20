@@ -20,7 +20,7 @@ from django.utils.module_loading import import_string
 from django.db.models import F, Model, Q
 from django.db.models.query import QuerySet
 
-from trusts.commons import (
+from trusts.plan.hops import (
     _auth_group_and_permission,
     _concrete_model,
     _content_model,

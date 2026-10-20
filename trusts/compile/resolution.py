@@ -1,17 +1,16 @@
 """Registration path and hop resolution.
 
-Metadata only: Django ``_meta`` and path info, no SQL. The shared
-``_meta`` helpers used by both compile and plan live in
-``trusts.commons``; the registration resolvers that need registry-shaped
-validation stay here. This module does not import
-``trusts.compile.factory`` or ``trusts.plan``.
+Metadata only: Django ``_meta`` and path info, no SQL. Shared hop math
+lives in ``trusts.plan.hops``. The registration resolvers that need
+registry-shaped validation stay here. This module does not import
+``trusts.compile.factory``.
 """
 
 __all__ = []
 
 from django.core.exceptions import FieldDoesNotExist
 
-from trusts.commons import (
+from trusts.plan.hops import (
     _auth_group_and_permission,
     _lookup_text,
     _materialize_related_model,

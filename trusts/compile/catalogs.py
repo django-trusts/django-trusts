@@ -6,12 +6,12 @@ from django.db.models import Model, QuerySet, Subquery
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.conditions import (
     evaluate_registered_expression,
+    parse_perm_code,
     permission_has_condition,
 )
 from trusts.plan.contents import _ordinary_records, granted
 from trusts.plan.delegations import _sponsor_record_matches
 from trusts.plan.relations import bind_checked_user
-from trusts.utils import parse_perm_code
 
 _NO_PRESET = object()
 

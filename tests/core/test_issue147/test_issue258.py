@@ -721,7 +721,7 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
 class ShortModelNameTest(SimpleTestCase):
     def test_lower_name_for_strings_models_and_other_classes(self):
         from django.contrib.auth.models import User
-        from trusts.utils import get_short_model_name_lower
+        from trusts.plan.conditions import get_short_model_name_lower
 
         self.assertEqual(get_short_model_name_lower('Auth.User'), 'auth.user')
         self.assertEqual(get_short_model_name_lower(User), 'auth.user')

@@ -13,7 +13,7 @@ from django.db.models import Model
 from django.db.models.query import QuerySet
 from django.http import Http404
 
-from trusts.commons import _require_instance
+from trusts.plan.hops import _require_instance
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.relations import bind_checked_user
 from trusts.plan.rewrites import bind_once

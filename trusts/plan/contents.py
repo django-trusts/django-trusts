@@ -9,16 +9,12 @@ __all__ = []
 from functools import reduce
 from operator import or_
 
+from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Exists, F, Model, OuterRef, Q
 
 from trusts.plan.rewrites import bind_once
-from trusts.commons import (
-    _bind_record_qs,
-    _bind_terminal,
-    _path_text,
-    _root_relative_column,
-    _scope_prefix_lookups,
-)
+from trusts.plan.hops import _lookup_text, _path_text, _resolved_hop
+from trusts.plan.predicates import _bind_record_qs, _bind_terminal
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.delegations import (
     _matched_delegation_q,
@@ -552,4 +548,54 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
     if not parts:
         return None
     return parts[0] if len(parts) == 1 else reduce(or_, parts)
+
+
+def _root_relative_column(model, path):
+    """Concrete column lookup for a forward single-valued path.
+
+    ``sponsor`` becomes ``sponsor_id``. ``sponsor_link__user`` becomes
+    ``sponsor_link__user_id``. Every prefix stays on the path, so ``F()``
+    cannot bind a bare ``user_id`` on the delegation root. The last
+    component is that field's attname: the column that stores the
+    comparison identity, including a non-PK ``to_field``. The path was
+    already resolved at registration.
+    """
+    parts = str(path).split('__')
+    current = model
+    prefix = []
+    field = None
+    for index, name in enumerate(parts):
+        field = current._meta.get_field(name)
+        if index == len(parts) - 1:
+            break
+        prefix.append(name)
+        current = field.related_model
+    return '__'.join(prefix + [field.attname])
+
+
+def _scope_prefix_lookups(record, scope_model):
+    """Root-relative lookups to proper prefix nodes matching ``scope_model``.
+
+    A proper prefix is a hop on ``content_path`` whose related model is
+    ``scope_model`` and that is not the content terminal. Each item is
+    ``(root-relative lookup, target attname)``. The attname is the
+    hop's resolved identity (``to_field`` when set), not assumed to
+    be ``pk``. Uses stored path names and ``_meta`` only (zero SQL).
+    """
+    path = record.content_path
+    if not path:
+        return ()
+    current = record.root
+    lookups = []
+    last = len(path) - 1
+    for index, name in enumerate(path):
+        try:
+            field = current._meta.get_field(name)
+        except FieldDoesNotExist:
+            return ()
+        related, target_attname = _resolved_hop(field, 'content', path)
+        if related._meta.concrete_model is scope_model and index != last:
+            lookups.append((_lookup_text(path[:index + 1]), target_attname))
+        current = related
+    return tuple(lookups)
 
