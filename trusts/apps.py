@@ -100,9 +100,8 @@ class Recorder(object):
 
 
 class TrustsConfigMixin(django.apps.AppConfig):
-    """The backend is the registry: one recorder and one catalog.
+    """Records every registration call through ``self.recorder``.
 
-    It records every registration call through ``self.recorder``.
     ``ready`` freezes that recorder; the compiler builds the catalog.
     Order across apps does not matter.
     """

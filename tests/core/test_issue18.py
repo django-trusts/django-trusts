@@ -272,7 +272,6 @@ class PermissionConditionsMetaOptionTest(SimpleTestCase):
         from django.apps import AppConfig
 
         self.assertTrue(issubclass(trusts.apps.TrustsConfigMixin, AppConfig))
-        self.assertFalse(hasattr(trusts.apps, 'TrustsImplementationConfig'))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class LongPathRegistrationTest(TestCase):

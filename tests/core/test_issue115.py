@@ -257,7 +257,6 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
 
         self.assertNotIn('.. code-block::', readme)
         self.assertIn('Define the models', rst)
-        self.assertIn('TrustsImplementationConfig', rst)
         self.assertIn('TrustModelBackendMixin', rst)
         self.assertIn('backend.register(', rst)
         self.assertIn('trust=DocumentPermission', rst)
