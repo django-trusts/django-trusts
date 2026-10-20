@@ -17,6 +17,7 @@ from tests.support import (
     live_config,
     built_registries,
     replay_recorder,
+    bound_handle,
 )
 from tests.backends import HostTrustModelBackend
 from tests.core import KernelHostRequiredMixin
@@ -97,7 +98,6 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
         extra = _extra_handle()
         with self.assertNumQueries(0):
             self._assert_public_deny()
-            from tests.support import bound_handle
             from trusts.backends import catalogs
             from trusts.compile.catalogs import Catalog
             cls = type(self.document_backend)

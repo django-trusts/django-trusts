@@ -7,7 +7,7 @@ from django.core.exceptions import PermissionDenied
 from django.http import HttpRequest
 from django.test import SimpleTestCase, TestCase, override_settings
 import tests as tests_module
-from tests.support import live_config, override_apps_ready, built_registries, built_catalog
+from tests.support import live_config, override_apps_ready, built_registries, built_catalog, bound_handle, replay_recorder, configured_catalog
 from tests.backends import MixinOnlyBackend
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
@@ -209,7 +209,6 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
         self.backend = DocumentBackend()
 
     def test_inapplicable_compiler_is_zero_sql(self):
-        from tests.support import bound_handle, replay_recorder
         from tests.myapp.apps import DOCUMENT_BACKEND
         import trusts.plan.standards as standards
 
@@ -247,7 +246,6 @@ class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertIsInstance(published.records, tuple)
 
     def test_unconfigured_path_still_fails_loud(self):
-        from tests.support import configured_catalog
         with self.assertRaises(TrustsConfigurationError) as ctx:
             configured_catalog(MIXIN)
         self.assertIn(MIXIN, str(ctx.exception))

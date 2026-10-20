@@ -28,6 +28,7 @@ from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
+from tests.support import unbound_named_filters
 
 from trusts.errors import TrustsConfigurationError
 from trusts.decorators import authorization_required
@@ -250,7 +251,6 @@ class AuthorizationRequiredReadinessPreflightTest(
         def _filtered(request, pk):
             return 'ok'
 
-        from tests.support import unbound_named_filters
         from tests.myapp.backends import DocumentBackend
 
         with unbound_named_filters(DocumentBackend):

@@ -20,7 +20,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import PermittedManager, PermittedQuerySet, PermittedUsersMixin
-from tests.support import render_configured_policy, built_catalog
+from tests.support import render_configured_policy, built_catalog, install_class_handle
 from trusts.compile.catalogs import Catalog
 
 
@@ -52,7 +52,6 @@ def _document_host_handle():
 
 @contextmanager
 def _listed(handle):
-    from tests.support import install_class_handle
     from trusts.backends import catalogs
     install_class_handle(_PairDocumentBackend, handle)
     _seal_factory(_PairDocumentBackend, handle)
@@ -785,7 +784,6 @@ class DelegatedAuthorityLiveTest(TestCase):
         ContentType.objects.clear_cache()
         if not kernel_host_listed():
             handle = _document_host_handle()
-            from tests.support import install_class_handle
             from trusts.backends import catalogs
             install_class_handle(_PairDocumentBackend, handle)
             _seal_factory(_PairDocumentBackend, handle)
