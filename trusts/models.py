@@ -218,3 +218,11 @@ def _condition_permission_label(model, normalized):
     if normalized[0] == 'string':
         return normalized[3]
     return '%s.%s' % (model._meta.app_label, normalized[2])
+
+
+# Once, at import. Host models import this module during populate,
+# after auth models can load. A per-config ready() would repeat it.
+import trusts.inspect.checks  # noqa: E402,F401
+from trusts.inspect.commands import install_policy_commands  # noqa: E402
+
+install_policy_commands()
