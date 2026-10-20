@@ -204,7 +204,7 @@ class RegistryFactory(object):
 
         ``build()`` freezes this factory and returns a fresh
         ``CatalogShape`` from the records already stored. A later build
-        returns another shape from those same records.         ``register``,
+        returns another shape from those same records. ``register``,
         ``register_delegation``, ``register_permission_condition``,
         ``set_user_condition``, and ``set_user_override`` raise
         ``TrustsConfigurationError``.
