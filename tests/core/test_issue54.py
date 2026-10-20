@@ -16,7 +16,6 @@ from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
 from tests.support import (
-    built_registries,
     listed_relationship,
     live_config,
     scoped_permitted_content,
@@ -484,8 +483,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
                     self.Folder.objects.all(), object(), self.add,
                     content=self.Payload,
                 )
-        built = built_registries((self.handle,))
-        with listed_relationship(built):
+        with listed_relationship((self.handle,)):
             self.assertEqual(
                 _pks(filter_by_permitted_content(
                     self.Folder.objects.all(),
@@ -511,7 +509,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
 
         ghost = Ghost()
         ghost.is_anonymous = True
-        with listed_relationship(built + built):
+        with listed_relationship((self.handle, self.handle)):
             with self.assertNumQueries(0):
                 denied = filter_by_permitted_content(
                     self.Folder.objects.all(),

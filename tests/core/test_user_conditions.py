@@ -868,7 +868,7 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
             self.assertFalse(permitted.permitted(self.change, self.plain).exists())
         self.assertEqual(set(permitted.permitted(self.change, self.staff).values_list('pk', flat=True)), {self.doc.pk})
         self.assertEqual(set(permitted.permitted(self.change, self.plain, skip_staff=True).values_list('pk', flat=True)), {self.doc.pk})
-        handle = configured_catalog(self.config, DOCUMENT_BACKEND)
+        handle = configured_catalog(DOCUMENT_BACKEND)
         denied = handle.permissions_for(self.plain, self.doc)
         self.assertIn('is_staff', str(denied.query))
         self.assertEqual(list(denied), [])
@@ -902,7 +902,7 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
         self.assertTrue(permitted.permitted(self.change, self.superuser).filter(pk=self.doc.pk).exists())
 
     def test_lockfile_records_staff_and_the_override(self):
-        handle = configured_catalog(self.config, DOCUMENT_BACKEND)
+        handle = configured_catalog(DOCUMENT_BACKEND)
         raw = render_configured_policy(self.registry)
         self.assertIn(b'user.is_staff=True', raw)
         self.assertIn(b'user.is_superuser=True', raw)
@@ -1067,7 +1067,7 @@ class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
     def test_without_override_superuser_is_an_ordinary_principal(self):
         config, original, sentinel, registry, saved_catalog = _install_document_registry(override=False)
         self.addCleanup(_restore_document_registry, config, original, sentinel, saved_catalog)
-        handle = configured_catalog(config, DOCUMENT_BACKEND)
+        handle = configured_catalog(DOCUMENT_BACKEND)
         self.assertIsNone(registry._user_override)
         raw = render_configured_policy(registry)
         document = _load_policy_sql_document(raw)
@@ -1091,7 +1091,7 @@ class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
     def test_with_override_active_superuser_passes_without_a_grant(self):
         config, original, sentinel, registry, saved_catalog = _install_document_registry(override=True)
         self.addCleanup(_restore_document_registry, config, original, sentinel, saved_catalog)
-        handle = configured_catalog(config, DOCUMENT_BACKEND)
+        handle = configured_catalog(DOCUMENT_BACKEND)
         self.assertEqual(registry._user_override.name, 'superuser')
         raw = render_configured_policy(registry)
         self.assertIn(b'user.is_superuser=True', raw)

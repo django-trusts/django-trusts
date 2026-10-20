@@ -16,7 +16,7 @@ from trusts.compile.nodes import All, Equal, PermissionIn, Ref, permission_in
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.query import AuthorizedManager
-from tests.support import listed_relationship, built_registries, built_catalog
+from tests.support import listed_relationship, built_catalog
 
 
 def _gh_models():
@@ -345,7 +345,7 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
             via_obj = self.registry.build_registry().has_permission(principal, obj, operation)
         with self.assertNumQueries(1):
             via_list = obj in list(self.registry.build_registry().filter_authorized(self.Repository.objects.filter(pk=obj.pk), principal, operation))
-        with listed_relationship(built_registries(self._handles())):
+        with listed_relationship(self._handles()):
             with self.assertNumQueries(1):
                 via_manager = obj in list(self.Repository.objects.filter(pk=obj.pk).authorized(principal, operation))
             with self.assertNumQueries(1):

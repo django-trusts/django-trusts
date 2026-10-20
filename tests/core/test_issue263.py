@@ -29,7 +29,6 @@ from trusts.query import AuthorizedManager, PermittedUsersManagerMixin, Permitte
 from tests.support import (
     render_configured_policy,
     listed_relationship,
-    built_registries,
     built_catalog,
     install_class_handle,
 )
@@ -392,7 +391,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         return self.TeamPermission.objects.create(team=team, permission=permission, note=note)
 
     def _authorized(self, handle, user, permission, *, skip_is_active=False):
-        with listed_relationship(built_registries((handle,))):
+        with listed_relationship((handle,)):
             return list(self.Repository.objects.authorized(user, permission, skip_is_active=skip_is_active).order_by('pk'))
 
     def _assert_unique(self, rows, expected):
@@ -446,7 +445,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         self.assertIn(self.Team._meta.get_field('members').m2m_db_table(), granted_sql)
 
     def _authorized_qs(self, handle, user, permission):
-        with listed_relationship(built_registries((handle,))):
+        with listed_relationship((handle,)):
             return self.Repository.objects.authorized(user, permission)
 
     def test_prefixed_access_does_not_cross_members_or_permissions(self):
