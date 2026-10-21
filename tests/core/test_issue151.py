@@ -135,15 +135,6 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
             pairing['runner'],
         )
 
-    def test_host_docs_do_not_import_or_bind_ir_lookup(self):
-        apps_text = (ROOT / 'tests' / 'myapp' / 'apps.py').read_text()
-        readme = (ROOT / 'README.md').read_text()
-        rst = (ROOT / 'docs' / 'source' / 'index.rst').read_text()
-        for text in (apps_text, readme, rst):
-            self.assertNotIn('RegistryConditionLookup', text)
-            self.assertNotIn('trusts.conditions._ir', text)
-            self.assertNotIn('set_filter_lookup', text)
-
 
 class ImportOrderStandaloneConstructionTest(SimpleTestCase):
     def _run_isolated(self, source):

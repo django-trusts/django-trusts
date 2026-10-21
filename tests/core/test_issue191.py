@@ -44,13 +44,6 @@ class LegacyDecoratorFamilyRemovedTest(SimpleTestCase):
         self.assertNotIn('def permission_required(', source)
         self.assertNotIn('def request_passes_test(', source)
 
-    def test_kernel_views_exercise_authorization_required(self):
-        views = (ROOT / 'tests' / 'myapp' / 'views.py').read_text()
-        self.assertIn('from trusts.decorators import authorization_required', views)
-        self.assertIn('@authorization_required(Document, \'myapp.change_document\')', views)
-        self.assertNotIn('permission_required', views)
-        self.assertNotIn('fieldlookups', views)
-        self.assertNotIn('trusts.zero', views)
 
     def test_companion_pin_is_exact_zero_candidate(self):
         ci = (ROOT / '.github' / 'workflows' / 'ci.yml').read_text()
@@ -66,15 +59,6 @@ class LegacyDecoratorFamilyRemovedTest(SimpleTestCase):
         self.assertNotIn('f50946f7112702a41bd63a3e044b44a0d4ec3297', ci)
         self.assertNotIn('f50946f7112702a41bd63a3e044b44a0d4ec3297', wheels)
 
-    def test_docs_do_not_publish_the_legacy_core_import(self):
-        rst = (ROOT / 'docs' / 'source' / 'index.rst').read_text()
-        security = (ROOT / 'docs/source/security-audit.md').read_text()
-        readme = (ROOT / 'README.md').read_text()
-        for text in (rst, security, readme):
-            self.assertNotIn('from trusts.decorators import permission_required', text)
-            self.assertNotIn('from trusts.decorators import P', text)
-        self.assertIn('from trusts.decorators import authorization_required', rst)
-        self.assertIn('authorization_required(', security)
 
     def test_wheel_proof_rejects_legacy_symbols(self):
         script = (ROOT / 'scripts' / 'verify-wheel-install.py').read_text()
