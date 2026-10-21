@@ -59,6 +59,13 @@ django-trusts requires Python 3.12--3.14 and Django 6.1.
    python -m pip install "Django>=6.1,<6.2"
    python -m pip install "django-trusts @ git+https://github.com/django-trusts/django-trusts@dev"
 
+Every app that hosts Trusts registrations or a Trusts backend must extend
+``TrustsConfigMixin`` on its Django ``AppConfig``, so the app owns its catalog.
+
+.. code-block:: python
+
+   class ProjectsConfig(TrustsConfigMixin, AppConfig):
+
 Define the models
 -----------------
 
@@ -199,7 +206,8 @@ Define the backend
 ------------------
 
 The application provides a Django authentication backend using
-``TrustModelBackendMixin``.
+``TrustModelBackendMixin``. Every app that hosts that backend must extend
+``TrustsConfigMixin`` on its Django ``AppConfig``, so the app owns its catalog.
 
 .. code-block:: python
 
@@ -217,7 +225,8 @@ Register the trust
 ------------------
 
 Register the model paths when the application starts.
-Extending ``TrustsConfigMixin`` is required, so the app owns its catalog.
+Every app that hosts Trusts registrations must extend ``TrustsConfigMixin``
+on its Django ``AppConfig``, so the app owns its catalog.
 
 .. code-block:: python
 
@@ -367,7 +376,9 @@ Configure Django
 ----------------
 
 Install the application that owns the permission implementation and add its
-backend:
+backend. Every app that hosts Trusts registrations or a Trusts backend must
+extend ``TrustsConfigMixin`` on its Django ``AppConfig``, so the app owns its
+catalog.
 
 .. code-block:: python
 
@@ -555,7 +566,8 @@ checked user without an ordinary grant.
 The only default condition is ``is_active``, if the field exists.
 No user override is registered by default.
 
-Set user conditions and overrides in ``AppConfig.ready()``, before
+Set user conditions and overrides in the ``ready()`` of an app config that
+extends ``TrustsConfigMixin``, so the app owns its catalog, before
 registering permissions or delegations. For example, replace the activity
 condition:
 
@@ -629,8 +641,9 @@ Named filters
 -------------
 
 A named filter further constrains an existing permission; it cannot grant
-permission by itself. Register it against the protected model during
-``AppConfig.ready()`` with ``registry.add_named_filter(...)``.
+permission by itself. Register it against the protected model during the ``ready()`` of an app
+config that extends ``TrustsConfigMixin``, so the app owns its catalog, with
+``registry.add_named_filter(...)``.
 
 Its condition is a three-argument lambda or function: ``u`` is the requesting
 user, ``p`` is the requested permission, and ``o`` is the protected object. It
