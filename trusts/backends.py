@@ -13,11 +13,11 @@ from django.db.models import Model, Q, QuerySet
 
 from trusts.apps import TrustsConfigMixin
 from trusts.compile.catalogs import (
-    _assert_same_database,
-    _catalog_models,
-    _database_alias,
-    _reject_permission_shape,
-    _require_saved_content,
+    assert_same_database,
+    catalog_models,
+    database_alias,
+    reject_permission_shape,
+    require_saved_content,
 )
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import permitted_content_q
@@ -51,11 +51,13 @@ class TrustModelBackendMixin(object):
         return self.catalog.has_perm(user_obj, permext, obj, **skip_flags)
 
     def get_all_permissions(self, user_obj, obj=None, **skip_flags):
+        """Permissions this catalog grants on the object."""
         if obj is None or not isinstance(obj, (QuerySet, Model)):
             return set()
         return self.catalog.get_all_permissions(user_obj, obj, **skip_flags)
 
     def get_group_permissions(self, user_obj, obj=None, **skip_flags):
+        """Group permissions this catalog grants on the object."""
         if obj is None or not isinstance(obj, (QuerySet, Model)):
             return set()
         return self.catalog.get_group_permissions(user_obj, obj, **skip_flags)
@@ -72,11 +74,13 @@ class TrustModelBackendMixin(object):
         )
 
     def authorized_grant_q(self, subject, user, permission, *, skipped=()):
+        """Grant for an authorized-row filter."""
         return self.catalog.complete_grant_q(
             subject, user, permission, skipped=skipped)
 
     def permitted_grant_q(self, subject, user, permission, *, skipped=(),
                           conditions=(), binding=None, api=None):
+        """Grant for a permitted-row filter."""
         model = subject.model if isinstance(subject, QuerySet) else subject
         predicate, _owned = self.catalog.authorization_grant(
             subject, user, model, permission, conditions, binding,
@@ -85,9 +89,37 @@ class TrustModelBackendMixin(object):
 
     def content_prefix_q(self, subject, user, permission, *, skipped=(),
                          content=None):
+        """Grant for a permitted-content prefix."""
         return permitted_content_q(
             subject.model, user, permission, content=content,
             catalog=self.catalog, skipped=skipped)
+
+
+def grant_users(item, subject, _user, permission, skipped, _grant_kw):
+    """User predicate from this backend's catalog."""
+    return item.permitted_users_predicate(
+        subject, permission, skipped=skipped)
+
+
+def grant_authorized(item, subject, user, permission, skipped, _grant_kw):
+    """Authorized-row grant from this backend's catalog."""
+    return item.authorized_grant_q(
+        subject, user, permission, skipped=skipped)
+
+
+def grant_prefix(item, subject, user, permission, skipped, grant_kw):
+    """Permitted-content prefix grant from this backend's catalog."""
+    return item.content_prefix_q(
+        subject, user, permission, skipped=skipped,
+        content=grant_kw.get('content'))
+
+
+def grant_permitted(item, subject, user, permission, skipped, grant_kw):
+    """Permitted-row grant from this backend's catalog."""
+    return item.permitted_grant_q(
+        subject, user, permission, skipped=skipped,
+        conditions=grant_kw.get('conditions') or (),
+        binding=grant_kw.get('binding'), api=grant_kw.get('api'))
 
 
 def permission_backends(backend=None):
@@ -116,12 +148,14 @@ def listed_catalogs(backend=None):
     return tuple(found.values())
 
 
-def filter_listed(queryset, subject, user, permission, *, kind, backend=None,
-                  skip_flags, require_user=True, extra_q=None, **grant_kw):
+def filter_listed(queryset, subject, user, permission, *, ask, backend=None,
+                  skip_flags, require_user=True, preflight=False, extra_q=None,
+                  **grant_kw):
     """OR the listed grant, then filter, distinct, and bind once."""
-    _inquiry, granted_q, user_model = open_grant(
-        kind, subject, user, permission, backend=backend,
-        skip_flags=skip_flags, require_user=require_user, **grant_kw)
+    _inquiry, granted_q, user_model, _chosen = open_grant(
+        ask, subject, user, permission, backend=backend,
+        skip_flags=skip_flags, require_user=require_user,
+        preflight=preflight, **grant_kw)
     if granted_q is None:
         return queryset.none()
     if extra_q is not None:
@@ -130,25 +164,25 @@ def filter_listed(queryset, subject, user, permission, *, kind, backend=None,
         queryset.filter(granted_q).distinct(), user_model=user_model)
 
 
-def open_grant(kind, subject, user, permission, *, backend=None, chosen=None,
-               skip_flags=None, require_user=True, model=None, **grant_kw):
+def open_grant(ask, subject, user, permission, *, backend=None,
+               skip_flags=None, require_user=True, preflight=False,
+               model=None, **grant_kw):
     """Preflight names, then OR. A denied user does not compile the grant."""
-    if chosen is None:
-        chosen = trusts_backends(backend)
+    chosen = trusts_backends(backend)
     inquiry = bind_checked_user(
         user, skip_flags=skip_flags, require_user=require_user,
         skip_names=known_skip_names(item.get_catalog() for item in chosen))
-    if kind == 'permitted':
+    if preflight:
         resolved = model if model is not None else getattr(subject, 'model', subject)
         _selected_conditions_owned(
             resolved, grant_kw.get('conditions') or (), chosen,
             grant_kw.get('api'))
     if inquiry.denied:
-        return inquiry, None, None
+        return inquiry, None, None, chosen
     granted, user_model = _combine(
-        kind, subject, user if require_user else None, permission,
+        ask, subject, user if require_user else None, permission,
         chosen, inquiry.values, grant_kw)
-    return inquiry, granted, user_model
+    return inquiry, granted, user_model, chosen
 
 
 def compile_permitted_users(content, perm, *, user_queryset=None,
@@ -161,9 +195,11 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     one dotted path. ``skip_<name>`` is a bound parameter on that
     predicate. The user queryset's model is the principal that is bound.
     """
-    _require_saved_content(content)
-    _reject_permission_shape(perm)
-    chosen = trusts_backends(backend)
+    require_saved_content(content)
+    reject_permission_shape(perm)
+    _inquiry, combined, _, chosen = open_grant(
+        grant_users, content, None, perm, backend=backend,
+        skip_flags=skip_flags, require_user=False)
     if user_queryset is None:
         user_model = next((
             item.get_catalog().user_model for item in chosen
@@ -182,17 +218,14 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     involved = [principal_model, type(content)]
     if isinstance(perm, (str, Permission)):
         involved.append(Permission)
-    _inquiry, combined, _catalog_user = open_grant(
-        'users', content, None, perm, chosen=chosen,
-        skip_flags=skip_flags, require_user=False)
     if combined is None:
         combined = Q(pk__isnull=True)
     else:
         for item in chosen:
             involved.extend(
-                _catalog_models(item.get_catalog(), content, principal_model))
-    alias = _database_alias(content, user_queryset)
-    _assert_same_database(alias, involved)
+                catalog_models(item.get_catalog(), content, principal_model))
+    alias = database_alias(content, user_queryset)
+    assert_same_database(alias, involved)
     if user_queryset.db != alias:
         user_queryset = user_queryset.using(alias)
     return bind_once(
@@ -219,7 +252,7 @@ def _selected_conditions_owned(model, conditions, chosen, api):
         _missing_condition(api, conditions, model)
 
 
-def _combine(kind, subject, user, permission, chosen, skipped, grant_kw):
+def _combine(ask, subject, user, permission, chosen, skipped, grant_kw):
     combined = user_model = None
     seen = set()
     for item in chosen:
@@ -228,27 +261,10 @@ def _combine(kind, subject, user, permission, chosen, skipped, grant_kw):
         if marker in seen:
             continue
         seen.add(marker)
-        part = _grant_q(item, kind, subject, user, permission, skipped, grant_kw)
+        part = ask(item, subject, user, permission, skipped, grant_kw)
         if part is None:
             continue
         combined = part if combined is None else combined | part
         if user_model is None:
             user_model = catalog.user_model
     return combined, user_model
-
-
-def _grant_q(item, kind, subject, user, permission, skipped, grant_kw):
-    if kind == 'users':
-        return item.permitted_users_predicate(
-            subject, permission, skipped=skipped)
-    if kind == 'authorized':
-        return item.authorized_grant_q(
-            subject, user, permission, skipped=skipped)
-    if kind == 'prefix':
-        return item.content_prefix_q(
-            subject, user, permission, skipped=skipped,
-            content=grant_kw.get('content'))
-    return item.permitted_grant_q(
-        subject, user, permission, skipped=skipped,
-        conditions=grant_kw.get('conditions') or (),
-        binding=grant_kw.get('binding'), api=grant_kw.get('api'))

@@ -18,6 +18,8 @@ diagnostics live in ``django-trusts-ordered-fold`` as
 __all__ = []
 
 from django.apps import apps as django_apps
+from django.conf import settings
+from django.contrib.auth import load_backend
 from django.core import checks as django_checks
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connections
@@ -25,7 +27,7 @@ from django.db import connections
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
 from trusts.apps import TrustsConfigMixin
-from trusts.backends import listed_catalogs, trusts_backends
+from trusts.backends import TrustModelBackendMixin
 from trusts.compile.factory import probe_along_capabilities
 from trusts.decorators import _declared_authorization_guards
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
@@ -42,6 +44,7 @@ CHECK_ID_ALONG_RENDERER = 'trusts.E005'
 CHECK_ID_OBSOLETE_CALLBACK_SETTING = 'trusts.E007'
 CHECK_ID_AUTHORIZATION_REQUIRED = 'trusts.E008'
 CHECK_ID_UNLISTED_CATALOG = 'trusts.E010'
+CHECK_ID_UNBUILDABLE_BACKEND = 'trusts.E011'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
     'Silencing this check ID suppresses only the early diagnostic. '
@@ -63,7 +66,6 @@ _E005_HINT = (
 
 
 def _trusts_abstract_base(model, label):
-    """Abstract base whose Django model label is ``label``."""
     for base in model.__mro__:
         meta = getattr(base, '_meta', None)
         if meta is not None and meta.abstract and meta.label == label:
@@ -127,21 +129,25 @@ def _is_concrete_model(model):
     return not opts.abstract and not opts.proxy
 
 
-def _report_unbuildable(check):
-    def wrapped(app_configs=None, **kwargs):
+def _load_listed():
+    built, errors, catalogs = [], [], {}
+    for path in settings.AUTHENTICATION_BACKENDS:
         try:
-            return check(app_configs, **kwargs)
+            backend = load_backend(path)
         except (ImproperlyConfigured, TrustsConfigurationError) as exc:
-            return [django_checks.Error(
-                'A listed authentication backend could not be built: %s' % exc,
+            errors.append(django_checks.Error(
+                'Authentication backend %s could not be built: %s' % (path, exc),
                 hint='Fix AUTHENTICATION_BACKENDS so the backend constructs.',
-                id=CHECK_ID_UNLISTED_CATALOG,
-            )]
-    return wrapped
+                id=CHECK_ID_UNBUILDABLE_BACKEND,
+            ))
+            continue
+        if isinstance(backend, TrustModelBackendMixin):
+            built.append(backend)
+            catalogs.setdefault(id(backend.get_catalog()), backend.get_catalog())
+    return built, tuple(catalogs.values()), errors
 
 
 def _covered_content_models(catalogs):
-    """Content terminals that a listed backend's catalog already records."""
     covered = set()
     for catalog in catalogs:
         for record in catalog.records:
@@ -152,7 +158,6 @@ def _covered_content_models(catalogs):
 
 
 def _junction_content_model(model):
-    """Return the Junction content model or a CheckMessage for a bad contract."""
     try:
         content_model = model.get_content_model()
     except Exception as exc:
@@ -177,7 +182,6 @@ def _junction_content_model(model):
 
 
 @django_checks.register(django_checks.Tags.models)
-@_report_unbuildable
 def check_missing_declarations(app_configs, **kwargs):
     """Report structurally detectable missing Content/Junction declarations.
 
@@ -192,7 +196,7 @@ def check_missing_declarations(app_configs, **kwargs):
     terminals still fail closed at runtime.
     """
 
-    catalogs = listed_catalogs()
+    _built, catalogs, _errors = _load_listed()
     if not catalogs:
         return []
 
@@ -238,7 +242,6 @@ def check_missing_declarations(app_configs, **kwargs):
 
 
 def _iter_catalog_permission_conditions(catalogs):
-    """Yield condition records from the listed catalogs."""
     for catalog in catalogs:
         yield from catalog.iter_permission_conditions()
 
@@ -256,7 +259,7 @@ def iter_live_permission_conditions(apps_registry=None, catalogs=None):
     """
 
     if catalogs is None:
-        catalogs = listed_catalogs()
+        _built, catalogs, _errors = _load_listed()
     seen_records = set()
     for model, cond_code, record in _iter_catalog_permission_conditions(catalogs):
         marker = id(record)
@@ -300,7 +303,6 @@ def check_obsolete_legacy_callback_setting(app_configs, **kwargs):
 
 
 @django_checks.register()
-@_report_unbuildable
 def check_authorization_required_conditions(app_configs, **kwargs):
     """Report unsupported or incomplete ``authorization_required`` guards.
 
@@ -315,7 +317,7 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     the superuser shortcut and never falls back to an unconditioned
     grant.
     """
-    catalogs = listed_catalogs()
+    _built, catalogs, _errors = _load_listed()
     messages = []
     seen = set()
     for model, _permission, conditions in _declared_authorization_guards:
@@ -375,16 +377,14 @@ def check_authorization_required_conditions(app_configs, **kwargs):
 
 
 @django_checks.register()
-@_report_unbuildable
 def check_unlisted_catalog(app_configs, **kwargs):
     """Registrations need a listed backend whose module lives in that app."""
-    chosen = trusts_backends()
+    chosen, _catalogs, messages = _load_listed()
     listed = set()
     for candidate in chosen:
         config = django_apps.get_containing_app_config(type(candidate).__module__)
         if isinstance(config, TrustsConfigMixin):
             listed.add(id(config))
-    messages = []
     for config in django_apps.get_app_configs():
         if not isinstance(config, TrustsConfigMixin):
             continue
@@ -402,7 +402,6 @@ def check_unlisted_catalog(app_configs, **kwargs):
 
 
 @django_checks.register(django_checks.Tags.models)
-@_report_unbuildable
 def check_permission_conditions(app_configs, **kwargs):
     """Validate every registered condition after models are loaded.
 
@@ -411,7 +410,7 @@ def check_permission_conditions(app_configs, **kwargs):
     ``manage.py check trusts`` still reports project-model conditions.
     Builders are never invoked. No database queries.
     """
-    catalogs = listed_catalogs()
+    _built, catalogs, _errors = _load_listed()
     user_model = catalogs[0].user_model if catalogs else None
     return permission_condition_check_messages(
         iter_live_permission_conditions(catalogs=catalogs), user_model,
@@ -432,7 +431,6 @@ def _along_engine(connection):
 
 
 @django_checks.register(django_checks.Tags.database)
-@_report_unbuildable
 def check_along_renderer(app_configs, **kwargs):
     """Report selected aliases that cannot render live Along records.
 
@@ -443,7 +441,7 @@ def check_along_renderer(app_configs, **kwargs):
     databases = kwargs.get('databases')
     if not databases:
         return []
-    catalogs = listed_catalogs()
+    _built, catalogs, _errors = _load_listed()
     if not catalogs:
         return []
     along_records = _live_along_records(catalogs)

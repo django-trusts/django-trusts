@@ -85,6 +85,7 @@ class PlanQueryCompiler(object):
             permission_model=plan.permission_model,
             content_identity=getattr(plan, 'content_identity', None),
             user_model=plan.user_model,
+            permission_column=plan.permission_column,
         ).content_exists(user, permission)
 
 
@@ -166,7 +167,6 @@ def user_skip_params(user, skip_flags, *, subjects=None, catalog=None,
 
 
 def _outer_permission_identity(permission_model, content_model):
-    """Content-type predicate on an outer ``auth.Permission`` row."""
     if (
         permission_model is None
         or content_model is None
@@ -211,7 +211,6 @@ def _or_q(left, right):
 
 
 def _require_mode_flag(value, name):
-    """A skip keyword must be a real boolean."""
     if not isinstance(value, bool):
         raise TypeError('%s must be a bool, not %r.' % (name, value))
     return value
@@ -327,6 +326,7 @@ class RelationPlan:
     user_rules_closed: object | None = None
     user_override_q: object | None = None
     user_model: object = None
+    permission_column: str = 'pk'
 
     def _bound_root_qs(self, record, **bindings):
         return bind_record_qs(

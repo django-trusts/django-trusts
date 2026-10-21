@@ -193,7 +193,6 @@ class PublicRegistration:
 
 def relation_plan(records, delegations, content, user, permission,
                   catalog_user, user_conditions, user_rules, override_q):
-    """One plan for ``(content, user, permission)``. An empty selection is a plan."""
     chosen = tuple(
         record for record in records
         if record.content_model is content
@@ -212,6 +211,17 @@ def relation_plan(records, delegations, content, user, permission,
                 'model; got %s.'
                 % ', '.join(sorted(model._meta.label for model in models)))
         plan_permission = models.pop()
+        targets = {record.permission_target for record in chosen}
+        if len(targets) != 1:
+            raise TrustsConfigurationError(
+                'Applicable registrations must share one permission '
+                'comparison target; got %s.'
+                % ', '.join(sorted(targets)))
+        stored = targets.pop()
+        column = 'pk' if stored in (
+            plan_permission._meta.pk.attname, 'pk') else stored
+    else:
+        column = 'pk'
     subject = user
     if subject is None:
         subjects = {
@@ -230,7 +240,8 @@ def relation_plan(records, delegations, content, user, permission,
     return RelationPlan(
         records=chosen, delegations=bridges, permission_model=plan_permission,
         content_identity=content, user_rules=rules, user_rules_closed=closed,
-        user_override_q=override, user_model=catalog_user)
+        user_override_q=override, user_model=catalog_user,
+        permission_column=column)
 
 
 def plan_table(records, delegations, catalog_user, user_conditions,

@@ -57,8 +57,8 @@ class PolicySqlCommand(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        # snapshot imports auth models, not a registry singleton.
-        # phase-1 import raises AppRegistryNotReady: Apps aren't loaded yet.
+        # phase-1 import raises AppRegistryNotReady: snapshot imports
+        # auth.Permission before apps are ready.
         from trusts.inspect.snapshot import (
             render_policy_sql_bytes,
             resolve_policy_database,
