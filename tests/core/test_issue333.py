@@ -87,6 +87,20 @@ FILTERS = {
             or r.left is None
         ),
     ),
+    'login_or_owner': (
+        lambda u, p, o: (u.last_login == o.opened) | (u == o.owner),
+        lambda u, r: (
+            (_both_set(u.last_login, r.opened) and u.last_login == r.opened)
+            or _owner(r) == u.pk
+        ),
+    ),
+    'seen_not_owner': (
+        lambda u, p, o: (u.last_login == u.last_login) & (u != o.owner),
+        lambda u, r: (
+            u.last_login is not None
+            and _owner(r) is not None and _owner(r) != u.pk
+        ),
+    ),
     'both': (
         lambda u, p, o: (o.left != 5) & (u != o.owner),
         lambda u, r: (
