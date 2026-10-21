@@ -1,7 +1,7 @@
 """#16 / #142 Stage A: per-handle condition registry and builders.
 
-Library-only proofs. Does not import Zero nouns. Prebuilt ``Expr``
-registration is rejected; compiler tests import ``trusts.plan.conditions``.
+Library-only proofs. Does not import Zero nouns. A prebuilt tree is
+rejected at registration.
 """
 from contextlib import contextmanager
 from io import BytesIO

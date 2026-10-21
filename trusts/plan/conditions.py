@@ -2,8 +2,7 @@
 
 This module is not an application-facing import. Register named
 conditions as builders on the recorder's ``add_named_filter``.
-``from trusts.conditions import Expr`` must fail. The stored node is
-``trusts.plan.grammar.Tree``.
+The stored node is ``trusts.plan.grammar.Tree``.
 
 A callable argument to condition registration is a **builder**: Core
 invokes it exactly once with symbolic ``(u, p, o)`` refs, validates the
@@ -713,7 +712,7 @@ def compile_to_q(node, model, user, perm, user_model=None):
 
 
 def compile_expression_q(expr, model, user, perm, user_model=None):
-    """Compile a registered ``Expr`` to ``Q``. Fail closed if invalid."""
+    """Compile a registered ``Tree`` to ``Q``. Fail closed if invalid."""
     if not is_predicate(expr):
         raise PermissionConditionError(
             'Permission condition did not produce a V1 comparison '
@@ -724,7 +723,7 @@ def compile_expression_q(expr, model, user, perm, user_model=None):
 
 
 def evaluate_registered_expression(expr, user, perm, obj, model=None, user_model=None):
-    """Evaluate a registered ``Expr`` against a real principal/object."""
+    """Evaluate a registered ``Tree`` against a real principal/object."""
     if not is_predicate(expr):
         raise PermissionConditionError(
             'Permission condition did not produce a V1 comparison '
@@ -818,7 +817,7 @@ class ConditionRegistry(object):
     overwrite each other.
 
     A callable argument is a registration-time builder: invoked once
-    with symbolic refs, then discarded. A prebuilt ``Expr`` raises
+    with symbolic refs, then discarded. A prebuilt ``Tree`` raises
     ``TypeError`` before this store is mutated.
     """
 
@@ -833,7 +832,7 @@ class ConditionRegistry(object):
         comparison. Core invokes it exactly once with symbolic refs,
         normalizes constants, and stores only IR.
 
-        A prebuilt ``Expr`` raises ``TypeError`` before any record is
+        A prebuilt ``Tree`` raises ``TypeError`` before any record is
         stored. Non-callables also raise ``TypeError``.
         """
         if isinstance(condition, Tree) or not callable(condition):

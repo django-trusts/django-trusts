@@ -298,7 +298,7 @@ class Compiler(object):
         """Register a ``:code`` condition on ``model`` for this instance.
 
         A callable is a registration-time builder, invoked once
-        here. A prebuilt ``Expr`` is rejected by the condition
+        here. A prebuilt ``Tree`` is rejected by the condition
         store with ``TypeError`` before mutation.
         """
         self._open('add_named_filter')
