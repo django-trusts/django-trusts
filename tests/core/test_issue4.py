@@ -74,6 +74,8 @@ class ConditionGrammarTest(SimpleTestCase):
             lambda u, p, o: o.status[0],
             lambda u, p, o: o.amount + 1,
             lambda u, p, o: ~(u == o.owner),
+            lambda u, p, o: ~((u == o.owner) & (u == o.owner)),
+            lambda u, p, o: ~(o.flag | (u == o.owner)),
             lambda u, p, o: 1 in o.status,
             lambda u, p, o: list(o.owner),
         )

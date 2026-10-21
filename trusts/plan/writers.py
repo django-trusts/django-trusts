@@ -5,18 +5,17 @@ turn that tree into a Python result or a Django ``Q``. They do not
 register a filter and they do not look one up.
 """
 
-from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
+from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import F, Model, Q
 
 from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
     ModelIdentity,
-    _collection_terminal,
     resolve_field_path,
     resolve_object_field_path,
     validate_expression,
 )
-from trusts.plan.grammar import Tree, is_predicate, missing_field
+from trusts.plan.grammar import Tree, is_predicate
 
 
 def contains_q(lookup, member):
@@ -29,47 +28,24 @@ def _node(node, *kinds):
 
 
 def _walk_model_path(instance, model, path, *, collection=False):
-    """Follow a ``_meta`` field path on ``instance``.
+    """Follow a checked field path on ``instance``.
 
-    A missing field name raises ``PermissionConditionError``. A legitimate
-    nullable relation (or a missing reverse one-to-one) resolves to ``None``.
-    Python properties are not consulted: only model fields.
+    ``resolve_field_path`` rejects a missing name, a multi-valued hop, and
+    a non-relation in the middle. A nullable relation resolves to ``None``.
+    Python properties are not consulted.
     """
+    resolve_field_path(
+        model, path, ref_kind='condition', collection=collection,
+    )
     current = instance
     current_model = model
     for i, name in enumerate(path):
-        try:
-            field = current_model._meta.get_field(name)
-        except FieldDoesNotExist:
-            raise missing_field(
-                'condition', path[:i + 1], name, current_model,
-            )
+        field = current_model._meta.get_field(name)
         last = i == len(path) - 1
-        if (field.many_to_many or field.one_to_many) and not _collection_terminal(
-            field, last, collection,
-        ):
-            raise PermissionConditionError(
-                'Multi-valued relation %r on %s is not supported in V1 '
-                'permission conditions (path %s). ManyToManyField and '
-                'reverse one-to-many membership is not defined; '
-                'has_perm and permitted both reject these refs.' % (
-                    name,
-                    current_model._meta.label,
-                    '.'.join(path[:i + 1]),
-                )
-            )
-        if _collection_terminal(field, last, collection):
+        if last and collection and field.many_to_many:
             if current is None:
                 return None
             return getattr(current, field.name)
-        if not last and not field.is_relation:
-            raise PermissionConditionError(
-                'Cannot traverse field %r on %s in a permission '
-                'condition; relationship traversal requires a '
-                'ForeignKey or OneToOneField.' % (
-                    name, current_model._meta.label
-                )
-            )
         if current is None:
             return None
         if field.is_relation and not field.many_to_many and not field.one_to_many:
@@ -133,7 +109,7 @@ def evaluate_expression(node, user, perm, obj, model=None, user_model=None):
             node, user, perm, obj, model, user_model,
         )
     if _node(node, 'bare'):
-        return _boolean_holds(_resolve_runtime(
+        return boolean_holds(_resolve_runtime(
             node.item, user, perm, obj, model, user_model,
         ))
     if _node(node, 'not'):
@@ -243,17 +219,17 @@ def _compile_comparison(node, model, user, perm, user_model):
     return column_q(right.lookup, left.value, equal, field=fields)
 
 
-def _boolean_holds(value):
+def boolean_holds(value):
     """A boolean field holds only when it is True. NULL does not."""
     return value is True
 
 
-def _boolean_q(lookup):
+def boolean_q(lookup):
     """Column is True. NULL is not True."""
     return Q(**{lookup: True})
 
 
-def _negate_q(model, q):
+def negate_q(model, q):
     """Rows for which ``q`` is not true.
 
     A row ``q`` rejects, including a row it rejects because a value is
@@ -304,8 +280,8 @@ def _evaluate_contains(node, user, perm, obj, model, user_model):
 def _compile_bare(node, model, user, perm, user_model):
     field = node.item
     if field.root == 'object':
-        return _boolean_q(resolve_object_field_path(model, field.path))
-    if _boolean_holds(_bound_value(field, user, perm, user_model)):
+        return boolean_q(resolve_object_field_path(model, field.path))
+    if boolean_holds(_bound_value(field, user, perm, user_model)):
         return Q()
     return Q(pk__in=())
 
@@ -355,7 +331,7 @@ def compile_to_q(node, model, user, perm, user_model=None):
     if _node(node, 'bare'):
         return _compile_bare(node, model, user, perm, user_model)
     if _node(node, 'not'):
-        return _negate_q(model, compile_to_q(
+        return negate_q(model, compile_to_q(
             node.item, model, user, perm, user_model,
         ))
     raise PermissionConditionError(

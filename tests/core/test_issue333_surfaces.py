@@ -200,11 +200,6 @@ def _relation_cases(member_pk):
             lambda row: False,
         ),
         (
-            'not-and',
-            lambda t: ~(t.flag & (t.status == 'open')),
-            lambda row: not (row.flag is True and row.status == 'open'),
-        ),
-        (
             'related',
             lambda t: t.marker.flag,
             lambda row: (

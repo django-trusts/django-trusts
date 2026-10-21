@@ -12,15 +12,15 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Exists, F, Model, OuterRef, Q
 
 from trusts.plan.conditions import (
-    _condition_model_key,
+    condition_model_key,
     parse_perm_code,
     permission_binding,
     resolve_field_path,
 )
 from trusts.plan.writers import (
-    _boolean_holds,
-    _boolean_q,
-    _negate_q,
+    boolean_holds,
+    boolean_q,
+    negate_q,
     column_q,
     columns_q,
     contains_q,
@@ -32,7 +32,7 @@ from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.contents import _as_q, _ordinary_records
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
 from trusts.plan.aggregates import _delegated_user_exists
-from trusts.plan.grammar import Tree, missing_field
+from trusts.plan.grammar import Tree
 
 
 def _reverse_checked(plan, exists, user_model, permission, content, values,
@@ -180,15 +180,11 @@ def _named_filter_q(named_filters, content, code, singular, user_model):
     subquery on the saved row. Construction does not query.
     """
     stored = named_filters.get(
-        (_condition_model_key(content.__class__), code),
+        (condition_model_key(content.__class__), code),
     )
     if stored is None:
         return None
     _model, expr = stored
-    if expr is None:
-        raise TrustsConfigurationError(
-            'Permission condition on %s is unbound.' % content._meta.label
-        )
     return _condition_outcome(expr, content, singular, user_model)
 
 
@@ -282,11 +278,11 @@ def _contains_outcome(expr, content, singular, user_model):
 def _bare_outcome(expr, content, singular, user_model):
     field = expr.item
     if field.root == 'user':
-        return _boolean_q(_user_lookup(user_model, field.path))
+        return boolean_q(_user_lookup(user_model, field.path))
     if field.root == 'object':
         lookup = _object_lookup(content, field.path)
-        return _exists_q(content, _boolean_q(lookup))
-    if _boolean_holds(_side_value(field, content, singular, user_model)):
+        return _exists_q(content, boolean_q(lookup))
+    if boolean_holds(_side_value(field, content, singular, user_model)):
         return True
     return None
 
@@ -297,7 +293,7 @@ def _negated_outcome(expr, content, singular, user_model):
         return None
     if inner is None:
         return True
-    return _negate_q(user_model, inner)
+    return negate_q(user_model, inner)
 
 
 def _side_value(node, content, singular, user_model):
@@ -470,19 +466,4 @@ def _trusts_eligibility_q(model):
 def _user_lookup(user_model, path):
     if not path:
         return 'pk'
-    current = user_model
-    for index, name in enumerate(path):
-        try:
-            field = current._meta.get_field(name)
-        except FieldDoesNotExist as exc:
-            raise missing_field(
-                'condition', path[:index + 1], name, current,
-            ) from exc
-        if field.many_to_many or field.one_to_many:
-            raise TrustsConfigurationError(
-                'Reverse permission inquiry cannot compile multi-valued '
-                'principal field %s.%s.' % (current._meta.label, name)
-            )
-        if getattr(field, 'is_relation', False) and field.related_model is not None:
-            current = field.related_model
-    return '__'.join(path)
+    return resolve_field_path(user_model, path, ref_kind='principal')

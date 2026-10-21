@@ -18,19 +18,18 @@ from django.db.models import BooleanField, F, Q
 from django.db.models.expressions import RawSQL
 
 from trusts.plan.conditions import (
-    _terminal_field,
+    require_boolean_field,
     normalize_expression,
     validate_expression,
 )
 from trusts.plan.grammar import Tree, invoke, unsupported
 from trusts.plan.writers import (
-    _boolean_q,
-    _negate_q,
+    boolean_q,
+    negate_q,
     column_q,
     columns_q,
     contains_q,
     member_pk,
-    values_match,
 )
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 
@@ -111,21 +110,6 @@ def condition_names(conditions, override=None):
     return frozenset(names)
 
 
-def _lower_user(node):
-    """Keep the shared tree when a user rule can store it."""
-    where = 'a user condition'
-    if node.kind in ('and', 'or', 'eq', 'ne', 'contains'):
-        _lower_user(node.left)
-        _lower_user(node.right)
-        return node
-    if node.kind in ('not', 'bare'):
-        _lower_user(node.item)
-        return node
-    if node.kind in ('field', 'const'):
-        return node
-    raise unsupported(node.kind, where)
-
-
 def walk_user_lambda(expr):
     """Walk ``lambda u: ...`` once. Does not call it with a user instance."""
     if not callable(expr):
@@ -133,7 +117,7 @@ def walk_user_lambda(expr):
             'User condition expression must be a callable or None, not %r.'
             % (expr,)
         )
-    return normalize_expression(_lower_user(invoke(expr, ('user',))))
+    return normalize_expression(invoke(expr, ('user',)))
 
 
 def _require_user_boolean(model, node, name):
@@ -143,17 +127,9 @@ def _require_user_boolean(model, node, name):
             'User condition %r needs a boolean field on %s.'
             % (name, model._meta.label)
         )
-    field = _terminal_field(model, node.path, 'principal')
-    if (
-        not getattr(field, 'concrete', False)
-        or not isinstance(field, BooleanField)
-    ):
-        raise PermissionConditionError(
-            'User condition %r needs %s.%s to be a concrete '
-            'BooleanField.' % (
-                name, model._meta.label, '__'.join(node.path),
-            )
-        )
+    require_boolean_field(
+        model, node.path, 'principal', name=name,
+    )
 
 
 def validate_user_rule(model, expr, name):
@@ -207,11 +183,11 @@ def _compile(path, expr, scope):
             | _compile(path, expr.right, scope)
         )
     if expr.kind == 'not':
-        return _negate_q(scope, _compile(path, expr.item, scope))
+        return negate_q(scope, _compile(path, expr.item, scope))
     if expr.kind == 'bare':
         return _compile(path, expr.item, scope)
     if expr.kind == 'field':
-        return _boolean_q(_prefixed(path, expr.path))
+        return boolean_q(_prefixed(path, expr.path))
     if expr.kind in ('eq', 'ne'):
         return _compile_user_comparison(path, expr)
     if expr.kind == 'contains':
@@ -229,10 +205,6 @@ def _compile_user_comparison(path, node):
             _prefixed(path, right.path),
             equal,
         )
-    if left.kind == 'const' and right.kind == 'const':
-        if values_match(left.value, right.value, equal, fields=False):
-            return Q()
-        return Q(pk__in=())
     if left.kind == 'field':
         return column_q(
             _prefixed(path, left.path), right.value, equal, field=False,

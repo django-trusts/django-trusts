@@ -4,11 +4,11 @@ from django.contrib.auth.models import Permission
 from django.db.models import F, Model, Q
 
 from trusts.errors import PermissionConditionError
-from trusts.plan.grammar import Tree, inquiry_partner, is_inquiry, unsupported
+from trusts.plan.grammar import Tree, inquiry_partner, unsupported
 from trusts.plan.hops import lookup_text, require_instance
 from trusts.plan.writers import (
-    _boolean_q,
-    _negate_q,
+    boolean_q,
+    negate_q,
     column_q,
     columns_q,
     contains_q,
@@ -101,7 +101,7 @@ class _PredicateCompiler(object):
         if node.kind == 'or':
             return self.compile(node.left) | self.compile(node.right)
         if node.kind == 'not':
-            return _negate_q(self.record.root, self.compile(node.item))
+            return negate_q(self.record.root, self.compile(node.item))
         if node.kind == 'eq':
             return self._eq(node)
         if node.kind == 'ne':
@@ -109,7 +109,7 @@ class _PredicateCompiler(object):
         if node.kind == 'contains':
             return self._contains(node)
         if node.kind == 'bare':
-            return _boolean_q(lookup_text(node.item.path))
+            return boolean_q(lookup_text(node.item.path))
         raise unsupported(node.kind, 'a relation condition')
 
     def _eq(self, node):
@@ -123,8 +123,12 @@ class _PredicateCompiler(object):
         })
 
     def _ne(self, node):
-        column = _inquiry_ne_column(node)
-        if column is not None:
+        column = inquiry_partner(node)
+        if (
+            column is not None
+            and column.kind == 'field'
+            and column.path
+        ):
             if self.permission is None:
                 raise PermissionConditionError(
                     'Delegated inquiry-permission condition needs the requested '
@@ -175,15 +179,6 @@ class _PredicateCompiler(object):
         return Q(**{
             lookup_text(path): bind_terminal(self.permission, 'permission'),
         })
-
-
-def _inquiry_ne_column(node):
-    """The row column in ``column != inquiry`` or ``inquiry != column``."""
-    if not is_inquiry(node.left) and not is_inquiry(node.right):
-        return None
-    if is_inquiry(node.left):
-        return node.right
-    return node.left
 
 
 def _permission_content_type_filters(record, content_identity):

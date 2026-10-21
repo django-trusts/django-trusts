@@ -155,18 +155,6 @@ FILTERS = {
         lambda u, p, o: ~o.flag | o.marks.contains(o.label),
         lambda u, r: r.flag is not True or _marked(r),
     ),
-    'not_flag_and_same': (
-        lambda u, p, o: ~(o.flag & (o.left == o.right)),
-        lambda u, r: not (
-            r.flag is True
-            and _both_set(r.left, r.right)
-            and r.left == r.right
-        ),
-    ),
-    'not_flag_or_marked': (
-        lambda u, p, o: ~(o.flag | o.marks.contains(o.label)),
-        lambda u, r: not (r.flag is True or _marked(r)),
-    ),
 }
 
 

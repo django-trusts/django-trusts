@@ -15,8 +15,7 @@ from trusts.plan.aggregates import (
     instance_match,
 )
 from trusts.plan.conditions import (
-    _condition_model_key,
-    _condition_model_label,
+    condition_model_key,
     parse_perm_code,
     permission_binding,
     permission_condition_code,
@@ -143,7 +142,7 @@ class Catalog(object):
             yield model, code, tree
 
     def _stored_named_filter(self, model, code):
-        return self.named_filters.get((_condition_model_key(model), code))
+        return self.named_filters.get((condition_model_key(model), code))
 
     def applies(self, plan):
         """Whether this catalog's compiler will compile ``plan``."""
@@ -432,11 +431,6 @@ class Catalog(object):
     def permission_condition_met(self, stored, user_obj, perm, obj):
         model = _content_model(obj)
         _registered, tree = stored
-        if tree is None:
-            label = _model_label(model)
-            raise PermissionConditionError(
-                'Permission condition on %s is unbound.' % label
-            )
         if isinstance(obj, QuerySet):
             objs, model = obj.all(), obj.model
         elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
@@ -706,7 +700,7 @@ def _owns_selected_conditions(catalog, model, conditions):
         return True
     for name in conditions:
         stored = catalog._stored_named_filter(model, name)
-        if stored is None or stored[1] is None:
+        if stored is None:
             return False
     return True
 
@@ -718,11 +712,6 @@ def _selected_condition_q(catalog, model, permission, conditions, user, *, api):
         stored = catalog._stored_named_filter(model, name)
         if stored is None:
             return None
-        if stored[1] is None:
-            raise TrustsConfigurationError(
-                '%s condition %r on %s is unsupported.'
-                % (api, name, model._meta.label)
-            )
         part = compile_stored_condition_q(
             stored, model, '%s:%s' % (permission, name), user,
             catalog.user_model,
@@ -737,11 +726,6 @@ def compile_stored_condition_q(stored, model, perm, user, user_model=None):
     if stored is None:
         raise _unknown_condition_error(model, cond)
     _registered, tree = stored
-    if tree is None:
-        raise PermissionConditionError(
-            'Permission condition %r on %s is unbound.'
-            % (cond, _condition_model_label(model))
-        )
     grant = perm.split(':', 1)[0] if isinstance(perm, str) else perm
     return compile_expression_q(tree, model, user, grant, user_model)
 

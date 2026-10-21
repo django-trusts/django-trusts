@@ -433,8 +433,9 @@ def _operand_spec(node, model, user_model):
     if _node(node, 'const'):
         return _spec_from_const(node.value)
     if _node(node, 'field'):
-        if node.root == 'object':
-            return _spec_from_field(_terminal_field(model, node.path, 'object'))
+        if node.root in ('object', 'row'):
+            ref = 'object' if node.root == 'object' else 'condition'
+            return _spec_from_field(_terminal_field(model, node.path, ref))
         if node.root == 'user':
             entity = user_model
             if not node.path:
@@ -459,7 +460,7 @@ def _specs_compatible(left, right):
     return False
 
 
-def _check_comparison_types(node, model, user_model):
+def check_comparison_types(node, model, user_model):
     left = _operand_spec(node.left, model, user_model)
     right = _operand_spec(node.right, model, user_model)
     if _specs_compatible(left, right):
@@ -510,6 +511,36 @@ def _validate_contains(node, model, user_model):
     _check_member_spec(_operand_spec(right, model, user_model), related)
 
 
+def require_boolean_field(model, path, ref_kind, *, where=None, name=None):
+    """One bare-boolean check for named filters, relations, and user rules."""
+    field = _terminal_field(model, path, ref_kind)
+    concrete = name is not None
+    ok = isinstance(field, BooleanField) and (
+        not concrete or getattr(field, 'concrete', False)
+    )
+    if ok:
+        return field
+    if name is not None:
+        raise PermissionConditionError(
+            'User condition %r needs %s.%s to be a concrete BooleanField.'
+            % (name, model._meta.label, '__'.join(path))
+        )
+    raise PermissionConditionError(
+        'A bare field in %s must be a boolean, not %s.%s.'
+        % (where, field.model._meta.label, field.name)
+    )
+
+
+def check_const_member(model, collection_path, value, ref_kind='condition'):
+    """A constant ``.contains()`` member must fit the related primary key."""
+    field = _terminal_field(
+        model, collection_path, ref_kind, collection=True,
+    )
+    if value is None:
+        return
+    _check_member_spec(_spec_from_const(value), field.remote_field.model)
+
+
 def _validate_bare(node, model, user_model):
     item = node.item
     if (
@@ -522,12 +553,7 @@ def _validate_bare(node, model, user_model):
         )
     host = model if item.root == 'object' else user_model
     ref = 'object' if item.root == 'object' else 'principal'
-    field = _terminal_field(host, item.path, ref)
-    if not isinstance(field, BooleanField):
-        raise PermissionConditionError(
-            'A bare field in a named filter must be a boolean, not %s.%s.'
-            % (field.model._meta.label, field.name)
-        )
+    require_boolean_field(host, item.path, ref, where='a named filter')
 
 
 def validate_expression(node, model, user_model=None):
@@ -555,7 +581,7 @@ def _validate_node(node, model, user_model):
     if _node(node, 'eq', 'ne'):
         _validate_node(node.left, model, user_model)
         _validate_node(node.right, model, user_model)
-        _check_comparison_types(node, model, user_model)
+        check_comparison_types(node, model, user_model)
         return
     if _node(node, 'contains'):
         _validate_contains(node, model, user_model)
@@ -587,45 +613,18 @@ def _validate_node(node, model, user_model):
     )
 
 
-def _condition_model_key(model):
+def condition_model_key(model):
     meta = getattr(model, '_meta', None)
     if meta is not None:
         return meta.label
     return model
 
 
-def _condition_model_label(model):
+def condition_model_label(model):
     meta = getattr(model, '_meta', None)
     if meta is not None:
         return meta.label
     return repr(model)
-
-
-def _lower_named(node):
-    """Keep the shared tree when a named filter can store it."""
-    kind = node.kind
-    if kind in ('field', 'const'):
-        return node
-    if kind in ('eq', 'ne', 'and', 'or', 'contains'):
-        _lower_named(node.left)
-        _lower_named(node.right)
-        return node
-    if kind in ('not', 'bare'):
-        _lower_named(node.item)
-        return node
-    raise unsupported(kind, 'a named filter')
-
-
-def _invoke_condition_builder(builder, model, cond_code):
-    """Invoke a trusted builder once and lower it into stored nodes."""
-    result = invoke(builder, ('user', 'permission', 'object'))
-    try:
-        return _lower_named(result)
-    except PermissionConditionError as exc:
-        raise PermissionConditionError(
-            'Permission condition %r on %s: %s'
-            % (cond_code, _condition_model_label(model), exc)
-        ) from exc
 
 
 def parse_named_filter(builder, model, code, user_model):
@@ -636,7 +635,7 @@ def parse_named_filter(builder, model, code, user_model):
     types are checked against that model and ``user_model``.
     """
     expr = normalize_expression(
-        _invoke_condition_builder(builder, model, code),
+        invoke(builder, ('user', 'permission', 'object')),
     )
     if getattr(model, '_meta', None) is not None:
         validate_expression(expr, model, user_model)

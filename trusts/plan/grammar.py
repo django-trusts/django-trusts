@@ -163,10 +163,10 @@ class Tree(object):
         return _join('or', other, self)
 
     def __invert__(self):
-        if self.kind in ('bare', 'and', 'or', 'not'):
+        if _negatable(self):
             return Tree('not', item=self)
         raise unsupported(
-            "'~' on a comparison", hint="Negate a boolean field or use '!='.",
+            "'~' on a comparison", hint='Negate a boolean field.',
         )
 
     def __eq__(self, other):
@@ -306,6 +306,33 @@ def _require_predicate(result):
     )
 
 
+def _negatable(node):
+    """True when ``~`` may wrap ``node``.
+
+    User rules at ``92141b0`` (``trusts/plan/standards.py`` ``Bit.__invert__``)
+    accepted ``~`` on a boolean field and on ``&`` / nested ``~`` of those.
+    A comparison, ``.contains()``, or ``|`` is outside that shape, including
+    one nested inside ``&`` or ``|``.
+    """
+    if node.kind == 'bare':
+        return True
+    if node.kind == 'not':
+        return _negatable(node.item)
+    if node.kind == 'and':
+        return _negatable(node.left) and _negatable(node.right)
+    return False
+
+
+def symbol_path(symbol):
+    """Field path recorded on a ``Symbol``. Slots stay private."""
+    return symbol._path
+
+
+def symbol_token(symbol):
+    """Builder token recorded on a ``Symbol``. Slots stay private."""
+    return symbol._token
+
+
 def is_inquiry(node):
     """True for the bare requested-permission root of a delegated condition."""
     return node.kind == 'field' and node.root == 'inquiry' and not node.path
@@ -319,9 +346,9 @@ def inquiry_partner(node):
     """
     if node.kind == 'contains' and is_inquiry(node.right):
         return node.left
-    if node.kind == 'eq' and is_inquiry(node.left):
+    if node.kind in ('eq', 'ne') and is_inquiry(node.left):
         return node.right
-    if node.kind == 'eq' and is_inquiry(node.right):
+    if node.kind in ('eq', 'ne') and is_inquiry(node.right):
         return node.left
     return None
 
