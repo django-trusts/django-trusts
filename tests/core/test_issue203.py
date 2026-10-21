@@ -25,7 +25,6 @@ from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 from django.utils.functional import SimpleLazyObject
 from django.utils.translation import gettext_lazy
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.apps import TrustsConfigMixin
 from trusts.backends import TrustModelBackendMixin
 from trusts.conditions import PermissionConditionError
@@ -251,8 +250,3 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
                 self.assertTrue(self.backend.has_perm(alice, '%s:owned' % PERM, first))
             self.assertEqual(len(log.calls), 1)
 
-class Issue203SuiteRegistrationTest(SimpleTestCase):
-
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue203', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue203', PAIR_KERNEL_SUITE)

@@ -14,7 +14,6 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
@@ -58,11 +57,6 @@ def _tables(*model_classes):
             for model in reversed(model_classes):
                 editor.delete_model(model)
 
-class Issue282SuiteRegistrationTest(SimpleTestCase):
-
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue282', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue282', PAIR_KERNEL_SUITE)
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class DelegatedAlongTest(TransactionTestCase):

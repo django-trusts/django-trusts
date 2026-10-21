@@ -14,7 +14,6 @@ from django.test.utils import isolate_apps
 from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
@@ -459,8 +458,3 @@ class PermittedPermissionExactnessTest(KernelHostRequiredMixin, TestCase):
             with self.assertRaises(TypeError):
                 self.docs.permitted(row, self.alice)
 
-class Issue270SuiteRegistrationTest(SimpleTestCase):
-
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue270', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue270', PAIR_KERNEL_SUITE)

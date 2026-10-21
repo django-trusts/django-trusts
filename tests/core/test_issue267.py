@@ -21,7 +21,6 @@ from django.db import connection, models
 from django.http import HttpRequest
 from django.test import TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.factory import Compiler
@@ -176,9 +175,6 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
             self.handle.register(trust=self.Ownership, user='user', permission='organization__owner_group__permissions', content='organization__repositories')
         self.users = _PermittedUsers(User)
 
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue267', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue267', PAIR_KERNEL_SUITE)
 
     def test_same_model_grants_and_crossed_pairs_deny(self):
         cases = ((self.manage_code, self.manage, self.acme, True), (self.read_code, self.read, self.specs, True), (self.read_code, self.read, self.acme, False), (self.manage_code, self.manage, self.specs, False), (self.manage_code, self.manage, self.team, False), (self.read_code, self.read, self.widget, False))

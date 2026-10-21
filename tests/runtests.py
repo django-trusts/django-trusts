@@ -1,5 +1,6 @@
 # see https://docs.djangoproject.com/en/stable/topics/testing/advanced/#using-the-django-test-runner-to-test-reusable-applications
 import os
+import pkgutil
 import sys
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'tests.settings')
@@ -10,123 +11,36 @@ import django
 from django.test.utils import get_runner
 from django.conf import settings
 
+import tests.core as _core_package
 
-# Library-only suite: no Zero, no concrete Trust models, no shipped
-# trusts/test*.py modules.
-KERNEL_SUITE = [
-    'tests.core.test_issue4',
-    'tests.core.test_issue16',
-    'tests.core.test_issue18',
-    'tests.core.test_issue29',
-    'tests.core.test_issue54',
-    'tests.core.test_issue57',
-    'tests.core.test_issue60',
-    'tests.core.test_issue65',
-    'tests.core.test_issue67',
-    'tests.core.test_issue70',
-    'tests.core.test_issue72',
-    'tests.core.test_issue75',
-    'tests.core.test_issue77',
-    'tests.core.test_issue83',
-    'tests.core.test_issue89',
-    'tests.core.test_issue92',
+
+# These modules assume the kernel host. They are not valid against an
+# installed Zero owner. Historical Trust coverage runs from the Zero
+# checkout (see scripts/run-z1-pair-tests.py), not from core paths.
+_KERNEL_ONLY = frozenset((
+    'tests.core.test_backend_or',
+    'tests.core.test_custom_user',
     'tests.core.test_issue96',
-    'tests.core.test_issue98',
-    'tests.core.test_issue103',
-    'tests.core.test_issue108',
     'tests.core.test_issue111',
     'tests.core.test_issue115',
     'tests.core.test_issue122',
-    'tests.core.test_issue129',
-    'tests.core.test_issue131',
-    'tests.core.test_issue132',
-    'tests.core.test_issue138',
-    'tests.core.test_issue147',
-    'tests.core.test_issue149',
-    'tests.core.test_issue151',
-    'tests.core.test_issue160',
-    'tests.core.test_issue178',
-    'tests.core.test_issue181',
-    'tests.core.test_issue191',
-    'tests.core.test_issue194',
-    'tests.core.test_issue195',
-    'tests.core.test_issue199',
-    'tests.core.test_issue201',
-    'tests.core.test_issue203',
-    'tests.core.test_issue207',
-    'tests.core.test_issue210',
-    'tests.core.test_issue246',
-    'tests.core.test_issue255',
-    'tests.core.test_issue263',
-    'tests.core.test_issue266',
-    'tests.core.test_issue267',
-    'tests.core.test_issue270',
-    'tests.core.test_issue284',
-    'tests.core.test_user_conditions',
-    'tests.core.test_issue300',
-    'tests.core.test_issue282',
-    'tests.core.test_issue282_permitted_content',
-    'tests.core.test_backend_or',
-    'tests.core.test_build_shapes',
-    'tests.core.test_registry_questions',
-    'tests.core.test_custom_user',
-]
+))
 
-# Kernel modules that remain valid against an installed Zero owner.
-# Historical Trust/Content/Junction/Role coverage runs from the Zero
-# checkout (see scripts/run-z1-pair-tests.py), not from core paths.
-PAIR_KERNEL_SUITE = [
-    'tests.core.test_issue4',
-    'tests.core.test_issue16',
-    'tests.core.test_issue18',
-    'tests.core.test_issue29',
-    'tests.core.test_issue54',
-    'tests.core.test_issue57',
-    'tests.core.test_issue60',
-    'tests.core.test_issue65',
-    'tests.core.test_issue67',
-    'tests.core.test_issue70',
-    'tests.core.test_issue72',
-    'tests.core.test_issue75',
-    'tests.core.test_issue77',
-    'tests.core.test_issue83',
-    'tests.core.test_issue89',
-    'tests.core.test_issue92',
-    'tests.core.test_issue98',
-    'tests.core.test_issue103',
-    'tests.core.test_issue108',
-    'tests.core.test_issue129',
-    'tests.core.test_issue131',
-    'tests.core.test_issue132',
-    'tests.core.test_issue138',
-    'tests.core.test_issue147',
-    'tests.core.test_issue149',
-    'tests.core.test_issue151',
-    'tests.core.test_issue160',
-    'tests.core.test_issue178',
-    'tests.core.test_issue181',
-    'tests.core.test_issue191',
-    'tests.core.test_issue194',
-    'tests.core.test_issue195',
-    'tests.core.test_issue199',
-    'tests.core.test_issue201',
-    'tests.core.test_issue203',
-    'tests.core.test_issue207',
-    'tests.core.test_issue210',
-    'tests.core.test_issue246',
-    'tests.core.test_issue255',
-    'tests.core.test_issue263',
-    'tests.core.test_issue266',
-    'tests.core.test_issue267',
-    'tests.core.test_issue270',
-    'tests.core.test_issue284',
-    'tests.core.test_user_conditions',
-    'tests.core.test_issue300',
-    'tests.core.test_issue282',
-    'tests.core.test_issue282_permitted_content',
-    'tests.core.test_build_shapes',
-    'tests.core.test_registry_questions',
-]
+
+def _discover_core_modules():
+    """Every ``tests.core.test_*`` module or package, in stable order."""
+    found = []
+    for module in pkgutil.iter_modules(_core_package.__path__):
+        if module.name.startswith('test_'):
+            found.append('tests.core.' + module.name)
+    return tuple(sorted(found))
+
+
+KERNEL_SUITE = _discover_core_modules()
+PAIR_KERNEL_SUITE = tuple(
+    name for name in KERNEL_SUITE
+    if name not in _KERNEL_ONLY
+)
 
 
 def runtests(suite=None):

@@ -17,7 +17,6 @@ from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 from tests.core.test_issue98 import _gh_models, _register_direct, _register_team, _tables
 from tests.myapp.models import Document, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.plan.conditions import Eq as IrEq
 from trusts.plan.conditions import Ref as IrRef
 from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
@@ -48,9 +47,6 @@ class _CountCondition:
 
 class RegisterConditionSurfaceTest(SimpleTestCase):
 
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue210', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue210', PAIR_KERNEL_SUITE)
 
     def test_predicate_is_not_on_the_signature(self):
         signature = inspect.signature(Compiler.register)

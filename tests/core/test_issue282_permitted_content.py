@@ -17,7 +17,6 @@ from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
 from tests.core.test_issue282 import _handle, _listed, _permission, _tables
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from tests.support import (
     render_configured_policy,
     scoped_permitted_content as filter_by_permitted_content,
@@ -112,12 +111,6 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
             continue
         test.assertEqual(parsed, _json_const(value))
     return row
-
-
-class Issue282PermittedContentSuiteRegistrationTest(SimpleTestCase):
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue282_permitted_content', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue282_permitted_content', PAIR_KERNEL_SUITE)
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')

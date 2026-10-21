@@ -8,11 +8,6 @@ import trusts.models as models_mod
 
 
 class PolicyLockImportTest(SimpleTestCase):
-    def test_module_is_on_kernel_and_pair_suites(self):
-        from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-
-        self.assertIn('tests.core.test_issue147', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue147', PAIR_KERNEL_SUITE)
 
     def test_request_time_lockfile_gate_is_removed(self):
         import trusts.backends as backends

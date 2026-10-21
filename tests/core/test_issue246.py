@@ -16,7 +16,6 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from tests.support import (
     render_configured_policy,
@@ -134,9 +133,6 @@ def _behavior_models():
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ExplicitGroupRegistrationTest(SimpleTestCase):
 
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue246', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue246', PAIR_KERNEL_SUITE)
 
     def _grant_model(self):
 

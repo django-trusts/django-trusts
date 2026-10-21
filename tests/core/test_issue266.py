@@ -11,7 +11,6 @@ from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps, override_settings
 from tests.core import kernel_host_listed
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.compile.factory import RegisteredDelegation
 from trusts.plan.relations import PlanQueryCompiler
@@ -119,11 +118,6 @@ def _contribute_m2m(field, model):
     if not hasattr(field, 'm2m_field_name'):
         field.contribute_to_related_class(model, field.remote_field)
 
-class DelegationSuiteRegistrationTest(SimpleTestCase):
-
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue266', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue266', PAIR_KERNEL_SUITE)
 
 class DelegationRegistrationTest(TestCase):
 

@@ -19,7 +19,6 @@ from django.db.models import Model
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import isolate_apps
 from tests.myapp.models import Document, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
 from trusts.compile.nodes import Along
 from trusts.plan.relations import PlanQueryCompiler
@@ -47,9 +46,6 @@ class _Count:
 
 class RegisterPublicSurfaceTest(SimpleTestCase):
 
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue207', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue207', PAIR_KERNEL_SUITE)
 
     def test_register_relationship_is_absent(self):
         handle = _handle()

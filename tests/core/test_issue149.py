@@ -9,7 +9,6 @@ from pathlib import Path
 
 from django.test import SimpleTestCase
 
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -61,9 +60,6 @@ def _init_git_checkout(root):
 
 
 class ExactZeroCandidatePinTest(SimpleTestCase):
-    def test_suite_lists_this_module(self):
-        self.assertIn('tests.core.test_issue149', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue149', PAIR_KERNEL_SUITE)
 
     def test_ci_and_verifier_pin_the_exact_zero_candidate(self):
         ci = (ROOT / '.github' / 'workflows' / 'ci.yml').read_text()

@@ -16,7 +16,6 @@ from django.db import models
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 from tests.core.test_issue282 import _tables
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.compile.factory import Compiler
 from trusts.compile.nodes import Ref
 from trusts.plan.aggregates import _compile_common_permissions, instance_match
@@ -35,11 +34,6 @@ def _permission(model, codename):
 def _pks(qs):
     return set(qs.values_list('pk', flat=True))
 
-class RegistryQuestionsSuiteRegistrationTest(SimpleTestCase):
-
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_registry_questions', KERNEL_SUITE)
-        self.assertIn('tests.core.test_registry_questions', PAIR_KERNEL_SUITE)
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class RegistryQuestionsTest(TransactionTestCase):

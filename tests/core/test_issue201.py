@@ -27,7 +27,6 @@ from django.test import SimpleTestCase, TestCase
 from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from tests.support import unbound_named_filters
 
 from trusts.errors import TrustsConfigurationError
@@ -298,7 +297,3 @@ class AuthorizationRequiredReadinessPreflightTest(
             _filtered(_request(self.bob), pk=self.open_doc.pk)
 
 
-class Issue201SuiteRegistrationTest(SimpleTestCase):
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue201', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue201', PAIR_KERNEL_SUITE)

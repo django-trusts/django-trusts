@@ -18,7 +18,6 @@ from django.test.utils import isolate_apps, override_settings
 from tests.core import KernelHostRequiredMixin, kernel_host_listed
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from tests.support import scoped_permitted_content as filter_by_permitted_content, built_catalog, compiler
 from trusts.plan.relations import PlanQueryCompiler
@@ -38,11 +37,6 @@ def _permission(model, codename):
 def _pks(queryset):
     return set(queryset.values_list('pk', flat=True))
 
-class Issue284SuiteRegistrationTest(TestCase):
-
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue284', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue284', PAIR_KERNEL_SUITE)
 
 class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
 

@@ -26,7 +26,6 @@ from trusts.plan.users import lock_permitted_users_queryset
 from tests.core.test_issue246 import _tables
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
@@ -222,11 +221,6 @@ def _handle(registry):
     registry.path = DOCUMENT_BACKEND
     return registry
 
-class Issue255SuiteRegistrationTest(SimpleTestCase):
-
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue255', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue255', PAIR_KERNEL_SUITE)
 
 class Issue255PolicySqlTest(SimpleTestCase):
 

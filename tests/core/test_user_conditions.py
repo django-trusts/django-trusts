@@ -16,7 +16,6 @@ from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.plan.rewrites import bind_once
 from tests.support import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import PlanQueryCompiler
@@ -34,11 +33,6 @@ def _permission(model, codename):
     permission, _created = Permission.objects.get_or_create(content_type=ct, codename=codename, defaults={'name': codename})
     return permission
 
-class UserConditionSuiteTest(TestCase):
-
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_user_conditions', KERNEL_SUITE)
-        self.assertIn('tests.core.test_user_conditions', PAIR_KERNEL_SUITE)
 
 class UserConditionRegistrationTest(TransactionTestCase):
 

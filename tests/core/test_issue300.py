@@ -14,7 +14,6 @@ from django.test.utils import CaptureQueriesContext, isolate_apps
 from tests.core import KernelHostRequiredMixin
 from tests.core.test_issue147.test_sql_export import Document as GuideDocument, _document_handle
 from tests.myapp.models import Document
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 import trusts.plan.rewrites as bind_once_module
 from trusts.plan.rewrites import BIND_ALIAS, BindRef, BindTable, SqlInt, bind_once, strip_exists_marker, trusts_bind_once
 from trusts.plan.walk import _render_reach_sql
@@ -40,11 +39,6 @@ def _repeat_count(params):
     counts = Counter(params)
     return sum((count - 1 for count in counts.values() if count > 1))
 
-class Issue300SuiteRegistrationTest(SimpleTestCase):
-
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue300', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue300', PAIR_KERNEL_SUITE)
 
 class Issue300LockfileTest(SimpleTestCase):
 

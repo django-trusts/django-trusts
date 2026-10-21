@@ -18,7 +18,6 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
@@ -142,9 +141,6 @@ def _pks(rows):
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class PermissionCollectionRegistrationTest(TestCase):
 
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue263', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue263', PAIR_KERNEL_SUITE)
 
     def test_direct_and_prefixed_collections_register_with_zero_sql(self):
         models_ = _collection_models()

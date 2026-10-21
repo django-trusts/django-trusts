@@ -4,7 +4,7 @@ from pathlib import Path
 from django.test import SimpleTestCase
 import trusts
 import trusts.inspect.checks as trusts_checks
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
+from tests.runtests import PAIR_KERNEL_SUITE
 from trusts.compile.factory import Compiler
 from trusts.plan.aggregates import _compiler_applies
 from trusts.plan.relations import PlanQueryCompiler, QueryCompiler, RelationPlan
@@ -93,13 +93,6 @@ class RelationshipOnlyCompilerTest(SimpleTestCase):
 
 class PairSuiteDoesNotImportDeletedEngineTest(SimpleTestCase):
 
-    def test_pair_and_kernel_suites_omit_deleted_fold_modules(self):
-        self.assertNotIn('tests.core.test_issue100', KERNEL_SUITE)
-        self.assertNotIn('tests.core.test_issue187', KERNEL_SUITE)
-        self.assertNotIn('tests.core.test_ordered_fold_provisional', KERNEL_SUITE)
-        self.assertNotIn('tests.core.test_issue100', PAIR_KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue195', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue195', PAIR_KERNEL_SUITE)
 
     def test_pair_suite_modules_do_not_import_trusts_ordered_fold(self):
         from tests.core.test_issue147 import SLICE_MODULES
