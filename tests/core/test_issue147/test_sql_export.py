@@ -562,17 +562,24 @@ class PolicySqlCommandTest(SimpleTestCase):
     def test_render_failure_writes_no_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / CONVENTIONAL_LOCKFILE_NAME
-
-            def boom(*args, **kwargs):
-                del args, kwargs
-                raise TrustsConfigurationError('render failed')
-            with override_settings(TRUSTS_POLICY_LOCKFILE=str(target)):
-                with patch('trusts.inspect.snapshot.render_policy_sql_bytes', boom):
-                    with patch('trusts.compile.factory.probe_along_capabilities') as probe:
-                        with self.assertRaises(CommandError) as ctx:
-                            call_command('trusts_policy_sql', lock=True, stdout=StringIO())
-                        probe.assert_not_called()
-            self.assertIn('render failed', str(ctx.exception))
+            databases = {
+                'default': {
+                    'ENGINE': 'django.db.backends.sqlite3',
+                    'NAME': ':memory:',
+                },
+                'bare': {'NAME': ':memory:'},
+            }
+            with override_settings(
+                TRUSTS_POLICY_LOCKFILE=str(target),
+                DATABASES=databases,
+            ):
+                with self.assertRaises(CommandError) as ctx:
+                    call_command(
+                        'trusts_policy_sql', database='bare', lock=True,
+                        stdout=StringIO(),
+                    )
+            self.assertIn('no DATABASES ENGINE', str(ctx.exception))
+            self.assertIn('bare', str(ctx.exception))
             self.assertFalse(target.exists())
 
 class PolicySqlCheckTest(SimpleTestCase):

@@ -97,24 +97,28 @@ class TrustModelBackendMixin(object):
 
 def grant_users(item, skipped, subject, permission):
     """User predicate from this backend's catalog."""
-    return item.permitted_users_predicate(subject, permission, skipped=skipped)
+    return item.permitted_users_predicate(
+        subject, permission, skipped=skipped)
 
 
 def grant_authorized(item, skipped, subject, user, permission):
     """Authorized-row grant from this backend's catalog."""
-    return item.authorized_grant_q(subject, user, permission, skipped=skipped)
+    return item.authorized_grant_q(
+        subject, user, permission, skipped=skipped)
 
 
 def grant_prefix(item, skipped, subject, user, permission, *, content):
     """Permitted-content prefix grant from this backend's catalog."""
-    return item.content_prefix_q(subject, user, permission, skipped=skipped, content=content)
+    return item.content_prefix_q(
+        subject, user, permission, skipped=skipped, content=content)
 
 
 def grant_permitted(item, skipped, subject, user, permission, *,
                     conditions=(), binding=None, api=None):
     """Permitted-row grant from this backend's catalog."""
-    return item.permitted_grant_q(subject, user, permission, skipped=skipped,
-                                  conditions=conditions, binding=binding, api=api)
+    return item.permitted_grant_q(
+        subject, user, permission, skipped=skipped,
+        conditions=conditions, binding=binding, api=api)
 
 
 def permission_backends(backend=None):
@@ -134,14 +138,14 @@ def trusts_backends(backend=None):
         if isinstance(item, TrustModelBackendMixin))
 
 
-def filter_listed(queryset, subject, user, permission, *, ask, backend=None,
-                  skip_flags, require_user=True, preflight=False, extra_q=None,
-                  **grant_kw):
+def filter_listed(queryset, subject, user, *, ask, backend=None,
+                  skip_flags, require_user=True, preflight=False,
+                  extra_q=None, model=None, conditions=(), api=None):
     """OR the listed grant, then filter, distinct, and bind once."""
     _inquiry, granted_q, user_model, _chosen = open_grant(
-        ask, subject, user, permission, backend=backend,
-        skip_flags=skip_flags, require_user=require_user,
-        preflight=preflight, **grant_kw)
+        ask, subject, user, backend=backend, skip_flags=skip_flags,
+        require_user=require_user, preflight=preflight, model=model,
+        conditions=conditions, api=api)
     if granted_q is None:
         return queryset.none()
     if extra_q is not None:
@@ -150,23 +154,28 @@ def filter_listed(queryset, subject, user, permission, *, ask, backend=None,
         queryset.filter(granted_q).distinct(), user_model=user_model)
 
 
-def open_grant(ask, subject, user, permission, *, backend=None,
-               skip_flags=None, require_user=True, preflight=False,
-               model=None, **grant_kw):
+def open_grant(ask, subject, user, *, backend=None, skip_flags=None,
+               require_user=True, preflight=False, model=None,
+               conditions=(), api=None):
     """Preflight names, then OR. A denied user does not compile the grant."""
     chosen = trusts_backends(backend)
     inquiry = bind_checked_user(
         user, skip_flags=skip_flags, require_user=require_user,
         skip_names=known_skip_names(item.get_catalog() for item in chosen))
     if preflight:
-        resolved = model if model is not None else getattr(subject, 'model', subject)
-        _selected_conditions_owned(
-            resolved, grant_kw.get('conditions') or (), chosen,
-            grant_kw.get('api'))
+        resolved = (
+            model if model is not None
+            else getattr(subject, 'model', subject))
+        _selected_conditions_owned(resolved, conditions, chosen, api)
+
+    def _ask(item):
+        if preflight:
+            return ask(item, inquiry.values, conditions, api)
+        return ask(item, inquiry.values)
+
     if inquiry.denied:
         return inquiry, None, None, chosen
-    granted, user_model = _combine(
-        lambda item: ask(item, inquiry.values), chosen)
+    granted, user_model = _combine(_ask, chosen)
     return inquiry, granted, user_model, chosen
 
 
@@ -184,8 +193,8 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     reject_permission_shape(perm)
     _inquiry, combined, _, chosen = open_grant(
         lambda item, skipped: grant_users(item, skipped, content, perm),
-        content, None, perm, backend=backend,
-        skip_flags=skip_flags, require_user=False)
+        content, None, backend=backend, skip_flags=skip_flags,
+        require_user=False)
     if user_queryset is None:
         if not chosen:
             raise TrustsConfigurationError(

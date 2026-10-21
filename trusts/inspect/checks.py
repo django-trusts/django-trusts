@@ -30,7 +30,11 @@ from trusts.apps import TrustsConfigMixin
 from trusts.backends import TrustModelBackendMixin
 from trusts.compile.factory import probe_along_capabilities
 from trusts.decorators import _declared_authorization_guards
-from trusts.errors import PermissionConditionError, TrustsConfigurationError, TrustsMixinRequired
+from trusts.errors import (
+    PermissionConditionError,
+    TrustsConfigurationError,
+    TrustsMixinRequired,
+)
 from trusts.plan.conditions import (
     obsolete_legacy_callback_setting_enabled,
     validate_expression,
@@ -173,7 +177,19 @@ def _load_listed():
 
 
 def _listed_catalogs():
-    return _load_listed()[0]
+    """Built catalogs of listed Trusts backends, with no check errors."""
+    catalogs = {}
+    for path in settings.AUTHENTICATION_BACKENDS:
+        try:
+            backend = import_string(path)()
+        except TrustsMixinRequired:
+            continue
+        except (ImportError, ImproperlyConfigured, TrustsConfigurationError):
+            continue
+        if isinstance(backend, TrustModelBackendMixin):
+            catalogs.setdefault(
+                id(backend.get_catalog()), backend.get_catalog())
+    return tuple(catalogs.values())
 
 
 def _covered_content_models(catalogs):

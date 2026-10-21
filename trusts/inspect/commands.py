@@ -11,12 +11,16 @@ not execute the exported statements.
 
 from __future__ import annotations
 
-__all__ = []
-
 from django.core.management.base import BaseCommand, CommandError
 
-import trusts.inspect.snapshot as snapshot
 from trusts.errors import TrustsConfigurationError
+from trusts.inspect.snapshot import (
+    render_policy_sql_bytes,
+    resolve_policy_database,
+    write_policy_lock,
+)
+
+__all__ = ['PolicySqlCommand']
 
 
 class PolicySqlCommand(BaseCommand):
@@ -54,10 +58,10 @@ class PolicySqlCommand(BaseCommand):
 
     def handle(self, *args, **options):
         try:
-            alias = snapshot.resolve_policy_database(options.get('database'))
-            payload = snapshot.render_policy_sql_bytes(alias=alias)
+            alias = resolve_policy_database(options.get('database'))
+            payload = render_policy_sql_bytes(alias=alias)
             if options.get('lock'):
-                snapshot.write_policy_lock(payload)
+                write_policy_lock(payload)
         except TrustsConfigurationError as exc:
             raise CommandError(str(exc)) from exc
         self.stdout.write(payload.decode('utf-8'), ending='')
