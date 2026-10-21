@@ -193,6 +193,7 @@ class PublicRegistration:
 
 def relation_plan(records, delegations, content, user, permission,
                   catalog_user, user_conditions, user_rules, override_q):
+    """One plan for ``(content, user, permission)``. An empty selection is a plan."""
     chosen = tuple(
         record for record in records
         if record.content_model is content
@@ -915,6 +916,7 @@ class Compiler(object):
         return Catalog(shape, user_model=model)
 
     def _stored_user_conditions(self):
+        """``None`` when the registry still uses the built-in rule."""
         if self._user_conditions is None:
             return None
         return tuple(self._user_conditions.values())
@@ -986,6 +988,7 @@ def _validate_permission_in(predicate, root, permission_model,
 
 def _validate_condition(condition, root, permission_model,
                         permission_target=None):
+    """Registration-time ``_meta`` validation. Zero SQL. None is a no-op."""
     if condition is None:
         return None
     if isinstance(condition, All):
@@ -1070,6 +1073,7 @@ def _common_prefix(left, right):
     return left[:n]
 
 def _target_field(field, role, path):
+    """Return ``(related_model, target_field)`` for one hop."""
     related, attname = resolved_hop(field, role, path)
     target = related._meta.get_field(attname)
     if getattr(target, 'attname', None) != attname:
@@ -1103,6 +1107,7 @@ def _concrete_fk(field):
     return field
 
 def _resolve_along_edge(walk_model, edge_path):
+    """Return S/C/E metadata for hops from ``walk_model`` along ``edge_path``."""
     n = len(edge_path)
     if n == 1:
         try:
@@ -1214,6 +1219,7 @@ def _resolve_along_edge(walk_model, edge_path):
     )
 
 def _re_resolve_suffix(walk_model, suffix_path, content_model):
+    """Confirm stored suffix names compile from the walk-site model."""
     if not suffix_path:
         if walk_model is not content_model:
             raise TrustsConfigurationError(
@@ -1351,6 +1357,7 @@ def _build_along_walk(root, content_path, content_model, along):
     )
 
 def _same_terminal_bindings(existing, record):
+    """True when two records share content/user/permission/along bindings."""
     return (
         existing.content_path == record.content_path
         and existing.content_model is record.content_model
@@ -1367,6 +1374,7 @@ def _same_terminal_bindings(existing, record):
     )
 
 def _rules_for_model(conditions, model):
+    """Stored rules, or the built-in ``is_active`` rule for ``model``."""
     if conditions is not None:
         return conditions
     return builtin_user_conditions(model)
@@ -1395,6 +1403,7 @@ def _assert_registration_rules(*, user_model, sponsor_model, conditions,
         )
 
 def _require_condition_arity(builder):
+    """Reject 0-arg, 2+-required, and keyword-only-only before invoke."""
     try:
         signature = inspect.signature(builder)
     except (TypeError, ValueError):
@@ -1408,6 +1417,7 @@ def _require_condition_arity(builder):
         ) from exc
 
 def _delegated_condition_arity(builder):
+    """Return 1 or 2 without invoking a delegated condition builder."""
     try:
         signature = inspect.signature(builder)
     except (TypeError, ValueError):
@@ -1523,6 +1533,7 @@ def _lower_public_condition(node, trust, token, permission_path):
     )
 
 def _reject_public_condition_value(condition):
+    """Public ``condition=`` is a callable, not a prebuilt IR node."""
     if (
         condition is All
         or condition is Equal
@@ -1547,6 +1558,7 @@ def _reject_public_condition_value(condition):
         )
 
 def _normalize_public_condition(trust, condition, permission_path, *, token):
+    """Invoke a public condition builder once and lower to private IR."""
     if condition is None:
         return None
     _reject_public_condition_value(condition)
@@ -1576,6 +1588,7 @@ def _normalize_public_condition(trust, condition, permission_path, *, token):
     return _lower_public_condition(result, trust, token, permission_path)
 
 def _normalize_delegated_condition(trust, condition, *, token):
+    """Invoke a delegated condition builder once and lower to private IR."""
     if condition is None:
         return None
     _reject_public_condition_value(condition)
@@ -1609,6 +1622,7 @@ def _normalize_delegated_condition(trust, condition, *, token):
     return _lower_public_condition(result, trust, token, None)
 
 def _normalize_public_role(trust, value, role, *, token):
+    """Normalize a public string or path builder to a Django ``__`` path."""
     if isinstance(value, Ref):
         raise TypeError(
             '%s must be a Django path string or a one-argument path '
@@ -1647,6 +1661,7 @@ def _normalize_public_role(trust, value, role, *, token):
     return '__'.join(result._path)
 
 def _public_path_segments(value, role, *, allow_empty=False):
+    """Split a public Django ``__`` path. Reject before ``Ref`` / resolve."""
     if isinstance(value, Ref):
         raise TypeError(
             '%s must be a Django path string, not a Ref.' % (role,)
@@ -1685,6 +1700,7 @@ def _public_ref(root, value, role, *, allow_empty=False):
     ))
 
 def _bind_public_along(root, along):
+    """Normalize ``(path, bound)`` to an internal ``Along``."""
     if along is None:
         return None
     if isinstance(along, Along):

@@ -27,7 +27,7 @@ from django.db import connections
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
 from trusts.apps import TrustsConfigMixin
-from trusts.backends import TrustModelBackendMixin
+from trusts.backends import TrustModelBackendMixin, mixin_required_message
 from trusts.compile.factory import probe_along_capabilities
 from trusts.decorators import _declared_authorization_guards
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
@@ -67,6 +67,7 @@ _E005_HINT = (
 
 
 def _trusts_abstract_base(model, label):
+    """Abstract base whose Django model label is ``label``."""
     for base in model.__mro__:
         meta = getattr(base, '_meta', None)
         if meta is not None and meta.abstract and meta.label == label:
@@ -139,13 +140,16 @@ def _unbuildable(path, exc):
 
 
 def _require_mixin(errors, config, path):
-    if any(message.obj is config for message in errors):
+    key = config if config is not None else path
+    if any(
+        message.id == CHECK_ID_MIXIN_REQUIRED and message.obj == key
+        for message in errors
+    ):
         return
-    label = config.label if config is not None else path
     errors.append(django_checks.Error(
-        'App %s must extend TrustsConfigMixin.' % label,
+        mixin_required_message(config, path),
         hint='Extend TrustsConfigMixin on the app config.',
-        obj=config, id=CHECK_ID_MIXIN_REQUIRED,
+        obj=key, id=CHECK_ID_MIXIN_REQUIRED,
     ))
 
 
@@ -155,19 +159,18 @@ def _load_listed():
         config = django_apps.get_containing_app_config(path.rpartition('.')[0])
         try:
             backend_cls = import_string(path)
-        except (ImportError, AttributeError, ImproperlyConfigured) as exc:
-            errors.append(_unbuildable(path, exc))
-            continue
-        trusts_backend = (
-            isinstance(backend_cls, type)
-            and issubclass(backend_cls, TrustModelBackendMixin)
-        )
-        if trusts_backend and not isinstance(config, TrustsConfigMixin):
-            _require_mixin(errors, config, path)
-            continue
-        try:
+            if (
+                isinstance(backend_cls, type)
+                and issubclass(backend_cls, TrustModelBackendMixin)
+                and not isinstance(config, TrustsConfigMixin)
+            ):
+                _require_mixin(errors, config, path)
+                continue
             backend = backend_cls()
-        except (ImproperlyConfigured, TrustsConfigurationError) as exc:
+        except (
+            ImportError, AttributeError, ImproperlyConfigured,
+            TrustsConfigurationError,
+        ) as exc:
             errors.append(_unbuildable(path, exc))
             continue
         if isinstance(backend, TrustModelBackendMixin):
@@ -177,6 +180,7 @@ def _load_listed():
 
 
 def _covered_content_models(catalogs):
+    """Content terminals that a listed backend's catalog already records."""
     covered = set()
     for catalog in catalogs:
         for record in catalog.records:
@@ -187,6 +191,7 @@ def _covered_content_models(catalogs):
 
 
 def _junction_content_model(model):
+    """Return the Junction content model or a CheckMessage for a bad contract."""
     try:
         content_model = model.get_content_model()
     except Exception as exc:
@@ -271,6 +276,7 @@ def check_missing_declarations(app_configs, **kwargs):
 
 
 def _iter_catalog_permission_conditions(catalogs):
+    """Yield condition records from the listed catalogs."""
     for catalog in catalogs:
         yield from catalog.iter_permission_conditions()
 
@@ -409,11 +415,6 @@ def check_authorization_required_conditions(app_configs, **kwargs):
 def check_unlisted_catalog(app_configs, **kwargs):
     """Registrations need a listed backend whose module lives in that app."""
     chosen, _catalogs, messages = _load_listed()
-    for config in django_apps.get_app_configs():
-        recorder = getattr(config, 'recorder', None)
-        if isinstance(config, TrustsConfigMixin) or not getattr(recorder, '_rows', ()):
-            continue
-        _require_mixin(messages, config, config.label)
     listed = set()
     for candidate in chosen:
         config = django_apps.get_containing_app_config(type(candidate).__module__)

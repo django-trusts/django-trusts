@@ -118,7 +118,9 @@ class TrustsConfigMixin(django.apps.AppConfig):
         self.catalog = None
 
     def get_catalog(self):
-        """Catalog built by ``ready``."""
+        """Catalog built by ``ready``. Raises before that build."""
+        if self.catalog is None:
+            raise TrustsConfigurationError('catalog not built yet')
         return self.catalog
 
     def catalog_path(self):
@@ -126,8 +128,8 @@ class TrustsConfigMixin(django.apps.AppConfig):
         return '%s.%s' % (type(self).__module__, type(self).__qualname__)
 
     def ready(self):
-        # phase-1 import raises AppRegistryNotReady: resolution imports
-        # auth.Permission before apps are ready.
+        # phase-1 import raises AppRegistryNotReady: compile/resolution.py
+        # imports django.contrib.contenttypes.fields before apps are ready.
         from trusts.compile.factory import Compiler
 
         user_model = get_user_model()

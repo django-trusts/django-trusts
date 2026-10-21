@@ -167,6 +167,7 @@ def user_skip_params(user, skip_flags, *, subjects=None, catalog=None,
 
 
 def _outer_permission_identity(permission_model, content_model):
+    """Content-type predicate on an outer ``auth.Permission`` row."""
     if (
         permission_model is None
         or content_model is None
@@ -211,6 +212,7 @@ def _or_q(left, right):
 
 
 def _require_mode_flag(value, name):
+    """A skip keyword must be a real boolean."""
     if not isinstance(value, bool):
         raise TypeError('%s must be a bool, not %r.' % (name, value))
     return value

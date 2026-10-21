@@ -405,18 +405,87 @@ class ListedBackendOrTest(TestCase):
             for message in messages
         ))
 
-    def test_recorded_rows_outside_a_mixin_are_e012(self):
-        config = apps.get_app_config('gh_permissions')
-        config.recorder = type('Rows', (), {'_rows': (object(),)})()
-        self.addCleanup(delattr, config, 'recorder')
+    def test_unbuildable_and_non_mixin_are_both_reported(self):
+        outside = 'tests.gh_permissions.backends.OutsideBackend'
+        with override_settings(
+            AUTHENTICATION_BACKENDS=(HOST, BROKEN_IMPROPER, outside),
+        ):
+            messages = run_checks()
+        self.assertEqual(
+            [message.msg for message in messages
+             if getattr(message, 'id', None) == 'trusts.E011'],
+            ['Authentication backend %s could not be built: %s' % (
+                BROKEN_IMPROPER, 'improper boom')],
+        )
         mixin = [
-            message for message in run_checks()
+            message for message in messages
             if getattr(message, 'id', None) == 'trusts.E012'
         ]
         self.assertEqual(
-            [message.obj.label for message in mixin],
-            ['gh_permissions'],
+            [(message.msg, message.obj.label) for message in mixin],
+            [('App gh_permissions must extend TrustsConfigMixin.', 'gh_permissions')],
         )
+
+    def test_each_backend_outside_any_app_is_e012(self):
+        import sys
+        import types
+
+        from django.contrib.auth.backends import ModelBackend
+        from tests.gh_permissions.backends import OutsideBackend
+        from trusts.backends import TrustModelBackendMixin
+
+        def loose(name):
+            module_name = 'loose_trusts_%s' % name
+            module = types.ModuleType(module_name)
+            sys.modules[module_name] = module
+            cls = type(name, (TrustModelBackendMixin, ModelBackend), {})
+            cls.__module__ = module_name
+            setattr(module, name, cls)
+            return '%s.%s' % (module_name, name), cls
+
+        first, first_cls = loose('LooseOne')
+        second, second_cls = loose('LooseTwo')
+        wording = (
+            'Backend %s is not inside an app whose config extends '
+            'TrustsConfigMixin.'
+        )
+        with self.assertRaises(ImproperlyConfigured) as raised:
+            first_cls()
+        self.assertEqual(str(raised.exception), wording % first)
+        with self.assertRaises(ImproperlyConfigured) as raised:
+            OutsideBackend()
+        self.assertEqual(
+            str(raised.exception),
+            'App gh_permissions must extend TrustsConfigMixin.',
+        )
+        with override_settings(
+            AUTHENTICATION_BACKENDS=(HOST, first, first, second),
+        ):
+            messages = run_checks()
+        mixin = [
+            message for message in messages
+            if getattr(message, 'id', None) == 'trusts.E012'
+        ]
+        self.assertEqual(
+            [(message.msg, message.obj) for message in mixin],
+            [(wording % first, first), (wording % second, second)],
+        )
+        self.assertFalse(any(
+            getattr(message, 'id', None) == 'trusts.E011'
+            for message in messages
+        ))
+
+    def test_no_listed_trusts_backend_names_the_gap(self):
+        from trusts.backends import compile_permitted_users
+
+        with override_settings(AUTHENTICATION_BACKENDS=(
+            'django.contrib.auth.backends.ModelBackend',
+        )):
+            with self.assertRaisesRegex(
+                TrustsConfigurationError,
+                'No Trusts backend is listed in AUTHENTICATION_BACKENDS.',
+            ):
+                compile_permitted_users(self.note, self.note_perm)
 
     def _assert_note(self, *, allowed, denied):
         self._assert_side(
