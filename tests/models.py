@@ -106,9 +106,6 @@ class Ticket(Content if Content is not None else models.Model):
     class Meta:
         app_label = 'trusts_tests'
         default_permissions = ('add', 'read', 'change', 'delete')
-        permission_conditions = (
-            ('meta_own', ticket_meta_own),
-        )
 
     def __str__(self):
         return self.title

@@ -6,20 +6,10 @@ from typing import TypeVar
 import django.apps
 from django.contrib.auth import get_user_model
 from django.db.models import Model
-from django.db.models import options as model_options
 
 from trusts.errors import TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
-
-# Populate imports this module before any models. The option has to be
-# registered before Django imports models that declare it.
-if 'permission_conditions' not in model_options.DEFAULT_NAMES:
-    _names = model_options.DEFAULT_NAMES
-    if isinstance(_names, tuple):
-        model_options.DEFAULT_NAMES = _names + ('permission_conditions',)
-    else:
-        _names.append('permission_conditions')
 
 
 class Recorder(object):

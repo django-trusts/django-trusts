@@ -41,11 +41,16 @@ class TestsConfig(trusts_apps.TrustsConfigMixin):
         from django.apps import apps as django_apps
         if self.apps is not django_apps:
             return
+        # Ticket.meta_own is a named filter. Importing tests.models
+        # while this module loads defines models before the registry
+        # is ready, so the import stays in ready().
+        from tests.models import Ticket, ticket_meta_own
+        self.recorder.add_named_filter(Ticket, 'meta_own', ticket_meta_own)
         try:
             TrustUserPermission = self.apps.get_model(
                 'trusts', 'TrustUserPermission',
             )
-            from tests.models import Category, TestGroupJunction, Ticket
+            from tests.models import Category, TestGroupJunction
         except (LookupError, ImportError):
             super().ready()
             return
