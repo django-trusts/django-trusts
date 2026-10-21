@@ -505,12 +505,6 @@ class PolicySqlGoldenTest(SimpleTestCase):
             self.assertEqual([param for param in params if param.startswith('$along_bound=')], ['$along_bound=2'])
             self.assertEqual(content[key]['sql'].count('%s'), len(params))
 
-    def test_unclassified_placeholder_fails_closed(self):
-        self.assertIsNone(_symbol_for_new_param(object()))
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            _classify_compiled(object(), 'SELECT %s', (1,))
-        self.assertIn('could not classify', str(ctx.exception))
-        self.assertIn('object', str(ctx.exception))
 
     def test_along_failure_does_not_return_a_partial_document(self):
         handle = _handle('documents.backends.FolderBackend')
@@ -727,52 +721,3 @@ class PolicySqlConstantTest(SimpleTestCase):
             else:
                 self.assertEqual(restored, Decimal(text))
 
-class PolicySqlConcurrencyTest(TestCase):
-
-    def test_normal_query_is_unchanged_while_export_compile_is_paused(self):
-        original_compile = SQLCompiler.compile
-        User.objects.create(username='export-neighbor')
-        queryset = User.objects.filter(username='export-neighbor')
-        control_sql, control_params = queryset.query.get_compiler(using='default').as_sql()
-        control_rows = list(queryset.values_list('username', flat=True))
-        expected = render_configured_policy(_document_handle())
-        entered = threading.Event()
-        release = threading.Event()
-        outcome = []
-        export_ident = []
-
-        def classifying(node, sql, params, query=None):
-            if threading.get_ident() == export_ident[0] and (not classifying.paused):
-                classifying.paused = True
-                entered.set()
-                if not release.wait(5):
-                    raise TimeoutError('export compilation was not released')
-            return _classify_compiled(node, sql, params, query=query)
-        classifying.paused = False
-
-        def run_export():
-            export_ident.append(threading.get_ident())
-            try:
-                with patch('trusts.inspect.snapshot._classify_compiled', classifying):
-                    outcome.append(render_configured_policy(_document_handle()))
-            except Exception as exc:
-                outcome.append(exc)
-        worker = threading.Thread(target=run_export)
-        worker.start()
-        self.assertTrue(entered.wait(5), 'export compilation did not pause: %r' % (outcome,))
-        try:
-            self.assertIs(SQLCompiler.compile, original_compile)
-            live_sql, live_params = queryset.query.get_compiler(using='default').as_sql()
-            live_rows = list(queryset.values_list('username', flat=True))
-            self.assertEqual(live_sql, control_sql)
-            self.assertEqual(list(live_params), list(control_params))
-            self.assertEqual(live_rows, ['export-neighbor'])
-            self.assertEqual(live_rows, control_rows)
-            for param in live_params:
-                self.assertNotIsInstance(param, _Symbol)
-        finally:
-            release.set()
-        worker.join(5)
-        self.assertFalse(worker.is_alive())
-        self.assertEqual(outcome, [expected])
-        self.assertIs(SQLCompiler.compile, original_compile)

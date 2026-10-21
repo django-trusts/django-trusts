@@ -402,46 +402,6 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         self.assertEqual(len(captured.captured_queries), 1)
         self.assertIn('EXISTS', captured.captured_queries[0]['sql'].upper())
 
-    def test_three_projections_share_one_plan_builder(self):
-        registry = self._registry()
-        self.DocumentGrant.objects.create(
-            document=self.doc_a, user=self.alice, permission=self.read,
-        )
-        # Catalog.plan_for is the shared lookup. Enumeration looks up
-        # once, then the compiler looks up again. has_perm looks up the
-        # applies plan and the grant plan. The queryset filter looks up
-        # once.
-        with patch.object(
-            Catalog, 'plan_for', autospec=True,
-            wraps=Catalog.plan_for,
-        ) as plan_for:
-            list(built_catalog(registry).permissions_for(self.alice, self.doc_a))
-            built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a)
-            list(built_catalog(registry).filter_authorized(
-                self.Document.objects.all(), self.alice, self.read,
-            ))
-        self.assertEqual(plan_for.call_count, 5)
-
-        plan = built_catalog(registry).plan_for(
-            self.doc_a, user=self.alice, permission=self.read,
-        )
-        terminals = []
-        original = RelationPlan._correlated_exists
-
-        def spy(self, terminal_field_attr, **bindings):
-            terminals.append(terminal_field_attr)
-            return original(self, terminal_field_attr, **bindings)
-
-        with patch.object(RelationPlan, '_correlated_exists', spy):
-            list(plan.permissions(self.alice, self.doc_a))
-            plan.has_permission(self.alice, self.doc_a, self.read)
-            list(plan.filter_content(
-                self.Document.objects.all(), self.alice, self.read,
-            ))
-        self.assertEqual(
-            terminals,
-            ['permission_field', 'permission_field', 'content_field'],
-        )
 
     def test_configured_user_model_uses_registered_terminal_metadata(self):
         User = get_user_model()

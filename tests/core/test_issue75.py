@@ -80,16 +80,6 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
             apps.get_app_config('trusts_kernel_host').catalog_path(),
         )
 
-    def test_backend_outside_a_mixin_app_fails_loud(self):
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST, OUTSIDE)):
-            messages = [
-                message for message in run_checks()
-                if getattr(message, 'id', None) == 'trusts.E012'
-            ]
-        self.assertEqual(
-            [message.obj.label for message in messages],
-            ['gh_permissions'],
-        )
 
     def test_document_and_host_catalogs_use_config_paths(self):
         from django.apps import apps

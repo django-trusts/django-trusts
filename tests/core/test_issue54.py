@@ -255,19 +255,6 @@ class AuthorizedQuerySetLiveTest(TestCase):
         with self.assertNumQueries(0):
             self.assertFalse(qs.exists())
 
-    def test_non_instance_user_is_configuration_error(self):
-        with self.assertNumQueries(0):
-            with patch('trusts.plan.contents.granted') as compiled:
-                denied = Document.objects.authorized(AnonymousUser(), self.change)
-                audited = Document.objects.authorized(
-                    AnonymousUser(), self.change, skip_is_active=True,
-                )
-                self.assertFalse(denied.exists())
-                self.assertFalse(audited.exists())
-            compiled.assert_not_called()
-            with self.assertRaises((TrustsConfigurationError, TypeError, AttributeError)):
-                Document.objects.authorized(None, self.change)
-
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):

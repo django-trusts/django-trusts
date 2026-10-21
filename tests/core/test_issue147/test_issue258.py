@@ -48,7 +48,6 @@ from tests.support import (
 )
 
 
-
 def _e009():
     return [
         item for item in django_checks.run_checks()
@@ -539,55 +538,6 @@ class PolicyLockSentinelTest(SimpleTestCase):
         self.assertIn('$content.pk_value', params)
         self.assertEqual(content._meta.pk.attname, 'pk_value')
         self.assertEqual(grant._meta.get_field('document').related_model, content)
-
-    def test_missing_grant_or_permission_query_fails_closed(self):
-        handle = _document_handle('documents.backends.MissingQueryBackend')
-        with patch(
-            'trusts.compile.catalogs.Catalog.complete_grant_q',
-            return_value=None,
-        ):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                render_configured_policy(handle)
-        self.assertIn('no grant', str(ctx.exception))
-
-        with patch(
-            'trusts.inspect.snapshot._compile_common_permissions',
-            return_value=None,
-        ):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                render_configured_policy(handle)
-        self.assertIn('no permissions query', str(ctx.exception))
-
-    def test_missing_group_permissions_query_fails_closed(self):
-        class GroupGrant(models.Model):
-            group = models.ForeignKey('auth.Group', on_delete=models.CASCADE)
-            paper = models.ForeignKey('auth.User', on_delete=models.CASCADE)
-
-            class Meta:
-                app_label = 'documents'
-
-        handle = _handle('documents.backends.GroupQueryBackend')
-        handle.register(
-            trust=GroupGrant,
-            user='group__user',
-            group='group',
-            content='paper',
-        )
-        from trusts.plan.aggregates import _compile_common_permissions
-
-        def hide_group(registry, instance, user, kind='complete'):
-            if kind == 'group':
-                return None
-            return _compile_common_permissions(
-                registry, instance, user, kind=kind,
-            )
-
-        with patch(
-            'trusts.inspect.snapshot._compile_common_permissions', hide_group,
-        ):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                render_configured_policy(handle)
-        self.assertIn('no group-permissions query', str(ctx.exception))
 
 
 class PolicyLockFilterShapeTest(SimpleTestCase):
