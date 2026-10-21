@@ -217,7 +217,8 @@ def relation_plan(records, delegations, content, user, permission,
         if len(targets) != 1:
             raise TrustsConfigurationError(
                 'Applicable registrations must share one permission '
-                'comparison target; got %s.' % ', '.join(sorted(targets)))
+                'comparison target; got %s.'
+                % ', '.join(sorted(targets)))
         stored = targets.pop()
         if stored not in (plan_permission._meta.pk.attname, 'pk'):
             column = stored
