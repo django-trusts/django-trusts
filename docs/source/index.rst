@@ -723,15 +723,15 @@ Permission policy in SQL
 django-trusts can render its registered authorization policy as reviewable
 output containing generated parameterized SQL:
 
+.. code-block:: console
+
+   python manage.py trusts_policy_sql
+
 A host app opts in with ``management/commands/trusts_policy_sql.py``:
 
 .. code-block:: python
 
    from trusts.inspect.commands import PolicySqlCommand as Command
-
-.. code-block:: console
-
-   python manage.py trusts_policy_sql
 
 This output is for examining the queries and noticing changes. It is not a
 public file format or an input API. Write the current output to a lockfile
