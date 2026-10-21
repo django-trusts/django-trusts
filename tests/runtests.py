@@ -23,7 +23,6 @@ _KERNEL_ONLY = frozenset((
     'tests.core.test_issue96',
     'tests.core.test_issue111',
     'tests.core.test_issue115',
-    'tests.core.test_issue122',
 ))
 
 

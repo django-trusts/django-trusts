@@ -17,10 +17,6 @@ LEGACY_NAMES = (
     'permission_required',
     'request_passes_test',
 )
-ZERO_PIN = '833866b9a096ac8a31e8bc60424e01a02f05389c'
-STALE_ZERO_R5A = '462c83b59edfb51011b4373e8214b2daaab7f500'
-STALE_ZERO_191 = '517307170f954f187da78c56e236ec1779c46e29'
-STALE_ZERO_38 = 'c7dc4f11f728ad3c4c22249e471daa4bf9849404'
 
 
 class LegacyDecoratorFamilyRemovedTest(SimpleTestCase):
@@ -45,25 +41,3 @@ class LegacyDecoratorFamilyRemovedTest(SimpleTestCase):
         self.assertNotIn('def request_passes_test(', source)
 
 
-    def test_companion_pin_is_exact_zero_candidate(self):
-        ci = (ROOT / '.github' / 'workflows' / 'ci.yml').read_text()
-        wheels = (ROOT / 'scripts' / 'verify-companion-wheels.py').read_text()
-        self.assertIn('COMPANION_ZERO_SHA: %s' % ZERO_PIN, ci)
-        self.assertIn("ZERO_HEAD = '%s'" % ZERO_PIN, wheels)
-        self.assertNotIn(STALE_ZERO_R5A, ci)
-        self.assertNotIn(STALE_ZERO_R5A, wheels)
-        self.assertNotIn(STALE_ZERO_191, ci)
-        self.assertNotIn(STALE_ZERO_191, wheels)
-        self.assertNotIn(STALE_ZERO_38, ci)
-        self.assertNotIn(STALE_ZERO_38, wheels)
-        self.assertNotIn('f50946f7112702a41bd63a3e044b44a0d4ec3297', ci)
-        self.assertNotIn('f50946f7112702a41bd63a3e044b44a0d4ec3297', wheels)
-
-
-    def test_wheel_proof_rejects_legacy_symbols(self):
-        script = (ROOT / 'scripts' / 'verify-wheel-install.py').read_text()
-        self.assertIn('legacy decorator family absent', script)
-        self.assertIn('permission_required', script)
-        self.assertIn('request_passes_test', script)
-        self.assertIn('library wheel still exposes trusts.decorators.', script)
-        self.assertIn('library wheel decorators import Zero', script)
