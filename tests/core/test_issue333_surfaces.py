@@ -546,3 +546,28 @@ class RemainingLimitsTest(SimpleTestCase):
                 content=delegation.document, delegate=delegation.delegate,
                 sponsor=delegation.sponsor, condition=object(),
             )
+
+    def test_role_path_uses_the_shared_builder(self):
+        with self.assertRaises(PermissionConditionError):
+            compiler().register(
+                trust=DocumentGrant, user=lambda t: t.user['pk'],
+                permission='permission', content='document',
+            )
+        with self.assertRaises(PermissionConditionError):
+            compiler().register(
+                trust=DocumentGrant, user=lambda t: t.user(),
+                permission='permission', content='document',
+            )
+        with self.assertRaises(PermissionConditionError):
+            compiler().register(
+                trust=DocumentGrant, user=lambda t: t.user == t.document,
+                permission='permission', content='document',
+            )
+        record = compiler().register(
+            trust=DocumentGrant, user=lambda t: t.user,
+            permission=lambda t: t.permission,
+            content=lambda t: t.document,
+        )
+        self.assertEqual(record.user_path, ('user',))
+        self.assertEqual(record.permission_path, ('permission',))
+        self.assertEqual(record.content_path, ('document',))

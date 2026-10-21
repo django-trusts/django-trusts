@@ -27,13 +27,14 @@ from trusts.compile.nodes import (
     _require_ref,
 )
 from trusts.plan.grammar import (
+    Symbol,
     Tree,
     inquiry_partner,
     invoke,
     is_inquiry,
     unsupported,
 )
-from trusts.compile.paths import AlongWalk, _PathBuilder
+from trusts.compile.paths import AlongWalk
 from trusts.compile.resolution import (
     _SUFFIX_KINDS,
     _append_group_permissions,
@@ -1728,27 +1729,27 @@ def _normalize_public_role(trust, value, role, *, token):
             '%s must be a Django path string or a one-argument path '
             'builder, not %r.' % (role, value)
         )
-    builder = _PathBuilder(trust, token=token)
+    symbol = Symbol('row', token=token)
     try:
-        result = value(builder)
+        result = value(symbol)
     except TrustsConfigurationError:
         raise
     except Exception as exc:
         raise TrustsConfigurationError(
             '%s path builder failed: %s' % (role, exc)
         ) from exc
-    if not isinstance(result, _PathBuilder):
-        raise TrustsConfigurationError(
+    if not isinstance(result, Symbol):
+        raise PermissionConditionError(
             '%s path builder must return a path rooted at the supplied '
             'trust value, not %r.' % (role, result)
         )
     if result._token is not token:
-        raise TrustsConfigurationError(
+        raise PermissionConditionError(
             '%s path builder used a path from another symbolic root.'
             % (role,)
         )
     if not result._path:
-        raise TrustsConfigurationError(
+        raise PermissionConditionError(
             '%s path builder returned an empty path.' % (role,)
         )
     return '__'.join(result._path)
