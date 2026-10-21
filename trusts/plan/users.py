@@ -228,32 +228,33 @@ def _combine_or(left, right):
 def _comparison_outcome(expr, content, singular, user_model, *, equal):
     left = _condition_side(expr.left, content, singular, user_model)
     right = _condition_side(expr.right, content, singular, user_model)
-    if left[0] == 'const' and right[0] == 'const':
-        matches = left[1] == right[1]
-        return True if matches == equal else None
     if left[0] == 'user' and right[0] == 'user':
         return _user_fields_q(left[1], right[1], equal)
-    if left[0] == 'user':
-        return _user_const_q(left[1], right[1], equal)
-    if right[0] == 'user':
-        return _user_const_q(right[1], left[1], equal)
-    raise TrustsConfigurationError(
-        'Reverse permission inquiry cannot compile permission condition %r.'
-        % (expr,)
-    )
+    if left[0] == 'user' or right[0] == 'user':
+        column, other = (left, right) if left[0] == 'user' else (right, left)
+        if other[0] == 'value':
+            return _user_field_value_q(column[1], other[1], equal)
+        return _user_const_q(column[1], other[1], equal)
+    if (
+        left[0] == 'value' and right[0] == 'value'
+        and (left[1] is None or right[1] is None)
+    ):
+        return None
+    matches = left[1] == right[1]
+    return True if matches == equal else None
 
 
 def _condition_side(node, content, singular, user_model):
     if isinstance(node, _ir.Tree) and node.kind == 'const':
         return ('const', node.value)
     if isinstance(node, _ir.Tree) and node.kind == 'field' and node.root == 'object':
-        return ('const', _object_memory_value(content, node.path))
+        return ('value', _object_memory_value(content, node.path))
     if isinstance(node, _ir.Tree) and node.kind == 'field' and node.root == 'permission':
         if node.path:
             raise TrustsConfigurationError(
                 'Permission references cannot traverse attributes.'
             )
-        return ('const', singular)
+        return ('value', singular)
     if isinstance(node, _ir.Tree) and node.kind == 'field' and node.root == 'user':
         return ('user', _user_lookup(user_model, node.path))
     raise TrustsConfigurationError(
@@ -274,24 +275,33 @@ def _user_const_q(lookup, value, equal):
     return Q(**{'%s__isnull' % lookup: True}) | ~Q(**{lookup: value})
 
 
-def _user_fields_q(left, right, equal):
+def _user_field_value_q(lookup, value, equal):
+    """User column against another field's loaded value.
+
+    NULL on either side does not match. A constant uses ``_user_const_q``.
+    """
+    if value is None:
+        return Q(pk__in=())
+    if isinstance(value, _ir.ModelIdentity):
+        value = value.pk
+    elif isinstance(value, Model):
+        value = value.pk
     if equal:
-        return (
-            (Q(**{'%s__isnull' % left: True}) & Q(**{'%s__isnull' % right: True}))
-            | (
-                Q(**{'%s__isnull' % left: False})
-                & Q(**{'%s__isnull' % right: False})
-                & Q(**{left: F(right)})
-            )
-        )
+        return Q(**{lookup: value})
     return (
-        (Q(**{'%s__isnull' % left: True}) & Q(**{'%s__isnull' % right: False}))
-        | (Q(**{'%s__isnull' % left: False}) & Q(**{'%s__isnull' % right: True}))
-        | (
-            Q(**{'%s__isnull' % left: False})
-            & Q(**{'%s__isnull' % right: False})
-            & ~Q(**{left: F(right)})
-        )
+        Q(**{'%s__isnull' % lookup: False})
+        & ~Q(**{lookup: value})
+    )
+
+
+def _user_fields_q(left, right, equal):
+    """Two user columns. NULL on either side does not match."""
+    if equal:
+        return Q(**{left: F(right)})
+    return (
+        Q(**{'%s__isnull' % left: False})
+        & Q(**{'%s__isnull' % right: False})
+        & ~Q(**{left: F(right)})
     )
 
 

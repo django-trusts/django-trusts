@@ -8,6 +8,27 @@ development log. New features and changes that require no application action
 belong in [What's new](whats-new.md); development history belongs in
 [development history](../dev/development.md).
 
+## Two fields do not match NULL
+
+A condition that compares two fields no longer treats NULL as a value.
+A field compared with a constant still follows Python: `== None` is
+`IS NULL`, `!= None` is `IS NOT NULL`, and `!= 5` is true when the
+field is NULL (`None != 5`).
+
+| Comparison | When | Old | New |
+| --- | --- | --- | --- |
+| `o.left == o.right` | both NULL | matches | does not match |
+| `o.left != o.right` | exactly one NULL | matches | does not match |
+| `u.manager == o.reviewer` | both NULL | matches | does not match |
+| `u != o.owner` | `owner` is NULL | matches | does not match |
+| `o.left == None` | `left` is NULL | matches | unchanged |
+| `o.left != 5` | `left` is NULL | matches | unchanged |
+
+`has_perm`, a permitted queryset, and `get_permitted_users` use this
+rule. Relation `condition=` equality was already plain `a = b` (NULL
+never matches) and is unchanged. `o.left != o.right` when both are
+NULL already did not match.
+
 ## Test-only names removed
 
 These names were importable and unused by the authorization runtime.

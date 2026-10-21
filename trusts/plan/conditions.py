@@ -600,13 +600,9 @@ def evaluate_expression(node, user, perm, obj, model=None, user_model=None):
         ) or evaluate_expression(
             node.right, user, perm, obj, model, user_model,
         )
-    if _node(node, 'eq'):
-        return _resolve_runtime(node.left, user, perm, obj, model, user_model) == (
-            _resolve_runtime(node.right, user, perm, obj, model, user_model)
-        )
-    if _node(node, 'ne'):
-        return _resolve_runtime(node.left, user, perm, obj, model, user_model) != (
-            _resolve_runtime(node.right, user, perm, obj, model, user_model)
+    if _node(node, 'eq', 'ne'):
+        return _compare_values(
+            node, _node(node, 'eq'), user, perm, obj, model, user_model,
         )
     raise PermissionConditionError(
         'Permission condition did not produce a comparison expression.'
@@ -666,26 +662,28 @@ def _q_ne_lookup(lookup, value):
 
 
 def _q_eq_fields(a, b):
-    # Python ``None == None`` is True; SQL ``NULL = NULL`` is not.
-    return (
-        (Q(**{'%s__isnull' % a: True}) & Q(**{'%s__isnull' % b: True})) |
-        (
-            Q(**{'%s__isnull' % a: False}) &
-            Q(**{'%s__isnull' % b: False}) &
-            Q(**{a: F(b)})
-        )
-    )
+    """Two columns. NULL on either side does not match."""
+    return Q(**{a: F(b)})
 
 
 def _q_ne_fields(a, b):
+    """Two columns. NULL on either side does not match.
+
+    ``~Q(a=F(b))`` alone is true for NULL, because Django negates
+    ``a = b AND a IS NOT NULL AND b IS NOT NULL``.
+    """
     return (
-        (Q(**{'%s__isnull' % a: True}) & Q(**{'%s__isnull' % b: False})) |
-        (Q(**{'%s__isnull' % a: False}) & Q(**{'%s__isnull' % b: True})) |
-        (
-            Q(**{'%s__isnull' % a: False}) &
-            Q(**{'%s__isnull' % b: False}) &
-            ~Q(**{a: F(b)})
-        )
+        Q(**{'%s__isnull' % a: False})
+        & Q(**{'%s__isnull' % b: False})
+        & ~Q(**{a: F(b)})
+    )
+
+
+def _q_ne_bound(lookup, value):
+    """Column against a non-NULL field value. NULL does not match."""
+    return (
+        Q(**{'%s__isnull' % lookup: False})
+        & ~Q(**{lookup: value})
     )
 
 
@@ -695,11 +693,29 @@ def _sql_constant(value):
     return value
 
 
+def _both_fields(node):
+    return _node(node.left, 'field') and _node(node.right, 'field')
+
+
+def _compare_values(node, equal, user, perm, obj, model, user_model):
+    """Python check. Two fields do not match when either value is NULL."""
+    left = _resolve_runtime(node.left, user, perm, obj, model, user_model)
+    right = _resolve_runtime(node.right, user, perm, obj, model, user_model)
+    if _both_fields(node) and (left is None or right is None):
+        return False
+    if equal:
+        return left == right
+    return left != right
+
+
 def _compile_comparison(node, model, user, perm, user_model):
     left = _classify(node.left, model, user, perm, user_model)
     right = _classify(node.right, model, user, perm, user_model)
     equal = _node(node, 'eq')
+    both_fields = _both_fields(node)
     if isinstance(left, _Bound) and isinstance(right, _Bound):
+        if both_fields and (left.value is None or right.value is None):
+            return _always_false()
         matches = (left.value == right.value) if equal else (left.value != right.value)
         return _always_true() if matches else _always_false()
     if isinstance(left, _Unbound) and isinstance(right, _Bound):
@@ -709,6 +725,12 @@ def _compile_comparison(node, model, user, perm, user_model):
     else:
         a, b = left.lookup, right.lookup
         return _q_eq_fields(a, b) if equal else _q_ne_fields(a, b)
+    if both_fields:
+        if value is None:
+            return _always_false()
+        if equal:
+            return Q(**{lookup: value})
+        return _q_ne_bound(lookup, value)
     return _q_eq_lookup(lookup, value) if equal else _q_ne_lookup(lookup, value)
 
 
