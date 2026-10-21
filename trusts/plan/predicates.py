@@ -10,6 +10,7 @@ from trusts.plan.hops import lookup_text, require_instance
 __all__ = [
     'bind_terminal',
     'compile_predicate',
+    'contains_q',
     'permission_terminal_is_auth_permission',
     'content_type_identity',
     'bind_record_qs',
@@ -20,6 +21,11 @@ _BINDING_FIELDS = {
     'content': 'content_field',
     'permission': 'permission_field',
 }
+
+
+def contains_q(lookup, member):
+    """One membership lookup. ``member`` is a value or an ``F`` expression."""
+    return Q(**{lookup: member})
 
 
 def bind_terminal(value, role):
@@ -111,9 +117,10 @@ class _PredicateCompiler(object):
     def _contains(self, node):
         if inquiry_partner(node) is not None:
             return self._bind_inquiry(node.left.path)
-        return Q(**{
-            lookup_text(node.left.path): F(self.record.permission_field),
-        })
+        return contains_q(
+            lookup_text(node.left.path),
+            F(self.record.permission_field),
+        )
 
     def _bind_inquiry(self, path):
         if self.permission is None:
