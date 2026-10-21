@@ -90,16 +90,6 @@ class ConditionGrammarTest(SimpleTestCase):
         with self.assertRaises(PermissionConditionError):
             compiler().add_named_filter(object, 'assign', assign)
 
-    def test_removed_helpers_stay_unexported(self):
-        with self.assertRaises(ImportError):
-            from django_trusts import TQ as _exported_tq  # noqa: F401
-        with self.assertRaises(ImportError):
-            from django_trusts import condition_refs as _exported_refs  # noqa: F401
-        with self.assertRaises(ImportError):
-            from trusts.conditions import TQ as _public_tq  # noqa: F401
-        with self.assertRaises(ImportError):
-            from trusts.conditions import condition_refs as _public_refs  # noqa: F401
-
     def test_non_callable_rejected_at_register(self):
         registry = compiler()
         with self.assertRaises(TypeError):

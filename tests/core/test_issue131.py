@@ -16,7 +16,6 @@ from tests.myapp.models import Document, DocumentGrant
 from trusts.compile.nodes import Along
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.grammar import Tree
 from tests.support import built_catalog, compiler
 
 def _handle(registry=None, path='tests.core.handle-a'):
@@ -51,7 +50,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
         with self.assertRaises(TypeError):
             handle.register(trust=DocumentGrant, user='user', permission='permission', content=j.document)
         with self.assertRaises(TypeError):
-            handle.register(trust=DocumentGrant, user='user', permission='permission', content='document', condition=Tree('eq', left=Tree('field', root='row', path=('user',)), right=Tree('field', root='row', path=('permission',))))
+            handle.register(trust=DocumentGrant, user='user', permission='permission', content='document', condition=j.user)
         with self.assertRaises(TypeError):
             handle.register(trust=DocumentGrant, user='user', permission='permission', content='document', along=Along(j.document, 8))
         self.assertEqual(built_catalog(handle).records, ())

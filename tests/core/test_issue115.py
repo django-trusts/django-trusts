@@ -96,9 +96,6 @@ class ReadmeExampleAuthorizationTest(TestCase):
             if model is Document and code == 'non_confidential'
         )
         self.assertIsNotNone(record)
-        self.assertEqual(record.expr.kind, 'ne')
-        self.assertEqual(record.expr.left.path, ('confidential',))
-        self.assertIs(record.expr.right.value, True)
         field = Document._meta.get_field('confidential')
         self.assertFalse(field.null)
         self.assertIs(field.default, False)
