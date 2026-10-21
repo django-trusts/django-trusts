@@ -9,7 +9,7 @@ __all__ = []
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import Permission
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import F, Model, Q, QuerySet
+from django.db.models import Exists, F, Model, OuterRef, Q, QuerySet
 
 from trusts.plan.conditions import (
     _condition_model_key,
@@ -20,8 +20,6 @@ from trusts.plan.conditions import (
 from trusts.plan.writers import (
     _boolean_holds,
     _boolean_q,
-    _collection_contains_q,
-    _load_collection,
     _member_pk,
     _negate_q,
     column_q,
@@ -30,7 +28,7 @@ from trusts.plan.writers import (
     values_match,
 )
 from trusts.plan.rewrites import bind_once
-from trusts.errors import TrustsConfigurationError
+from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.contents import _as_q, _ordinary_records
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
 from trusts.plan.aggregates import _delegated_user_exists
@@ -187,8 +185,8 @@ def _named_filter_q(named_filters, content, code, singular, user_model):
 
     ``named_filters`` maps ``(model label, code)`` to ``(model, tree)``.
     ``None`` means this catalog grants nobody for this condition, matching
-    a singular object check that returns false. Construction reads only
-    values already loaded on ``content``.
+    a singular object check that returns false. Object-side fields are a
+    subquery on the saved row. Construction does not query.
     """
     stored = named_filters.get(
         (_condition_model_key(content.__class__), code),
@@ -258,39 +256,45 @@ def _contains_outcome(expr, content, singular, user_model):
         lookup = resolve_field_path(
             user_model, left.path, ref_kind='principal', collection=True,
         )
-        if (
-            isinstance(right, Tree)
-            and right.kind == 'field'
-            and right.root == 'user'
-        ):
+        if _is_field(right, 'user'):
             return contains_q(
                 lookup, F(_user_lookup(user_model, right.path)),
             )
+        if _is_field(right, 'object'):
+            member = _object_lookup(content, right.path)
+            saved = _saved_rows(content).filter(
+                **{'%s__isnull' % member: False},
+            )
+            return Q(**{'%s__in' % lookup: saved.values(member)})
         pk = _member_pk(_side_value(right, content, singular, user_model))
         if pk is None:
             return None
         return contains_q(lookup, pk)
-    manager = _load_collection(
-        left, None, content, content.__class__, user_model,
-    )
-    if (
-        isinstance(right, Tree)
-        and right.kind == 'field'
-        and right.root == 'user'
-    ):
-        if manager is None:
-            return None
+    if left.root != 'object':
+        raise TrustsConfigurationError(
+            'Reverse permission inquiry cannot compile permission condition '
+            'node %r.' % (left,)
+        )
+    lookup = _object_lookup(content, left.path, collection=True)
+    if _is_field(right, 'user'):
         member = _user_lookup(user_model, right.path)
-        return Q(**{'%s__in' % member: manager.values('pk')})
-    return _collection_contains_q(
-        manager, _member_pk(_side_value(right, content, singular, user_model)),
-    )
+        return _exists_q(content, Q(**{lookup: OuterRef(member)}))
+    if _is_field(right, 'object'):
+        other = _object_lookup(content, right.path)
+        return _exists_q(content, contains_q(lookup, F(other)))
+    pk = _member_pk(_side_value(right, content, singular, user_model))
+    if pk is None:
+        return None
+    return _exists_q(content, contains_q(lookup, pk))
 
 
 def _bare_outcome(expr, content, singular, user_model):
     field = expr.item
     if field.root == 'user':
         return _boolean_q(_user_lookup(user_model, field.path))
+    if field.root == 'object':
+        lookup = _object_lookup(content, field.path)
+        return _exists_q(content, _boolean_q(lookup))
     if _boolean_holds(_side_value(field, content, singular, user_model)):
         return True
     return None
@@ -307,7 +311,7 @@ def _negated_outcome(expr, content, singular, user_model):
 
 def _side_value(node, content, singular, user_model):
     kind, value = _condition_side(node, content, singular, user_model)
-    if kind == 'user':
+    if kind == 'user' or kind == 'object':
         raise TrustsConfigurationError(
             'Reverse permission inquiry cannot compile permission condition '
             'node %r.' % (node,)
@@ -320,6 +324,8 @@ def _comparison_outcome(expr, content, singular, user_model, *, equal):
     right = _condition_side(expr.right, content, singular, user_model)
     if left[0] == 'user' and right[0] == 'user':
         return columns_q(left[1], right[1], equal)
+    if left[0] == 'object' or right[0] == 'object':
+        return _object_comparison(content, left, right, equal)
     fields = 'const' not in (left[0], right[0])
     if left[0] == 'user' or right[0] == 'user':
         column, other = (left, right) if left[0] == 'user' else (right, left)
@@ -332,19 +338,75 @@ def _comparison_outcome(expr, content, singular, user_model, *, equal):
 def _condition_side(node, content, singular, user_model):
     if isinstance(node, Tree) and node.kind == 'const':
         return ('const', node.value)
-    if isinstance(node, Tree) and node.kind == 'field' and node.root == 'object':
-        return ('value', _object_memory_value(content, node.path))
-    if isinstance(node, Tree) and node.kind == 'field' and node.root == 'permission':
+    if _is_field(node, 'object'):
+        return ('object', _object_lookup(content, node.path))
+    if _is_field(node, 'permission'):
         if node.path:
             raise TrustsConfigurationError(
                 'Permission references cannot traverse attributes.'
             )
         return ('value', singular)
-    if isinstance(node, Tree) and node.kind == 'field' and node.root == 'user':
+    if _is_field(node, 'user'):
         return ('user', _user_lookup(user_model, node.path))
     raise TrustsConfigurationError(
         'Reverse permission inquiry cannot compile permission condition '
         'node %r.' % (node,)
+    )
+
+
+def _is_field(node, root):
+    return isinstance(node, Tree) and node.kind == 'field' and node.root == root
+
+
+def _object_lookup(content, path, *, collection=False):
+    """Saved-row lookup for one object path. One rule for every hop."""
+    if content.pk is None:
+        raise PermissionConditionError('Save the object first.')
+    return resolve_field_path(
+        content.__class__, path, ref_kind='object', collection=collection,
+    )
+
+
+def _saved_rows(content):
+    model = content._meta.concrete_model
+    return model._default_manager.filter(pk=content.pk)
+
+
+def _exists_q(content, q):
+    return Q(Exists(_saved_rows(content).filter(q)))
+
+
+def _object_comparison(content, left, right, equal):
+    if left[0] == 'user' or right[0] == 'user':
+        user_side, object_side = (
+            (left, right) if left[0] == 'user' else (right, left)
+        )
+        return _user_object_q(
+            content, user_side[1], object_side[1], equal,
+        )
+    if left[0] == 'object' and right[0] == 'object':
+        return _exists_q(content, columns_q(left[1], right[1], equal))
+    object_side, other = (
+        (left, right) if left[0] == 'object' else (right, left)
+    )
+    fields = other[0] != 'const'
+    return _exists_q(
+        content,
+        column_q(object_side[1], other[1], equal, field=fields),
+    )
+
+
+def _user_object_q(content, user_lookup, object_lookup, equal):
+    """User column against one saved object column. NULL never matches."""
+    rows = _saved_rows(content)
+    matched = rows.filter(**{object_lookup: OuterRef(user_lookup)})
+    if equal:
+        return Q(Exists(matched))
+    present = rows.filter(**{'%s__isnull' % object_lookup: False})
+    return (
+        Q(**{'%s__isnull' % user_lookup: False})
+        & Q(Exists(present))
+        & ~Q(Exists(matched))
     )
 
 
@@ -413,46 +475,6 @@ def _trusts_eligibility_q(model):
     if authenticated == 'field':
         predicate &= Q(is_authenticated=True)
     return predicate
-
-
-def _object_memory_value(instance, path):
-    """Field value already present on ``instance``. Does not query."""
-    if not path:
-        return instance
-    current = instance
-    model = instance.__class__
-    for index, name in enumerate(path):
-        try:
-            field = model._meta.get_field(name)
-        except FieldDoesNotExist as exc:
-            raise missing_field(
-                'condition', path[:index + 1], name, model,
-            ) from exc
-        last = index == len(path) - 1
-        if field.many_to_many or field.one_to_many:
-            raise TrustsConfigurationError(
-                'Reverse permission inquiry cannot compile multi-valued '
-                'condition field %s.%s.' % (model._meta.label, name)
-            )
-        if not last and getattr(field, 'is_relation', False):
-            raise TrustsConfigurationError(
-                'Reverse permission inquiry cannot traverse %s.%s without '
-                'a construction query.' % (model._meta.label, name)
-            )
-        attname = field.attname
-        if attname not in current.__dict__:
-            raise TrustsConfigurationError(
-                'Reverse permission inquiry needs %s.%s loaded on the '
-                'content instance to compile a named filter without SQL.'
-                % (model._meta.label, attname)
-            )
-        current = current.__dict__[attname]
-        if not last:
-            raise TrustsConfigurationError(
-                'Reverse permission inquiry cannot traverse %s.%s.'
-                % (model._meta.label, name)
-            )
-    return current
 
 
 def _user_lookup(user_model, path):

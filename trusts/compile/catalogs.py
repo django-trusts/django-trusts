@@ -789,9 +789,7 @@ def require_saved_content(content):
             'content must be a saved model instance, not %r.' % (content,)
         )
     if content.pk is None:
-        raise TrustsConfigurationError(
-            'content must be a saved %s instance.' % content._meta.label
-        )
+        raise PermissionConditionError('Save the object first.')
 
 
 def reject_permission_shape(perm):

@@ -38,6 +38,7 @@ missing field. The messages name the surface, for example
 "'|' is not supported in a relation condition."
 Named filters accept `.contains()`, `~`, and a bare boolean field.
 The predicates compiler and the relation-condition guards raise `PermissionConditionError` directly and do not wrap it.
+`get_permitted_users` reads object-side fields from the saved row. Save first; an in-memory change is ignored, and a never-saved object raises `PermissionConditionError` (`Save the object first.`).
 
 | | Old | New |
 | --- | --- | --- |
