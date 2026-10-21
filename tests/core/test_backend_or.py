@@ -128,6 +128,40 @@ class ListedBackendOrTest(TestCase):
             self.assertFalse(self.other.has_perm(self.note_code, self.note))
             self.assertFalse(self.other.has_perm(self.page_code, self.child_page))
 
+    def test_other_backend_denies_quietly(self):
+        PageGrant.objects.create(
+            binder=self.root, user=self.holder, permission=self.page_perm,
+        )
+        alpha = compiler()
+        beta = _page_catalog(PageGrant)
+        with _listed(alpha, beta):
+            foreign = self.root_page
+            own = PairBetaBackend()
+            other = PairAlphaBackend()
+            self.assertFalse(other.has_perm(self.holder, self.page_code, foreign))
+            self.assertTrue(own.has_perm(self.holder, self.page_code, foreign))
+            self.assertTrue(self.holder.has_perms([self.page_code], foreign))
+            self.assertFalse(other.has_perm(self.holder, self.note_code, foreign))
+            self.assertFalse(own.has_perm(self.holder, self.note_code, foreign))
+            self.assertEqual(other.get_all_permissions(self.holder, foreign), set())
+            self.assertEqual(
+                own.get_all_permissions(self.holder, foreign), {self.page_code},
+            )
+            self.assertEqual(other.get_group_permissions(self.holder, foreign), set())
+            self.assertEqual(own.get_group_permissions(self.holder, foreign), set())
+            self.assertEqual(
+                set(other.with_perm(self.page_code, obj=foreign)), set(),
+            )
+            self.assertEqual(
+                set(own.with_perm(self.page_code, obj=foreign)), {self.holder},
+            )
+            self.assertEqual(
+                set(other.get_permitted_users(foreign, self.page_perm)), set(),
+            )
+            self.assertEqual(
+                set(own.get_permitted_users(foreign, self.page_perm)), {self.holder},
+            )
+
     def test_both_catalogs_or_distinct_grant_tables(self):
         NoteGrant.objects.create(
             shelf=self.shelf, user=self.holder, permission=self.note_perm,
