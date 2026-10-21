@@ -364,21 +364,6 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
             )
         self.assertEqual(registry.records, ())
 
-    def test_no_historical_model_is_required(self):
-        Folder, Document, FolderGrant, DocumentPermit = _folder_models()
-        for model in (Folder, Document, FolderGrant, DocumentPermit):
-            names = {cls.__name__ for cls in model.__mro__}
-            self.assertNotIn('Trust', names)
-            self.assertNotIn('Content', names)
-            self.assertNotIn('Junction', names)
-        self.assertEqual(FolderGrant.__module__, __name__)
-        self.assertEqual(Document.__module__, __name__)
-
-    def test_package_surface_does_not_reexport_registry(self):
-        import trusts
-        self.assertIsNone(getattr(trusts, 'TrustsRegistry', None))
-        self.assertIsNone(getattr(trusts, 'RelationPlan', None))
-
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):

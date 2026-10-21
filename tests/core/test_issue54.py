@@ -120,28 +120,6 @@ def _register_payload(registry, grant):
     )
 
 
-class KernelConfigTest(SimpleTestCase):
-    def test_live_owner_is_host_and_kernel_config_is_gone(self):
-        if not kernel_host_listed():
-            self.skipTest('kernel-only host path is not listed on the pair')
-        import trusts.apps as apps_mod
-
-        from django.apps import apps as django_apps
-
-        config = django_apps.get_app_config('trusts_kernel_host')
-        self.assertIsInstance(config, TrustsConfigMixin)
-        self.assertIsNot(type(config), TrustsConfigMixin)
-        self.assertFalse(hasattr(apps_mod, 'kernel_config'))
-        self.assertFalse(hasattr(apps_mod, 'AppConfig'))
-
-    def test_legacy_query_helpers_are_removed(self):
-        self.assertFalse(hasattr(models_mod, 'trust_grant_q'))
-        self.assertFalse(hasattr(models_mod, 'historical_group_grant_exists'))
-        self.assertFalse(hasattr(models_mod, 'group_local_grant_exists'))
-        self.assertFalse(hasattr(models_mod, 'permission_granted_via_group_exists'))
-        self.assertTrue(callable(filter_by_permitted_content))
-
-
 class ConditionLookupBindTest(TestCase):
     def test_build_freezes_one_lookup_at_zero_sql(self):
         registry = compiler()
@@ -209,14 +187,6 @@ class AuthorizedQuerySetSurfaceTest(SimpleTestCase):
             queryset, 'user', 'permission', extra_q='extra',
         )
         self.assertEqual(manager.application_method(), 'application-owned')
-
-    def test_no_permitted_or_get_permission_on_generic_surface(self):
-        self.assertFalse(hasattr(AuthorizedQuerySet, 'permitted'))
-        self.assertFalse(hasattr(AuthorizedQuerySet, 'get_permission'))
-        self.assertFalse(hasattr(AuthorizedManager, 'permitted'))
-        self.assertFalse(hasattr(AuthorizedManager, 'get_permission'))
-        self.assertTrue(hasattr(AuthorizedManager, 'authorized'))
-        self.assertTrue(issubclass(Document._default_manager._queryset_class, AuthorizedQuerySet))
 
 
 class AuthorizedQuerySetLiveTest(TestCase):

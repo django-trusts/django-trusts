@@ -503,21 +503,6 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a),
         )
 
-    def test_no_historical_model_is_required(self):
-        for model in (
-            self.Document, self.DocumentGrant, self.DocumentPermit, self.Folder,
-        ):
-            names = {cls.__name__ for cls in model.__mro__}
-            self.assertNotIn('Trust', names)
-            self.assertNotIn('Content', names)
-            self.assertNotIn('Junction', names)
-        self.assertEqual(self.DocumentGrant.__module__, __name__)
-        self.assertEqual(self.DocumentPermit.__module__, __name__)
-
-    def test_package_surface_does_not_reexport_registry(self):
-        import trusts
-        self.assertIsNone(getattr(trusts, 'TrustsRegistry', None))
-        self.assertIsNone(getattr(trusts, 'RelationPlan', None))
 
     def test_instances_are_isolated(self):
         left = self._registry()

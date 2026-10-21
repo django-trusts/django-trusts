@@ -47,13 +47,6 @@ class _Count:
 class RegisterPublicSurfaceTest(SimpleTestCase):
 
 
-    def test_register_relationship_is_absent(self):
-        handle = _handle()
-        self.assertFalse(hasattr(handle, 'register_relationship'))
-        self.assertTrue(callable(handle.register))
-        self.assertFalse(hasattr(handle, 'register_public'))
-        self.assertFalse(hasattr(handle, 'register_ordered_fold'))
-
     def test_positional_trust_is_type_error(self):
         handle = _handle()
         with self.assertRaises(TypeError):

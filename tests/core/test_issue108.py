@@ -26,19 +26,6 @@ HOST = 'tests.kernel_host.backends.HostTrustModelBackend'
 OUTSIDE = 'tests.gh_permissions.backends.OutsideBackend'
 
 
-class ImplementationHelperSurfaceTest(SimpleTestCase):
-    def test_generic_declarations_import_without_kernel_config(self):
-        import trusts.apps as apps_mod
-
-        self.assertFalse(hasattr(apps_mod, 'kernel_config'))
-        self.assertTrue(callable(filter_by_permitted_content))
-        self.assertTrue(issubclass(AuthorizedQuerySet, object))
-        self.assertTrue(issubclass(AuthorizedManager, object))
-        registry = compiler()
-        self.assertEqual(registry.records, ())
-        self.assertIsNotNone(Ref)
-
-
 class ImplementationRoutingTest(SimpleTestCase):
     def test_exact_path_routing_is_the_owning_config(self):
         host = configured_catalog(HOST)

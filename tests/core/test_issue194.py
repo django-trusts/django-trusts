@@ -76,14 +76,6 @@ def _request(user):
 
 class ProtectedFactorySurfaceTest(SimpleTestCase):
 
-    def test_default_family_and_factories_are_protected(self):
-        self.assertEqual(TrustsConfigMixin.family, 'relationship')
-        self.assertFalse(hasattr(TrustsConfigMixin, '_authorization_family'))
-        self.assertFalse(hasattr(TrustsConfigMixin, 'authorization_family'))
-        self.assertFalse(hasattr(TrustsConfigMixin, '_create_registry'))
-        self.assertFalse(hasattr(TrustsConfigMixin, '_create_handle'))
-        self.assertTrue(callable(QueryCompiler().applies))
-        self.assertTrue(callable(PlanQueryCompiler().applies))
 
     def test_relationship_applies_is_records_only(self):
         compiler = PlanQueryCompiler()

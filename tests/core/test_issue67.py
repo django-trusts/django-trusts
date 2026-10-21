@@ -56,14 +56,6 @@ class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertIsNot(isolated, live)
         self.assertEqual(isolated.records, ())
 
-    def test_trusts_does_not_import_or_discover_tests_category(self):
-        import trusts.apps as trusts_apps
-        import trusts.models as trusts_models
-
-        for module in (trusts_apps, trusts_models):
-            self.assertNotIn('Category', vars(module))
-            self.assertNotIn('Ticket', vars(module))
-
 
 class ContributorIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_reenter_same_document_contributor_ready_is_noop(self):

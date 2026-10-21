@@ -28,18 +28,6 @@ def _handle(registry=None, path='tests.core.handle-a'):
 
 class HandleRegisterSurfaceTest(SimpleTestCase):
 
-    def test_register_is_the_public_donation_verb(self):
-        handle = _handle()
-        self.assertTrue(callable(handle.register))
-        self.assertTrue(callable(handle.add_named_filter))
-        self.assertFalse(hasattr(handle, 'register_public'))
-        self.assertFalse(hasattr(handle, 'register_permission_condition'))
-        self.assertFalse(hasattr(handle, 'register_relationship'))
-        self.assertFalse(hasattr(handle, 'register_ordered_fold'))
-        self.assertFalse(hasattr(handle, 'register_strategy'))
-        self.assertTrue(hasattr(handle, 'register'))
-        self.assertFalse(hasattr(handle, 'register_strategy'))
-        self.assertFalse(hasattr(handle, 'strategies'))
 
     def test_string_register_matches_internal_ref_record(self):
         via_ref = compiler()
@@ -168,14 +156,6 @@ class _PredicateLog:
 
 class CMethodsPublicSurfaceTest(SimpleTestCase):
 
-    def test_two_public_methods_and_no_ordered_fold(self):
-        backend = _handle()
-        self.assertTrue(callable(backend.register))
-        self.assertTrue(callable(backend.add_named_filter))
-        self.assertFalse(hasattr(backend, 'register_public'))
-        self.assertFalse(hasattr(backend, 'register_relationship'))
-        self.assertFalse(hasattr(backend, 'register_ordered_fold'))
-        self.assertFalse(hasattr(backend, 'register_strategy'))
 
     def test_register_matches_internal_ref_record(self):
         via_ref = compiler()

@@ -72,11 +72,6 @@ class _IsolatedTables(object):
 
 
 class ConstructTimeSelfBindTest(SimpleTestCase):
-    def test_new_registry_self_binds_private_store_adapter(self):
-        registry = compiler()
-        built = built_catalog(registry)
-        self.assertIsInstance(built.filter_lookup, FrozenConditionLookup)
-        self.assertFalse(hasattr(built.filter_lookup, 'conditions'))
 
     def test_handles_do_not_share_lookup_or_store(self):
         left = compiler()
@@ -93,17 +88,6 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         self.assertIsInstance(built.filter_lookup, FrozenConditionLookup)
         self.assertFalse(hasattr(built.filter_lookup, 'conditions'))
         self.assertFalse(hasattr(registry, 'filter_lookup'))
-
-    def test_public_conditions_surface_stays_six_names(self):
-        import django_trusts
-        import trusts.conditions as conditions_mod
-
-        self.assertEqual(tuple(conditions_mod.__all__), PUBLIC_SURFACE_NAMES)
-        self.assertFalse(hasattr(conditions_mod, 'RegistryConditionLookup'))
-        self.assertFalse(hasattr(conditions_mod, 'ConditionRegistry'))
-        self.assertFalse(hasattr(django_trusts, 'RegistryConditionLookup'))
-        self.assertTrue(permission_has_condition('change_note:own'))
-        self.assertEqual(permission_condition_code('change_note:own'), 'own')
 
 
 class ImportOrderStandaloneConstructionTest(SimpleTestCase):

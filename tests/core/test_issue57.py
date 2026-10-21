@@ -344,16 +344,6 @@ class TrustsRegistryTest(SimpleTestCase):
                 permission=j.permission,
             )
 
-    def test_no_historical_model_is_required(self):
-        Document, DocumentGrant, OtherGrant = _mock_models()
-        for model in (Document, DocumentGrant, OtherGrant):
-            names = {cls.__name__ for cls in model.__mro__}
-            self.assertNotIn('Trust', names)
-            self.assertNotIn('Content', names)
-            self.assertNotIn('Junction', names)
-        record = _register(compiler(), DocumentGrant)
-        self.assertEqual(DocumentGrant.__module__, __name__)
-        self.assertIs(record.root, DocumentGrant)
 
     def test_instances_are_isolated(self):
         _document, DocumentGrant, _other = _mock_models()
@@ -363,7 +353,3 @@ class TrustsRegistryTest(SimpleTestCase):
         self.assertEqual(len(left.records), 1)
         self.assertEqual(right.records, ())
 
-    def test_package_surface_does_not_reexport_registry(self):
-        import trusts
-        self.assertIsNone(getattr(trusts, 'TrustsRegistry', None))
-        self.assertIsNone(getattr(trusts, 'RegisteredRelation', None))

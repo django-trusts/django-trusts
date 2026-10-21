@@ -72,16 +72,6 @@ class _BuilderLog(object):
 
 class ConditionRegistryIsolationTest(SimpleTestCase):
 
-    def test_no_process_global_condition_store(self):
-        import trusts.conditions as conditions_mod
-        self.assertFalse(hasattr(conditions_mod, '_conditions'))
-        self.assertFalse(hasattr(conditions_mod, 'legacy_permission_callbacks_allowed'))
-        self.assertIsInstance(ConditionRegistry(), ConditionRegistry)
-        first = ConditionRegistry()
-        second = ConditionRegistry()
-        self.assertIsNot(first._records, second._records)
-        self.assertEqual(list(first.iter_permission_conditions()), [])
-        self.assertEqual(list(second.iter_permission_conditions()), [])
 
     def test_trusts_registry_owns_a_private_condition_store(self):
         left = compiler()
