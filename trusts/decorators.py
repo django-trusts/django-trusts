@@ -5,7 +5,7 @@ Each listed backend answers from its own catalog, in
 did not register the model contributes nothing and does not raise.
 """
 
-from functools import wraps
+from functools import partial, wraps
 
 from django.apps import apps as django_apps
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -68,8 +68,10 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
     user = require_instance(user, 'user')
     permission = require_instance(permission, 'permission')
     return filter_listed(
-        queryset, queryset, user, permission, ask=grant_prefix,
-        backend=backend, skip_flags=skip_flags, content=content)
+        queryset, queryset, user, permission,
+        ask=partial(grant_prefix, subject=queryset, user=user,
+                    permission=permission, content=content),
+        backend=backend, skip_flags=skip_flags)
 
 
 def authorization_required(model, permission, conditions=(), backend=None,
@@ -161,11 +163,12 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
             'authorization_required cannot authorize before Django apps '
             'are ready.')
     candidates = model._default_manager.filter(pk=pk)
+    binding = codename_binding(model, *permission.split('.', 1))
     inquiry, granted_q, user_model, _chosen = open_grant(
-        grant_permitted, candidates, request.user, permission,
-        backend=backend, skip_flags=skip_flags, conditions=conditions,
-        preflight=True, api='authorization_required', model=model,
-        binding=codename_binding(model, *permission.split('.', 1)))
+        partial(grant_permitted, subject=candidates, user=request.user, permission=permission,
+                conditions=conditions, binding=binding, api='authorization_required'),
+        candidates, request.user, permission, backend=backend, skip_flags=skip_flags,
+        preflight=True, conditions=conditions, api='authorization_required', model=model)
     if inquiry.denied:
         raise PermissionDenied
     if granted_q is not None and bind_once(

@@ -9,7 +9,6 @@ only. A miss returns nothing. Callers OR the grant ``Q`` objects.
 from django.apps import apps
 from django.contrib.auth import get_backends, load_backend
 from django.contrib.auth.models import Permission
-from django.core.exceptions import ImproperlyConfigured
 from django.db.models import Model, Q, QuerySet
 
 from trusts.apps import TrustsConfigMixin
@@ -20,22 +19,11 @@ from trusts.compile.catalogs import (
     reject_permission_shape,
     require_saved_content,
 )
-from trusts.errors import TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError, TrustsMixinRequired
 from trusts.plan.contents import permitted_content_q
 from trusts.plan.relations import bind_checked_user, known_skip_names
 from trusts.plan.rewrites import bind_once
 from trusts.plan.users import assert_persisted_principal
-
-
-class _MixinRequired(ImproperlyConfigured): pass
-
-
-def _mixin_required_message(config, backend_path):
-    return (
-        'Backend %s is not inside an app whose config extends '
-        'TrustsConfigMixin.' % backend_path
-        if config is None else
-        'App %s must extend TrustsConfigMixin.' % config.label)
 
 
 class TrustModelBackendMixin(object):
@@ -45,7 +33,7 @@ class TrustModelBackendMixin(object):
         super().__init__(*args, **kwargs)
         config = apps.get_containing_app_config(type(self).__module__)
         if not isinstance(config, TrustsConfigMixin):
-            raise _MixinRequired(_mixin_required_message(
+            raise TrustsMixinRequired(_mixin_required_message(
                 config,
                 '%s.%s' % (type(self).__module__, type(self).__qualname__),
             ))
@@ -107,31 +95,26 @@ class TrustModelBackendMixin(object):
             catalog=self.catalog, skipped=skipped)
 
 
-def grant_users(item, subject, user, permission, skipped, grant_kw):
+def grant_users(item, skipped, subject, permission):
     """User predicate from this backend's catalog."""
-    return item.permitted_users_predicate(
-        subject, permission, skipped=skipped)
+    return item.permitted_users_predicate(subject, permission, skipped=skipped)
 
 
-def grant_authorized(item, subject, user, permission, skipped, grant_kw):
+def grant_authorized(item, skipped, subject, user, permission):
     """Authorized-row grant from this backend's catalog."""
-    return item.authorized_grant_q(
-        subject, user, permission, skipped=skipped)
+    return item.authorized_grant_q(subject, user, permission, skipped=skipped)
 
 
-def grant_prefix(item, subject, user, permission, skipped, grant_kw):
+def grant_prefix(item, skipped, subject, user, permission, *, content):
     """Permitted-content prefix grant from this backend's catalog."""
-    return item.content_prefix_q(
-        subject, user, permission, skipped=skipped,
-        content=grant_kw.get('content'))
+    return item.content_prefix_q(subject, user, permission, skipped=skipped, content=content)
 
 
-def grant_permitted(item, subject, user, permission, skipped, grant_kw):
+def grant_permitted(item, skipped, subject, user, permission, *,
+                    conditions=(), binding=None, api=None):
     """Permitted-row grant from this backend's catalog."""
-    return item.permitted_grant_q(
-        subject, user, permission, skipped=skipped,
-        conditions=grant_kw.get('conditions') or (),
-        binding=grant_kw.get('binding'), api=grant_kw.get('api'))
+    return item.permitted_grant_q(subject, user, permission, skipped=skipped,
+                                  conditions=conditions, binding=binding, api=api)
 
 
 def permission_backends(backend=None):
@@ -183,8 +166,7 @@ def open_grant(ask, subject, user, permission, *, backend=None,
     if inquiry.denied:
         return inquiry, None, None, chosen
     granted, user_model = _combine(
-        ask, subject, user if require_user else None, permission,
-        chosen, inquiry.values, grant_kw)
+        lambda item: ask(item, inquiry.values), chosen)
     return inquiry, granted, user_model, chosen
 
 
@@ -201,7 +183,8 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     require_saved_content(content)
     reject_permission_shape(perm)
     _inquiry, combined, _, chosen = open_grant(
-        grant_users, content, None, perm, backend=backend,
+        lambda item, skipped: grant_users(item, skipped, content, perm),
+        content, None, perm, backend=backend,
         skip_flags=skip_flags, require_user=False)
     if user_queryset is None:
         if not chosen:
@@ -231,6 +214,14 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
         user_queryset.filter(combined).distinct(), user_model=principal_model)
 
 
+def _mixin_required_message(config, backend_path):
+    return (
+        'Backend %s is not inside an app whose config extends '
+        'TrustsConfigMixin.' % backend_path
+        if config is None else
+        'App %s must extend TrustsConfigMixin.' % config.label)
+
+
 def _missing_condition(api, conditions, model):
     raise TrustsConfigurationError(
         '%s condition %r is not registered on %s.'
@@ -251,7 +242,7 @@ def _selected_conditions_owned(model, conditions, chosen, api):
         _missing_condition(api, conditions, model)
 
 
-def _combine(ask, subject, user, permission, chosen, skipped, grant_kw):
+def _combine(ask, chosen):
     combined = user_model = None
     seen = set()
     for item in chosen:
@@ -260,7 +251,7 @@ def _combine(ask, subject, user, permission, chosen, skipped, grant_kw):
         if marker in seen:
             continue
         seen.add(marker)
-        part = ask(item, subject, user, permission, skipped, grant_kw)
+        part = ask(item)
         if part is None:
             continue
         combined = part if combined is None else combined | part

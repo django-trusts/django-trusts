@@ -27,10 +27,10 @@ from django.db import connections
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
 from trusts.apps import TrustsConfigMixin
-from trusts.backends import TrustModelBackendMixin, _MixinRequired
+from trusts.backends import TrustModelBackendMixin
 from trusts.compile.factory import probe_along_capabilities
 from trusts.decorators import _declared_authorization_guards
-from trusts.errors import PermissionConditionError, TrustsConfigurationError
+from trusts.errors import PermissionConditionError, TrustsConfigurationError, TrustsMixinRequired
 from trusts.plan.conditions import (
     obsolete_legacy_callback_setting_enabled,
     validate_expression,
@@ -131,14 +131,6 @@ def _is_concrete_model(model):
     return not opts.abstract and not opts.proxy
 
 
-def _unbuildable(path, exc):
-    return django_checks.Error(
-        'Authentication backend %s could not be built: %s' % (path, exc),
-        hint='Fix AUTHENTICATION_BACKENDS so the backend constructs.',
-        id=CHECK_ID_UNBUILDABLE_BACKEND,
-    )
-
-
 def _require_mixin(errors, config, path, message):
     key = config if config is not None else path
     if any(
@@ -164,16 +156,24 @@ def _load_listed():
         config = django_apps.get_containing_app_config(path.rpartition('.')[0])
         try:
             backend = import_string(path)()
-        except _MixinRequired as exc:
+        except TrustsMixinRequired as exc:
             _require_mixin(errors, config, path, str(exc))
             continue
         except (ImportError, ImproperlyConfigured, TrustsConfigurationError) as exc:
-            errors.append(_unbuildable(path, exc))
+            errors.append(django_checks.Error(
+                'Authentication backend %s could not be built: %s' % (path, exc),
+                hint='Fix AUTHENTICATION_BACKENDS so the backend constructs.',
+                id=CHECK_ID_UNBUILDABLE_BACKEND,
+            ))
             continue
         if isinstance(backend, TrustModelBackendMixin):
             catalogs.setdefault(id(backend.get_catalog()), backend.get_catalog())
             listed.add(id(config))
     return tuple(catalogs.values()), errors, listed
+
+
+def _listed_catalogs():
+    return _load_listed()[0]
 
 
 def _covered_content_models(catalogs):
@@ -227,7 +227,7 @@ def check_missing_declarations(app_configs, **kwargs):
     terminals still fail closed at runtime.
     """
 
-    catalogs, _errors, _listed = _load_listed()
+    catalogs = _listed_catalogs()
     if not catalogs:
         return []
 
@@ -291,7 +291,7 @@ def iter_live_permission_conditions(apps_registry=None, catalogs=None):
     """
 
     if catalogs is None:
-        catalogs, _errors, _listed = _load_listed()
+        catalogs = _listed_catalogs()
     seen_records = set()
     for model, cond_code, record in _iter_catalog_permission_conditions(catalogs):
         marker = id(record)
@@ -349,7 +349,7 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     the superuser shortcut and never falls back to an unconditioned
     grant.
     """
-    catalogs, _errors, _listed = _load_listed()
+    catalogs = _listed_catalogs()
     messages = []
     seen = set()
     for model, _permission, conditions in _declared_authorization_guards:
@@ -437,24 +437,11 @@ def check_permission_conditions(app_configs, **kwargs):
     ``manage.py check trusts`` still reports project-model conditions.
     Builders are never invoked. No database queries.
     """
-    catalogs, _errors, _listed = _load_listed()
+    catalogs = _listed_catalogs()
     user_model = catalogs[0].user_model if catalogs else None
     return permission_condition_check_messages(
         iter_live_permission_conditions(catalogs=catalogs), user_model,
     )
-
-
-def _live_along_records(catalogs):
-    found = []
-    for catalog in catalogs:
-        for record in catalog.records:
-            if record.along is not None:
-                found.append(record)
-    return found
-
-
-def _along_engine(connection):
-    return (getattr(connection, 'settings_dict', None) or {}).get('ENGINE')
 
 
 @django_checks.register(django_checks.Tags.database)
@@ -468,17 +455,19 @@ def check_along_renderer(app_configs, **kwargs):
     databases = kwargs.get('databases')
     if not databases:
         return []
-    catalogs, _errors, _listed = _load_listed()
+    catalogs = _listed_catalogs()
     if not catalogs:
         return []
-    along_records = _live_along_records(catalogs)
+    along_records = [
+        record for catalog in catalogs for record in catalog.records
+        if record.along is not None]
     if not along_records:
         return []
 
     messages = []
     for alias in databases:
         connection = connections[alias]
-        engine = _along_engine(connection)
+        engine = (getattr(connection, 'settings_dict', None) or {}).get('ENGINE')
         vendor = getattr(connection, 'vendor', None)
         if not along_connection_supported(connection):
             messages.append(django_checks.Error(
