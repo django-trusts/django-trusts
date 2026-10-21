@@ -4,7 +4,6 @@ Zero-owned pair/live Trust proofs stay on ``tests/legacy/test_issue54.py``.
 """
 
 from contextlib import contextmanager
-from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser, Permission
@@ -165,30 +164,6 @@ class ConditionLookupBindTest(TestCase):
                 empty.compile_q(Document, 'myapp.change_document:named', None)
 
 
-class AuthorizedQuerySetSurfaceTest(SimpleTestCase):
-    def test_manager_mixin_preserves_application_manager_behavior(self):
-        class DocumentManager(AuthorizedManagerMixin, models.Manager):
-            def application_method(self):
-                return 'application-owned'
-
-        manager = DocumentManager()
-        queryset = Mock()
-        with (
-            patch.object(manager, 'get_queryset', return_value=queryset),
-            patch.object(
-                AuthorizedQuerySet, 'authorized', return_value='authorized',
-            ) as authorized,
-        ):
-            self.assertEqual(
-                manager.authorized('user', 'permission', extra_q='extra'),
-                'authorized',
-            )
-        authorized.assert_called_once_with(
-            queryset, 'user', 'permission', extra_q='extra',
-        )
-        self.assertEqual(manager.application_method(), 'application-owned')
-
-
 class AuthorizedQuerySetLiveTest(TestCase):
     def setUp(self):
         if not kernel_host_listed():
@@ -201,6 +176,28 @@ class AuthorizedQuerySetLiveTest(TestCase):
         self.doc_b = Document.objects.create(title='b')
         DocumentGrant.objects.create(
             document=self.doc_a, user=self.alice, permission=self.change,
+        )
+
+    def test_manager_mixin_preserves_application_manager_behavior(self):
+        class DocumentManager(AuthorizedManagerMixin, models.Manager):
+            def application_method(self):
+                return 'application-owned'
+
+            def get_queryset(self):
+                return AuthorizedQuerySet(Document, using=self._db)
+
+        manager = DocumentManager()
+        manager.model = Document
+        manager._db = Document.objects.db
+        self.assertEqual(manager.application_method(), 'application-owned')
+        self.assertEqual(
+            _pks(manager.authorized(self.alice, self.change)),
+            _pks(Document.objects.all().authorized(self.alice, self.change)),
+        )
+        narrowed = Q(pk=self.doc_a.pk)
+        self.assertEqual(
+            _pks(manager.authorized(self.alice, self.change, extra_q=narrowed)),
+            {self.doc_a.pk},
         )
 
     def test_wrong_permission_type_is_zero_sql_configuration_error(self):

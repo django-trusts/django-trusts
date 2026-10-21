@@ -9,7 +9,6 @@ owner. Registration after the catalog is built is refused.
 
 Missing-declaration E003 on Content/Junction stays on Zero ``tests/legacy/``.
 """
-from unittest.mock import patch
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
@@ -73,9 +72,12 @@ class StandaloneIndependenceTest(SimpleTestCase):
         self.assertEqual(first_build.records, before)
         self.assertEqual(second_build.records, before)
         self.assertTrue(apps.ready)
-        with patch.object(apps, 'ready', True):
-            with self.assertRaises(TrustsConfigurationError):
-                registry.register_relation(content=Ref(DocumentGrant).document, user=Ref(DocumentGrant).user, permission=Ref(DocumentGrant).permission)
+        with self.assertRaises(TrustsConfigurationError):
+            registry.register_relation(
+                content=Ref(DocumentGrant).document,
+                user=Ref(DocumentGrant).user,
+                permission=Ref(DocumentGrant).permission,
+            )
         self.assertEqual(registry.records, before)
         self.assertIs(built_catalog(registry).plan_for(Document).records[0], before[0])
 

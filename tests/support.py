@@ -6,6 +6,7 @@ from django.apps import apps as django_apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
+from django.db import connections
 from django.test import override_settings
 from django.utils.module_loading import import_string
 
@@ -17,6 +18,28 @@ from trusts.inspect.snapshot import render_policy_sql_bytes
 
 
 ZERO_BACKEND = 'trusts.zero.backends.TrustModelBackend'
+
+
+@contextmanager
+def installed_databases(databases):
+    """Install ``databases`` on settings and on the connection handler.
+
+    ``override_settings(DATABASES=...)`` does not rebuild Django's
+    connection handler, so a new alias is missing from ``connections``
+    until ``connections.settings`` is replaced too.
+    """
+    with override_settings(DATABASES=databases):
+        previous = connections.settings
+        connections.settings = connections.configure_settings(None)
+        try:
+            yield
+        finally:
+            extra = [alias for alias in connections if alias not in previous]
+            for alias in extra:
+                if hasattr(connections._connections, alias):
+                    connections[alias].close()
+                    del connections[alias]
+            connections.settings = previous
 
 
 def built_catalog(compiler):

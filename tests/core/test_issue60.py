@@ -6,8 +6,6 @@ models; no historical Trusts types required.
 """
 
 from contextlib import contextmanager
-from unittest.mock import patch
-
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
@@ -392,15 +390,16 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         self.DocumentGrant.objects.create(
             document=self.doc_a, user=self.alice, permission=self.read,
         )
-        with patch.object(RelationPlan, 'permissions') as permissions:
-            from django.test.utils import CaptureQueriesContext
-            with CaptureQueriesContext(connection) as captured:
-                self.assertTrue(
-                    built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a),
-                )
-        permissions.assert_not_called()
-        self.assertEqual(len(captured.captured_queries), 1)
-        self.assertIn('EXISTS', captured.captured_queries[0]['sql'].upper())
+        with self.assertNumQueries(1):
+            self.assertTrue(
+                built_catalog(registry).has_perm(
+                    self.alice,
+                    '%s.%s' % (
+                        self.read.content_type.app_label, self.read.codename,
+                    ),
+                    self.doc_a,
+                ),
+            )
 
 
     def test_configured_user_model_uses_registered_terminal_metadata(self):

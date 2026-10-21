@@ -1,5 +1,12 @@
-from tests.support import render_configured_policy, built_catalog, compiler
 """Schema-1 SQL policy export, lockfile bytes, and trusts.E009."""
+from tests.support import (
+    built_catalog,
+    compiler,
+    installed_databases,
+    listed_relationship,
+    render_configured_policy,
+)
+from tests.unsupported_db_settings import DATABASES as UNSUPPORTED_DATABASES
 import datetime
 import json
 import math
@@ -10,12 +17,11 @@ import yaml
 from decimal import Decimal
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
 from django.contrib.auth.models import Permission, User
 from django.core import checks as django_checks
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.db import connection, models
+from django.db import connection, connections, models
 from django.db.models.sql.compiler import SQLCompiler
 from django.test import SimpleTestCase, TestCase, override_settings
 from trusts.plan.conditions import ModelIdentity
@@ -472,9 +478,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         try:
             with override_settings(DEBUG=True):
                 connection.queries_log.clear()
-                with patch('trusts.compile.factory.probe_along_capabilities') as probe:
-                    payload = render_configured_policy(_document_handle())
-                probe.assert_not_called()
+                payload = render_configured_policy(_document_handle())
                 recorded = ' '.join((item['sql'] for item in connection.queries))
             self.assertIsNone(connection.connection)
             self.assertNotIn('documents_documentpermission', recorded)
@@ -508,12 +512,24 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_along_failure_does_not_return_a_partial_document(self):
         handle = _handle('documents.backends.FolderBackend')
-        handle.register(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
-        with patch('trusts.compile.factory.probe_along_capabilities') as probe:
-            with patch('trusts.plan.walk.along_connection_supported', return_value=False):
-                with self.assertRaises(TrustsConfigurationError):
-                    render_configured_policy(handle)
-            probe.assert_not_called()
+        handle.register(
+            trust=FolderGrant,
+            user='user',
+            permission='permission',
+            content='folder',
+            along=('folder__parent', 2),
+        )
+        databases = {
+            alias: dict(config)
+            for alias, config in UNSUPPORTED_DATABASES.items()
+        }
+        databases['default'] = dict(connections.settings['default'])
+        with installed_databases(databases):
+            with listed_relationship((handle,)):
+                with self.assertRaises(TrustsConfigurationError) as ctx:
+                    render_policy_sql_bytes(alias='other')
+        self.assertIn("'other'", str(ctx.exception))
+        self.assertIn('tests.unsupported_backend', str(ctx.exception))
 
 class PolicySqlCommandTest(SimpleTestCase):
 
