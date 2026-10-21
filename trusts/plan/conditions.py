@@ -15,6 +15,8 @@ Builders are trusted startup/configuration code, the same class as
 registration path issues zero SQL (symbolic refs plus ``_meta``).
 
 Prebuilt trees are not accepted at register.
+``parse_named_filter`` is the entry point: one builder in, one checked
+tree out. The caller stores that tree.
 
 Permission-condition records live on an instantiable
 ``ConditionRegistry`` (also exposed on each built registry and the
@@ -1027,6 +1029,21 @@ def _invoke_condition_builder(builder, model, cond_code):
         ) from exc
 
 
+def parse_named_filter(builder, model, code, user_model):
+    """Return the checked tree for one named-filter builder.
+
+    The builder runs once. Constants are normalized into durable
+    values. When ``model`` has ``_meta``, field paths and operand
+    types are checked against that model and ``user_model``.
+    """
+    expr = normalize_expression(
+        _invoke_condition_builder(builder, model, code),
+    )
+    if getattr(model, '_meta', None) is not None:
+        validate_expression(expr, model, user_model)
+    return expr
+
+
 class ConditionRecord(object):
     """Registered condition: normalized declarative IR only.
 
@@ -1081,11 +1098,7 @@ class ConditionRegistry(object):
                 'Named filter %r is already registered on %s.'
                 % (cond_code, _condition_model_label(model))
             )
-        expr = normalize_expression(
-            _invoke_condition_builder(condition, model, cond_code),
-        )
-        if getattr(model, '_meta', None) is not None:
-            validate_expression(expr, model, user_model)
+        expr = parse_named_filter(condition, model, cond_code, user_model)
         record = ConditionRecord(expr=expr, model=model)
         self._records[key] = record
         return record
