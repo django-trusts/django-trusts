@@ -69,7 +69,7 @@ Call the catalog or the condition compiler instead.
 | | Old | New |
 | --- | --- | --- |
 | Permission rows | `RelationPlan.common_permissions(user, content)` | `catalog.permissions_for(user, content)` |
-| Condition object check | `ConditionRegistry.evaluate_permission_condition(...)` | `compile_registered_condition_q` and filter the queryset |
+| Condition object check | `ConditionRegistry.evaluate_permission_condition(...)` | `qs.permitted(permission, user, conditions=(code,))` |
 | Stored-condition object check | `evaluate_stored_condition(...)` | the same compiled `Q` |
 | Compiler failure type | `TrustsCompilerError` | `TrustsConfigurationError` |
 | Exists marker | `LiteralExists(queryset)` | ordinary `Exists`; the renderer writes `SELECT 1` |
