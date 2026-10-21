@@ -526,7 +526,7 @@ def _validate_bare(node, model, user_model):
     if not isinstance(field, BooleanField):
         raise PermissionConditionError(
             'A bare field in a named filter must be a boolean, not %s.%s.'
-            % (host._meta.label, field.name)
+            % (field.model._meta.label, field.name)
         )
 
 

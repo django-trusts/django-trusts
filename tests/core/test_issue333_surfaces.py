@@ -533,6 +533,21 @@ class RemainingLimitsTest(SimpleTestCase):
         self.assertEqual(handle.records, ())
         self.assertEqual(handle.delegations, ())
 
+    def test_bare_field_error_names_the_model_that_holds_the_field(self):
+        with self.assertRaisesRegex(
+            PermissionConditionError, r'not myapp\.Document\.title\.',
+        ):
+            compiler().register(
+                trust=DocumentGrant, user='user', permission='permission',
+                content='document', condition=lambda t: t.document.title,
+            )
+        with self.assertRaisesRegex(
+            PermissionConditionError, r'not myapp\.Document\.title\.',
+        ):
+            compiler().add_named_filter(
+                DocumentGrant, 'titled', lambda u, p, o: o.document.title,
+            )
+
     def test_plain_object_condition_raises_permission_condition_error(self):
         grant = Ref(DocumentGrant)
         delegation = Ref(DocumentDelegation)

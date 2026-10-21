@@ -319,7 +319,7 @@ class Compiler(object):
         self._open('add_named_filter')
         if isinstance(predicate, Tree) or not callable(predicate):
             raise TypeError(
-                'register_permission_condition expected a builder callable, '
+                'add_named_filter expected a builder callable, '
                 'got %r.' % (type(predicate).__name__,)
             )
         key = (_condition_model_key(model), code)
@@ -1020,7 +1020,7 @@ def _validate_row_boolean(root, path):
     if not isinstance(field, BooleanField):
         raise PermissionConditionError(
             'A bare field in a relation condition must be a boolean, '
-            'not %s.%s.' % (root._meta.label, field.name)
+            'not %s.%s.' % (field.model._meta.label, field.name)
         )
 
 
