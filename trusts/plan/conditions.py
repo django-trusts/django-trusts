@@ -1055,7 +1055,10 @@ def evaluate_registered_expression(expr, user, perm, obj, model=None, user_model
         )
     klass = model
     if klass is None:
-        klass = obj.model if hasattr(obj, 'model') and not isinstance(obj, Model) else obj.__class__
+        klass = (
+            obj.model if hasattr(obj, 'model') and not isinstance(obj, Model)
+            else obj.__class__
+        )
     validate_expression(expr, klass, user_model)
     return evaluate_expression(
         expr, user, perm, obj, model=klass, user_model=user_model,

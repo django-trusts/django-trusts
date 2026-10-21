@@ -27,4 +27,8 @@ INSTALLED_APPS = (
     'tests.kernel_host.apps.KernelHostConfig',
     'tests.core.apps.AlongCoreConfig',
 )
+# DocumentBackend lives in myapp, which these jobs do not install.
+AUTHENTICATION_BACKENDS = (
+    'tests.kernel_host.backends.HostTrustModelBackend',
+)
 MIGRATION_MODULES = {}

@@ -16,7 +16,7 @@ from django.http import Http404
 from trusts.plan.hops import require_instance
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.rewrites import bind_once
-from trusts.backends import _filter_listed, open_grant
+from trusts.backends import filter_listed, open_grant
 from trusts.compile.catalogs import (
     codename_binding,
     guard_conditions,
@@ -62,10 +62,12 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
 
     """
     if not isinstance(queryset, QuerySet):
-        raise TrustsConfigurationError('filter_by_permitted_content requires a QuerySet, not %r.' % (queryset,))
+        raise TrustsConfigurationError(
+            'filter_by_permitted_content requires a QuerySet, not %r.'
+            % (queryset,))
     user = require_instance(user, 'user')
     permission = require_instance(permission, 'permission')
-    return _filter_listed(
+    return filter_listed(
         queryset, queryset, user, permission, kind='prefix', backend=backend,
         skip_flags=skip_flags, content=content)
 
@@ -111,7 +113,9 @@ def authorization_required(model, permission, conditions=(), backend=None,
 
 def _guard_model(model):
     if not isinstance(model, type) or not issubclass(model, Model):
-        raise TypeError('authorization_required model must be a Django model class, not %r.' % (model,))
+        raise TypeError(
+            'authorization_required model must be a Django model class, '
+            'not %r.' % (model,))
     return model
 
 
@@ -136,10 +140,13 @@ def _coerce_pk(model, raw):
     field = model._meta.pk
     try:
         value = field.to_python(raw)
-        if value is None:
-            raise Http404
+    except (ValidationError, ValueError, TypeError):
+        raise Http404
+    if value is None:
+        raise Http404
+    try:
         field.get_prep_value(value)
-    except (ValidationError, ValueError, TypeError, Http404):
+    except (ValidationError, ValueError, TypeError):
         raise Http404
     return value
 

@@ -307,7 +307,12 @@ def main() -> int:
     from trusts.plan.conditions import FrozenConditionLookup
     print('FrozenConditionLookup', FrozenConditionLookup)
     from django.contrib.auth import get_user_model
-    standalone = Compiler(user_model=get_user_model())
+    standalone = Compiler(
+        user_model=get_user_model(),
+        query_compiler=Compiler.default_query_compiler(),
+        path='scripts.verify',
+        family='relationship',
+    )
     shape = standalone.compile()
     bound = shape.filter_lookup
     if not isinstance(bound, FrozenConditionLookup):

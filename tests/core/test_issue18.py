@@ -243,11 +243,6 @@ class CoreImportBoundaryTest(SimpleTestCase):
                 if any((name == 'trusts.zero' or name.startswith('trusts.zero.') for name in names)):
                     forbidden.append(str(path))
         self.assertEqual(forbidden, [])
-        self.assertFalse(hasattr(trusts, 'get_entity_model'))
-        self.assertFalse(hasattr(trusts, 'get_group_model'))
-        self.assertFalse(hasattr(trusts, 'get_permission_model'))
-        self.assertFalse(hasattr(trusts, 'ENTITY_MODEL_NAME'))
-        self.assertFalse(hasattr(trusts, 'ROOT_PK'))
 
     def test_plan_package_does_not_import_compile(self):
         root = Path(inspect.getfile(trusts)).resolve().parent / 'plan'

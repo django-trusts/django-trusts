@@ -57,13 +57,13 @@ from trusts.compile.resolution import (
 from trusts.errors import TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
-from trusts.compile.catalogs import Catalog, CatalogShape, relation_plan
+from trusts.compile.catalogs import Catalog, CatalogShape
 from trusts.plan.conditions import (
     ConditionRegistry,
     Expr,
     FrozenConditionLookup,
 )
-from trusts.plan.relations import PlanQueryCompiler, bind_checked_user
+from trusts.plan.relations import PlanQueryCompiler, RelationPlan, bind_checked_user
 from trusts.plan.standards import (
     UserCondition,
     assert_concrete_booleans,
@@ -191,6 +191,48 @@ class PublicRegistration:
     along: object | None = None
 
 
+def relation_plan(records, delegations, content, user, permission,
+                  catalog_user, user_conditions, user_rules, override_q):
+    """One plan for ``(content, user, permission)``. An empty selection is a plan."""
+    chosen = tuple(
+        record for record in records
+        if record.content_model is content
+        and (user is None or record.user_model is user)
+        and (permission is None or record.permission_model is permission))
+    bridges = tuple(
+        record for record in delegations
+        if record.content_model is content
+        and (user is None or record.delegate_model is user))
+    plan_permission = permission
+    if chosen:
+        models = {record.permission_model for record in chosen}
+        if len(models) != 1:
+            raise TrustsConfigurationError(
+                'Applicable registrations must share one permission '
+                'model; got %s.'
+                % ', '.join(sorted(model._meta.label for model in models)))
+        plan_permission = models.pop()
+    subject = user
+    if subject is None:
+        subjects = {
+            record.user_model._meta.concrete_model for record in chosen}
+        subjects.update(
+            record.delegate_model._meta.concrete_model for record in bridges)
+        if len(subjects) == 1:
+            subject = subjects.pop()
+    rules = closed = override = None
+    if subject is not None:
+        primary, absent = user_rules
+        rules = primary if (
+            user_conditions is not None or builtin_user_conditions(subject)
+        ) else absent
+        closed, override = rules, override_q
+    return RelationPlan(
+        records=chosen, delegations=bridges, permission_model=plan_permission,
+        content_identity=content, user_rules=rules, user_rules_closed=closed,
+        user_override_q=override, user_model=catalog_user)
+
+
 def plan_table(records, delegations, catalog_user, user_conditions,
                user_rules, override_q):
     """Selectable keys in first-seen order. ``None`` is the default plan."""
@@ -218,23 +260,25 @@ def plan_table(records, delegations, catalog_user, user_conditions,
         for content in order
         for user in (None, *users[content])
         for perm in (None, *perms[content])}
-    table[None] = relation_plan(records, delegations, None, None, None, catalog_user, user_conditions, user_rules, override_q)
+    table[None] = relation_plan(
+        records, delegations, None, None, None, catalog_user,
+        user_conditions, user_rules, override_q)
     return table
 
 
 class Compiler(object):
-    """Build the Catalog.
+    """Replay target for one recorder.
 
-    It records every registration call through its recorder. ``register``
-    performs zero SQL. ``compile`` freezes this compiler and returns a
-    ``Catalog``. A later ``compile`` returns another catalog from the
-    same stored rows. After that, ``register``, ``register_delegation``,
+    The app recorder stores every registration call. ``ready`` replays
+    that log onto this compiler. ``register`` performs zero SQL.
+    ``compile`` freezes this compiler and returns a ``Catalog``. A later
+    ``compile`` returns another catalog from the same stored rows.
+    After that, ``register``, ``register_delegation``,
     ``add_named_filter``, ``set_user_condition``, and
     ``set_user_override`` raise ``TrustsConfigurationError``.
     """
 
-    def __init__(self, *, user_model, query_compiler=None, path='',
-                 family='relationship'):
+    def __init__(self, *, user_model, query_compiler, path, family):
         self._by_root = {}
         self._order = []
         self._delegations_by_root = {}
@@ -243,21 +287,14 @@ class Compiler(object):
         self._user_conditions = None
         self._user_override = None
         self.conditions = ConditionRegistry(user_model=user_model)
-        self._explicit_compiler = query_compiler is not None
-        self.query_compiler = (
-            query_compiler if self._explicit_compiler else PlanQueryCompiler()
-        )
+        self.query_compiler = query_compiler
         self.path = path
         self.family = family
         self.user_model = user_model
 
     @staticmethod
     def default_query_compiler():
-        """Compiler ``ready`` stores when the config does not set one.
-
-        Passing it explicitly keeps ``_project`` false, matching the live
-        catalogs that used to receive the backend's ``PlanQueryCompiler``.
-        """
+        """Plan compiler ``ready`` stores when the config does not set one."""
         return PlanQueryCompiler()
 
     def get_recorder_target(self):
@@ -284,11 +321,6 @@ class Compiler(object):
         that model's own fields.
         """
         if self._user_conditions is None:
-            if self.user_model is None:
-                raise TrustsConfigurationError(
-                    'Compiler has no user model. Pass user_model '
-                    'at construction.'
-                )
             return builtin_user_conditions(self.user_model)
         return tuple(self._user_conditions.values())
 
@@ -301,7 +333,6 @@ class Compiler(object):
         The lambda is walked once against this factory's ``user_model``.
         """
         self._open('set_user_condition')
-        self._require_user_model()
         self._open_for_rules('condition')
         validate_user_rule_name(name, kind='condition')
         target = normalize_on(on)
@@ -345,7 +376,6 @@ class Compiler(object):
         registered condition.
         """
         self._open('set_user_override')
-        self._require_user_model()
         self._open_for_rules('override')
         validate_user_rule_name(name, kind='override')
         normalize_override_on(on)
@@ -845,7 +875,7 @@ class Compiler(object):
         override_q = None
         if slot is not None:
             seen = set()
-            candidates = [model] if model is not None else []
+            candidates = [model]
             candidates.extend(record.user_model for record in self.records)
             candidates.extend(record.delegate_model for record in self.delegations)
             for candidate in candidates:
@@ -867,8 +897,8 @@ class Compiler(object):
             records=self.records, delegations=self.delegations, conditions=rows,
             user_conditions=stored, user_override=self._user_override,
             filter_lookup=lookup,
-            compiler=self.query_compiler if self._explicit_compiler else None,
-            path=self.path or '', family=self.family, user_model=model,
+            compiler=self.query_compiler,
+            path=self.path, family=self.family, user_model=model,
             user_rules=rules, override_q=override_q, plans=plans,
         )
         return Catalog(shape, user_model=model)
@@ -878,12 +908,6 @@ class Compiler(object):
         if self._user_conditions is None:
             return None
         return tuple(self._user_conditions.values())
-
-    def _require_user_model(self):
-        if self.user_model is None:
-            raise TrustsConfigurationError(
-                'Compiler has no user model. Pass user_model at construction.'
-            )
 
     def _open(self, method):
         if self.frozen:

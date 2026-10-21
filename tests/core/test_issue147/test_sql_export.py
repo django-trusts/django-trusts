@@ -566,7 +566,7 @@ class PolicySqlCommandTest(SimpleTestCase):
                 del args, kwargs
                 raise TrustsConfigurationError('render failed')
             with override_settings(TRUSTS_POLICY_LOCKFILE=str(target)):
-                with patch('trusts.inspect.commands.render_policy_sql_bytes', boom):
+                with patch('trusts.inspect.snapshot.render_policy_sql_bytes', boom):
                     with patch('trusts.compile.factory.probe_along_capabilities') as probe:
                         with self.assertRaises(CommandError) as ctx:
                             call_command('trusts_policy_sql', lock=True, stdout=StringIO())

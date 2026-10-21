@@ -4,10 +4,9 @@
 from django.contrib.auth.models import Permission
 from django.db.models import Manager, Model, QuerySet
 
-from trusts.backends import _filter_listed
+from trusts.backends import compile_permitted_users, filter_listed
 from trusts.compile.catalogs import (
     codename_binding,
-    compile_permitted_users,
     guard_conditions,
     guard_permission_string,
 )
@@ -39,10 +38,11 @@ class AuthorizedQuerySet(QuerySet):
     def authorized(self, user, permission, extra_q=None, backend=None,
                    **skip_flags):
         if not isinstance(permission, Model):
-            raise TrustsConfigurationError('permission must be a model instance, not %r.' % (permission,))
+            raise TrustsConfigurationError(
+                'permission must be a model instance, not %r.' % (permission,))
         if user is None:
             raise TrustsConfigurationError('user must be a model instance, not None.')
-        return _filter_listed(
+        return filter_listed(
             self, self, user, permission, kind='authorized', backend=backend,
             skip_flags=skip_flags, extra_q=extra_q)
 
@@ -88,7 +88,7 @@ class PermittedQuerySetMixin:
         model = self.model
         normalized = _normalize_permitted_permission(permission, api='permitted')
         conditions = guard_conditions(conditions, api='permitted')
-        return _filter_listed(
+        return filter_listed(
             self, self, user, _condition_permission_label(model, normalized),
             kind='permitted', backend=backend, skip_flags=skip_flags,
             conditions=conditions, api='permitted',
@@ -114,11 +114,10 @@ class PermittedUsersMixin:
 class PermittedUsersManagerMixin:
     """Optional adapter on an application's existing user manager.
 
-    ``User.objects.permitted(content, perm)`` returns a lazy user
-    queryset. The name is ``permitted`` because the manager already
-    identifies the user model, and Django's ``get`` convention implies
-    one row. Does not replace that manager or its queryset class. Stock
-    ``auth.User`` does not acquire this method. The content adapter
+    ``permitted`` and ``with_perm`` both call the one reverse inquiry.
+    That inquiry asks each listed backend for its user predicate and
+    ORs them. ``backend`` is one dotted path. Stock ``auth.User`` does
+    not acquire either method. The content adapter
     ``get_permitted_users`` remains the path that does not require a
     user-manager change.
     """
@@ -128,6 +127,20 @@ class PermittedUsersManagerMixin:
             content, perm, user_queryset=self.get_queryset(), backend=backend,
             **skip_flags,
         )
+
+    def with_perm(self, perm, is_active=True, include_superusers=True,
+                  backend=None, obj=None, **skip_flags):
+        """Users holding ``perm`` on ``obj``. No object yields no users.
+
+        ``is_active`` and ``include_superusers`` are ignored. The
+        catalog's user conditions decide. ``skip_<name>`` is forwarded.
+        """
+        del is_active, include_superusers
+        if obj is None:
+            return self.get_queryset().none()
+        return compile_permitted_users(
+            obj, perm, user_queryset=self.get_queryset(),
+            backend=backend, **skip_flags)
 
 
 PermittedManager = Manager.from_queryset(PermittedQuerySet)
@@ -141,13 +154,19 @@ def _normalize_permitted_permission(permission, *, api):
         return ('string', app_label, codename, permission)
     if permission.__class__ is Permission:
         if permission.pk is None:
-            raise TrustsConfigurationError('%s permission must be a saved auth.Permission instance.' % api)
+            raise TrustsConfigurationError(
+                '%s permission must be a saved auth.Permission instance.' % api)
         codename = permission.codename
-        if not isinstance(codename, str) or not codename or codename != codename.strip() or ':' in codename:
-            raise TrustsConfigurationError('%s permission codename is malformed: %r.' % (api, codename))
+        if (
+            not isinstance(codename, str) or not codename
+            or codename != codename.strip() or ':' in codename
+        ):
+            raise TrustsConfigurationError(
+                '%s permission codename is malformed: %r.' % (api, codename))
         return ('instance', permission, codename)
     raise TypeError(
-        '%s permission must be an app_label.codename string or a saved auth.Permission instance, not %r.'
+        '%s permission must be an app_label.codename string or a saved '
+        'auth.Permission instance, not %r.'
         % (api, type(permission).__name__))
 
 
@@ -162,11 +181,3 @@ def _condition_permission_label(model, normalized):
     if normalized[0] == 'string':
         return normalized[3]
     return '%s.%s' % (model._meta.app_label, normalized[2])
-
-
-# Once, at import. Host models import this module during populate,
-# after auth models can load. A per-config ready() would repeat it.
-import trusts.inspect.checks  # noqa: E402,F401
-from trusts.inspect.commands import install_policy_commands  # noqa: E402
-
-install_policy_commands()

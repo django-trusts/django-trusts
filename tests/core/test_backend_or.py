@@ -22,12 +22,25 @@ from tests.core.pair_beta.backends import PairBetaBackend
 from tests.core.pair_beta.models import Binder, Page, PageDirect, PageGrant
 from tests.support import compiler, push_catalog
 from trusts.decorators import _declared_authorization_guards, authorization_required
+from trusts.models import PermittedUsersManagerMixin
 
 
 ALPHA = 'tests.core.pair_alpha.backends.PairAlphaBackend'
 BETA = 'tests.core.pair_beta.backends.PairBetaBackend'
 HOST = 'tests.kernel_host.backends.HostTrustModelBackend'
 DOCUMENT = 'tests.myapp.backends.DocumentBackend'
+
+
+def _grant_users():
+    """User manager that mixes in the Trusts reverse inquiry."""
+    User = get_user_model()
+
+    class GrantUsers(PermittedUsersManagerMixin, User._default_manager.__class__):
+        pass
+
+    manager = GrantUsers()
+    manager.model = User
+    return manager
 
 
 def _request(user):
@@ -149,17 +162,22 @@ class ListedBackendOrTest(TestCase):
             )
             self.assertEqual(other.get_group_permissions(self.holder, foreign), set())
             self.assertEqual(own.get_group_permissions(self.holder, foreign), set())
+            users = _grant_users()
             self.assertEqual(
-                set(other.with_perm(self.page_code, obj=foreign)), set(),
+                set(users.with_perm(self.page_code, obj=foreign, backend=ALPHA)),
+                set(),
             )
             self.assertEqual(
-                set(own.with_perm(self.page_code, obj=foreign)), {self.holder},
+                set(users.with_perm(self.page_code, obj=foreign, backend=BETA)),
+                {self.holder},
             )
             self.assertEqual(
-                set(other.get_permitted_users(foreign, self.page_perm)), set(),
+                set(foreign.get_permitted_users(self.page_perm, backend=ALPHA)),
+                set(),
             )
             self.assertEqual(
-                set(own.get_permitted_users(foreign, self.page_perm)), {self.holder},
+                set(foreign.get_permitted_users(self.page_perm, backend=BETA)),
+                {self.holder},
             )
 
     def test_both_catalogs_or_distinct_grant_tables(self):
@@ -289,26 +307,26 @@ class ListedBackendOrTest(TestCase):
         NoteAlso.objects.create(
             shelf=self.shelf, user=self.other, permission=self.note_perm,
         )
-        User = get_user_model()
         alpha = _note_catalog(NoteGrant)
         beta = _note_catalog(NoteAlso)
+        users = _grant_users()
         with _listed(alpha, beta):
-            found = set(User.objects.with_perm(
+            found = set(users.with_perm(
                 self.note_code, obj=self.note,
             ).values_list('pk', flat=True))
             self.assertEqual(found, {self.holder.pk, self.other.pk})
             self.assertNotIn(self.superuser.pk, found)
             self.assertNotIn(self.inactive.pk, found)
-            inactive_flag = set(User.objects.with_perm(
+            inactive_flag = set(users.with_perm(
                 self.note_code, is_active=False, include_superusers=True,
                 obj=self.note,
             ).values_list('pk', flat=True))
             self.assertEqual(inactive_flag, found)
-            alpha_only = set(User.objects.with_perm(
+            alpha_only = set(users.with_perm(
                 self.note_code, backend=ALPHA, obj=self.note,
             ).values_list('pk', flat=True))
             self.assertEqual(alpha_only, {self.holder.pk})
-            self.assertFalse(User.objects.with_perm(self.note_code).exists())
+            self.assertFalse(users.with_perm(self.note_code).exists())
 
     def test_unlisted_catalog_with_registrations_is_e010(self):
         registered = _note_catalog(NoteGrant)
