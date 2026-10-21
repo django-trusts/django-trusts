@@ -176,22 +176,6 @@ def _load_listed():
     return tuple(catalogs.values()), errors, listed
 
 
-def _listed_catalogs():
-    """Built catalogs of listed Trusts backends, with no check errors."""
-    catalogs = {}
-    for path in settings.AUTHENTICATION_BACKENDS:
-        try:
-            backend = import_string(path)()
-        except TrustsMixinRequired:
-            continue
-        except (ImportError, ImproperlyConfigured, TrustsConfigurationError):
-            continue
-        if isinstance(backend, TrustModelBackendMixin):
-            catalogs.setdefault(
-                id(backend.get_catalog()), backend.get_catalog())
-    return tuple(catalogs.values())
-
-
 def _covered_content_models(catalogs):
     """Content terminals that a listed backend's catalog already records."""
     covered = set()
@@ -243,7 +227,7 @@ def check_missing_declarations(app_configs, **kwargs):
     terminals still fail closed at runtime.
     """
 
-    catalogs = _listed_catalogs()
+    catalogs = _load_listed()[0]
     if not catalogs:
         return []
 
@@ -307,7 +291,7 @@ def iter_live_permission_conditions(apps_registry=None, catalogs=None):
     """
 
     if catalogs is None:
-        catalogs = _listed_catalogs()
+        catalogs = _load_listed()[0]
     seen_records = set()
     for model, cond_code, record in _iter_catalog_permission_conditions(catalogs):
         marker = id(record)
@@ -365,7 +349,7 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     the superuser shortcut and never falls back to an unconditioned
     grant.
     """
-    catalogs = _listed_catalogs()
+    catalogs = _load_listed()[0]
     messages = []
     seen = set()
     for model, _permission, conditions in _declared_authorization_guards:
@@ -453,7 +437,7 @@ def check_permission_conditions(app_configs, **kwargs):
     ``manage.py check trusts`` still reports project-model conditions.
     Builders are never invoked. No database queries.
     """
-    catalogs = _listed_catalogs()
+    catalogs = _load_listed()[0]
     user_model = catalogs[0].user_model if catalogs else None
     return permission_condition_check_messages(
         iter_live_permission_conditions(catalogs=catalogs), user_model,
@@ -471,7 +455,7 @@ def check_along_renderer(app_configs, **kwargs):
     databases = kwargs.get('databases')
     if not databases:
         return []
-    catalogs = _listed_catalogs()
+    catalogs = _load_listed()[0]
     if not catalogs:
         return []
     along_records = [

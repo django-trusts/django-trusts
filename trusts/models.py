@@ -95,9 +95,9 @@ class PermittedQuerySetMixin:
         binding = _permitted_binding(model, normalized)
         return filter_listed(
             self, self, user,
-            ask=lambda item, skipped, conditions, api: grant_permitted(
+            ask=lambda item, skipped: grant_permitted(
                 item, skipped, self, user, label,
-                conditions=conditions, binding=binding, api=api),
+                conditions=conditions, binding=binding, api='permitted'),
             backend=backend, skip_flags=skip_flags, preflight=True,
             model=model, conditions=conditions, api='permitted')
 

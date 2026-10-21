@@ -163,19 +163,11 @@ def open_grant(ask, subject, user, *, backend=None, skip_flags=None,
         user, skip_flags=skip_flags, require_user=require_user,
         skip_names=known_skip_names(item.get_catalog() for item in chosen))
     if preflight:
-        resolved = (
-            model if model is not None
-            else getattr(subject, 'model', subject))
-        _selected_conditions_owned(resolved, conditions, chosen, api)
-
-    def _ask(item):
-        if preflight:
-            return ask(item, inquiry.values, conditions, api)
-        return ask(item, inquiry.values)
-
+        _selected_conditions_owned(model, conditions, chosen, api)
     if inquiry.denied:
         return inquiry, None, None, chosen
-    granted, user_model = _combine(_ask, chosen)
+    granted, user_model = _combine(
+        lambda item: ask(item, inquiry.values), chosen)
     return inquiry, granted, user_model, chosen
 
 
