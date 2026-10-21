@@ -87,11 +87,17 @@ def _compile_common_permissions(catalog, candidates, user, *, kind='complete',
                                 skipped=()):
     """Permission queryset for ``catalog``. It sponsors itself."""
     qs = candidate_queryset(candidates)
-    perm_expr = OuterRef(OuterRef('pk'))
     compiler = catalog.compiler
     plan = catalog.plan_for(candidates, user=user)
     if not _compiler_applies(compiler, plan):
         return None
+    # A non-PK to_field is the grant column. auth.Permission stays ``pk``.
+    perm_expr = OuterRef(OuterRef(
+        plan.records[0].permission_target
+        if plan.records and plan.records[0].permission_target not in (
+            plan.records[0].permission_model._meta.pk.attname, 'pk',
+        )
+        else 'pk'))
     permission_model = plan.permission_model
     if kind == 'complete':
         fn = compiler.complete_exists
