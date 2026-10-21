@@ -1,11 +1,9 @@
 """Schema-1 SQL policy export, lockfile bytes, and trusts.E009."""
 from tests.support import (
     compiler,
-    installed_databases,
     listed_relationship,
     render_configured_policy,
 )
-from tests.unsupported_db_settings import DATABASES as UNSUPPORTED_DATABASES
 import datetime
 import json
 import tempfile
@@ -14,12 +12,14 @@ import yaml
 from decimal import Decimal
 from io import StringIO
 from pathlib import Path
+from django.conf import settings
 from django.contrib.auth.models import Permission, User
 from django.core import checks as django_checks
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.db import connection, connections, models
+from django.db import connection, models
 from django.test import SimpleTestCase, override_settings
+from trusts.compile.nodes import All, Equal, Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import CHECK_ID_POLICY_LOCK, CONVENTIONAL_LOCKFILE_NAME, check_policy_sql_lockfile, render_policy_sql_bytes
 from trusts.inspect.yaml import dump_policy_yaml
@@ -507,6 +507,10 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
 
     def test_along_failure_does_not_return_a_partial_document(self):
+        if 'other' not in settings.DATABASES or 'also' not in settings.DATABASES:
+            self.skipTest(
+                'other and also are configured by tests.unsupported_db_settings',
+            )
         handle = _handle('documents.backends.FolderBackend')
         handle.register(
             trust=FolderGrant,
@@ -515,17 +519,33 @@ class PolicySqlGoldenTest(SimpleTestCase):
             content='folder',
             along=('folder__parent', 2),
         )
-        databases = {
-            alias: dict(config)
-            for alias, config in UNSUPPORTED_DATABASES.items()
-        }
-        databases['default'] = dict(connections.settings['default'])
-        with installed_databases(databases):
-            with listed_relationship((handle,)):
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    render_policy_sql_bytes(alias='other')
+        with listed_relationship((handle,)):
+            with self.assertRaises(TrustsConfigurationError) as ctx:
+                render_policy_sql_bytes(alias='other')
         self.assertIn("'other'", str(ctx.exception))
         self.assertIn('tests.unsupported_backend', str(ctx.exception))
+
+    def test_nested_all_condition_is_parenthesized(self):
+        handle = _handle('documents.backends.NestedAllBackend')
+        root = Ref(DocumentPermission)
+        handle.register_relation(
+            content=root.document,
+            user=root.user,
+            permission=root.permission,
+            condition=All(
+                All(
+                    Equal(root.user, root.user),
+                    Equal(root.permission, root.permission),
+                ),
+                Equal(root.document, root.document),
+            ),
+        )
+        document = yaml.safe_load(render_configured_policy(handle))
+        condition = document['backends'][0]['contents'][0]['trusts'][0]['condition']
+        self.assertEqual(
+            condition,
+            '(user == user and permission == permission) and document == document',
+        )
 
 class PolicySqlCommandTest(SimpleTestCase):
 

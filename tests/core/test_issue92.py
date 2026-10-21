@@ -9,6 +9,7 @@ from uuid import uuid4
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
+from django.conf import settings
 from django.db import connection, connections, models
 from django.db.models.query import QuerySet
 from django.db.utils import OperationalError
@@ -20,9 +21,7 @@ from tests.support import (
     built_registries,
     built_catalog,
     compiler,
-    installed_databases,
 )
-from tests.unsupported_db_settings import DATABASES as UNSUPPORTED_DATABASES
 from trusts.inspect.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
 from trusts.inspect.format import _format_policy_sql, _tokenize_policy_sql
 from trusts.plan.aggregates import all_match
@@ -1007,20 +1006,18 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
         self.assertEqual(messages, [])
 
     def test_unsupported_and_several_aliases(self):
+        if 'other' not in settings.DATABASES or 'also' not in settings.DATABASES:
+            self.skipTest(
+                'other and also are configured by tests.unsupported_db_settings',
+            )
         registry, Node, NodeGrant = self._along_registry()
         isolate_live_registry(
             self.live, registry,
             'tests.kernel_host.backends.HostTrustModelBackend',
         )
-        databases = {
-            alias: dict(config)
-            for alias, config in UNSUPPORTED_DATABASES.items()
-        }
-        databases['default'] = dict(connections.settings['default'])
-        with installed_databases(databases):
-            messages = check_along_renderer(
-                None, databases=['default', 'other', 'also'],
-            )
+        messages = check_along_renderer(
+            None, databases=['default', 'other', 'also'],
+        )
         errors = [m for m in messages if m.id == CHECK_ID_ALONG_RENDERER]
         self.assertEqual(len(errors), 2)
         aliases = ' '.join((m.msg for m in errors))

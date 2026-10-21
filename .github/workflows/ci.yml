@@ -34,6 +34,13 @@ jobs:
       run: |
         coverage run -m tests.runtests
         coverage report
+    - name: Unsupported database aliases
+      env:
+        DJANGO_SETTINGS_MODULE: tests.unsupported_db_settings
+      run: >
+        python -m tests.runtests
+        tests.core.test_issue92.AlongE005Test.test_unsupported_and_several_aliases
+        tests.core.test_issue147.test_sql_export.PolicySqlGoldenTest.test_along_failure_does_not_return_a_partial_document
     - name: Generate Cobertura coverage.xml
       if: matrix.python-version == '3.12'
       run: coverage xml
