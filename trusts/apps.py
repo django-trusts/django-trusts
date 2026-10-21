@@ -9,6 +9,7 @@ from django.db.models import Model
 from django.db.models import options as model_options
 
 from trusts.errors import TrustsConfigurationError
+from trusts.inspect.commands import install_policy_commands
 
 T = TypeVar('T', bound=Model)
 
@@ -95,7 +96,8 @@ class Recorder(object):
     def _open(self):
         if self.frozen:
             raise TrustsConfigurationError(
-                'register refused: this recorder is frozen. The catalog was already built by TrustsConfigMixin.ready().'
+                'register refused: this recorder is frozen. '
+                'The catalog was already built by TrustsConfigMixin.ready().'
             )
 
 
@@ -126,8 +128,8 @@ class TrustsConfigMixin(django.apps.AppConfig):
         return '%s.%s' % (type(self).__module__, type(self).__qualname__)
 
     def ready(self):
-        # Compiler imports Permission through the factory chain.
-        # Apps.populate phase 1 imports this module before that is safe.
+        # phase 1 import raises AppRegistryNotReady: Apps aren't loaded yet.
+        # Compiler is built per config, not a registry singleton.
         from trusts.compile.factory import Compiler
 
         user_model = get_user_model()
@@ -140,9 +142,10 @@ class TrustsConfigMixin(django.apps.AppConfig):
         self.recorder.freeze()
         self.recorder.play(compiler.get_recorder_target())
         self.catalog = compiler.compile()
-        from django.contrib.auth.models import UserManager
-        from trusts.backends import manager_with_perm
-        UserManager.with_perm = manager_with_perm
+        # phase 1 import raises AppRegistryNotReady: Apps aren't loaded yet.
+        # checks register on import (Django convention), not a registry singleton.
+        import trusts.inspect.checks  # noqa: F401
+        install_policy_commands()
 
 
 def installed_catalogs():

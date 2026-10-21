@@ -1,9 +1,10 @@
 """Management command for the authorization policy SQL document.
 
-Core is not a Django app and does not ship
-``trusts/management``. Importing ``trusts.models`` calls
-:func:`install_policy_commands` once, so ``trusts_policy_sql`` is
-discoverable after ``django.setup()``.
+Core is not a Django app and does not ship ``trusts/management``.
+Django discovers commands only under ``django.core`` and each
+``INSTALLED_APPS`` entry, and hosts do not list ``trusts``, so a
+``trusts/management/commands`` module would never load.
+``TrustsConfigMixin.ready`` calls :func:`install_policy_commands`.
 
 The command prints the schema-1 canonical YAML document and, with
 ``--lock``, writes those same bytes. It does not authorize and it does
@@ -14,15 +15,10 @@ from __future__ import annotations
 
 __all__ = []
 
+import django.core.management as management
 from django.core.management.base import BaseCommand, CommandError
 
 from trusts.errors import TrustsConfigurationError
-from trusts.inspect.snapshot import (
-    render_policy_sql_bytes,
-    resolve_policy_database,
-    write_policy_lock,
-)
-import django.core.management as management
 
 _POLICY_COMMAND_APP = 'trusts.policy_commands'
 
@@ -35,8 +31,9 @@ class PolicySqlCommand(BaseCommand):
         'alias selected by TRUSTS_POLICY_DATABASE, or Django\'s default '
         'alias when that setting is unset. Each content lists its trust '
         'legs and the compiled SQL for permitted, has_perm, '
-        'get_all_permissions, and get_permitted_users. --database selects another configured alias for this '
-        'process only. --lock writes the same bytes to the lockfile path.'
+        'get_all_permissions, and get_permitted_users. --database selects '
+        'another configured alias for this process only. --lock writes '
+        'the same bytes to the lockfile path.'
     )
     requires_system_checks = []
     requires_migrations_checks = False
@@ -60,6 +57,13 @@ class PolicySqlCommand(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        # snapshot imports auth models, not a registry singleton.
+        # phase-1 import raises AppRegistryNotReady: Apps aren't loaded yet.
+        from trusts.inspect.snapshot import (
+            render_policy_sql_bytes,
+            resolve_policy_database,
+            write_policy_lock,
+        )
         try:
             alias = resolve_policy_database(options.get('database'))
             payload = render_policy_sql_bytes(alias=alias)
@@ -75,32 +79,33 @@ _POLICY_COMMANDS = {
 }
 
 
+_original_get_commands = management.get_commands
+_original_load_command_class = management.load_command_class
+
+
+def _policy_get_commands():
+    commands = _original_get_commands()
+    for name in _POLICY_COMMANDS:
+        commands.setdefault(name, _POLICY_COMMAND_APP)
+    return commands
+
+
+_policy_get_commands.cache_clear = _original_get_commands.cache_clear
+
+
+def _policy_load_command_class(app_name, name):
+    command_cls = _POLICY_COMMANDS.get(name)
+    if app_name == _POLICY_COMMAND_APP and command_cls is not None:
+        return command_cls()
+    return _original_load_command_class(app_name, name)
+
+
 def install_policy_commands():
     """Register ``trusts_policy_sql`` on Django's command loader.
 
-    ``trusts.models`` calls this once, when that module is first
-    imported. Does not override a command of the same name already
-    provided by another application.
+    ``ready`` calls this for every mixin config. Assigning these same
+    wrapper objects again is a no-op, and ``setdefault`` leaves a
+    command another app already provided.
     """
-    original_get = management.get_commands
-    original_load = management.load_command_class
-
-    def get_commands():
-        commands = original_get()
-        for name in _POLICY_COMMANDS:
-            commands.setdefault(name, _POLICY_COMMAND_APP)
-        return commands
-
-    def cache_clear():
-        original_get.cache_clear()
-
-    get_commands.cache_clear = cache_clear
-
-    def load_command_class(app_name, name):
-        command_cls = _POLICY_COMMANDS.get(name)
-        if app_name == _POLICY_COMMAND_APP and command_cls is not None:
-            return command_cls()
-        return original_load(app_name, name)
-
-    management.get_commands = get_commands
-    management.load_command_class = load_command_class
+    management.get_commands = _policy_get_commands
+    management.load_command_class = _policy_load_command_class

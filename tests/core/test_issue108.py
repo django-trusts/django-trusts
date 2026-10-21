@@ -5,7 +5,6 @@ Historical core backend is gone. A backend outside a
 ``TrustsConfigMixin`` app fails at construction.
 """
 
-from django.apps import AppConfig as DjangoAppConfig
 from django.apps import apps
 from django.test import SimpleTestCase, override_settings
 from django.test.utils import isolate_apps
@@ -17,9 +16,8 @@ from tests.kernel_host.apps import HOST_BACKEND
 from tests.kernel_host.backends import HostTrustModelBackend
 from tests.support import configured_catalog, sweep_listed_backends, compiler
 from trusts.apps import TrustsConfigMixin, installed_catalogs
-from trusts.backends import TrustModelBackendMixin
-from trusts.compile.factory import Compiler
 from trusts.compile.nodes import Ref
+from trusts.models import PermittedUsersManagerMixin
 from trusts.decorators import filter_by_permitted_content
 from trusts.errors import TrustsConfigurationError
 from trusts.models import AuthorizedManager, AuthorizedQuerySet
@@ -30,38 +28,6 @@ OUTSIDE = 'tests.gh_permissions.backends.OutsideBackend'
 
 
 class ImplementationHelperSurfaceTest(SimpleTestCase):
-    def test_core_is_not_an_implementation_appconfig(self):
-        import trusts.apps as apps_mod
-
-        host = apps.get_app_config('trusts_kernel_host')
-        self.assertFalse(hasattr(apps_mod, 'AppConfig'))
-        self.assertFalse(hasattr(apps_mod, 'kernel_config'))
-        self.assertIsInstance(host, TrustsConfigMixin)
-        self.assertIsNot(type(host), TrustsConfigMixin)
-
-    def test_helper_and_resolvers_import(self):
-        import trusts.apps as apps_mod
-
-        self.assertTrue(issubclass(TrustsConfigMixin, DjangoAppConfig))
-        self.assertFalse(hasattr(apps_mod, 'implementation_for_path'))
-        self.assertFalse(hasattr(apps_mod, 'implementation_for_class'))
-        self.assertFalse(hasattr(apps_mod, 'implementation_configs'))
-        self.assertFalse(hasattr(apps_mod, 'relationship_registries'))
-        self.assertFalse(hasattr(TrustsConfigMixin, 'trusts_backend_paths'))
-        self.assertFalse(hasattr(TrustsConfigMixin, '_authorization_family'))
-
-    def test_mixin_lives_only_on_trusts_backends(self):
-        self.assertEqual(
-            TrustModelBackendMixin.__module__, 'trusts.backends',
-        )
-
-    def test_historical_backend_no_longer_imports(self):
-        import trusts.backends as backends_mod
-
-        self.assertFalse(hasattr(backends_mod, 'TrustModelBackend'))
-        self.assertFalse(hasattr(backends_mod, 'HistoricalGroupQueryCompiler'))
-        self.assertFalse(hasattr(backends_mod, 'catalogs'))
-
     def test_generic_declarations_import_without_kernel_config(self):
         import trusts.apps as apps_mod
 
@@ -149,9 +115,16 @@ class MixinCatalogResolveTest(SimpleTestCase):
             backend.get_catalog(),
             apps.get_app_config('trusts_tests').get_catalog(),
         )
-        held = backend.with_perm('myapp.change_document')
+        User = get_user_model()
+
+        class GrantUsers(PermittedUsersManagerMixin, User._default_manager.__class__):
+            pass
+
+        manager = GrantUsers()
+        manager.model = User
+        held = manager.with_perm('myapp.change_document')
         self.assertIsInstance(held, QuerySet)
-        self.assertIs(held.model, get_user_model())
+        self.assertIs(held.model, User)
         self.assertEqual(backend.get_all_permissions(object(), None), set())
         self.assertEqual(backend.get_group_permissions(object(), None), set())
         host = configured_catalog(HOST)

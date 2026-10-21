@@ -7,7 +7,6 @@ from django.contrib.auth.models import Permission
 from django.db import router
 from django.db.models import Model, Q, QuerySet, Subquery
 
-from trusts.backends import open_grant, trusts_backends
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.aggregates import (
     _compile_common_permissions,
@@ -37,20 +36,13 @@ from trusts.plan.hops import (
     require_instance,
     resolved_hop,
 )
-from trusts.plan.relations import (
-    PlanQueryCompiler,
-    RelationPlan,
-    _candidate_model,
-    bind_checked_user,
-)
+from trusts.plan.relations import _candidate_model, bind_checked_user
 from trusts.plan.rewrites import bind_once
-from trusts.plan.standards import builtin_user_conditions
 from trusts.plan.users import (
     _named_filter_q,
     _permission_binding_for_plan,
     _plan_user_model,
     _reverse_checked,
-    assert_persisted_principal,
 )
 
 _NO_PRESET = object()
@@ -67,7 +59,7 @@ class CatalogShape(object):
     a concrete boolean ``is_active`` and ``absent`` otherwise.
     ``override_q`` is the override compiled against the catalog user
     model, or ``None``. ``plans`` maps keys to plans; ``None`` is the
-    default. ``compiler is None`` means the default compiler.
+    default. ``compiler`` is the query compiler stored at ``compile``.
     """
 
     records: tuple
@@ -123,10 +115,7 @@ class Catalog(object):
         self.family = shape.family
         self.records = shape.records
         self.delegations = shape.delegations
-        self._project = shape.compiler is None
-        self.compiler = (
-            PlanQueryCompiler() if shape.compiler is None else shape.compiler
-        )
+        self.compiler = shape.compiler
         self.user_model = user_model
         self.user_conditions = shape.user_conditions
         self.user_override = shape.user_override
@@ -191,14 +180,6 @@ class Catalog(object):
         content = require_instance(content, 'content')
         if denied:
             return False
-        if (self._project and extra_q is None
-                and isinstance(permission, Model)):
-            plan = self.plan_for(
-                content, user=user,
-                permission=permission if isinstance(permission, Model) else None,
-            )
-            if not plan.delegations:
-                return plan.has_permission(user, content, permission, skipped=values)
         matched = instance_match(
             self, content, user, permission,
             kind='complete', extra_q=extra_q,
@@ -218,10 +199,6 @@ class Catalog(object):
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if denied:
             return queryset.none()
-        if self._project:
-            plan = self.plan_for(queryset, user=user, permission=permission)
-            if not plan.delegations:
-                return plan.filter_content(queryset, user, permission, skipped=values)
         granted_q = _compile_granted(
             self, queryset, user, permission,
             kind='complete', skipped=values,
@@ -265,9 +242,6 @@ class Catalog(object):
             if not (plan.records or plan.delegations) or plan.permission_model is None:
                 return ()
             return plan.permission_model._default_manager.none()
-        if (self._project and kind == 'complete'
-                and not isinstance(content, QuerySet) and not plan.delegations):
-            return plan.permissions(user, content, skipped=values)
         qs = _compile_common_permissions(
             self, content, user, kind=kind, skipped=values,
         )
@@ -342,15 +316,10 @@ class Catalog(object):
         )
         plan = self.plan_for(content)
         if predicate is None:
-            if plan.records or plan.delegations:
-                user_model = _plan_user_model(plan, content)
-            elif self.user_model is not None:
-                user_model = self.user_model
-            else:
-                raise TrustsConfigurationError(
-                    'permitted_users has no registered user model and this '
-                    'catalog was built without user_model.'
-                )
+            user_model = (
+                _plan_user_model(plan, content)
+                if plan.records or plan.delegations else self.user_model
+            )
             return user_model._default_manager.none()
         user_model = _plan_user_model(plan, content)
         return bind_once(
@@ -617,47 +586,6 @@ class Catalog(object):
         return tuple(descriptors)
 
 
-def relation_plan(records, delegations, content, user, permission,
-                  catalog_user, user_conditions, user_rules, override_q):
-    """One plan for ``(content, user, permission)``. An empty selection is a plan."""
-    chosen = tuple(
-        record for record in records
-        if record.content_model is content
-        and (user is None or record.user_model is user)
-        and (permission is None or record.permission_model is permission))
-    bridges = tuple(
-        record for record in delegations
-        if record.content_model is content
-        and (user is None or record.delegate_model is user))
-    plan_permission = permission
-    if chosen:
-        models = {record.permission_model for record in chosen}
-        if len(models) != 1:
-            raise TrustsConfigurationError(
-                'Applicable registrations must share one permission '
-                'model; got %s.'
-                % ', '.join(sorted(model._meta.label for model in models)))
-        plan_permission = models.pop()
-    subject = user
-    if subject is None:
-        subjects = {record.user_model._meta.concrete_model for record in chosen}
-        subjects.update(
-            record.delegate_model._meta.concrete_model for record in bridges)
-        if len(subjects) == 1:
-            subject = subjects.pop()
-    rules = closed = override = None
-    if subject is not None:
-        primary, absent = user_rules
-        rules = primary if (
-            user_conditions is not None or builtin_user_conditions(subject)
-        ) else absent
-        closed, override = rules, override_q
-    return RelationPlan(
-        records=chosen, delegations=bridges, permission_model=plan_permission,
-        content_identity=content, user_rules=rules, user_rules_closed=closed,
-        user_override_q=override, user_model=catalog_user)
-
-
 class PreparedInquiry(object):
     def __init__(self, model, result=_NO_PRESET, qs=None):
         self.model = model
@@ -721,51 +649,6 @@ def codename_binding(model, app_label, codename):
             codename=codename,
         ).values('pk')[:1]
     )
-
-
-def compile_permitted_users(content, perm, *, user_queryset=None,
-                            backend=None, **skip_flags):
-    """Lazy user queryset for one saved content object and one permission.
-
-    Listed backends are asked in order. Each catalog that registered
-    the content contributes its user predicate, including that catalog's
-    override. The predicates are OR'd. ``backend`` is one dotted path.
-    ``skip_<name>`` is a bound parameter on that predicate.
-    """
-    _require_saved_content(content)
-    _reject_permission_shape(perm)
-    chosen = trusts_backends(backend)
-    if user_queryset is None:
-        user_model = next((
-            item.get_catalog().user_model for item in chosen
-            if item.get_catalog().user_model is not None
-        ), None)
-        if user_model is None:
-            raise TrustsConfigurationError(
-                'get_permitted_users has no user model. The catalog is not built yet.')
-        user_queryset = user_model._default_manager.get_queryset()
-    elif not isinstance(user_queryset, QuerySet):
-        raise TrustsConfigurationError(
-            'user queryset must be a QuerySet, not %r.' % (user_queryset,))
-    principal_model = user_queryset.model
-    assert_persisted_principal(principal_model)
-    involved = [principal_model, type(content)]
-    if isinstance(perm, (str, Permission)):
-        involved.append(Permission)
-    _inquiry, combined, grant_user = open_grant(
-        'users', content, None, perm, backend=backend,
-        skip_flags=skip_flags, require_user=False)
-    if combined is None:
-        combined = Q(pk__isnull=True)
-    else:
-        for item in chosen:
-            involved.extend(_catalog_models(item.get_catalog(), content, principal_model))
-    alias = _database_alias(content, user_queryset)
-    _assert_same_database(alias, involved)
-    if user_queryset.db != alias:
-        user_queryset = user_queryset.using(alias)
-    user_model = principal_model if grant_user is None else grant_user
-    return bind_once(user_queryset.filter(combined).distinct(), user_model=user_model)
 
 
 def _content_model(obj):

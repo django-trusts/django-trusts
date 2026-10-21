@@ -20,7 +20,6 @@ class BackendsMixinBoundaryTest(SimpleTestCase):
         catalog = apps.get_app_config('trusts_kernel_host').get_catalog()
         self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
         self.assertFalse(catalog.compiler.historical_fallback)
-        self.assertFalse(catalog._project)
 
     def test_core_backends_module_is_gone(self):
         with self.assertRaises(ModuleNotFoundError):

@@ -66,9 +66,11 @@ def config_for_class(backend_cls, apps_registry=None):
 
 
 def compiler(**kwargs):
-    """Test ``Compiler``. Passes the installed user model when omitted."""
-    if 'user_model' not in kwargs:
-        kwargs['user_model'] = get_user_model()
+    """Test ``Compiler``. Supplies the arguments ``ready`` passes."""
+    kwargs.setdefault('user_model', get_user_model())
+    kwargs.setdefault('query_compiler', Compiler.default_query_compiler())
+    kwargs.setdefault('path', 'tests.support.Compiler')
+    kwargs.setdefault('family', 'relationship')
     return Compiler(**kwargs)
 
 
@@ -76,14 +78,12 @@ def compiler(**kwargs):
 def _publish_built(built):
     """Point installed configs and the catalog walk at ``built``."""
     import trusts.apps as apps_mod
-    import trusts.inspect.checks as checks_mod
     import trusts.inspect.snapshot as snapshot_mod
 
     configs = mixin_configs()
     saved = [(config, config.catalog) for config in configs]
     originals = (
         apps_mod.installed_catalogs,
-        checks_mod.installed_catalogs,
         snapshot_mod.installed_catalogs,
     )
 
@@ -95,6 +95,8 @@ def _publish_built(built):
             for config in configs:
                 config.catalog = built_catalog(Compiler(
                     path='%s.empty' % config.catalog_path(),
+                    family=config.family,
+                    query_compiler=Compiler.default_query_compiler(),
                     user_model=get_user_model(),
                 ))
         elif len(built) == 1:
@@ -104,7 +106,6 @@ def _publish_built(built):
             for config, catalog in zip(configs, built):
                 config.catalog = catalog
         apps_mod.installed_catalogs = published
-        checks_mod.installed_catalogs = published
         snapshot_mod.installed_catalogs = published
         count = max(len(built), 1)
         paths = tuple(
@@ -115,8 +116,7 @@ def _publish_built(built):
             yield tuple(built)
     finally:
         apps_mod.installed_catalogs = originals[0]
-        checks_mod.installed_catalogs = originals[1]
-        snapshot_mod.installed_catalogs = originals[2]
+        snapshot_mod.installed_catalogs = originals[1]
         for config, catalog in saved:
             config.catalog = catalog
 
@@ -195,6 +195,8 @@ def _publish_catalog(backend_cls, factory, *, path=None):
     if factory is None:
         config.catalog = built_catalog(Compiler(
             path=path or config.catalog_path(),
+            family=config.family,
+            query_compiler=Compiler.default_query_compiler(),
             user_model=get_user_model(),
         ))
         return None
@@ -307,7 +309,12 @@ def isolate_live_registry(config, registry, path):
 def install_writable_registry(config, path, contribute=None):
     """Install a standalone factory as the catalog for one live path."""
 
-    registry = Compiler(path=path, user_model=get_user_model())
+    registry = Compiler(
+        path=path,
+        family=config.family,
+        query_compiler=Compiler.default_query_compiler(),
+        user_model=get_user_model(),
+    )
     if contribute is not None:
         contribute(registry)
     isolate_live_registry(config, registry, path)

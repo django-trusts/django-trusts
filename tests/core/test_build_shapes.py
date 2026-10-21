@@ -17,9 +17,10 @@ from django.db.models import Q
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
-from trusts.compile.catalogs import Catalog, CatalogShape, relation_plan
-from trusts.plan.relations import RelationPlan
+from trusts.compile.catalogs import Catalog, CatalogShape
+from trusts.plan.relations import PlanQueryCompiler, RelationPlan
 from trusts.compile.factory import (
+    relation_plan,
     PublicRegistration,
     RegisteredDelegation,
     RegisteredRelation,
@@ -291,7 +292,7 @@ class BuildPublicRegistrationTest(SimpleTestCase):
 class BuildCatalogShapeTest(SimpleTestCase):
     def test_build_freezes_rows_and_fragments(self):
         Document, DocumentGrant = _document_models()
-        registry = compiler()
+        registry = compiler(path='')
         root = Ref(DocumentGrant)
         record = registry.register_relation(
             content=root.document, user=root.user,
@@ -622,7 +623,7 @@ class CatalogFromShapeTest(TransactionTestCase):
                 user_conditions=None,
                 user_override=None,
                 filter_lookup=FrozenConditionLookup(()),
-                compiler=None,
+                compiler=PlanQueryCompiler(),
                 path='shape-answers',
                 family='relationship',
                 user_model=User,
@@ -654,7 +655,7 @@ class CatalogFromShapeTest(TransactionTestCase):
                 records=(), delegations=(), conditions=(),
                 user_conditions=None, user_override=None,
                 filter_lookup=FrozenConditionLookup(()),
-                compiler=None, path='empty-shape',
+                compiler=PlanQueryCompiler(), path='empty-shape',
                 family='relationship', user_model=User,
                 user_rules=(Q(), Q()), override_q=None,
                 plans=_shape_plans((), User),

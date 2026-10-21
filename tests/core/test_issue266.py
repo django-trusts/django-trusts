@@ -17,7 +17,7 @@ from trusts.compile.factory import RegisteredDelegation
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.catalogs import compile_permitted_users
+from trusts.backends import compile_permitted_users
 from trusts.compile.factory import Compiler
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.models import PermittedManager, PermittedQuerySet, PermittedUsersMixin

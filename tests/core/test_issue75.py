@@ -117,7 +117,6 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         catalog = HostTrustModelBackend().catalog
         self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
         self.assertFalse(catalog.compiler.historical_fallback)
-        self.assertFalse(catalog._project)
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes', attr_name='isolated_apps')
 class IsolatedAppsPathStoreTest(SimpleTestCase):
