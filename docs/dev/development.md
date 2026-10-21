@@ -50,7 +50,7 @@ python -m pip install .
 ```
 
 A host implementation owns `INSTALLED_APPS` and
-`AUTHENTICATION_BACKENDS`. One supported pairing is:
+`AUTHENTICATION_BACKENDS`. Every app that hosts Trusts registrations or a Trusts backend must extend `TrustsConfigMixin` on its Django `AppConfig`, so the app owns its catalog. One supported pairing is:
 
 ```
 INSTALLED_APPS = (

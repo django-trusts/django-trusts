@@ -19,6 +19,8 @@ The fixed user eligibility and superuser discussions below are historical.
 supersede those parts. The relationship and ordinary-sponsor ceiling
 remain.
 
+Every app that hosts Trusts registrations or a Trusts backend must extend `TrustsConfigMixin` on its Django `AppConfig`, so the app owns its catalog.
+
 The public `register()` API has two different authorization modes. They must
 remain visibly different because an ordinary registration is a grant, while a
 delegated registration is only one side of a conditional grant.
