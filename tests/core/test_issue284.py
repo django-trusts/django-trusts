@@ -17,8 +17,14 @@ from tests.core import KernelHostRequiredMixin, kernel_host_listed
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from trusts.backends import TrustModelBackendMixin
-from tests.support import scoped_permitted_content as filter_by_permitted_content, built_catalog, compiler
+from tests.support import (
+    scoped_permitted_content as filter_by_permitted_content,
+    built_catalog,
+    compiler,
+    listed_relationship,
+)
 from trusts.compile.nodes import Ref
+from trusts.errors import TrustsConfigurationError
 from trusts.models import AuthorizedQuerySet, PermittedQuerySet, PermittedUsersManagerMixin, PermittedUsersMixin
 
 PERM = 'myapp.change_document'
@@ -87,6 +93,8 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
             audited = Document.objects.authorized(anonymous, self.change, skip_is_active=True)
             self.assertEqual(_pks(denied), set())
             self.assertEqual(_pks(audited), set())
+            with self.assertRaises(TrustsConfigurationError):
+                Document.objects.authorized(None, self.change)
 
     def test_superuser_shortcut_is_unchanged(self):
         self.assertTrue(self.superuser.has_perm(PERM, self.open_doc))
@@ -334,12 +342,11 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 user=bare_grant.holder,
                 permission=bare_grant.action,
             )
-            self.assertEqual(
-                _pks(built_catalog(bare_registry).filter_authorized(
-                    Note.objects.all(), bare, read,
-                )),
-                {note.pk},
-            )
+            with listed_relationship((bare_registry,)):
+                self.assertEqual(
+                    _pks(AuthorizedQuerySet(Note).authorized(bare, read)),
+                    {note.pk},
+                )
             with self.assertNumQueries(0):
                 for holder in (anonymous, guest):
                     for include_inactive in (False, True):
