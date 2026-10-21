@@ -9,7 +9,7 @@ __all__ = []
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import Permission
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Exists, F, Model, OuterRef, Q, QuerySet
+from django.db.models import Exists, F, Model, OuterRef, Q
 
 from trusts.plan.conditions import (
     _condition_model_key,
@@ -33,7 +33,6 @@ from trusts.plan.contents import _as_q, _ordinary_records
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
 from trusts.plan.aggregates import _delegated_user_exists
 from trusts.plan.grammar import Tree, missing_field
-
 
 
 def _reverse_checked(plan, exists, user_model, permission, content, values,
@@ -120,14 +119,6 @@ def _plan_user_model(plan, content):
             'candidate user model.' % content._meta.label
         )
     return models.pop()
-
-
-
-
-
-
-
-
 
 
 def _permission_binding_for_plan(accepts_permission, content, perm, plan):
@@ -418,7 +409,6 @@ def _concrete_field(model, name):
     if not getattr(field, 'concrete', False) or getattr(field, 'many_to_many', False):
         return None
     return field
-
 
 
 def assert_persisted_principal(model):
