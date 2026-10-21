@@ -29,6 +29,8 @@ permission schema, grant editor, or application workflow.
 
 ## Usage
 
+The app config must extend `TrustsConfigMixin`, so the app owns its catalog.
+
 Start with **[Installation in the usage guide](https://django-trusts.readthedocs.io/en/latest/#installation)**.
 The RST guide covers models, backend configuration, trust registration
 (both one-argument path lambdas and Django `__` strings,

@@ -241,7 +241,7 @@ not be empty.
 
 Audit all of the following:
 
-- the implementation `AppConfig` in `INSTALLED_APPS`;
+- the app config extending `TrustsConfigMixin`, so the app owns its catalog;
 - every dotted path in `AUTHENTICATION_BACKENDS`;
 - ownership of each configured Trusts backend path;
 - duplicate, obsolete, or missing backend paths;

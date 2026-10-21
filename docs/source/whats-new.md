@@ -11,6 +11,8 @@ log.
 
 ## 1.1.0
 
+- **App config.** Extend `TrustsConfigMixin`, so the app owns its catalog.
+
 - **User conditions and overrides.** `set_user_condition()` and
   `set_user_override()` add named user checks to Trusts inquiries. Skip one
   with `skip_<name>=True`. Rules use user model fields; Python properties raise
