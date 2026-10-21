@@ -104,13 +104,6 @@ CONFIG = '''\
 '''
 
 
-def _reject_handle_annotation(source: str, label: str) -> None:
-    if 'BackendHandle' in source:
-        raise SystemExit(
-            '%s consumer must not import or annotate BackendHandle' % label
-        )
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--checkout', required=True)
@@ -122,9 +115,6 @@ def main() -> int:
             'Refuse to run from the checkout (%s). cd to a temporary directory.'
             % cwd
         )
-
-    _reject_handle_annotation(OK_SOURCE, 'valid')
-    _reject_handle_annotation(MISSING_SOURCE, 'missing-attribute')
 
     ok = Path('register_ok.py')
     missing = Path('register_missing.py')

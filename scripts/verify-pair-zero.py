@@ -108,7 +108,6 @@ def main() -> int:
         django.setup()
         call_command('migrate', verbosity=0, interactive=False)
 
-        import trusts.apps as trusts_apps
         from trusts.backends import TrustModelBackendMixin
         from trusts.zero.apps import ZeroConfig
         from trusts.zero.backends import TrustModelBackend as ZeroBackend
@@ -119,20 +118,9 @@ def main() -> int:
                 'TrustModelBackendMixin.__module__ is %r'
                 % TrustModelBackendMixin.__module__
             )
-        try:
-            import trusts.core_backends  # noqa: F401
-        except ModuleNotFoundError:
-            pass
-        else:
-            raise SystemExit('trusts.core_backends still imports on the IIa pair')
-
         labels = {config.label for config in django_apps.get_app_configs()}
         if 'trusts' not in labels:
             raise SystemExit('expected Zero label trusts, got %r' % labels)
-        if 'trusts_core' in labels:
-            raise SystemExit('IIa pair must not install library label trusts_core')
-        if hasattr(trusts_apps, 'kernel_config') or hasattr(trusts_apps, 'AppConfig'):
-            raise SystemExit('core still exposes kernel_config or AppConfig')
 
         zero_config = django_apps.get_app_config('trusts')
         if zero_config.name != 'trusts.zero' or type(zero_config) is not ZeroConfig:

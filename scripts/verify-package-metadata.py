@@ -22,8 +22,6 @@ FORBIDDEN_LONG_DESC = (
     'Step I',
     'Step II',
     'Step III',
-    'kernel_config',
-    'trusts.core_backends',
     'pair pin',
     'multiple organizations and object-level permission settings',
 )

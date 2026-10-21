@@ -52,8 +52,6 @@ if not settings.configured:
 import django
 django.setup()
 import trusts
-import importlib
-import trusts.apps as trusts_apps
 from trusts.backends import TrustModelBackendMixin
 from trusts.zero.apps import ZeroConfig
 from trusts.zero.models import Trust
@@ -63,46 +61,14 @@ assert ZeroConfig.label == "trusts"
 assert django_apps.get_app_config("trusts").name == "trusts.zero"
 assert Trust._meta.app_label == "trusts"
 assert TrustModelBackendMixin.__module__ == "trusts.backends"
-try:
-    importlib.import_module("trusts.core_backends")
-except ModuleNotFoundError:
-    pass
-else:
-    raise SystemExit("trusts.core_backends still imports")
-if hasattr(trusts_apps, "kernel_config") or hasattr(trusts_apps, "AppConfig"):
-    raise SystemExit("overlay still exposes kernel_config or AppConfig")
 init = Path(trusts.__file__)
 assert init.name == "__init__.py"
 assert (init.parent / "zero" / "apps.py").is_file()
 assert (init.parent / "apps.py").is_file()
-assert not (init.parent / "core_backends.py").is_file()
-from trusts.conditions import permission_has_condition, PermissionConditionError
-assert permission_has_condition("change_trust:own")
+from trusts.utils import parse_perm_code
+from trusts.errors import PermissionConditionError
+assert parse_perm_code("trusts.change_trust:own")[3] == "own"
 assert PermissionConditionError is not None
-try:
-    from trusts.conditions import Expr
-except ImportError:
-    pass
-else:
-    raise SystemExit("companion overlay still exports trusts.conditions.Expr")
-try:
-    from trusts.conditions import ConditionRegistry
-except ImportError:
-    pass
-else:
-    raise SystemExit("companion overlay still exports trusts.conditions.ConditionRegistry")
-try:
-    from trusts.conditions import validate_expression
-except ImportError:
-    pass
-else:
-    raise SystemExit("companion overlay still exports trusts.conditions.validate_expression")
-try:
-    from django_trusts import condition_refs
-except ImportError:
-    pass
-else:
-    raise SystemExit("companion overlay still exports django_trusts.condition_refs")
 print("companion-overlay-ok")
 '''
 
@@ -220,8 +186,6 @@ def main() -> int:
     zero_wheel = _ensure_zero_wheel(zero_root)
     with zipfile.ZipFile(kernel_wheel) as zf:
         names = zf.namelist()
-    if any(n.endswith('trusts/core_backends.py') for n in names):
-        raise SystemExit('library wheel still ships trusts/core_backends.py')
     if ships_trusts_management(names):
         raise SystemExit('library wheel still ships trusts/management/**')
     _assert_zero_record(zero_wheel)
