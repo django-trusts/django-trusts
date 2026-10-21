@@ -8,6 +8,8 @@ from decimal import Decimal
 from io import BytesIO
 from uuid import uuid4
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
+from django.contrib.contenttypes.models import ContentType
 from django.core.checks import Error
 from django.db import connection, models
 from django.http import HttpRequest
@@ -263,7 +265,16 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
     def test_saved_user_constant_matches_only_that_principal(self):
         Note, _Memo = _note_models()
         User = get_user_model()
-        with _tables(Note):
+
+        class NoteGrant(models.Model):
+            note = models.ForeignKey(Note, on_delete=models.CASCADE)
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with _tables(Note, NoteGrant):
             alice = User.objects.create_user(
                 'alice-16id', 'alice-16id@example.com', 'x',
             )
@@ -272,23 +283,36 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             )
             keep = Note.objects.create(title='keep', owner=alice, status='open')
             other = Note.objects.create(title='other', owner=bob, status='open')
+            change = Permission.objects.create(
+                content_type=ContentType.objects.get_for_model(Note),
+                codename='change_note',
+                name='Can change note',
+            )
+            for holder in (alice, bob):
+                for row in (keep, other):
+                    NoteGrant.objects.create(
+                        note=row, user=holder, permission=change,
+                    )
             registry = compiler()
+            registry.register(
+                trust=NoteGrant,
+                user='user',
+                permission='permission',
+                content='note',
+            )
             registry.add_named_filter(
                 Note, 'is_alice', lambda u, p, o: u == alice,
             )
-            perm = 'trusts_tests.change_note:is_alice'
-            as_alice = set(Note.objects.filter(
-                registry.conditions.compile_registered_condition_q(
-                    Note, perm, alice,
-                ),
-            ).values_list('pk', flat=True))
-            as_bob = set(Note.objects.filter(
-                registry.conditions.compile_registered_condition_q(
-                    Note, perm, bob,
-                ),
-            ).values_list('pk', flat=True))
-            self.assertEqual(as_alice, {keep.pk, other.pk})
-            self.assertEqual(as_bob, set())
+            code = 'trusts_tests.change_note:is_alice'
+            plain = 'trusts_tests.change_note'
+            catalog = built_catalog(registry)
+            for holder in (alice, bob):
+                for row in (keep, other):
+                    self.assertTrue(catalog.has_perm(holder, plain, row))
+            self.assertTrue(catalog.has_perm(alice, code, keep))
+            self.assertTrue(catalog.has_perm(alice, code, other))
+            self.assertFalse(catalog.has_perm(bob, code, keep))
+            self.assertFalse(catalog.has_perm(bob, code, other))
 
     def test_forbidden_captures_rejected_at_register(self):
         Note, _Memo = _note_models()
