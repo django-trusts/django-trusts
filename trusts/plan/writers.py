@@ -6,7 +6,7 @@ register a filter and they do not look one up.
 """
 
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
-from django.db.models import Exists, F, Model, Q
+from django.db.models import F, Model, Q
 
 from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
@@ -271,25 +271,10 @@ def _member_pk(value):
     return value
 
 
-def _collection_members(manager, pk):
-    if manager is None or pk is None:
-        return None
-    return manager.filter(pk=pk)
-
-
 def _collection_contains(manager, pk):
-    found = _collection_members(manager, pk)
-    if found is None:
+    if manager is None or pk is None:
         return False
-    return found.exists()
-
-
-def _collection_contains_q(manager, pk):
-    """Membership of a loaded collection, as a filter on any model."""
-    found = _collection_members(manager, pk)
-    if found is None:
-        return Q(pk__in=())
-    return Q(Exists(found))
+    return manager.filter(pk=pk).exists()
 
 
 def _bound_value(node, user, perm, user_model):
