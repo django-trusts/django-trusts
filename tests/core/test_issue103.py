@@ -10,15 +10,14 @@ import inspect
 
 from django.test import SimpleTestCase
 
+from tests.core import kernel_host_listed
+from trusts.apps import installed_catalogs
 from trusts.plan.relations import PlanQueryCompiler
 
 
 class BackendsMixinBoundaryTest(SimpleTestCase):
     def test_canonical_mixin_import_and_plan_compiler(self):
         from django.apps import apps
-
-        from tests.core import kernel_host_listed
-        from trusts.apps import installed_catalogs
 
         if kernel_host_listed():
             catalogs = (
