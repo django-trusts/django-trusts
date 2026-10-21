@@ -690,8 +690,9 @@ def _compile_comparison(node, model, user, perm, user_model):
         return Q(pk__in=())
     if isinstance(left, _Unbound) and isinstance(right, _Unbound):
         return columns_q(left.lookup, right.lookup, equal)
-    column, bound = (left, right) if isinstance(left, _Unbound) else (right, left)
-    return column_q(column.lookup, bound.value, equal, field=fields)
+    if isinstance(left, _Unbound):
+        return column_q(left.lookup, right.value, equal, field=fields)
+    return column_q(right.lookup, left.value, equal, field=fields)
 
 
 def compile_to_q(node, model, user, perm, user_model=None):
