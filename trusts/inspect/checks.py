@@ -19,9 +19,9 @@ __all__ = []
 
 from django.apps import apps as django_apps
 from django.conf import settings
-from django.contrib.auth import load_backend
 from django.core import checks as django_checks
 from django.core.exceptions import ImproperlyConfigured
+from django.utils.module_loading import import_string
 from django.db import connections
 
 # Importing the lockfile module registers the trusts.E009 model check.
@@ -130,27 +130,45 @@ def _is_concrete_model(model):
     return not opts.abstract and not opts.proxy
 
 
+def _unbuildable(path, exc):
+    return django_checks.Error(
+        'Authentication backend %s could not be built: %s' % (path, exc),
+        hint='Fix AUTHENTICATION_BACKENDS so the backend constructs.',
+        id=CHECK_ID_UNBUILDABLE_BACKEND,
+    )
+
+
+def _require_mixin(errors, config, path):
+    if any(message.obj is config for message in errors):
+        return
+    label = config.label if config is not None else path
+    errors.append(django_checks.Error(
+        'App %s must extend TrustsConfigMixin.' % label,
+        hint='Extend TrustsConfigMixin on the app config.',
+        obj=config, id=CHECK_ID_MIXIN_REQUIRED,
+    ))
+
+
 def _load_listed():
     built, errors, catalogs = [], [], {}
     for path in settings.AUTHENTICATION_BACKENDS:
+        config = django_apps.get_containing_app_config(path.rpartition('.')[0])
         try:
-            backend = load_backend(path)
+            backend_cls = import_string(path)
+        except (ImportError, AttributeError, ImproperlyConfigured) as exc:
+            errors.append(_unbuildable(path, exc))
+            continue
+        trusts_backend = (
+            isinstance(backend_cls, type)
+            and issubclass(backend_cls, TrustModelBackendMixin)
+        )
+        if trusts_backend and not isinstance(config, TrustsConfigMixin):
+            _require_mixin(errors, config, path)
+            continue
+        try:
+            backend = backend_cls()
         except (ImproperlyConfigured, TrustsConfigurationError) as exc:
-            if 'must live inside an app' in str(exc):
-                config = django_apps.get_containing_app_config(path.rpartition('.')[0])
-                label = config.label if config is not None else path
-                if not any(message.obj is config for message in errors):
-                    errors.append(django_checks.Error(
-                        'App %s must extend TrustsConfigMixin.' % label,
-                        hint='Extend TrustsConfigMixin on the app config.',
-                        obj=config, id=CHECK_ID_MIXIN_REQUIRED,
-                    ))
-                continue
-            errors.append(django_checks.Error(
-                'Authentication backend %s could not be built: %s' % (path, exc),
-                hint='Fix AUTHENTICATION_BACKENDS so the backend constructs.',
-                id=CHECK_ID_UNBUILDABLE_BACKEND,
-            ))
+            errors.append(_unbuildable(path, exc))
             continue
         if isinstance(backend, TrustModelBackendMixin):
             built.append(backend)
@@ -395,13 +413,7 @@ def check_unlisted_catalog(app_configs, **kwargs):
         recorder = getattr(config, 'recorder', None)
         if isinstance(config, TrustsConfigMixin) or not getattr(recorder, '_rows', ()):
             continue
-        if any(message.obj is config for message in messages):
-            continue
-        messages.append(django_checks.Error(
-            'App %s must extend TrustsConfigMixin.' % config.label,
-            hint='Extend TrustsConfigMixin on the app config.',
-            obj=config, id=CHECK_ID_MIXIN_REQUIRED,
-        ))
+        _require_mixin(messages, config, config.label)
     listed = set()
     for candidate in chosen:
         config = django_apps.get_containing_app_config(type(candidate).__module__)
@@ -411,7 +423,7 @@ def check_unlisted_catalog(app_configs, **kwargs):
         if not isinstance(config, TrustsConfigMixin):
             continue
         catalog = config.catalog
-        if catalog is None or not (catalog.records or catalog.delegations):
+        if not (catalog.records or catalog.delegations):
             continue
         if id(config) in listed:
             continue

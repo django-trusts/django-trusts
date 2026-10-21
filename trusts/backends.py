@@ -11,7 +11,6 @@ from django.contrib.auth import get_backends, load_backend
 from django.contrib.auth.models import Permission
 from django.db.models import Model, Q, QuerySet
 
-from trusts.apps import TrustsConfigMixin
 from trusts.compile.catalogs import (
     assert_same_database,
     catalog_models,
@@ -32,12 +31,7 @@ class TrustModelBackendMixin(object):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         config = apps.get_containing_app_config(type(self).__module__)
-        if not isinstance(config, TrustsConfigMixin):
-            dotted = '%s.%s' % (type(self).__module__, type(self).__qualname__)
-            raise TrustsConfigurationError(
-                '%s must live inside an app whose config subclasses '
-                'TrustsConfigMixin.' % dotted)
-        self.catalog = config.get_catalog()
+        self.catalog = config.catalog
         self.recorder = config.recorder
 
     def get_catalog(self):
@@ -201,14 +195,7 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
         grant_users, content, None, perm, backend=backend,
         skip_flags=skip_flags, require_user=False)
     if user_queryset is None:
-        user_model = next((
-            item.get_catalog().user_model for item in chosen
-            if item.get_catalog().user_model is not None
-        ), None)
-        if user_model is None:
-            raise TrustsConfigurationError(
-                'get_permitted_users has no user model. '
-                'The catalog is not built yet.')
+        user_model = chosen[0].get_catalog().user_model
         user_queryset = user_model._default_manager.get_queryset()
     elif not isinstance(user_queryset, QuerySet):
         raise TrustsConfigurationError(

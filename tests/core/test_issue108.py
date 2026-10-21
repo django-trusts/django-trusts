@@ -2,16 +2,16 @@
 
 Core ships no ``kernel_config()``. Mixin identity stays.
 Historical core backend is gone. A backend outside a
-``TrustsConfigMixin`` app fails at construction.
+``TrustsConfigMixin`` app is ``trusts.E012``.
 """
 
 from django.apps import apps
+from django.core.checks import run_checks
 from django.test import SimpleTestCase, override_settings
 from django.test.utils import isolate_apps
 
 import tests as tests_module
 from tests.apps import TestsConfig
-from tests.gh_permissions.backends import OutsideBackend
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.kernel_host.backends import HostTrustModelBackend
 from tests.support import configured_catalog, sweep_listed_backends, compiler
@@ -19,7 +19,6 @@ from trusts.apps import TrustsConfigMixin, installed_catalogs
 from trusts.compile.nodes import Ref
 from trusts.models import PermittedUsersManagerMixin
 from trusts.decorators import filter_by_permitted_content
-from trusts.errors import TrustsConfigurationError
 from trusts.models import AuthorizedManager, AuthorizedQuerySet
 
 
@@ -49,10 +48,15 @@ class ImplementationRoutingTest(SimpleTestCase):
         self.assertEqual(host.family, 'relationship')
 
     def test_backend_outside_a_mixin_app_fails_loud(self):
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            OutsideBackend()
-        self.assertIn(OUTSIDE, str(ctx.exception))
-        self.assertIn('TrustsConfigMixin', str(ctx.exception))
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, OUTSIDE)):
+            messages = [
+                message for message in run_checks()
+                if getattr(message, 'id', None) == 'trusts.E012'
+            ]
+        self.assertEqual(
+            [message.obj.label for message in messages],
+            ['gh_permissions'],
+        )
 
 
 class ImplementationReadyTest(SimpleTestCase):
@@ -100,9 +104,13 @@ class ImplementationReadyTest(SimpleTestCase):
 
 class MixinCatalogResolveTest(SimpleTestCase):
     def test_outside_backend_is_not_constructed(self):
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            OutsideBackend()
-        self.assertIn('TrustsConfigMixin', str(ctx.exception))
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, OUTSIDE, OUTSIDE)):
+            messages = [
+                message for message in run_checks()
+                if getattr(message, 'id', None) == 'trusts.E012'
+            ]
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].obj.label, 'gh_permissions')
 
     def test_installed_catalogs_follow_apps_not_backend_duplicates(self):
         from django.contrib.auth import get_user_model

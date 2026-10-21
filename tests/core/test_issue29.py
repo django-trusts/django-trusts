@@ -88,6 +88,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         errors = _messages_with_id(
             permission_condition_check_messages(
                 registry.conditions.iter_permission_conditions(),
+                get_user_model(),
             ),
             CHECK_ID_INVALID_EXPR,
         )
@@ -120,6 +121,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         errors = _messages_with_id(
             permission_condition_check_messages(
                 registry.conditions.iter_permission_conditions(),
+                get_user_model(),
             ),
             CHECK_ID_INVALID_EXPR,
         )
@@ -135,6 +137,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         errors = _messages_with_id(
             permission_condition_check_messages(
                 registry.conditions.iter_permission_conditions(),
+                get_user_model(),
             ),
             CHECK_ID_INVALID_EXPR,
         )
@@ -158,6 +161,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         self.assertFalse(hasattr(record, 'func'))
         messages = permission_condition_check_messages(
             registry.conditions.iter_permission_conditions(),
+            get_user_model(),
         )
         self.assertEqual(len(log.calls), 1)
         self.assertEqual(

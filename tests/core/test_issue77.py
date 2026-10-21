@@ -3,10 +3,11 @@
 Live one-path Trust/Content ``has_perm`` stays on Zero ``tests/legacy/``.
 """
 from django.contrib.auth import get_user_model
+from django.core.checks import run_checks
+from django.test import TestCase, override_settings
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db.models.query import QuerySet
-from django.test import TestCase
 from tests.support import configured_catalog, built_catalog, compiler
 from tests.core import KernelHostRequiredMixin
 from tests.backends import RaisingCompilerBackend
@@ -15,7 +16,6 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 
 from trusts.plan.aggregates import _compile_common_permissions
-from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import granted
 
 
@@ -45,9 +45,13 @@ class CompilerFailureTest(KernelHostRequiredMixin, TestCase):
         self.assertIn('compiler exploded', str(ctx.exception))
 
     def test_unconfigured_and_ambiguous_path_fail_loud(self):
-        from tests.gh_permissions.backends import OutsideBackend
-        with self.assertRaises(TrustsConfigurationError):
-            OutsideBackend()
+        outside = 'tests.gh_permissions.backends.OutsideBackend'
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST_BACKEND, outside)):
+            messages = run_checks()
+        self.assertTrue(any(
+            getattr(message, 'id', None) == 'trusts.E012'
+            for message in messages
+        ))
 
 class CompilerIsolationBackendTest(KernelHostRequiredMixin, TestCase):
 
