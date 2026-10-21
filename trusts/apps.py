@@ -9,7 +9,6 @@ from django.db.models import Model
 from django.db.models import options as model_options
 
 from trusts.errors import TrustsConfigurationError
-from trusts.inspect.commands import install_policy_commands
 
 T = TypeVar('T', bound=Model)
 
@@ -145,7 +144,6 @@ class TrustsConfigMixin(django.apps.AppConfig):
         # phase-1 import raises AppRegistryNotReady: snapshot imports
         # auth.Permission before apps are ready.
         import trusts.inspect.checks  # noqa: F401
-        install_policy_commands()
 
 
 def installed_catalogs():

@@ -1,10 +1,8 @@
 """Management command for the authorization policy SQL document.
 
-Core is not a Django app and does not ship ``trusts/management``.
-Django discovers commands only under ``django.core`` and each
-``INSTALLED_APPS`` entry, and hosts do not list ``trusts``, so a
-``trusts/management/commands`` module would never load.
-``TrustsConfigMixin.ready`` calls :func:`install_policy_commands`.
+A host app gets the command by adding
+``management/commands/trusts_policy_sql.py`` containing
+``from trusts.inspect.commands import PolicySqlCommand as Command``.
 
 The command prints the schema-1 canonical YAML document and, with
 ``--lock``, writes those same bytes. It does not authorize and it does
@@ -15,12 +13,10 @@ from __future__ import annotations
 
 __all__ = []
 
-import django.core.management as management
 from django.core.management.base import BaseCommand, CommandError
 
+import trusts.inspect.snapshot as snapshot
 from trusts.errors import TrustsConfigurationError
-
-_POLICY_COMMAND_APP = 'trusts.policy_commands'
 
 
 class PolicySqlCommand(BaseCommand):
@@ -57,55 +53,11 @@ class PolicySqlCommand(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        # phase-1 import raises AppRegistryNotReady: snapshot imports
-        # auth.Permission before apps are ready.
-        from trusts.inspect.snapshot import (
-            render_policy_sql_bytes,
-            resolve_policy_database,
-            write_policy_lock,
-        )
         try:
-            alias = resolve_policy_database(options.get('database'))
-            payload = render_policy_sql_bytes(alias=alias)
+            alias = snapshot.resolve_policy_database(options.get('database'))
+            payload = snapshot.render_policy_sql_bytes(alias=alias)
             if options.get('lock'):
-                write_policy_lock(payload)
+                snapshot.write_policy_lock(payload)
         except TrustsConfigurationError as exc:
             raise CommandError(str(exc)) from exc
         self.stdout.write(payload.decode('utf-8'), ending='')
-
-
-_POLICY_COMMANDS = {
-    'trusts_policy_sql': PolicySqlCommand,
-}
-
-
-_original_get_commands = management.get_commands
-_original_load_command_class = management.load_command_class
-
-
-def _policy_get_commands():
-    commands = _original_get_commands()
-    for name in _POLICY_COMMANDS:
-        commands.setdefault(name, _POLICY_COMMAND_APP)
-    return commands
-
-
-_policy_get_commands.cache_clear = _original_get_commands.cache_clear
-
-
-def _policy_load_command_class(app_name, name):
-    command_cls = _POLICY_COMMANDS.get(name)
-    if app_name == _POLICY_COMMAND_APP and command_cls is not None:
-        return command_cls()
-    return _original_load_command_class(app_name, name)
-
-
-def install_policy_commands():
-    """Register ``trusts_policy_sql`` on Django's command loader.
-
-    ``ready`` calls this for every mixin config. Assigning these same
-    wrapper objects again is a no-op, and ``setdefault`` leaves a
-    command another app already provided.
-    """
-    management.get_commands = _policy_get_commands
-    management.load_command_class = _policy_load_command_class
