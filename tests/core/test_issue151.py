@@ -27,15 +27,6 @@ from trusts.plan.conditions import ConditionRecord, FrozenConditionLookup
 
 ROOT = Path(__file__).resolve().parents[2]
 
-PUBLIC_SURFACE_NAMES = (
-    'PermissionConditionBooleanError',
-    'PermissionConditionError',
-    'PermissionConditionNotQueryable',
-    'PermissionConditionUnsupported',
-    'permission_condition_code',
-    'permission_has_condition',
-)
-
 
 def _note_model():
     User = get_user_model()

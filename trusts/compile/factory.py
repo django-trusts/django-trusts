@@ -32,17 +32,8 @@ from trusts.compile.nodes import (
     _require_same_root,
     permission_in,
 )
+from trusts.plan.grammar import Tree, invoke
 from trusts.compile.paths import AlongWalk, _PathBuilder
-from trusts.compile.visitors import (
-    ConditionAnd as _ConditionAnd,
-    ConditionEq as _ConditionEq,
-    ConditionIn as _ConditionIn,
-    ConditionInquiryMatch as _ConditionInquiryMatch,
-    ConditionProxy as _ConditionProxy,
-    InquiryPermissionProxy as _InquiryPermissionProxy,
-    _CONDITION_ARITY_PROBE,
-    _CONDITION_EXPR_TYPES,
-)
 from trusts.compile.resolution import (
     _SUFFIX_KINDS,
     _append_group_permissions,
@@ -54,7 +45,7 @@ from trusts.compile.resolution import (
     _resolve_permission_in_path,
     _resolve_permission_path,
 )
-from trusts.errors import TrustsConfigurationError
+from trusts.errors import PermissionConditionError, TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
 from trusts.compile.catalogs import Catalog, CatalogShape
@@ -781,7 +772,7 @@ class Compiler(object):
                 delegate=_public_ref(trust, delegate_path, 'delegate'),
                 sponsor=_public_ref(trust, sponsor_path, 'sponsor'),
                 condition=_normalize_delegated_condition(
-                    trust, condition, token=token,
+                    trust, condition,
                 ),
                 along=_bind_public_along(trust, along),
             )
@@ -803,7 +794,7 @@ class Compiler(object):
                 user=_public_ref(trust, user_path, 'user'),
                 group=_public_ref(trust, group_text, 'group'),
                 condition=_normalize_public_condition(
-                    trust, condition, permission_text, token=token,
+                    trust, condition, permission_text,
                 ),
                 along=_bind_public_along(trust, along),
             )
@@ -816,7 +807,7 @@ class Compiler(object):
             user=_public_ref(trust, user_path, 'user'),
             permission=_public_ref(trust, permission_path, 'permission'),
             condition=_normalize_public_condition(
-                trust, condition, permission_path, token=token,
+                trust, condition, permission_path,
             ),
             along=_bind_public_along(trust, along),
         )
@@ -1401,6 +1392,9 @@ def _assert_registration_rules(*, user_model, sponsor_model, conditions,
             user_model._meta.concrete_model, override.expr, override.name,
         )
 
+_CONDITION_ARITY_PROBE = object()
+
+
 def _require_condition_arity(builder):
     """Reject 0-arg, 2+-required, and keyword-only-only before invoke."""
     try:
@@ -1443,22 +1437,6 @@ def _delegated_condition_arity(builder):
         )
     return 2 if 2 in accepted else 1
 
-def _public_condition_path(proxy, token, role):
-    if not isinstance(proxy, _ConditionProxy):
-        raise TrustsConfigurationError(
-            '%s must be a path rooted at the supplied trust value, '
-            'not %r.' % (role, proxy)
-        )
-    if proxy._token is not token:
-        raise TrustsConfigurationError(
-            '%s used a path from another symbolic root.' % (role,)
-        )
-    if not proxy._path:
-        raise TrustsConfigurationError(
-            '%s returned an empty path.' % (role,)
-        )
-    return '__'.join(proxy._path)
-
 def _flatten_public_all(*predicates):
     parts = []
     for predicate in predicates:
@@ -1468,64 +1446,140 @@ def _flatten_public_all(*predicates):
             parts.append(predicate)
     return All(*parts)
 
-def _lower_public_condition(node, trust, token, permission_path):
-    if isinstance(node, _ConditionAnd):
-        return _flatten_public_all(
-            _lower_public_condition(node.left, trust, token, permission_path),
-            _lower_public_condition(node.right, trust, token, permission_path),
+def _is_inquiry(node):
+    return (
+        isinstance(node, Tree)
+        and node.kind == 'field'
+        and node.root == 'inquiry'
+        and not node.path
+    )
+
+
+def _reject_inquiry_hop(node):
+    if (
+        isinstance(node, Tree)
+        and node.kind == 'field'
+        and node.root == 'inquiry'
+        and node.path
+    ):
+        raise PermissionConditionError(
+            'requested permission is a symbolic terminal and has no '
+            'traversable attributes.'
         )
-    if isinstance(node, _ConditionEq):
+
+
+def _row_path(node, role):
+    if (
+        not isinstance(node, Tree)
+        or node.kind != 'field'
+        or node.root != 'row'
+    ):
+        raise PermissionConditionError(
+            '%s must be a path rooted at the supplied trust value, '
+            'not %r.' % (role, node)
+        )
+    if not node.path:
+        raise PermissionConditionError(
+            '%s returned an empty path.' % (role,)
+        )
+    return '__'.join(node.path)
+
+
+def _lower_relation(node, trust, permission_path):
+    """Lower one shared tree into the relation nodes stored today."""
+    if isinstance(node, Tree) and node.kind == 'and':
+        return _flatten_public_all(
+            _lower_relation(node.left, trust, permission_path),
+            _lower_relation(node.right, trust, permission_path),
+        )
+    if isinstance(node, Tree) and node.kind == 'eq':
+        _reject_inquiry_hop(node.left)
+        _reject_inquiry_hop(node.right)
+        left_inquiry = _is_inquiry(node.left)
+        right_inquiry = _is_inquiry(node.right)
+        if left_inquiry or right_inquiry:
+            other = node.right if left_inquiry else node.left
+            if left_inquiry and right_inquiry:
+                raise PermissionConditionError(
+                    'requested permission equality requires one '
+                    'relationship path.'
+                )
+            if (
+                not isinstance(other, Tree)
+                or other.kind != 'field'
+                or other.root != 'row'
+                or not other.path
+            ):
+                raise PermissionConditionError(
+                    'requested permission equality requires one '
+                    'relationship path.'
+                )
+            return _InquiryPermissionMatch(
+                _public_ref(
+                    trust,
+                    '__'.join(other.path),
+                    'delegated inquiry permission',
+                )
+            )
+        if (
+            isinstance(node.left, Tree) and node.left.kind == 'const'
+        ) or (
+            isinstance(node.right, Tree) and node.right.kind == 'const'
+        ):
+            raise PermissionConditionError(
+                'condition equality requires two trust-rooted paths, '
+                'not a constant.'
+            )
         return Equal(
             _public_ref(
-                trust,
-                _public_condition_path(node.left, token, 'Equal left'),
-                'Equal left',
+                trust, _row_path(node.left, 'Equal left'), 'Equal left',
             ),
             _public_ref(
-                trust,
-                _public_condition_path(node.right, token, 'Equal right'),
-                'Equal right',
+                trust, _row_path(node.right, 'Equal right'), 'Equal right',
             ),
         )
-    if isinstance(node, _ConditionIn):
+    if isinstance(node, Tree) and node.kind == 'contains':
+        _reject_inquiry_hop(node.right)
+        collection = _row_path(
+            node.left, 'condition .contains collection',
+        )
+        if _is_inquiry(node.right):
+            return _InquiryPermissionMatch(
+                _public_ref(
+                    trust, collection, 'delegated inquiry permission',
+                )
+            )
+        if (
+            not isinstance(node.right, Tree)
+            or node.right.kind != 'field'
+            or node.right.root != 'row'
+        ):
+            raise PermissionConditionError(
+                'condition .contains member must be a path rooted at the '
+                'supplied trust value, not %r.' % (node.right,)
+            )
         if permission_path is None:
-            raise TrustsConfigurationError(
+            raise PermissionConditionError(
                 'row-only delegated condition .contains() cannot bind the '
                 'requested permission; accept a second argument and pass it '
                 'as the member.'
             )
-        member_path = _public_condition_path(
-            node.member, token, 'condition .contains member',
+        member_path = _row_path(
+            node.right, 'condition .contains member',
         )
         permission_segments = _public_path_segments(
             permission_path, 'permission',
         )
         if tuple(member_path.split('__')) != permission_segments:
-            raise TrustsConfigurationError(
+            raise PermissionConditionError(
                 'condition .contains member must be the registered '
                 'permission path %r, not %r.'
                 % (permission_path, member_path)
             )
         return PermissionIn(
-            _public_ref(
-                trust,
-                _public_condition_path(
-                    node.collection, token, 'condition .contains collection',
-                ),
-                'permission_in',
-            ),
+            _public_ref(trust, collection, 'permission_in'),
         )
-    if isinstance(node, _ConditionInquiryMatch):
-        return _InquiryPermissionMatch(
-            _public_ref(
-                trust,
-                _public_condition_path(
-                    node.path, token, 'delegated inquiry permission path',
-                ),
-                'delegated inquiry permission',
-            )
-        )
-    raise TrustsConfigurationError(
+    raise PermissionConditionError(
         'condition builder must return a boolean expression of path '
         'equality, collection.contains(member), or their conjunction, '
         'not %r.' % (node,)
@@ -1556,8 +1610,7 @@ def _reject_public_condition_value(condition):
             'not %r.' % (condition,)
         )
 
-def _normalize_public_condition(trust, condition, permission_path, *, token):
-    """Invoke a public condition builder once and lower to private IR."""
+def _prepare_condition_builder(condition):
     if condition is None:
         return None
     _reject_public_condition_value(condition)
@@ -1568,57 +1621,28 @@ def _normalize_public_condition(trust, condition, permission_path, *, token):
             'condition builder must return a boolean expression, not a '
             'coroutine or async generator.'
         )
-    _require_condition_arity(condition)
-    proxy = _ConditionProxy(trust, token=token)
-    try:
-        result = condition(proxy)
-    except TrustsConfigurationError:
-        raise
-    except Exception as exc:
-        raise TrustsConfigurationError(
-            'condition builder failed: %s' % exc
-        ) from exc
-    if not isinstance(result, _CONDITION_EXPR_TYPES):
-        raise TrustsConfigurationError(
-            'condition builder must return a boolean expression of path '
-            'equality, collection.contains(member), or their conjunction, '
-            'not %r.' % (result,)
-        )
-    return _lower_public_condition(result, trust, token, permission_path)
+    return condition
 
-def _normalize_delegated_condition(trust, condition, *, token):
-    """Invoke a delegated condition builder once and lower to private IR."""
-    if condition is None:
+
+def _normalize_public_condition(trust, condition, permission_path):
+    """Invoke a public condition builder once and lower to private IR."""
+    if _prepare_condition_builder(condition) is None:
         return None
-    _reject_public_condition_value(condition)
-    if inspect.iscoroutinefunction(condition) or inspect.isasyncgenfunction(
-        condition,
-    ):
-        raise TrustsConfigurationError(
-            'condition builder must return a boolean expression, not a '
-            'coroutine or async generator.'
-        )
-    arity = _delegated_condition_arity(condition)
-    relationship = _ConditionProxy(trust, token=token)
-    inquiry_permission = _InquiryPermissionProxy(token)
-    try:
-        if arity == 2:
-            result = condition(relationship, inquiry_permission)
-        else:
-            result = condition(relationship)
-    except TrustsConfigurationError:
-        raise
-    except Exception as exc:
-        raise TrustsConfigurationError(
-            'condition builder failed: %s' % exc
-        ) from exc
-    if not isinstance(result, _CONDITION_EXPR_TYPES):
-        raise TrustsConfigurationError(
-            'condition builder must return a boolean expression of path '
-            'equality, collection.contains(permission), or their '
-            'conjunction, not %r.' % (result,)
-        )
-    return _lower_public_condition(result, trust, token, None)
+    _require_condition_arity(condition)
+    return _lower_relation(
+        invoke(condition, ('row',)), trust, permission_path,
+    )
+
+
+def _normalize_delegated_condition(trust, condition):
+    """Invoke a delegated condition builder once and lower to private IR."""
+    if _prepare_condition_builder(condition) is None:
+        return None
+    if _delegated_condition_arity(condition) == 2:
+        roots = ('row', 'inquiry')
+    else:
+        roots = ('row',)
+    return _lower_relation(invoke(condition, roots), trust, None)
 
 def _normalize_public_role(trust, value, role, *, token):
     """Normalize a public string or path builder to a Django ``__`` path."""

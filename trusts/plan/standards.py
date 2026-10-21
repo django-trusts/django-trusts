@@ -1,6 +1,6 @@
 """Named user conditions compiled once into each check.
 
-``Bit`` and ``Proxy`` are the tree names.
+The shared grammar builds the expression. ``Node`` is the stored tree.
 
 Each condition is ``(skip_<name> OR condition)``. The override is
 ``(NOT skip_<override> AND override)``, ORed with ordinary grants and
@@ -17,9 +17,8 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db.models import BooleanField, Q
 from django.db.models.expressions import RawSQL
 
-from trusts.errors import TrustsConfigurationError
-
-_MSG = 'User conditions only support concrete boolean fields, &, and ~.'
+from trusts.plan.grammar import Tree, invoke
+from trusts.errors import PermissionConditionError, TrustsConfigurationError
 
 # ``skip_<name>`` must not reuse an inquiry parameter. ``skip_is_active``
 # is absent: it is the keyword for the ``is_active`` condition.
@@ -95,30 +94,30 @@ def condition_names(conditions, override=None):
     return frozenset(names)
 
 
-class Bit(object):
-    def __init__(self, node):
-        self.node = node
-
-    def __and__(self, other):
-        if not isinstance(other, Bit):
-            raise TrustsConfigurationError(_MSG)
-        return Bit(Node('and', None, self.node, other.node))
-
-    def __invert__(self):
-        return Bit(Node('not', None, self.node, None))
-
-    def _reject(self, *args, **kwargs):
-        raise TrustsConfigurationError(_MSG)
-
-    __rand__ = __and__
-    __bool__ = __eq__ = __or__ = __call__ = _reject
-
-
-class Proxy(object):
-    def __getattr__(self, name):
-        if name.startswith('_'):
-            raise AttributeError(name)
-        return Bit(Node('field', name, None, None))
+def _lower_user(node):
+    """Lower the shared tree into the boolean ``Node`` stored today."""
+    if isinstance(node, Tree) and node.kind == 'bare':
+        field = node.item
+        if (
+            field.kind != 'field'
+            or field.root != 'user'
+            or len(field.path) != 1
+        ):
+            raise PermissionConditionError(
+                'A user condition names one concrete boolean field, not %r.'
+                % (getattr(field, 'path', field),)
+            )
+        return Node('field', field.path[0], None, None)
+    if isinstance(node, Tree) and node.kind == 'and':
+        return Node(
+            'and', None, _lower_user(node.left), _lower_user(node.right),
+        )
+    if isinstance(node, Tree) and node.kind == 'not':
+        return Node('not', None, _lower_user(node.item), None)
+    kind = getattr(node, 'kind', type(node).__name__)
+    raise PermissionConditionError(
+        '%s is not supported in a condition.' % kind
+    )
 
 
 def walk_user_lambda(expr):
@@ -128,15 +127,7 @@ def walk_user_lambda(expr):
             'User condition expression must be a callable or None, not %r.'
             % (expr,)
         )
-    try:
-        result = expr(Proxy())
-    except TrustsConfigurationError:
-        raise
-    except Exception as exc:
-        raise TrustsConfigurationError(_MSG) from exc
-    if not isinstance(result, Bit):
-        raise TrustsConfigurationError(_MSG)
-    return result.node
+    return _lower_user(invoke(expr, ('user',)))
 
 
 def _fields(expr):

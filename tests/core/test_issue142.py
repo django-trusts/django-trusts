@@ -6,21 +6,16 @@ from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
 from trusts.conditions import (
-    PermissionConditionBooleanError,
     PermissionConditionError,
-    PermissionConditionNotQueryable,
-    PermissionConditionUnsupported,
     permission_condition_code,
     permission_has_condition,
 )
+from trusts.errors import TrustsConfigurationError
 from tests.support import compiler
 
 
 PUBLIC_SURFACE_NAMES = (
-    'PermissionConditionBooleanError',
     'PermissionConditionError',
-    'PermissionConditionNotQueryable',
-    'PermissionConditionUnsupported',
     'permission_condition_code',
     'permission_has_condition',
 )
@@ -56,26 +51,20 @@ class StageBPublicSurfaceTest(SimpleTestCase):
         import trusts.conditions as conditions_mod
 
         self.assertEqual(tuple(conditions_mod.__all__), PUBLIC_SURFACE_NAMES)
-        self.assertTrue(issubclass(PermissionConditionBooleanError, PermissionConditionError))
-        self.assertTrue(issubclass(PermissionConditionUnsupported, PermissionConditionError))
-        self.assertTrue(issubclass(PermissionConditionNotQueryable, ValueError))
+        self.assertTrue(
+            issubclass(PermissionConditionError, TrustsConfigurationError),
+        )
+        for name in HIDDEN_PUBLIC_NAMES:
+            self.assertNotIn(name, conditions_mod.__all__)
+            self.assertFalse(hasattr(conditions_mod, name), name)
         self.assertTrue(permission_has_condition('change_note:own'))
         self.assertEqual(permission_condition_code('change_note:own'), 'own')
-
-
-    def test_private_ir_remains_importable_for_compiler_tests(self):
-        from trusts.plan.conditions import Expr, TQ, condition_refs
-
-        u, _p, o = condition_refs()
-        self.assertIsInstance(u == o.owner, Expr)
-        with self.assertRaises(PermissionConditionUnsupported):
-            TQ.contains
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class StageBRegisterCallableOnlyTest(SimpleTestCase):
     def test_registering_prebuilt_expr_raises_before_mutation(self):
-        from trusts.plan.conditions import condition_refs
+        from trusts.plan.conditions import Eq, Ref
 
         User = get_user_model()
 
@@ -85,10 +74,10 @@ class StageBRegisterCallableOnlyTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        u, _p, o = condition_refs()
+        owned = Eq(Ref('principal', ()), Ref('object', ('owner',)))
         registry = compiler()
         with self.assertRaises(TypeError):
-            registry.add_named_filter(Note, 'own', u == o.owner)
+            registry.add_named_filter(Note, 'own', owned)
         self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'own'))
         record = registry.add_named_filter(
             Note, 'own', lambda u, p, o: u == o.owner,

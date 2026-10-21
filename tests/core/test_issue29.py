@@ -25,8 +25,9 @@ from trusts.inspect.checks import (
 from trusts.conditions import PermissionConditionError
 from trusts.plan.conditions import (
     ConditionRecord,
+    Const,
+    Eq,
     Ref,
-    condition_refs,
     obsolete_legacy_callback_setting_enabled,
 )
 
@@ -72,9 +73,8 @@ class _BuilderLog(object):
 class PermissionConditionCheckLifecycleTest(SimpleTestCase):
     def test_prebuilt_expr_is_type_error_before_mutation(self):
         Note = _note_model()
-        u, _p, o = condition_refs()
         registry = compiler()
-        expr = u == o.not_a_field
+        expr = Eq(Ref('principal', ()), Ref('object', ('not_a_field',)))
         with self.assertRaises(TypeError):
             registry.add_named_filter(Note, 'missing', expr)
         self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'missing'))
@@ -95,7 +95,6 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
 
     def test_builder_validates_at_register_when_models_are_ready(self):
         Note = _note_model()
-        u, _p, o = condition_refs()
         registry = compiler()
         record = registry.add_named_filter(
             Note, 'deferred_own', lambda u, p, o: u == o.owner,
@@ -111,7 +110,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
             ),
             [],
         )
-        bad = u == o.deferred_missing
+        bad = Eq(Ref('principal', ()), Ref('object', ('deferred_missing',)))
         with self.assertRaises(TypeError):
             registry.add_named_filter(Note, 'deferred_bad', bad)
         _store_expr(registry, Note, 'deferred_bad', bad)
@@ -127,10 +126,15 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
 
     def test_multiple_dynamic_errors_are_aggregated(self):
         Note = _note_model()
-        u, _p, o = condition_refs()
         registry = compiler()
-        _store_expr(registry, Note, 'typo', u == o.nope)
-        _store_expr(registry, Note, 'types', o.status == 1)
+        _store_expr(
+            registry, Note, 'typo',
+            Eq(Ref('principal', ()), Ref('object', ('nope',))),
+        )
+        _store_expr(
+            registry, Note, 'types',
+            Eq(Ref('object', ('status',)), Const(1)),
+        )
         errors = _messages_with_id(
             permission_condition_check_messages(
                 registry.conditions.iter_permission_conditions(),
@@ -149,12 +153,6 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         registry = compiler()
         record = registry.add_named_filter(Note, 'spy', log)
         self.assertEqual(len(log.calls), 1)
-        u, p, o = log.calls[0]
-        self.assertIsInstance(u, Ref)
-        self.assertIsInstance(p, Ref)
-        self.assertIsInstance(o, Ref)
-        self.assertEqual(u.source, 'principal')
-        self.assertEqual(o.source, 'object')
         self.assertFalse(hasattr(record, 'func'))
         messages = permission_condition_check_messages(
             registry.conditions.iter_permission_conditions(),
@@ -202,9 +200,11 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         from tests.kernel_host.backends import HostTrustModelBackend
 
         Note = _note_model()
-        u, _p, o = condition_refs()
         registry = compiler()
-        _store_expr(registry, Note, 'typo', u == o.nope)
+        _store_expr(
+            registry, Note, 'typo',
+            Eq(Ref('principal', ()), Ref('object', ('nope',))),
+        )
 
         with override_catalog(
             HostTrustModelBackend, registry,
@@ -232,9 +232,11 @@ class ManagePyCheckLifecycleTest(SimpleTestCase):
         from tests.kernel_host.backends import HostTrustModelBackend
         from tests.myapp.models import Document
 
-        u, _p, o = condition_refs()
         registry = compiler()
-        _store_expr(registry, Document, 'typo-29', u == o.nope)
+        _store_expr(
+            registry, Document, 'typo-29',
+            Eq(Ref('principal', ()), Ref('object', ('nope',))),
+        )
 
         with override_catalog(
             HostTrustModelBackend, registry,
