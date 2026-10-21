@@ -52,7 +52,7 @@ from django.db.utils import DEFAULT_DB_ALIAS
 from trusts.plan.conditions import compile_expression_q
 from django.contrib.auth.models import Permission
 from django.db import connections
-from trusts.plan import conditions as _ir
+from trusts.plan.grammar import Tree
 from trusts.plan.rewrites import BindTable
 from trusts.plan.recursions import (
         GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
@@ -786,7 +786,7 @@ class _PolicyConditionText(object):
         self._grouped = False
 
     def render(self, node, *, grouped=False):
-        if not isinstance(node, _ir.Tree):
+        if not isinstance(node, Tree):
             raise TrustsConfigurationError(
                 'Policy SQL cannot render condition node %s.'
                 % type(node).__name__
@@ -853,7 +853,7 @@ def _inquiry_row(node):
 
 
 def _condition_path(operand):
-    if isinstance(operand, _ir.Tree) and operand.kind == 'field':
+    if isinstance(operand, Tree) and operand.kind == 'field':
         if not operand.path:
             raise TrustsConfigurationError(
                 'Policy SQL condition path is empty.'
@@ -1186,11 +1186,11 @@ def _filter_queues(expr):
         queues.setdefault(path, []).append(symbol)
 
     def walk(node):
-        if isinstance(node, _ir.Tree) and node.kind in ('and', 'or'):
+        if isinstance(node, Tree) and node.kind in ('and', 'or'):
             walk(node.left)
             walk(node.right)
             return
-        if isinstance(node, _ir.Tree) and node.kind in ('eq', 'ne'):
+        if isinstance(node, Tree) and node.kind in ('eq', 'ne'):
             pair = _comparison_symbol(node)
             if pair is not None:
                 add(pair[0], pair[1])
@@ -1207,7 +1207,7 @@ def _comparison_symbol(node):
     object_ref = None
     other = None
     for side in (left, right):
-        if isinstance(side, _ir.Tree) and side.kind == 'field' and side.root == 'object':
+        if isinstance(side, Tree) and side.kind == 'field' and side.root == 'object':
             if object_ref is None:
                 object_ref = side
             else:
@@ -1216,20 +1216,20 @@ def _comparison_symbol(node):
             other = side
     if object_ref is None or other is None:
         return None
-    if isinstance(other, _ir.Tree) and other.kind == 'field' and other.root == 'object':
+    if isinstance(other, Tree) and other.kind == 'field' and other.root == 'object':
         return None
     path = '__'.join(object_ref.path)
-    if isinstance(other, _ir.Tree) and other.kind == 'const':
+    if isinstance(other, Tree) and other.kind == 'const':
         return path, _with_hint(
             {'const': _json_const(other.value)}, path or 'literal',
         )
-    if isinstance(other, _ir.Tree) and other.kind == 'field' and other.root == 'user':
+    if isinstance(other, Tree) and other.kind == 'field' and other.root == 'user':
         if other.path:
             bind = 'user.%s' % '__'.join(other.path)
         else:
             bind = 'user.id'
         return path, _with_hint({'bind': bind}, _request_hint(bind))
-    if isinstance(other, _ir.Tree) and other.kind == 'field' and other.root == 'permission':
+    if isinstance(other, Tree) and other.kind == 'field' and other.root == 'permission':
         return path, _with_hint(
             {'bind': 'permission.id'}, _request_hint('permission.id'),
         )

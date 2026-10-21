@@ -11,13 +11,13 @@ from django.contrib.auth.models import Permission
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import F, Model, Q, QuerySet
 
-from trusts.plan.conditions import parse_perm_code, permission_binding
+from trusts.plan.conditions import ModelIdentity, parse_perm_code, permission_binding
 from trusts.plan.rewrites import bind_once
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import _as_q, _ordinary_records
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
 from trusts.plan.aggregates import _delegated_user_exists
-from trusts.plan import conditions as _ir
+from trusts.plan.grammar import Tree
 
 
 
@@ -184,17 +184,17 @@ def _named_filter_q(filter_lookup, content, code, singular, user_model):
 
 
 def _condition_outcome(expr, content, singular, user_model):
-    if isinstance(expr, _ir.Tree) and expr.kind == 'and':
+    if isinstance(expr, Tree) and expr.kind == 'and':
         return _combine_and(
             _condition_outcome(expr.left, content, singular, user_model),
             _condition_outcome(expr.right, content, singular, user_model),
         )
-    if isinstance(expr, _ir.Tree) and expr.kind == 'or':
+    if isinstance(expr, Tree) and expr.kind == 'or':
         return _combine_or(
             _condition_outcome(expr.left, content, singular, user_model),
             _condition_outcome(expr.right, content, singular, user_model),
         )
-    if isinstance(expr, _ir.Tree) and expr.kind in ('eq', 'ne'):
+    if isinstance(expr, Tree) and expr.kind in ('eq', 'ne'):
         return _comparison_outcome(
             expr, content, singular, user_model,
             equal=expr.kind == 'eq',
@@ -245,17 +245,17 @@ def _comparison_outcome(expr, content, singular, user_model, *, equal):
 
 
 def _condition_side(node, content, singular, user_model):
-    if isinstance(node, _ir.Tree) and node.kind == 'const':
+    if isinstance(node, Tree) and node.kind == 'const':
         return ('const', node.value)
-    if isinstance(node, _ir.Tree) and node.kind == 'field' and node.root == 'object':
+    if isinstance(node, Tree) and node.kind == 'field' and node.root == 'object':
         return ('value', _object_memory_value(content, node.path))
-    if isinstance(node, _ir.Tree) and node.kind == 'field' and node.root == 'permission':
+    if isinstance(node, Tree) and node.kind == 'field' and node.root == 'permission':
         if node.path:
             raise TrustsConfigurationError(
                 'Permission references cannot traverse attributes.'
             )
         return ('value', singular)
-    if isinstance(node, _ir.Tree) and node.kind == 'field' and node.root == 'user':
+    if isinstance(node, Tree) and node.kind == 'field' and node.root == 'user':
         return ('user', _user_lookup(user_model, node.path))
     raise TrustsConfigurationError(
         'Reverse permission inquiry cannot compile permission condition '
@@ -264,7 +264,7 @@ def _condition_side(node, content, singular, user_model):
 
 
 def _user_const_q(lookup, value, equal):
-    if isinstance(value, _ir.ModelIdentity):
+    if isinstance(value, ModelIdentity):
         value = value.pk
     elif isinstance(value, Model):
         value = value.pk
@@ -282,7 +282,7 @@ def _user_field_value_q(lookup, value, equal):
     """
     if value is None:
         return Q(pk__in=())
-    if isinstance(value, _ir.ModelIdentity):
+    if isinstance(value, ModelIdentity):
         value = value.pk
     elif isinstance(value, Model):
         value = value.pk
