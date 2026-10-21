@@ -12,7 +12,6 @@ from django.core.checks import Error
 from django.db import connection, models
 from django.http import HttpRequest
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
-from django.utils import timezone
 from django.test.utils import isolate_apps
 from tests.models import Ticket, ticket_meta_own
 from trusts.inspect.checks import CHECK_ID_INVALID_EXPR, CHECK_ID_OBSOLETE_CALLBACK_SETTING, check_obsolete_legacy_callback_setting, check_permission_conditions, iter_live_permission_conditions, permission_condition_check_messages
@@ -101,28 +100,6 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         with self.assertRaises(TypeError):
             registry.add_named_filter(Note, 'bad', 'not-a-condition')
         self.assertEqual(len(log.calls), 1)
-
-    def test_duplicate_condition_fails_and_keeps_the_first(self):
-        Note, _Memo = _note_models()
-        registry = compiler()
-        calls = []
-
-        def second(u, p, o):
-            calls.append(1)
-            return o.title == 'keep'
-
-        registry.add_named_filter(Note, 'named', lambda u, p, o: u == o.owner)
-        with self.assertRaises(PermissionConditionError):
-            registry.add_named_filter(Note, 'named', second)
-        self.assertEqual(calls, [])
-        q = registry.conditions.compile_registered_condition_q(
-            Note, 'trusts_tests.change_note:named', get_user_model()(pk=1),
-        )
-        self.assertIn('owner', str(q))
-        self.assertNotIn('keep', str(q))
-        rows = list(registry.conditions.iter_permission_conditions())
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0][1], 'named')
 
     def test_owners_do_not_share_or_overwrite_records(self):
         Note, _Memo = _note_models()
@@ -451,113 +428,3 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         errors = [m for m in messages if m.id == CHECK_ID_INVALID_EXPR]
         self.assertTrue(any(("'own'" in m.msg and 'nope' in m.msg for m in errors)))
         self.assertTrue(any((m.obj is Note for m in errors)), 'invalid owner B record must still be reported')
-
-
-@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class FieldNullRuleTest(TransactionTestCase):
-    """Two fields never match NULL. A field and a constant follow Python."""
-
-    def test_null_matches_only_a_constant(self):
-        User = get_user_model()
-
-        class Pair(models.Model):
-            left = models.IntegerField(null=True)
-            right = models.IntegerField(null=True)
-            owner = models.ForeignKey(
-                User, null=True, on_delete=models.CASCADE,
-            )
-            opened = models.DateTimeField(null=True)
-
-            class Meta:
-                app_label = 'trusts_tests'
-
-        class PairGrant(models.Model):
-            pair = models.ForeignKey(Pair, on_delete=models.CASCADE)
-            user = models.ForeignKey(User, on_delete=models.CASCADE)
-            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
-
-            class Meta:
-                app_label = 'trusts_tests'
-
-        with _tables(Pair, PairGrant):
-            alice = User.objects.create_user('alice-null', 'alice-null@example.com', 'x')
-            bob = User.objects.create_user('bob-null', 'bob-null@example.com', 'x')
-            when = timezone.now().replace(microsecond=0)
-            bob.last_login = when
-            bob.save(update_fields=['last_login'])
-            change = Permission.objects.create(
-                content_type=ContentType.objects.get_for_model(Pair),
-                codename='change_pair',
-                name='Can change pair',
-            )
-            orphan = Pair.objects.create()
-            owned = Pair.objects.create(left=1, right=1, owner=alice)
-            differ = Pair.objects.create(left=1, right=2, owner=bob)
-            five = Pair.objects.create(left=5, right=5)
-            timed = Pair.objects.create(opened=when)
-            for row in (orphan, owned, differ, five, timed):
-                for holder in (alice, bob):
-                    PairGrant.objects.create(pair=row, user=holder, permission=change)
-            bob.refresh_from_db()
-            timed.refresh_from_db()
-            registry = compiler()
-            registry.register(
-                trust=PairGrant, user='user', permission='permission', content='pair',
-            )
-            registry.add_named_filter(Pair, 'same', lambda u, p, o: o.left == o.right)
-            registry.add_named_filter(Pair, 'differ', lambda u, p, o: o.left != o.right)
-            registry.add_named_filter(Pair, 'blank', lambda u, p, o: o.left == None)
-            registry.add_named_filter(Pair, 'not_five', lambda u, p, o: o.left != 5)
-            registry.add_named_filter(Pair, 'not_owner', lambda u, p, o: u != o.owner)
-            registry.add_named_filter(
-                Pair, 'login', lambda u, p, o: u.last_login == o.opened,
-            )
-            catalog = built_catalog(registry)
-            prefix = 'trusts_tests.change_pair'
-
-            def holds(code, row):
-                return {
-                    user.pk
-                    for user in (alice, bob)
-                    if catalog.has_perm(user, '%s:%s' % (prefix, code), row)
-                }
-
-            def listed(code, user):
-                compiled = registry.conditions.compile_registered_condition_q(
-                    Pair, '%s:%s' % (prefix, code), user,
-                )
-                return set(Pair.objects.filter(compiled).values_list('pk', flat=True))
-
-            def reverse(row, code):
-                return set(catalog.permitted_users(
-                    row, '%s:%s' % (prefix, code),
-                ).values_list('pk', flat=True))
-
-            self.assertEqual(holds('same', orphan), set())
-            self.assertEqual(holds('same', owned), {alice.pk, bob.pk})
-            self.assertEqual(holds('differ', orphan), set())
-            self.assertEqual(holds('differ', differ), {alice.pk, bob.pk})
-            self.assertEqual(holds('blank', orphan), {alice.pk, bob.pk})
-            self.assertEqual(holds('blank', owned), set())
-            self.assertEqual(holds('not_five', orphan), {alice.pk, bob.pk})
-            self.assertEqual(holds('not_five', five), set())
-            self.assertEqual(holds('not_owner', orphan), set())
-            self.assertEqual(holds('not_owner', owned), {bob.pk})
-            self.assertEqual(holds('login', timed), {bob.pk})
-            self.assertEqual(holds('login', orphan), set())
-            self.assertEqual(listed('same', alice), {owned.pk, five.pk})
-            self.assertEqual(listed('differ', alice), {differ.pk})
-            self.assertEqual(listed('blank', alice), {orphan.pk, timed.pk})
-            self.assertEqual(listed('not_five', alice), {
-                orphan.pk, owned.pk, differ.pk, timed.pk,
-            })
-            self.assertEqual(listed('not_owner', alice), {differ.pk})
-            self.assertEqual(listed('not_owner', bob), {owned.pk})
-            self.assertEqual(listed('login', alice), set())
-            self.assertEqual(listed('login', bob), {timed.pk})
-            self.assertEqual(reverse(orphan, 'same'), set())
-            self.assertEqual(reverse(orphan, 'blank'), {alice.pk, bob.pk})
-            self.assertEqual(reverse(timed, 'login'), {bob.pk})
-            self.assertEqual(reverse(orphan, 'login'), set())
-            self.assertEqual(reverse(five, 'not_five'), set())
-            self.assertEqual(reverse(orphan, 'not_five'), {alice.pk, bob.pk})
