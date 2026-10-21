@@ -326,6 +326,11 @@ def inquiry_partner(node):
     return None
 
 
+def is_predicate(node):
+    """True when ``node`` is a condition this grammar can return."""
+    return isinstance(node, Tree) and node.kind in _PREDICATE_KINDS
+
+
 def invoke(fn, roots):
     """Call ``fn`` once with one symbol per root name. Return a predicate."""
     token = object()

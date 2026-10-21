@@ -23,7 +23,9 @@ recorder's ``add_named_filter``).
 V1 grammar: principal/object field refs and relationship traversal
 (``_meta`` fields on the content model and the entity/user model; not
 Python properties); literal constants; ``==`` / ``!=``; nested ``&`` /
-``|``. Operand types must match without Django field coercion:
+``|``; ``.contains()`` on a forward many-to-many; a bare boolean field;
+and ``~`` on a boolean field or on ``&`` / ``|``. Operand types must
+match without Django field coercion:
 ``CharField`` compares to ``str``, relations compare to model identity
 (not raw primary keys). Missing attribute names fail closed; they are
 not treated as ``NULL``. Python ``and`` / ``or`` / ``not`` and chained
@@ -41,6 +43,7 @@ from uuid import UUID
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.contrib.auth.models import Permission
 from django.db.models import (
+    Exists,
     F,
     Manager,
     Model,
@@ -67,7 +70,14 @@ from django.db.models.fields import GenericIPAddressField
 from django.http import HttpRequest
 from django.utils.functional import Promise, SimpleLazyObject
 
-from trusts.plan.grammar import Tree, invoke, missing_field, unsupported
+from trusts.plan.grammar import (
+    Tree,
+    invoke,
+    is_predicate,
+    missing_field,
+    unsupported,
+)
+from trusts.plan.predicates import contains_q
 from trusts.errors import PermissionConditionError
 
 
@@ -179,10 +189,6 @@ class ModelIdentity(object):
         )
 
 
-def is_predicate(node):
-    return _node(node, 'eq', 'ne', 'and', 'or')
-
-
 _SCALAR_CONSTANT_TYPES = (
     type(None), bool, int, float, str, bytes,
     Decimal, UUID, datetime, date, time, timedelta,
@@ -243,12 +249,17 @@ def normalize_constant(value):
 
 def normalize_expression(node):
     """Return a tree whose constants are durable values."""
-    if _node(node, 'and', 'or', 'eq', 'ne'):
+    if _node(node, 'and', 'or', 'eq', 'ne', 'contains'):
         left = normalize_expression(node.left)
         right = normalize_expression(node.right)
         if left is node.left and right is node.right:
             return node
         return Tree(node.kind, left=left, right=right)
+    if _node(node, 'not', 'bare'):
+        item = normalize_expression(node.item)
+        if item is node.item:
+            return node
+        return Tree(node.kind, item=item)
     if _node(node, 'const'):
         value = normalize_constant(node.value)
         if value is node.value:
@@ -257,12 +268,23 @@ def normalize_expression(node):
     return node
 
 
-def resolve_field_path(model, path, ref_kind='object'):
+def _collection_terminal(field, last, collection):
+    """Forward many-to-many allowed as the last hop of ``.contains()``."""
+    return (
+        last
+        and collection
+        and field.many_to_many
+        and not getattr(field, 'auto_created', False)
+    )
+
+
+def resolve_field_path(model, path, ref_kind='object', *, collection=False):
     """Validate ``path`` against ``model`` and return the Django lookup string.
 
     Relationship traversal is allowed; a non-relational field may only appear
-    as the last component. Missing names raise ``PermissionConditionError``
-    rather than resolving to ``None``.
+    as the last component. ``collection`` allows that last component to be a
+    forward many-to-many, which is the left side of ``.contains()``. Missing
+    names raise ``PermissionConditionError`` rather than resolving to ``None``.
     """
     if not path:
         raise PermissionConditionError(
@@ -279,7 +301,10 @@ def resolve_field_path(model, path, ref_kind='object'):
             field = current._meta.get_field(name)
         except FieldDoesNotExist:
             raise missing_field(ref_kind, path[:i + 1], name, current)
-        if field.many_to_many or field.one_to_many:
+        last = i == len(path) - 1
+        if (field.many_to_many or field.one_to_many) and not _collection_terminal(
+            field, last, collection,
+        ):
             raise PermissionConditionError(
                 'Multi-valued relation %r on %s is not supported in V1 '
                 'permission conditions (path %s). ManyToManyField and '
@@ -290,7 +315,6 @@ def resolve_field_path(model, path, ref_kind='object'):
                     '.'.join(path[:i + 1]),
                 )
             )
-        last = i == len(path) - 1
         if not last:
             if not field.is_relation:
                 raise PermissionConditionError(
@@ -308,8 +332,10 @@ def resolve_object_field_path(model, path):
     return resolve_field_path(model, path, ref_kind='object')
 
 
-def _terminal_field(model, path, ref_kind='object'):
-    resolve_field_path(model, path, ref_kind=ref_kind)
+def _terminal_field(model, path, ref_kind='object', *, collection=False):
+    resolve_field_path(
+        model, path, ref_kind=ref_kind, collection=collection,
+    )
     current = model
     field = None
     for i, name in enumerate(path):
@@ -451,6 +477,64 @@ def _check_comparison_types(node, model, user_model):
     )
 
 
+def _check_member_spec(spec, related):
+    if spec[0] == 'null':
+        return
+    if spec[0] == 'instance' and _models_compatible(spec[1], related):
+        return
+    if _specs_compatible(spec, _spec_from_field(related._meta.pk)):
+        return
+    raise PermissionConditionError(
+        'Permission condition .contains() member is incompatible with '
+        '%s (%s).' % (related._meta.label, spec[2])
+    )
+
+
+def _validate_contains(node, model, user_model):
+    left = node.left
+    right = node.right
+    if not _node(left, 'field') or left.root not in ('object', 'user'):
+        raise PermissionConditionError(
+            'Malformed permission condition node %r.' % (node,)
+        )
+    host = model if left.root == 'object' else user_model
+    ref = 'object' if left.root == 'object' else 'principal'
+    collection = _terminal_field(
+        host, left.path, ref, collection=True,
+    )
+    related = collection.remote_field.model
+    if _node(right, 'const'):
+        if right.value is not None:
+            _check_member_spec(_spec_from_const(right.value), related)
+        return
+    if not _node(right, 'field'):
+        raise PermissionConditionError(
+            'Malformed permission condition node %r.' % (node,)
+        )
+    _validate_node(right, model, user_model)
+    _check_member_spec(_operand_spec(right, model, user_model), related)
+
+
+def _validate_bare(node, model, user_model):
+    item = node.item
+    if (
+        not _node(item, 'field')
+        or item.root not in ('object', 'user')
+        or not item.path
+    ):
+        raise PermissionConditionError(
+            'Malformed permission condition node %r.' % (node,)
+        )
+    host = model if item.root == 'object' else user_model
+    ref = 'object' if item.root == 'object' else 'principal'
+    field = _terminal_field(host, item.path, ref)
+    if not isinstance(field, BooleanField):
+        raise PermissionConditionError(
+            'A bare field in a named filter must be a boolean, not %s.%s.'
+            % (host._meta.label, field.name)
+        )
+
+
 def validate_expression(node, model, user_model=None):
     """Resolve paths and require comparable operand types on ``Eq`` / ``Ne``.
 
@@ -462,7 +546,8 @@ def validate_expression(node, model, user_model=None):
     """
     if not is_predicate(node):
         raise PermissionConditionError(
-            'Permission condition did not produce a comparison expression.'
+            'Permission condition did not produce a comparison, '
+            '.contains(), or boolean field.'
         )
     _validate_node(node, model, user_model)
 
@@ -476,6 +561,15 @@ def _validate_node(node, model, user_model):
         _validate_node(node.left, model, user_model)
         _validate_node(node.right, model, user_model)
         _check_comparison_types(node, model, user_model)
+        return
+    if _node(node, 'contains'):
+        _validate_contains(node, model, user_model)
+        return
+    if _node(node, 'bare'):
+        _validate_bare(node, model, user_model)
+        return
+    if _node(node, 'not'):
+        _validate_node(node.item, model, user_model)
         return
     if _node(node, 'const'):
         return
@@ -498,7 +592,7 @@ def _validate_node(node, model, user_model):
     )
 
 
-def _walk_model_path(instance, model, path):
+def _walk_model_path(instance, model, path, *, collection=False):
     """Follow a ``_meta`` field path on ``instance``.
 
     A missing field name raises ``PermissionConditionError``. A legitimate
@@ -515,7 +609,9 @@ def _walk_model_path(instance, model, path):
                 'condition', path[:i + 1], name, current_model,
             )
         last = i == len(path) - 1
-        if field.many_to_many or field.one_to_many:
+        if (field.many_to_many or field.one_to_many) and not _collection_terminal(
+            field, last, collection,
+        ):
             raise PermissionConditionError(
                 'Multi-valued relation %r on %s is not supported in V1 '
                 'permission conditions (path %s). ManyToManyField and '
@@ -526,6 +622,10 @@ def _walk_model_path(instance, model, path):
                     '.'.join(path[:i + 1]),
                 )
             )
+        if _collection_terminal(field, last, collection):
+            if current is None:
+                return None
+            return getattr(current, field.name)
         if not last and not field.is_relation:
             raise PermissionConditionError(
                 'Cannot traverse field %r on %s in a permission '
@@ -592,8 +692,21 @@ def evaluate_expression(node, user, perm, obj, model=None, user_model=None):
             _node(node, 'eq'),
             fields=_both_fields(node),
         )
+    if _node(node, 'contains'):
+        return _evaluate_contains(
+            node, user, perm, obj, model, user_model,
+        )
+    if _node(node, 'bare'):
+        return _boolean_holds(_resolve_runtime(
+            node.item, user, perm, obj, model, user_model,
+        ))
+    if _node(node, 'not'):
+        return not evaluate_expression(
+            node.item, user, perm, obj, model, user_model,
+        )
     raise PermissionConditionError(
-        'Permission condition did not produce a comparison expression.'
+        'Permission condition did not produce a comparison, '
+        '.contains(), or boolean field.'
     )
 
 
@@ -695,6 +808,115 @@ def _compile_comparison(node, model, user, perm, user_model):
     return column_q(right.lookup, left.value, equal, field=fields)
 
 
+def _boolean_holds(value):
+    """A boolean field holds only when it is True. NULL does not."""
+    return value is True
+
+
+def _boolean_q(lookup):
+    """Column is True. NULL is not True."""
+    return Q(**{lookup: True})
+
+
+def _negate_q(model, q):
+    """Rows for which ``q`` is not true.
+
+    A row ``q`` rejects, including a row it rejects because a value is
+    NULL, is included. That is Python ``not``. ``~Q`` does not do this
+    for a comparison: ``NOT (left = right)`` is unknown when either side
+    is NULL, and ``~Q()`` is not an empty match.
+    """
+    return ~Q(pk__in=model._base_manager.filter(q).values('pk'))
+
+
+def _member_pk(value):
+    if isinstance(value, (Model, ModelIdentity)):
+        return value.pk
+    return value
+
+
+def _collection_members(manager, pk):
+    if manager is None or pk is None:
+        return None
+    return manager.filter(pk=pk)
+
+
+def _collection_contains(manager, pk):
+    found = _collection_members(manager, pk)
+    if found is None:
+        return False
+    return found.exists()
+
+
+def _collection_contains_q(manager, pk):
+    """Membership of a loaded collection, as a filter on any model."""
+    found = _collection_members(manager, pk)
+    if found is None:
+        return Q(pk__in=())
+    return Q(Exists(found))
+
+
+def _bound_value(node, user, perm, user_model):
+    return _resolve_runtime(node, user, perm, None, None, user_model)
+
+
+def _load_collection(node, user, obj, model, user_model):
+    if node.root == 'object':
+        return _walk_model_path(obj, model, node.path, collection=True)
+    if node.root == 'user':
+        return _walk_model_path(
+            user, user_model, node.path, collection=True,
+        )
+    raise PermissionConditionError(
+        'Cannot evaluate permission condition node %r.' % (node,)
+    )
+
+
+def _evaluate_contains(node, user, perm, obj, model, user_model):
+    manager = _load_collection(node.left, user, obj, model, user_model)
+    member = _resolve_runtime(
+        node.right, user, perm, obj, model, user_model,
+    )
+    return _collection_contains(manager, _member_pk(member))
+
+
+def _compile_bare(node, model, user, perm, user_model):
+    field = node.item
+    if field.root == 'object':
+        return _boolean_q(resolve_object_field_path(model, field.path))
+    if _boolean_holds(_bound_value(field, user, perm, user_model)):
+        return Q()
+    return Q(pk__in=())
+
+
+def _compile_contains(node, model, user, perm, user_model):
+    left = node.left
+    right = node.right
+    if left.root == 'object':
+        lookup = resolve_field_path(
+            model, left.path, ref_kind='object', collection=True,
+        )
+        if _node(right, 'field') and right.root == 'object':
+            return contains_q(
+                lookup, F(resolve_object_field_path(model, right.path)),
+            )
+        value = _member_pk(_bound_value(right, user, perm, user_model))
+        if value is None:
+            return Q(pk__in=())
+        return contains_q(lookup, value)
+    manager = _load_collection(left, user, None, model, user_model)
+    if _node(right, 'field') and right.root == 'object':
+        if manager is None:
+            return Q(pk__in=())
+        member = resolve_object_field_path(model, right.path)
+        return Q(**{'%s__in' % member: manager.values('pk')})
+    if _collection_contains(
+        manager, _member_pk(_bound_value(right, user, perm, user_model)),
+    ):
+        return Q()
+    return Q(pk__in=())
+
+
 def compile_to_q(node, model, user, perm, user_model=None):
     """Compile an expression tree to a Django ``Q`` for ``model`` rows."""
     if _node(node, 'and'):
@@ -707,8 +929,17 @@ def compile_to_q(node, model, user, perm, user_model=None):
         )
     if _node(node, 'eq', 'ne'):
         return _compile_comparison(node, model, user, perm, user_model)
+    if _node(node, 'contains'):
+        return _compile_contains(node, model, user, perm, user_model)
+    if _node(node, 'bare'):
+        return _compile_bare(node, model, user, perm, user_model)
+    if _node(node, 'not'):
+        return _negate_q(model, compile_to_q(
+            node.item, model, user, perm, user_model,
+        ))
     raise PermissionConditionError(
-        'Permission condition did not produce a comparison expression.'
+        'Permission condition did not produce a comparison, '
+        '.contains(), or boolean field.'
     )
 
 
@@ -716,8 +947,8 @@ def compile_expression_q(expr, model, user, perm, user_model=None):
     """Compile a registered ``Tree`` to ``Q``. Fail closed if invalid."""
     if not is_predicate(expr):
         raise PermissionConditionError(
-            'Permission condition did not produce a V1 comparison '
-            'expression (==, !=, &, | over principal and object fields).'
+            'Permission condition did not produce a comparison, '
+            '.contains(), boolean field, or combination with & and |.'
         )
     validate_expression(expr, model, user_model)
     return compile_to_q(expr, model, user, perm, user_model)
@@ -727,8 +958,8 @@ def evaluate_registered_expression(expr, user, perm, obj, model=None, user_model
     """Evaluate a registered ``Tree`` against a real principal/object."""
     if not is_predicate(expr):
         raise PermissionConditionError(
-            'Permission condition did not produce a V1 comparison '
-            'expression (==, !=, &, | over principal and object fields).'
+            'Permission condition did not produce a comparison, '
+            '.contains(), boolean field, or combination with & and |.'
         )
     klass = model
     if klass is None:
@@ -774,9 +1005,12 @@ def _lower_named(node):
     kind = node.kind
     if kind in ('field', 'const'):
         return node
-    if kind in ('eq', 'ne', 'and', 'or'):
+    if kind in ('eq', 'ne', 'and', 'or', 'contains'):
         _lower_named(node.left)
         _lower_named(node.right)
+        return node
+    if kind in ('not', 'bare'):
+        _lower_named(node.item)
         return node
     raise unsupported(kind, 'a named filter')
 

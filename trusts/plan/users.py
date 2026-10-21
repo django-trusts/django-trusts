@@ -9,15 +9,23 @@ __all__ = []
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import Permission
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Model, Q, QuerySet
+from django.db.models import F, Model, Q, QuerySet
 
 from trusts.plan.conditions import (
+    _boolean_holds,
+    _boolean_q,
+    _collection_contains_q,
+    _load_collection,
+    _member_pk,
+    _negate_q,
     column_q,
     columns_q,
     parse_perm_code,
     permission_binding,
+    resolve_field_path,
     values_match,
 )
+from trusts.plan.predicates import contains_q
 from trusts.plan.rewrites import bind_once
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import _as_q, _ordinary_records
@@ -205,6 +213,12 @@ def _condition_outcome(expr, content, singular, user_model):
             expr, content, singular, user_model,
             equal=expr.kind == 'eq',
         )
+    if isinstance(expr, Tree) and expr.kind == 'contains':
+        return _contains_outcome(expr, content, singular, user_model)
+    if isinstance(expr, Tree) and expr.kind == 'bare':
+        return _bare_outcome(expr, content, singular, user_model)
+    if isinstance(expr, Tree) and expr.kind == 'not':
+        return _negated_outcome(expr, content, singular, user_model)
     raise TrustsConfigurationError(
         'Reverse permission inquiry cannot compile permission condition %r.'
         % (expr,)
@@ -229,6 +243,70 @@ def _combine_or(left, right):
     if right is None:
         return left
     return left | right
+
+
+def _contains_outcome(expr, content, singular, user_model):
+    left = expr.left
+    right = expr.right
+    if left.root == 'user':
+        lookup = resolve_field_path(
+            user_model, left.path, ref_kind='principal', collection=True,
+        )
+        if (
+            isinstance(right, Tree)
+            and right.kind == 'field'
+            and right.root == 'user'
+        ):
+            return contains_q(
+                lookup, F(_user_lookup(user_model, right.path)),
+            )
+        pk = _member_pk(_side_value(right, content, singular, user_model))
+        if pk is None:
+            return None
+        return contains_q(lookup, pk)
+    manager = _load_collection(
+        left, None, content, content.__class__, user_model,
+    )
+    if (
+        isinstance(right, Tree)
+        and right.kind == 'field'
+        and right.root == 'user'
+    ):
+        if manager is None:
+            return None
+        member = _user_lookup(user_model, right.path)
+        return Q(**{'%s__in' % member: manager.values('pk')})
+    return _collection_contains_q(
+        manager, _member_pk(_side_value(right, content, singular, user_model)),
+    )
+
+
+def _bare_outcome(expr, content, singular, user_model):
+    field = expr.item
+    if field.root == 'user':
+        return _boolean_q(_user_lookup(user_model, field.path))
+    if _boolean_holds(_side_value(field, content, singular, user_model)):
+        return True
+    return None
+
+
+def _negated_outcome(expr, content, singular, user_model):
+    inner = _condition_outcome(expr.item, content, singular, user_model)
+    if inner is True:
+        return None
+    if inner is None:
+        return True
+    return _negate_q(user_model, inner)
+
+
+def _side_value(node, content, singular, user_model):
+    kind, value = _condition_side(node, content, singular, user_model)
+    if kind == 'user':
+        raise TrustsConfigurationError(
+            'Reverse permission inquiry cannot compile permission condition '
+            'node %r.' % (node,)
+        )
+    return value
 
 
 def _comparison_outcome(expr, content, singular, user_model, *, equal):
