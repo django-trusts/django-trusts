@@ -45,6 +45,7 @@ CHECK_ID_OBSOLETE_CALLBACK_SETTING = 'trusts.E007'
 CHECK_ID_AUTHORIZATION_REQUIRED = 'trusts.E008'
 CHECK_ID_UNLISTED_CATALOG = 'trusts.E010'
 CHECK_ID_UNBUILDABLE_BACKEND = 'trusts.E011'
+CHECK_ID_MIXIN_REQUIRED = 'trusts.E012'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
     'Silencing this check ID suppresses only the early diagnostic. '
@@ -135,6 +136,16 @@ def _load_listed():
         try:
             backend = load_backend(path)
         except (ImproperlyConfigured, TrustsConfigurationError) as exc:
+            if 'must live inside an app' in str(exc):
+                config = django_apps.get_containing_app_config(path.rpartition('.')[0])
+                label = config.label if config is not None else path
+                if not any(message.obj is config for message in errors):
+                    errors.append(django_checks.Error(
+                        'App %s must extend TrustsConfigMixin.' % label,
+                        hint='Extend TrustsConfigMixin on the app config.',
+                        obj=config, id=CHECK_ID_MIXIN_REQUIRED,
+                    ))
+                continue
             errors.append(django_checks.Error(
                 'Authentication backend %s could not be built: %s' % (path, exc),
                 hint='Fix AUTHENTICATION_BACKENDS so the backend constructs.',
@@ -380,6 +391,17 @@ def check_authorization_required_conditions(app_configs, **kwargs):
 def check_unlisted_catalog(app_configs, **kwargs):
     """Registrations need a listed backend whose module lives in that app."""
     chosen, _catalogs, messages = _load_listed()
+    for config in django_apps.get_app_configs():
+        recorder = getattr(config, 'recorder', None)
+        if isinstance(config, TrustsConfigMixin) or not getattr(recorder, '_rows', ()):
+            continue
+        if any(message.obj is config for message in messages):
+            continue
+        messages.append(django_checks.Error(
+            'App %s must extend TrustsConfigMixin.' % config.label,
+            hint='Extend TrustsConfigMixin on the app config.',
+            obj=config, id=CHECK_ID_MIXIN_REQUIRED,
+        ))
     listed = set()
     for candidate in chosen:
         config = django_apps.get_containing_app_config(type(candidate).__module__)
