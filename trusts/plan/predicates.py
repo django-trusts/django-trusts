@@ -3,9 +3,9 @@
 from django.contrib.auth.models import Permission
 from django.db.models import F, Model, Q
 
-from trusts.errors import TrustsConfigurationError
+from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import ModelIdentity
-from trusts.plan.grammar import Tree, inquiry_partner, is_inquiry
+from trusts.plan.grammar import Tree, inquiry_partner, is_inquiry, unsupported
 from trusts.plan.hops import lookup_text, require_instance
 from trusts.plan.writers import (
     _boolean_q,
@@ -95,9 +95,7 @@ class _PredicateCompiler(object):
         if node is None:
             return None
         if not isinstance(node, Tree):
-            raise TrustsConfigurationError(
-                'condition is not supported; omit it or pass None.'
-            )
+            raise unsupported('This condition', 'a relation condition')
         if node.kind == 'and':
             return self.compile(node.left) & self.compile(node.right)
         if node.kind == 'or':
@@ -112,9 +110,7 @@ class _PredicateCompiler(object):
             return self._contains(node)
         if node.kind == 'bare':
             return _boolean_q(lookup_text(node.item.path))
-        raise TrustsConfigurationError(
-            'condition is not supported; omit it or pass None.'
-        )
+        raise unsupported(node.kind, 'a relation condition')
 
     def _eq(self, node):
         partner = inquiry_partner(node)
@@ -130,7 +126,7 @@ class _PredicateCompiler(object):
         column = _inquiry_ne_column(node)
         if column is not None:
             if self.permission is None:
-                raise TrustsConfigurationError(
+                raise PermissionConditionError(
                     'Delegated inquiry-permission condition needs the requested '
                     'permission binding.'
                 )
@@ -174,7 +170,7 @@ class _PredicateCompiler(object):
 
     def _bind_inquiry(self, path):
         if self.permission is None:
-            raise TrustsConfigurationError(
+            raise PermissionConditionError(
                 'Delegated inquiry-permission condition needs the requested '
                 'permission binding.'
             )

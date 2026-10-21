@@ -15,7 +15,9 @@ from django.db import connection, models
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
 
+from tests.myapp.models import DocumentDelegation, DocumentGrant
 from trusts.backends import TrustModelBackendMixin
+from trusts.compile.nodes import Ref
 from trusts.conditions import PermissionConditionError
 from trusts.models import PermittedQuerySet, PermittedUsersMixin
 from tests.support import compiler, published_class_catalog
@@ -530,3 +532,17 @@ class RemainingLimitsTest(SimpleTestCase):
             )
         self.assertEqual(handle.records, ())
         self.assertEqual(handle.delegations, ())
+
+    def test_plain_object_condition_raises_permission_condition_error(self):
+        grant = Ref(DocumentGrant)
+        delegation = Ref(DocumentDelegation)
+        with self.assertRaises(PermissionConditionError):
+            compiler().register_relation(
+                content=grant.document, user=grant.user,
+                permission=grant.permission, condition=object(),
+            )
+        with self.assertRaises(PermissionConditionError):
+            compiler().build_delegation(
+                content=delegation.document, delegate=delegation.delegate,
+                sponsor=delegation.sponsor, condition=object(),
+            )
