@@ -1189,17 +1189,6 @@ class ConditionRegistry(object):
             model, perm, user, self.user_model,
         )
 
-    def evaluate_permission_condition(self, model, cond_code, user, perm, obj):
-        """Evaluate one registered condition against a real object.
-
-        Unregistered codes raise ``AttributeError``. Unbound records
-        fail closed. The builder is never invoked here.
-        """
-        return evaluate_stored_condition(
-            self.get_permission_condition_record(model, cond_code),
-            model, cond_code, user, perm, obj, self.user_model,
-        )
-
 
 def compile_stored_condition_q(record, model, perm, user, user_model=None):
     """Compile one stored condition record, or raise fail-closed."""
@@ -1213,20 +1202,6 @@ def compile_stored_condition_q(record, model, perm, user, user_model=None):
         )
     grant = perm.split(':', 1)[0] if isinstance(perm, str) else perm
     return compile_expression_q(record.expr, model, user, grant, user_model)
-
-
-def evaluate_stored_condition(record, model, cond_code, user, perm, obj, user_model=None):
-    """Evaluate one stored condition record, or raise fail-closed."""
-    if record is None:
-        raise _unknown_condition_error(model, cond_code)
-    if record.expr is None:
-        raise PermissionConditionError(
-            'Permission condition %r on %s is unbound.'
-            % (cond_code, _condition_model_label(model))
-        )
-    return evaluate_registered_expression(
-        record.expr, user, perm, obj, model=model, user_model=user_model,
-    )
 
 
 class FrozenConditionLookup(object):

@@ -22,7 +22,6 @@ from trusts.plan.relations import QueryCompiler
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
-from trusts.plan.aggregates import _compiler_applies
 from trusts.decorators import _declared_authorization_guards, authorization_required
 HOST = HOST_BACKEND
 DOCUMENT = DOCUMENT_BACKEND
@@ -89,7 +88,6 @@ class ProtectedFactorySurfaceTest(SimpleTestCase):
         self.assertTrue(protocol.applies(filled))
         self.assertFalse(compiler.applies(strategy_only))
         self.assertFalse(protocol.applies(strategy_only))
-        self.assertFalse(_compiler_applies(compiler, strategy_only))
 
     def test_ready_stores_the_built_registry_on_the_catalog(self):
         from tests.kernel_host.backends import HostTrustModelBackend

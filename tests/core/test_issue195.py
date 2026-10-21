@@ -3,7 +3,6 @@ from pathlib import Path
 
 from django.test import SimpleTestCase
 
-from trusts.plan.aggregates import _compiler_applies
 from trusts.plan.relations import PlanQueryCompiler, QueryCompiler
 
 
@@ -27,8 +26,5 @@ class RelationshipOnlyCompilerTest(SimpleTestCase):
         filled = type('Plan', (), {'records': (object(),), 'delegations': ()})()
         self.assertFalse(compiler.applies(empty))
         self.assertFalse(protocol.applies(empty))
-        self.assertFalse(_compiler_applies(compiler, empty))
-        with self.assertRaises(AttributeError):
-            _compiler_applies(object(), empty)
         self.assertTrue(compiler.applies(filled))
-        self.assertTrue(_compiler_applies(compiler, filled))
+        self.assertTrue(protocol.applies(filled))

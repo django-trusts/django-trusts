@@ -429,33 +429,6 @@ class RelationPlan:
             user_model=self.user_model,
         )
 
-    def common_permissions(self, user, content, *,
-                           skipped=()):
-        """Trustee permissions held on every candidate through this plan.
-
-        ``content`` is an instance or QuerySet. Empty candidates yield
-        an empty permission queryset. Group extras belong to the compiler,
-        not this plan-only projection.
-        """
-        user = require_instance(user, 'user')
-        if not self.records or self.permission_model is None:
-            if self.permission_model is None:
-                return ()
-            return self.permission_model._default_manager.none()
-        qs = candidate_queryset(content)
-        exists = self.content_exists(user, OuterRef(OuterRef('pk')))
-        ordinary = None
-        if exists is not None:
-            ordinary = Exists(qs) & ~Exists(qs.filter(~Q(exists)))
-        identity = Exists(qs) & _outer_permission_identity(
-            self.permission_model, _candidate_model(content),
-        )
-        return self._bound_queryset(
-            user, ordinary, skipped, identity,
-            self.permission_model._default_manager.all(),
-            self.permission_model._default_manager.none(),
-        )
-
     def permissions(self, user, content, *, skipped=()):
         """Distinct permission rows for ``(user, content)``."""
         user = require_instance(user, 'user')

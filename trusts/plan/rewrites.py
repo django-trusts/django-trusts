@@ -1377,11 +1377,3 @@ def strip_exists_marker(query):
         query.annotations['a'] = SqlInt(1)
         query._annotation_select_cache = None
     return query
-
-
-class LiteralExists(Exists):
-    """``EXISTS (SELECT 1 ...)``. The marker is SQL, not a placeholder."""
-
-    def __init__(self, queryset, **kwargs):
-        super().__init__(queryset, **kwargs)
-        strip_exists_marker(self.query)

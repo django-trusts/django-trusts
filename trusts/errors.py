@@ -7,10 +7,6 @@ class TrustsConfigurationError(Exception):
     """Malformed or unsupported registration."""
 
 
-class TrustsCompilerError(TrustsConfigurationError):
-    """Configured Trusts backend is missing or has a malformed query compiler."""
-
-
 class TrustsMixinRequired(ImproperlyConfigured):
     """The backend's app config does not extend TrustsConfigMixin."""
 

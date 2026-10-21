@@ -229,9 +229,9 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
 
     def test_literal_one_is_standard_sql_on_sqlite_mysql_and_postgresql(self):
         from django.db.models import Exists
-        from trusts.plan.rewrites import LiteralExists
         inner = User.objects.filter(pk=1)
-        exists = LiteralExists(inner)
+        exists = Exists(inner)
+        strip_exists_marker(exists.query)
         self.assertIsInstance(exists.query.annotations['a'], SqlInt)
         bare = Exists(User.objects.filter(pk=1))
         self.assertEqual(bare.query.annotations['a'].value, 1)

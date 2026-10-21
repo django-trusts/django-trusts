@@ -8,6 +8,27 @@ development log. New features and changes that require no application action
 belong in [What's new](whats-new.md); development history belongs in
 [development history](../dev/development.md).
 
+## Test-only names removed
+
+These names were importable and unused by the authorization runtime.
+Call the catalog or the condition compiler instead.
+
+| | Old | New |
+| --- | --- | --- |
+| Permission rows | `RelationPlan.common_permissions(user, content)` | `catalog.permissions_for(user, content)` |
+| Condition object check | `ConditionRegistry.evaluate_permission_condition(...)` | `compile_registered_condition_q` and filter the queryset |
+| Stored-condition object check | `evaluate_stored_condition(...)` | the same compiled `Q` |
+| Compiler failure type | `TrustsCompilerError` | `TrustsConfigurationError` |
+| Exists marker | `LiteralExists(queryset)` | ordinary `Exists`; the renderer writes `SELECT 1` |
+
+Migration-bot checklist:
+
+- `common_permissions`
+- `evaluate_permission_condition`
+- `evaluate_stored_condition`
+- `TrustsCompilerError`
+- `LiteralExists`
+
 ## `Meta.permission_conditions` removed (#330)
 
 Named filters are not a model `Meta` option. Register the predicate on

@@ -27,14 +27,14 @@ from tests.support import (
 from tests.unsupported_db_settings import DATABASES as UNSUPPORTED_DATABASES
 from trusts.inspect.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
 from trusts.inspect.format import _format_policy_sql, _tokenize_policy_sql
-from trusts.plan.aggregates import _compile_common_permissions, all_match
+from trusts.plan.aggregates import all_match
 from trusts.plan.users import lock_permitted_users_queryset
 from trusts.plan.walk import _render_reach_sql
 from trusts.compile.nodes import Along
 from trusts.plan.recursions import GrantReach
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
-from trusts.errors import TrustsCompilerError, TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
 CONCRETE = 'tests.kernel_host.backends.HostTrustModelBackend'
@@ -365,9 +365,9 @@ class _AlongProjectionMixin(object):
         with self.assertNumQueries(1):
             self.assertFalse(all_match(built_catalog(handle), mixed_qs, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(_compile_common_permissions(built_catalog(handle), granted_qs, self.alice)), {self.read.pk})
+            self.assertEqual(_pks(built_catalog(handle).permissions_for(self.alice, granted_qs)), {self.read.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(list(_compile_common_permissions(built_catalog(handle), mixed_qs, self.alice)), [])
+            self.assertEqual(list(built_catalog(handle).permissions_for(self.alice, mixed_qs)), [])
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
@@ -914,14 +914,12 @@ class AlongRuntimeGateTest(TransactionTestCase):
             oracle = Stub('oracle', 'django.db.backends.oracle', 'legacy')
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 expr.as_sql(sql_compiler, oracle)
-            self.assertNotIsInstance(ctx.exception, TrustsCompilerError)
             self.assertIn('oracle', str(ctx.exception).lower())
             self.assertIn('legacy', str(ctx.exception))
             maria = Stub('mysql', 'django.db.backends.mysql', 'maria')
             maria.mysql_is_mariadb = True
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 expr.as_sql(sql_compiler, maria)
-            self.assertNotIsInstance(ctx.exception, TrustsCompilerError)
             self.assertEqual(str(ctx.exception), 'Along reachability requires a recursive CTE on Django sqlite3, postgresql, or mysql; got ENGINE=%r vendor=%r alias=%r.' % ('django.db.backends.mysql', 'mysql', 'maria'))
             rendered_qs = built_catalog(registry).filter_authorized(Node.objects.all(), alice, read)
             rendered = str(rendered_qs.query)

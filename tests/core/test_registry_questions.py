@@ -18,11 +18,9 @@ from django.test.utils import isolate_apps
 from tests.core.test_issue282 import _tables
 from trusts.compile.factory import Compiler
 from trusts.compile.nodes import Ref
-from trusts.plan.aggregates import _compile_common_permissions, instance_match
-from trusts.plan.contents import _compile_granted
+from trusts.plan.aggregates import instance_match
 from trusts.compile.catalogs import Question
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.plan.rewrites import bind_once
 from tests.support import built_catalog, compiler
 
 
@@ -127,9 +125,6 @@ class RegistryQuestionsTest(TransactionTestCase):
         handle = self._production_handle(registry)
         self.assertEqual(built.has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a), instance_match(built_catalog(handle), self.doc_a, self.alice, self.read))
         built_qs = built.filter_authorized(self.Document.objects.all(), self.alice, self.read)
-        granted_q = _compile_granted(built_catalog(handle), self.Document.objects.all(), self.alice, self.read)
-        production_qs = bind_once(self.Document.objects.filter(granted_q).distinct(), user_model=get_user_model())
-        self.assertEqual(str(built_qs.query), str(production_qs.query))
         self.assertEqual(_pks(built_qs), {self.doc_a.pk})
         self.assertEqual(_pks(built.permissions_for(self.alice, self.doc_a)), {self.read.pk})
         self.assertEqual(str(built.permissions_for(self.alice, self.doc_a).query), str(built_catalog(registry).permissions_for(self.alice, self.doc_a).query))
@@ -156,8 +151,10 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.assertFalse(built.has_perm(self.outsider, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))
         self.assertEqual(_pks(built.filter_authorized(self.Document.objects.all(), self.bob, self.read)), {self.doc_a.pk})
         self.assertEqual(_pks(built.permissions_for(self.bob, self.doc_a)), {self.read.pk})
-        production_permissions = _compile_common_permissions(built_catalog(handle), self.doc_a, self.bob, kind='complete')
-        self.assertEqual(str(built.permissions_for(self.bob, self.doc_a).query), str(production_permissions.query))
+        self.assertEqual(
+            str(built.permissions_for(self.bob, self.doc_a).query),
+            str(built_catalog(handle).permissions_for(self.bob, self.doc_a).query),
+        )
         self.assertEqual(_pks(built.permitted_users(self.doc_a, self.read)), {self.alice.pk, self.bob.pk})
         self.assertTrue(built_catalog(registry).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))
         self.assertEqual(_pks(built_catalog(registry).permissions_for(self.bob, self.doc_a)), {self.read.pk})

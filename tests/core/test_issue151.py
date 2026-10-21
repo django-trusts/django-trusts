@@ -233,16 +233,6 @@ class NamedConditionCompilationTest(TransactionTestCase):
             listed = set(Note.objects.filter(compiled).values_list('pk', flat=True))
             self.assertEqual(listed, {keep.pk})
             self.assertNotIn(drop.pk, listed)
-            self.assertTrue(
-                registry.conditions.evaluate_permission_condition(
-                    Note, 'owned', alice, 'trusts_tests.change_note', keep,
-                )
-            )
-            self.assertFalse(
-                registry.conditions.evaluate_permission_condition(
-                    Note, 'owned', alice, 'trusts_tests.change_note', drop,
-                )
-            )
 
     def test_unknown_unbound_and_malformed_fail_closed(self):
         Note = _note_model()
@@ -251,7 +241,6 @@ class NamedConditionCompilationTest(TransactionTestCase):
             alice = User.objects.create_user(
                 'alice-151u', 'alice-151u@example.com', 'x',
             )
-            note = Note.objects.create(title='n', owner=alice)
             registry = compiler()
             lookup = FrozenConditionLookup(())
             self.assertIsNone(lookup.record_for(Note, 'missing'))
@@ -278,7 +267,7 @@ class NamedConditionCompilationTest(TransactionTestCase):
                 ConditionRecord(model=Note)
             )
             with self.assertRaises(PermissionConditionError) as unbound:
-                registry.conditions.evaluate_permission_condition(
-                    Note, 'empty', alice, 'trusts_tests.change_note', note,
+                registry.conditions.compile_registered_condition_q(
+                    Note, 'trusts_tests.change_note:empty', alice,
                 )
             self.assertIn('unbound', str(unbound.exception))

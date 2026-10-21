@@ -498,10 +498,10 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
                 self.assertEqual(len(_group_permission_aliases(sql)), 1, sql)
 
     def test_common_permissions_omit_change(self):
-        plan = built_catalog(self.registry).plan_for(self.paper, user=self.alice)
+        catalog = built_catalog(self.registry)
         for label, target in (('instance', self.paper), ('queryset', self.one)):
             with self.subTest(label):
-                self.assertEqual(self._permission_codes(plan.common_permissions(self.alice, target)), {self.read_code})
+                self.assertEqual(self._permission_codes(catalog.permissions_for(self.alice, target)), {self.read_code})
 
     def test_policy_sql_shares_one_group_permissions_alias(self):
         document = yaml.safe_load(render_configured_policy(self.handle))

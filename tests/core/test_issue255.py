@@ -31,7 +31,7 @@ from tests.myapp.models import Document, DocumentGrant
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
-from trusts.inspect.snapshot import _compile_queryset, render_policy_sql_bytes
+from trusts.inspect.snapshot import render_policy_sql_bytes
 from trusts.models import PermittedManager, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import render_configured_policy, built_catalog, compiler
 
@@ -356,9 +356,6 @@ class Issue255PolicySqlTest(SimpleTestCase):
     def test_content_pk_literal_stays_const_beside_an_along_reverse(self):
         handle = _export_handle('documents.backends.LiteralFolderBackend')
         handle.register(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
-        record = built_catalog(handle).plan_for(Folder).records[0]
-        _sql, params = _compile_queryset(FolderGrant.objects.filter(folder__pk=5), 'default', record=record, expr=None, records=(record,), reverse_users=True)
-        self.assertEqual(params, [{'const': 5, 'hint': 'id'}])
         document = yaml.safe_load(render_configured_policy(handle))
         reverse = document['backends'][0]['contents'][0]['get_permitted_users']
         self.assertIn('$content.id', reverse['params'])

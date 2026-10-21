@@ -16,7 +16,7 @@ from django.db.models import ForeignObject, Q
 from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
-from trusts.plan.aggregates import _compile_common_permissions, all_match
+from trusts.plan.aggregates import all_match
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
@@ -486,16 +486,16 @@ class _TerminalProjectionMixin(object):
             self.assertTrue(all_match(built_catalog(handle), granted_qs, self.alice, self.read))
         with self.assertNumQueries(1):
             self.assertFalse(all_match(built_catalog(handle), mixed_qs, self.alice, self.read))
-        group_only = _compile_common_permissions(built_catalog(handle), granted_qs, self.alice, kind='group')
+        group_only = built_catalog(handle).permissions_for(self.alice, granted_qs, kind='group')
         self.assertIsInstance(group_only, QuerySet)
         self.assertEqual(list(group_only), [])
-        plan = built_catalog(registry).plan_for(granted, user=self.alice, permission=self.read)
+        catalog = built_catalog(registry)
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(plan.common_permissions(self.alice, granted)), {self.read.pk})
+            self.assertEqual(_pks(catalog.permissions_for(self.alice, granted)), {self.read.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(plan.common_permissions(self.alice, granted_qs)), {self.read.pk})
+            self.assertEqual(_pks(catalog.permissions_for(self.alice, granted_qs)), {self.read.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(list(plan.common_permissions(self.alice, mixed_qs)), [])
+            self.assertEqual(list(catalog.permissions_for(self.alice, mixed_qs)), [])
 
     def _assert_shared_row(self, registry, granted, other_scope):
         self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), granted))
@@ -737,13 +737,13 @@ class TrustsRegistryDependentGrammarGroupSplitTest(TransactionTestCase):
         with self.assertNumQueries(1):
             self.assertFalse(all_match(built_catalog(self.handle), many, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(_compile_common_permissions(built_catalog(self.handle), alice_only, self.alice)), {self.read.pk})
+            self.assertEqual(_pks(built_catalog(self.handle).permissions_for(self.alice, alice_only)), {self.read.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(list(_compile_common_permissions(built_catalog(self.handle), alice_only, self.alice, kind='group')), [])
+            self.assertEqual(list(built_catalog(self.handle).permissions_for(self.alice, alice_only, kind='group')), [])
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(_compile_common_permissions(built_catalog(self.handle), alice_only, self.carol, kind='group')), {self.read.pk})
+            self.assertEqual(_pks(built_catalog(self.handle).permissions_for(self.carol, alice_only, kind='group')), {self.read.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(list(_compile_common_permissions(built_catalog(self.handle), many, self.alice)), [])
+            self.assertEqual(list(built_catalog(self.handle).permissions_for(self.alice, many)), [])
         self.assertFalse(all_match(built_catalog(self.handle), self.pay_b, self.alice, self.read))
         self.assertFalse(all_match(built_catalog(self.handle), self.pay_b, self.carol, self.read))
 

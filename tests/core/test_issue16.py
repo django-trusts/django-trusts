@@ -205,15 +205,9 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
                 registry.add_named_filter(Note, 'editable', log)
             self.assertEqual(len(log.calls), 1)
             perm = 'trusts_tests.change_note:editable'
-            grant = 'trusts_tests.change_note'
             q = registry.conditions.compile_registered_condition_q(Note, perm, alice)
             listed = set(Note.objects.filter(q).values_list('pk', flat=True))
-            evaluated = set()
-            for row in Note.objects.all():
-                if registry.conditions.evaluate_permission_condition(Note, 'editable', alice, grant, row):
-                    evaluated.add(row.pk)
             self.assertEqual(listed, {keep.pk})
-            self.assertEqual(evaluated, listed)
             self.assertNotIn(drop.pk, listed)
             self.assertNotIn(locked.pk, listed)
             sql = str(Note.objects.filter(q).query)
@@ -244,26 +238,21 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
         User = get_user_model()
         with _tables(Note):
             alice = User.objects.create_user('alice-16u', 'alice-16u@example.com', 'x')
-            note = Note.objects.create(title='n', owner=alice)
             u, _p, o = condition_refs()
             registry = compiler()
             with self.assertRaises(AttributeError) as missing:
                 registry.conditions.compile_registered_condition_q(Note, 'trusts_tests.change_note:missing', alice)
             self.assertIn('missing', str(missing.exception))
-            with self.assertRaises(AttributeError):
-                registry.conditions.evaluate_permission_condition(Note, 'missing', alice, 'trusts_tests.change_note', note)
             with self.assertRaises(TypeError):
                 registry.add_named_filter(Note, 'typo', u == o.nope)
             _store_expr(registry, Note, 'typo', u == o.nope)
             with self.assertRaises(PermissionConditionError) as typo:
                 registry.conditions.compile_registered_condition_q(Note, 'trusts_tests.change_note:typo', alice)
             self.assertIn('nope', str(typo.exception))
-            with self.assertRaises(PermissionConditionError):
-                registry.conditions.evaluate_permission_condition(Note, 'typo', alice, 'trusts_tests.change_note', note)
             empty = ConditionRecord(model=Note)
             registry.conditions._records[Note._meta.label, 'empty'] = empty
             with self.assertRaises(PermissionConditionError) as unbound:
-                registry.conditions.evaluate_permission_condition(Note, 'empty', alice, 'trusts_tests.change_note', note)
+                registry.conditions.compile_registered_condition_q(Note, 'trusts_tests.change_note:empty', alice)
             self.assertIn('unbound', str(unbound.exception))
 
     def test_constant_normalization_is_durable(self):
@@ -282,9 +271,16 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             self.assertEqual(const.value.as_tuple(), (alice._meta.app_label, alice._meta.model_name, alice.pk))
             alice.username = 'mutated'
             alice.save(update_fields=['username'])
-            self.assertTrue(registry.conditions.evaluate_permission_condition(Note, 'owner_is', bob, 'trusts_tests.change_note', note))
+            perm = 'trusts_tests.change_note:owner_is'
+            listed = set(Note.objects.filter(
+                registry.conditions.compile_registered_condition_q(Note, perm, bob),
+            ).values_list('pk', flat=True))
+            self.assertEqual(listed, {note.pk})
             captured = bob
-            self.assertTrue(registry.conditions.evaluate_permission_condition(Note, 'owner_is', bob, 'trusts_tests.change_note', note))
+            listed_again = set(Note.objects.filter(
+                registry.conditions.compile_registered_condition_q(Note, perm, bob),
+            ).values_list('pk', flat=True))
+            self.assertEqual(listed_again, {note.pk})
 
     def test_forbidden_captures_rejected_at_register(self):
         Note, _Memo = _note_models()

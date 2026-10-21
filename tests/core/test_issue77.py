@@ -15,7 +15,6 @@ from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 
-from trusts.plan.aggregates import _compile_common_permissions
 from trusts.plan.contents import granted
 
 
@@ -98,18 +97,17 @@ class CoreCommonPermissionsProjectionTest(KernelHostRequiredMixin, TestCase):
         DocumentGrant.objects.create(document=self.doc, user=self.alice, permission=self.change)
         self.handle = configured_catalog(DOCUMENT_BACKEND)
 
-    def test_plan_and_handle_common_permissions_are_one_sql(self):
-        plan = self.handle.plan_for(self.doc, user=self.alice)
+    def test_permissions_for_instance_and_queryset_are_one_sql(self):
         with self.assertNumQueries(1):
-            codes = set(plan.common_permissions(self.alice, self.doc).values_list('codename', flat=True))
+            codes = set(self.handle.permissions_for(self.alice, self.doc).values_list('codename', flat=True))
         self.assertIn('change_document', codes)
         qs = Document.objects.filter(pk=self.doc.pk)
         with self.assertNumQueries(1):
-            rows = list(_compile_common_permissions(self.handle, qs, self.alice))
+            rows = list(self.handle.permissions_for(self.alice, qs))
         self.assertTrue(any((row.codename == 'change_document' for row in rows)))
         empty = Document.objects.none()
         with self.assertNumQueries(1):
-            self.assertFalse(list(_compile_common_permissions(self.handle, empty, self.alice)))
+            self.assertFalse(list(self.handle.permissions_for(self.alice, empty)))
 
 class RegisteredOrdinaryModelTest(KernelHostRequiredMixin, TestCase):
 
