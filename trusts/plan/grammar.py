@@ -80,10 +80,10 @@ def _unsupported(name):
 class Tree(object):
     """One condition node. Not a Django expression and not a callback."""
 
-    __slots__ = ('kind', 'root', 'path', 'value', 'left', 'right', 'item', 'token')
+    __slots__ = ('kind', 'root', 'path', 'value', 'left', 'right', 'item')
 
     def __init__(self, kind, root=None, path=(), value=None, left=None,
-                 right=None, item=None, token=None):
+                 right=None, item=None):
         object.__setattr__(self, 'kind', kind)
         object.__setattr__(self, 'root', root)
         object.__setattr__(self, 'path', tuple(path))
@@ -91,7 +91,6 @@ class Tree(object):
         object.__setattr__(self, 'left', left)
         object.__setattr__(self, 'right', right)
         object.__setattr__(self, 'item', item)
-        object.__setattr__(self, 'token', token)
 
     def __setattr__(self, name, value):
         raise PermissionConditionError('A condition is immutable.')
@@ -134,12 +133,6 @@ class Tree(object):
             and self.item == other.item
         )
 
-    def __hash__(self):
-        return hash((
-            self.kind, self.root, self.path, self.value,
-            self.left, self.right, self.item,
-        ))
-
     def __repr__(self):
         return 'Tree(%s)' % self.kind
 
@@ -174,9 +167,7 @@ class Symbol(object):
         )
 
     def _field(self):
-        return Tree(
-            'field', root=self._root, path=self._path, token=self._token,
-        )
+        return Tree('field', root=self._root, path=self._path)
 
     def contains(self, member):
         if not self._path:
