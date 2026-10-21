@@ -36,6 +36,7 @@ NULL already did not match.
 user rules raise it for every unsupported operator, unsupported node, and
 missing field. The messages name the surface, for example
 "'|' is not supported in a relation condition."
+Named filters accept `.contains()`, `~`, and a bare boolean field.
 
 | | Old | New |
 | --- | --- | --- |
