@@ -1,6 +1,6 @@
 """Named user conditions compiled once into each check.
 
-The shared grammar builds the expression. ``Node`` is the stored tree.
+The shared grammar builds the expression. ``Tree`` is the stored node.
 
 Each condition is ``(skip_<name> OR condition)``. The override is
 ``(NOT skip_<override> AND override)``, ORed with ordinary grants and
@@ -28,11 +28,14 @@ _RESERVED = frozenset({
     'plan', 'permission_model', 'skipped', 'skip_flags',
 })
 
-Node = namedtuple('Node', 'kind name left right')
 UserCondition = namedtuple('UserCondition', 'name expr on')
 
+_IS_ACTIVE = Tree(
+    'bare', item=Tree('field', root='user', path=('is_active',)),
+)
+
 BUILTIN_USER_CONDITIONS = (
-    UserCondition('is_active', Node('field', 'is_active', None, None), '*'),
+    UserCondition('is_active', _IS_ACTIVE, '*'),
 )
 
 
@@ -95,7 +98,7 @@ def condition_names(conditions, override=None):
 
 
 def _lower_user(node):
-    """Lower the shared tree into the boolean ``Node`` stored today."""
+    """Keep the shared tree when a user rule can store it."""
     if isinstance(node, Tree) and node.kind == 'bare':
         field = node.item
         if (
@@ -107,13 +110,18 @@ def _lower_user(node):
                 'A user condition names one concrete boolean field, not %r.'
                 % (getattr(field, 'path', field),)
             )
-        return Node('field', field.path[0], None, None)
+        return node
     if isinstance(node, Tree) and node.kind == 'and':
-        return Node(
-            'and', None, _lower_user(node.left), _lower_user(node.right),
-        )
+        left = _lower_user(node.left)
+        right = _lower_user(node.right)
+        if left is node.left and right is node.right:
+            return node
+        return Tree('and', left=left, right=right)
     if isinstance(node, Tree) and node.kind == 'not':
-        return Node('not', None, _lower_user(node.item), None)
+        item = _lower_user(node.item)
+        if item is node.item:
+            return node
+        return Tree('not', item=item)
     kind = getattr(node, 'kind', type(node).__name__)
     raise PermissionConditionError(
         '%s is not supported in a condition.' % kind
@@ -132,7 +140,10 @@ def walk_user_lambda(expr):
 
 def _fields(expr):
     if expr.kind == 'field':
-        yield expr.name
+        yield expr.path[0]
+        return
+    if expr.kind == 'bare' or expr.kind == 'not':
+        yield from _fields(expr.item)
         return
     if expr.left is not None:
         yield from _fields(expr.left)
@@ -174,11 +185,14 @@ def concrete_rule(expr, name, user_model):
 
 
 def _compile(path, expr):
+    if expr.kind == 'bare':
+        return _compile(path, expr.item)
     if expr.kind == 'field':
-        key = '%s__%s' % (path, expr.name) if path else expr.name
+        name = expr.path[0]
+        key = '%s__%s' % (path, name) if path else name
         return Q(**{key: True})
     if expr.kind == 'not':
-        return ~_compile(path, expr.left)
+        return ~_compile(path, expr.item)
     return _compile(path, expr.left) & _compile(path, expr.right)
 
 

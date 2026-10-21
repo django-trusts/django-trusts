@@ -21,16 +21,10 @@ from trusts.plan.hops import (
     resolved_hop,
 )
 from trusts.compile.nodes import (
-    All,
     Along,
-    Equal,
-    PermissionIn,
     Ref,
-    _InquiryPermissionMatch,
     _is_model_class,
     _require_ref,
-    _require_same_root,
-    permission_in,
 )
 from trusts.plan.grammar import Tree, invoke
 from trusts.compile.paths import AlongWalk, _PathBuilder
@@ -51,7 +45,6 @@ T = TypeVar('T', bound=Model)
 from trusts.compile.catalogs import Catalog, CatalogShape
 from trusts.plan.conditions import (
     ConditionRegistry,
-    Expr,
     FrozenConditionLookup,
 )
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan, bind_checked_user
@@ -657,9 +650,9 @@ class Compiler(object):
         walk-site with bounded reachability. Along validation uses
         ``_meta`` only (zero SQL).
 
-        Optional ``condition`` is a closed predicate tree (``All``,
-        ``Equal``, ``permission_in``) compiled as an AND overlay on the
-        same root row. Validation uses ``_meta`` only (zero SQL).
+        Optional ``condition`` is a shared condition tree compiled as an
+        AND overlay on the same root row. Validation uses ``_meta`` only
+        (zero SQL).
 
         This method does not inspect Django's global ``apps.ready``.
         """
@@ -936,14 +929,12 @@ def probe_along_capabilities(connection):
         cursor.fetchone()
 
 
-def _validate_equal(predicate, root):
-    left = _require_same_root(predicate.left, root, 'Equal left')
-    right = _require_same_root(predicate.right, root, 'Equal right')
+def _validate_equal_paths(left_path, right_path, root):
     _left_path, left_model, _left_field, left_target = _resolve_forward_singles(
-        root, left._path, 'Equal left',
+        root, left_path, 'Equal left',
     )
     _right_path, right_model, _right_field, right_target = (
-        _resolve_forward_singles(root, right._path, 'Equal right')
+        _resolve_forward_singles(root, right_path, 'Equal right')
     )
     if left_model is not right_model:
         raise TrustsConfigurationError(
@@ -963,47 +954,44 @@ def _validate_equal(predicate, root):
             )
         )
 
-def _validate_permission_in(predicate, root, permission_model,
-                            permission_target=None):
-    if not predicate.refs:
-        raise TrustsConfigurationError(
-            'permission_in requires one or more refs.'
-        )
-    for ref in predicate.refs:
-        bound = _require_same_root(ref, root, 'permission_in')
-        _resolve_permission_in_path(
-            root, bound._path, 'permission_in', permission_model,
-            permission_target=permission_target,
-        )
-
 def _validate_condition(condition, root, permission_model,
                         permission_target=None):
     """Registration-time ``_meta`` validation. Zero SQL. None is a no-op."""
     if condition is None:
         return None
-    if isinstance(condition, All):
-        if not condition.predicates:
-            raise TrustsConfigurationError(
-                'All requires one or more predicates.'
-            )
-        for predicate in condition.predicates:
-            _validate_condition(
-                predicate, root, permission_model,
-                permission_target=permission_target,
-            )
+    if isinstance(condition, Tree) and condition.kind == 'and':
+        _validate_condition(
+            condition.left, root, permission_model,
+            permission_target=permission_target,
+        )
+        _validate_condition(
+            condition.right, root, permission_model,
+            permission_target=permission_target,
+        )
         return condition
-    if isinstance(condition, Equal):
-        _validate_equal(condition, root)
+    if isinstance(condition, Tree) and condition.kind == 'eq':
+        _validate_equal_paths(condition.left.path, condition.right.path, root)
         return condition
-    if isinstance(condition, PermissionIn):
-        _validate_permission_in(
-            condition, root, permission_model,
+    if isinstance(condition, Tree) and condition.kind == 'contains':
+        _resolve_permission_in_path(
+            root, condition.left.path, 'permission_in', permission_model,
             permission_target=permission_target,
         )
         return condition
     raise TrustsConfigurationError(
         'condition is not supported; omit it or pass None.'
     )
+
+def _inquiry_row_path(node):
+    if not isinstance(node, Tree):
+        return None
+    if node.kind == 'contains' and _is_inquiry(node.right):
+        return node.left.path
+    if node.kind == 'eq' and _is_inquiry(node.left):
+        return node.right.path
+    if node.kind == 'eq' and _is_inquiry(node.right):
+        return node.left.path
+    return None
 
 def _validate_delegated_condition(condition, root):
     """Validate delegated row predicates and return inquiry terminal metadata.
@@ -1017,25 +1005,17 @@ def _validate_delegated_condition(condition, root):
     matches = []
 
     def visit(node):
-        if isinstance(node, All):
-            if not node.predicates:
-                raise TrustsConfigurationError(
-                    'All requires one or more predicates.'
-                )
-            for predicate in node.predicates:
-                visit(predicate)
+        if isinstance(node, Tree) and node.kind == 'and':
+            visit(node.left)
+            visit(node.right)
             return
-        if isinstance(node, Equal):
-            _validate_equal(node, root)
-            return
-        if isinstance(node, _InquiryPermissionMatch):
-            ref = _require_same_root(
-                node.ref, root, 'delegated inquiry permission',
-            )
-            _path, model, _field, target = _resolve_permission_path(
-                root, ref._path,
-            )
+        row = _inquiry_row_path(node)
+        if row is not None:
+            _path, model, _field, target = _resolve_permission_path(root, row)
             matches.append((model, target))
+            return
+        if isinstance(node, Tree) and node.kind == 'eq':
+            _validate_equal_paths(node.left.path, node.right.path, root)
             return
         raise TrustsConfigurationError(
             'delegated condition is not supported; omit it or use '
@@ -1437,15 +1417,6 @@ def _delegated_condition_arity(builder):
         )
     return 2 if 2 in accepted else 1
 
-def _flatten_public_all(*predicates):
-    parts = []
-    for predicate in predicates:
-        if isinstance(predicate, All):
-            parts.extend(predicate.predicates)
-        else:
-            parts.append(predicate)
-    return All(*parts)
-
 def _is_inquiry(node):
     return (
         isinstance(node, Tree)
@@ -1486,12 +1457,11 @@ def _row_path(node, role):
 
 
 def _lower_relation(node, trust, permission_path):
-    """Lower one shared tree into the relation nodes stored today."""
+    """Check a relation tree and store that same tree."""
     if isinstance(node, Tree) and node.kind == 'and':
-        return _flatten_public_all(
-            _lower_relation(node.left, trust, permission_path),
-            _lower_relation(node.right, trust, permission_path),
-        )
+        _lower_relation(node.left, trust, permission_path)
+        _lower_relation(node.right, trust, permission_path)
+        return node
     if isinstance(node, Tree) and node.kind == 'eq':
         _reject_inquiry_hop(node.left)
         _reject_inquiry_hop(node.right)
@@ -1514,13 +1484,7 @@ def _lower_relation(node, trust, permission_path):
                     'requested permission equality requires one '
                     'relationship path.'
                 )
-            return _InquiryPermissionMatch(
-                _public_ref(
-                    trust,
-                    '__'.join(other.path),
-                    'delegated inquiry permission',
-                )
-            )
+            return node
         if (
             isinstance(node.left, Tree) and node.left.kind == 'const'
         ) or (
@@ -1530,25 +1494,16 @@ def _lower_relation(node, trust, permission_path):
                 'condition equality requires two trust-rooted paths, '
                 'not a constant.'
             )
-        return Equal(
-            _public_ref(
-                trust, _row_path(node.left, 'Equal left'), 'Equal left',
-            ),
-            _public_ref(
-                trust, _row_path(node.right, 'Equal right'), 'Equal right',
-            ),
-        )
+        _row_path(node.left, 'Equal left')
+        _row_path(node.right, 'Equal right')
+        return node
     if isinstance(node, Tree) and node.kind == 'contains':
         _reject_inquiry_hop(node.right)
         collection = _row_path(
             node.left, 'condition .contains collection',
         )
         if _is_inquiry(node.right):
-            return _InquiryPermissionMatch(
-                _public_ref(
-                    trust, collection, 'delegated inquiry permission',
-                )
-            )
+            return node
         if (
             not isinstance(node.right, Tree)
             or node.right.kind != 'field'
@@ -1576,9 +1531,7 @@ def _lower_relation(node, trust, permission_path):
                 'permission path %r, not %r.'
                 % (permission_path, member_path)
             )
-        return PermissionIn(
-            _public_ref(trust, collection, 'permission_in'),
-        )
+        return node
     raise PermissionConditionError(
         'condition builder must return a boolean expression of path '
         'equality, collection.contains(member), or their conjunction, '
@@ -1586,23 +1539,12 @@ def _lower_relation(node, trust, permission_path):
     )
 
 def _reject_public_condition_value(condition):
-    """Public ``condition=`` is a callable, not a prebuilt IR node."""
-    if (
-        condition is All
-        or condition is Equal
-        or condition is PermissionIn
-        or condition is permission_in
-    ):
+    """Public ``condition=`` is a callable, not a prebuilt tree."""
+    if isinstance(condition, (Tree, Ref, Q, str, bool)):
         raise TypeError(
             'condition must be a symbolic callable, '
-            'not a prebuilt All / Equal / permission_in value or other '
-            'non-callable %r.' % (condition,)
-        )
-    if isinstance(condition, (All, Equal, PermissionIn, Expr, Ref, Q, str, bool)):
-        raise TypeError(
-            'condition must be a symbolic callable, '
-            'not a prebuilt All / Equal / permission_in value or other '
-            'non-callable %r.' % (condition,)
+            'not a prebuilt condition or other non-callable %r.'
+            % (condition,)
         )
     if not callable(condition):
         raise TypeError(

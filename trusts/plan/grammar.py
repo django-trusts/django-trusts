@@ -121,6 +121,25 @@ class Tree(object):
             "'~' is not supported on a comparison. Negate a boolean field."
         )
 
+    def __eq__(self, other):
+        if not isinstance(other, Tree):
+            return NotImplemented
+        return (
+            self.kind == other.kind
+            and self.root == other.root
+            and self.path == other.path
+            and self.value == other.value
+            and self.left == other.left
+            and self.right == other.right
+            and self.item == other.item
+        )
+
+    def __hash__(self):
+        return hash((
+            self.kind, self.root, self.path, self.value,
+            self.left, self.right, self.item,
+        ))
+
     def __repr__(self):
         return 'Tree(%s)' % self.kind
 
@@ -343,7 +362,11 @@ _REJECTED = (
 
 for _name in _REJECTED:
     setattr(Symbol, _name, _unsupported(_name))
-    setattr(Tree, _name, _unsupported(_name))
+    # Stored nodes are data, not callbacks, so Tree has no ``__call__``.
+    # ``t.team()`` is rejected on Symbol. Calling a finished tree is a
+    # plain TypeError.
+    if _name != '__call__':
+        setattr(Tree, _name, _unsupported(_name))
 
 for _name in ('__lt__', '__le__', '__gt__', '__ge__', '__contains__'):
     setattr(Tree, _name, _unsupported(_name))

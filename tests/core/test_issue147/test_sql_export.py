@@ -19,7 +19,6 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection, models
 from django.test import SimpleTestCase, override_settings
-from trusts.compile.nodes import All, Equal, Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import CHECK_ID_POLICY_LOCK, CONVENTIONAL_LOCKFILE_NAME, check_policy_sql_lockfile, render_policy_sql_bytes
 from trusts.inspect.yaml import dump_policy_yaml
@@ -527,17 +526,14 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_nested_all_condition_is_parenthesized(self):
         handle = _handle('documents.backends.NestedAllBackend')
-        root = Ref(DocumentPermission)
-        handle.register_relation(
-            content=root.document,
-            user=root.user,
-            permission=root.permission,
-            condition=All(
-                All(
-                    Equal(root.user, root.user),
-                    Equal(root.permission, root.permission),
-                ),
-                Equal(root.document, root.document),
+        handle.register(
+            trust=DocumentPermission,
+            user='user',
+            permission='permission',
+            content='document',
+            condition=lambda t: (
+                ((t.user == t.user) & (t.permission == t.permission))
+                & (t.document == t.document)
             ),
         )
         document = yaml.safe_load(render_configured_policy(handle))

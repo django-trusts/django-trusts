@@ -3,8 +3,8 @@
 Isolated models whose names are unrelated to Trust/Group/Role/Permission.
 A long root-relative ceiling walks several ordinary forward FK hops, then
 the bounded M2M→M2M membership shape. Two alternative records share
-content/user/permission bindings and differ only in the closed
-``permission_in`` ceiling.
+content/user/permission bindings and differ only in the ``.contains``
+ceiling.
 
 Core must resolve every hop from Django ``_meta`` / stored path metadata.
 This module does not import ``trusts.zero`` and does not special-case
@@ -21,7 +21,6 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 import trusts
-from trusts.compile.nodes import permission_in
 from tests.support import scoped_permitted_content as filter_by_permitted_content, built_catalog, compiler
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan
 from trusts.compile.nodes import Ref
@@ -209,12 +208,22 @@ def _tables(*model_classes):
                 editor.delete_model(model)
 
 def _direct_ceiling(registry, placement):
-    p = Ref(placement)
-    return registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.badges))
+    return registry.register(
+        trust=placement,
+        user='actor',
+        permission='token',
+        content='artifact',
+        condition=lambda t: t.wing.floor.building.hall.badges.contains(t.token),
+    )
 
 def _cluster_ceiling(registry, placement):
-    p = Ref(placement)
-    return registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens))
+    return registry.register(
+        trust=placement,
+        user='actor',
+        permission='token',
+        content='artifact',
+        condition=lambda t: t.wing.floor.building.hall.clusters.tokens.contains(t.token),
+    )
 
 def _pks(rows):
     return {row.pk for row in rows}
@@ -263,9 +272,9 @@ class LongPathRegistrationTest(TestCase):
         self.assertEqual(clustered.user_path, ('actor',))
         self.assertEqual(direct.permission_path, ('token',))
         self.assertEqual(clustered.permission_path, ('token',))
-        self.assertEqual(direct.condition.refs[0]._path, ('wing', 'floor', 'building', 'hall', 'badges'))
-        self.assertEqual(clustered.condition.refs[0]._path, ('wing', 'floor', 'building', 'hall', 'clusters', 'tokens'))
-        self.assertGreaterEqual(len(clustered.condition.refs[0]._path), 6)
+        self.assertEqual(direct.condition.left.path, ('wing', 'floor', 'building', 'hall', 'badges'))
+        self.assertEqual(clustered.condition.left.path, ('wing', 'floor', 'building', 'hall', 'clusters', 'tokens'))
+        self.assertGreaterEqual(len(clustered.condition.left.path), 6)
 
     def test_handle_string_paths_match_ref_registration(self):
         models_ = _long_path_models()
@@ -281,7 +290,7 @@ class LongPathRegistrationTest(TestCase):
             handle_cluster = handle.register(trust=Placement, user='actor', permission='token', content='artifact', condition=lambda t: t.wing.floor.building.hall.clusters.tokens.contains(t.token))
         self.assertEqual(handle_direct, ref_direct)
         self.assertEqual(handle_cluster, ref_cluster)
-        self.assertGreaterEqual(len(handle_cluster.condition.refs[0]._path), 6)
+        self.assertGreaterEqual(len(handle_cluster.condition.left.path), 6)
 
     def test_exact_duplicate_rejects_and_leaves_store_unchanged(self):
         models_ = _long_path_models()
@@ -298,24 +307,46 @@ class LongPathRegistrationTest(TestCase):
         Placement = models_[-1]
         registry = compiler()
         first = _cluster_ceiling(registry, Placement)
-        p = Ref(Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'Conflicting'):
-                registry.register_relation(content=p.artifact, user=p.alt_actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens))
+                registry.register(
+                    trust=Placement,
+                    user='alt_actor',
+                    permission='token',
+                    content='artifact',
+                    condition=lambda t: t.wing.floor.building.hall.clusters.tokens.contains(t.token),
+                )
         self.assertEqual(registry.records, (first,))
 
     def test_wrong_terminal_malformed_and_gfk_fail_closed(self):
         models_ = _long_path_models()
         Placement = models_[-1]
         registry = compiler()
-        p = Ref(Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'permission model'):
-                registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters))
+                registry.register(
+                    trust=Placement,
+                    user='actor',
+                    permission='token',
+                    content='artifact',
+                    condition=lambda t: t.wing.floor.building.hall.clusters.contains(t.token),
+                )
             with self.assertRaisesRegex(TrustsConfigurationError, 'extra or intermediate multi-valued'):
-                registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens.clustered))
+                registry.register(
+                    trust=Placement,
+                    user='actor',
+                    permission='token',
+                    content='artifact',
+                    condition=lambda t: t.wing.floor.building.hall.clusters.tokens.clustered.contains(t.token),
+                )
             with self.assertRaisesRegex(TrustsConfigurationError, 'scalar field|single-valued hops'):
-                registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.title))
+                registry.register(
+                    trust=Placement,
+                    user='actor',
+                    permission='token',
+                    content='artifact',
+                    condition=lambda t: t.wing.floor.building.hall.clusters.title.contains(t.token),
+                )
         self.assertEqual(registry.records, ())
 
         class Tagged(models.Model):
@@ -335,19 +366,29 @@ class LongPathRegistrationTest(TestCase):
 
             class Meta:
                 app_label = 'trusts_tests'
-        g = Ref(TaggedGrant)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'generic foreign key'):
-                registry.register_relation(content=g.artifact, user=g.actor, permission=g.token, condition=permission_in(g.tagged.target))
+                registry.register(
+                    trust=TaggedGrant,
+                    user='actor',
+                    permission='token',
+                    content='artifact',
+                    condition=lambda t: t.tagged.target.contains(t.token),
+                )
         self.assertEqual(registry.records, ())
 
     def test_colliding_to_field_membership_fails_closed(self):
         _Actor, _Token, _Hall, Cluster, _Through, _Building, _Floor, _Wing, Artifact, Placement = _colliding_to_field_models()
         registry = compiler()
-        p = Ref(Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'resolved comparison field'):
-                registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens))
+                registry.register(
+                    trust=Placement,
+                    user='actor',
+                    permission='token',
+                    content='artifact',
+                    condition=lambda t: t.wing.floor.building.hall.clusters.tokens.contains(t.token),
+                )
         self.assertEqual(registry.records, ())
         self.assertIs(Cluster._meta.concrete_model, Cluster)
         self.assertIs(Artifact._meta.concrete_model, Artifact)

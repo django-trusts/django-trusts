@@ -25,11 +25,9 @@ from trusts.inspect.checks import (
 from trusts.conditions import PermissionConditionError
 from trusts.plan.conditions import (
     ConditionRecord,
-    Const,
-    Eq,
-    Ref,
     obsolete_legacy_callback_setting_enabled,
 )
+from trusts.plan.grammar import Tree
 
 from tests.support import override_catalog, compiler
 
@@ -74,7 +72,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
     def test_prebuilt_expr_is_type_error_before_mutation(self):
         Note = _note_model()
         registry = compiler()
-        expr = Eq(Ref('principal', ()), Ref('object', ('not_a_field',)))
+        expr = Tree('eq', left=Tree('field', root='user', path=()), right=Tree('field', root='object', path=('not_a_field',)))
         with self.assertRaises(TypeError):
             registry.add_named_filter(Note, 'missing', expr)
         self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'missing'))
@@ -110,7 +108,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
             ),
             [],
         )
-        bad = Eq(Ref('principal', ()), Ref('object', ('deferred_missing',)))
+        bad = Tree('eq', left=Tree('field', root='user', path=()), right=Tree('field', root='object', path=('deferred_missing',)))
         with self.assertRaises(TypeError):
             registry.add_named_filter(Note, 'deferred_bad', bad)
         _store_expr(registry, Note, 'deferred_bad', bad)
@@ -129,11 +127,11 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         registry = compiler()
         _store_expr(
             registry, Note, 'typo',
-            Eq(Ref('principal', ()), Ref('object', ('nope',))),
+            Tree('eq', left=Tree('field', root='user', path=()), right=Tree('field', root='object', path=('nope',))),
         )
         _store_expr(
             registry, Note, 'types',
-            Eq(Ref('object', ('status',)), Const(1)),
+            Tree('eq', left=Tree('field', root='object', path=('status',)), right=Tree('const', value=1)),
         )
         errors = _messages_with_id(
             permission_condition_check_messages(
@@ -203,7 +201,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         registry = compiler()
         _store_expr(
             registry, Note, 'typo',
-            Eq(Ref('principal', ()), Ref('object', ('nope',))),
+            Tree('eq', left=Tree('field', root='user', path=()), right=Tree('field', root='object', path=('nope',))),
         )
 
         with override_catalog(
@@ -235,7 +233,7 @@ class ManagePyCheckLifecycleTest(SimpleTestCase):
         registry = compiler()
         _store_expr(
             registry, Document, 'typo-29',
-            Eq(Ref('principal', ()), Ref('object', ('nope',))),
+            Tree('eq', left=Tree('field', root='user', path=()), right=Tree('field', root='object', path=('nope',))),
         )
 
         with override_catalog(

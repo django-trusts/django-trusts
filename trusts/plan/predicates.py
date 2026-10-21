@@ -4,6 +4,7 @@ from django.contrib.auth.models import Permission
 from django.db.models import F, Model, Q
 
 from trusts.errors import TrustsConfigurationError
+from trusts.plan.grammar import Tree
 from trusts.plan.hops import lookup_text, require_instance
 
 __all__ = [
@@ -85,58 +86,63 @@ class _PredicateCompiler(object):
     def compile(self, node):
         if node is None:
             return None
-        accept = getattr(type(node), 'accept', None)
-        if accept is None:
+        if not isinstance(node, Tree):
             raise TrustsConfigurationError(
                 'condition is not supported; omit it or pass None.'
             )
-        return accept(node, self)
+        if node.kind == 'and':
+            compiled = self.compile(node.left)
+            other = self.compile(node.right)
+            if compiled is None:
+                return other
+            if other is None:
+                return compiled
+            return compiled & other
+        if node.kind == 'eq':
+            return self._eq(node)
+        if node.kind == 'contains':
+            return self._contains(node)
+        raise TrustsConfigurationError(
+            'condition is not supported; omit it or pass None.'
+        )
 
-    def visit_all(self, node):
-        parts = [
-            self.compile(predicate) for predicate in node.predicates
-        ]
-        parts = [part for part in parts if part is not None]
-        if not parts:
-            return None
-        compiled = parts[0]
-        for part in parts[1:]:
-            compiled &= part
-        return compiled
-
-    def visit_equal(self, node):
+    def _eq(self, node):
+        inquiry = _inquiry_path(node)
+        if inquiry is not None:
+            return self._bind_inquiry(inquiry)
         return Q(**{
-            lookup_text(node.left._path): F(lookup_text(node.right._path)),
+            lookup_text(node.left.path): F(lookup_text(node.right.path)),
         })
 
-    def visit_permission_in(self, node):
-        compiled = Q()
-        for ref in node.refs:
-            compiled &= Q(**{
-                lookup_text(ref._path): F(self.record.permission_field),
-            })
-        return compiled
+    def _contains(self, node):
+        if (
+            isinstance(node.right, Tree)
+            and node.right.kind == 'field'
+            and node.right.root == 'inquiry'
+            and not node.right.path
+        ):
+            return self._bind_inquiry(node.left.path)
+        return Q(**{
+            lookup_text(node.left.path): F(self.record.permission_field),
+        })
 
-    def visit_inquiry_permission_match(self, node):
+    def _bind_inquiry(self, path):
         if self.permission is None:
             raise TrustsConfigurationError(
                 'Delegated inquiry-permission condition needs the requested '
                 'permission binding.'
             )
-        require = getattr(type(node.ref), 'require_same_root', None)
-        if require is None:
-            raise TrustsConfigurationError(
-                '%s must be a root-relative Ref, not %r.'
-                % ('delegated inquiry permission', node.ref)
-            )
-        ref = require(
-            node.ref, self.record.root, 'delegated inquiry permission',
-        )
         return Q(**{
-            lookup_text(ref._path): bind_terminal(
-                self.permission, 'permission',
-            ),
+            lookup_text(path): bind_terminal(self.permission, 'permission'),
         })
+
+
+def _inquiry_path(node):
+    if node.left.kind == 'field' and node.left.root == 'inquiry' and not node.left.path:
+        return node.right.path
+    if node.right.kind == 'field' and node.right.root == 'inquiry' and not node.right.path:
+        return node.left.path
+    return None
 
 
 def _permission_content_type_filters(record, content_identity):

@@ -184,20 +184,20 @@ def _named_filter_q(filter_lookup, content, code, singular, user_model):
 
 
 def _condition_outcome(expr, content, singular, user_model):
-    if isinstance(expr, _ir.And):
+    if isinstance(expr, _ir.Tree) and expr.kind == 'and':
         return _combine_and(
             _condition_outcome(expr.left, content, singular, user_model),
             _condition_outcome(expr.right, content, singular, user_model),
         )
-    if isinstance(expr, _ir.Or):
+    if isinstance(expr, _ir.Tree) and expr.kind == 'or':
         return _combine_or(
             _condition_outcome(expr.left, content, singular, user_model),
             _condition_outcome(expr.right, content, singular, user_model),
         )
-    if isinstance(expr, (_ir.Eq, _ir.Ne)):
+    if isinstance(expr, _ir.Tree) and expr.kind in ('eq', 'ne'):
         return _comparison_outcome(
             expr, content, singular, user_model,
-            equal=isinstance(expr, _ir.Eq),
+            equal=expr.kind == 'eq',
         )
     raise TrustsConfigurationError(
         'Reverse permission inquiry cannot compile permission condition %r.'
@@ -244,17 +244,17 @@ def _comparison_outcome(expr, content, singular, user_model, *, equal):
 
 
 def _condition_side(node, content, singular, user_model):
-    if isinstance(node, _ir.Const):
+    if isinstance(node, _ir.Tree) and node.kind == 'const':
         return ('const', node.value)
-    if isinstance(node, _ir.Ref) and node.source == 'object':
+    if isinstance(node, _ir.Tree) and node.kind == 'field' and node.root == 'object':
         return ('const', _object_memory_value(content, node.path))
-    if isinstance(node, _ir.Ref) and node.source == 'permission':
+    if isinstance(node, _ir.Tree) and node.kind == 'field' and node.root == 'permission':
         if node.path:
             raise TrustsConfigurationError(
                 'Permission references cannot traverse attributes.'
             )
         return ('const', singular)
-    if isinstance(node, _ir.Ref) and node.source == 'principal':
+    if isinstance(node, _ir.Tree) and node.kind == 'field' and node.root == 'user':
         return ('user', _user_lookup(user_model, node.path))
     raise TrustsConfigurationError(
         'Reverse permission inquiry cannot compile permission condition '

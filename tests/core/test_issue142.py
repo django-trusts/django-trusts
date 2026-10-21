@@ -64,7 +64,7 @@ class StageBPublicSurfaceTest(SimpleTestCase):
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class StageBRegisterCallableOnlyTest(SimpleTestCase):
     def test_registering_prebuilt_expr_raises_before_mutation(self):
-        from trusts.plan.conditions import Eq, Ref
+        from trusts.plan.grammar import Tree
 
         User = get_user_model()
 
@@ -74,7 +74,11 @@ class StageBRegisterCallableOnlyTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        owned = Eq(Ref('principal', ()), Ref('object', ('owner',)))
+        owned = Tree(
+            'eq',
+            left=Tree('field', root='user', path=()),
+            right=Tree('field', root='object', path=('owner',)),
+        )
         registry = compiler()
         with self.assertRaises(TypeError):
             registry.add_named_filter(Note, 'own', owned)

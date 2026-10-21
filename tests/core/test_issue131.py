@@ -5,7 +5,7 @@ builders, ``along=(path, bound)``, ``register(*, trust=...)``, and
 ``add_named_filter``. The earlier positional/strategy
 ``Compiler.register`` forms and
 ``register_permission_condition`` remain removed. ``Ref`` input and
-prebuilt ``All`` / ``Equal`` / ``permission_in`` on the public handle
+a prebuilt condition tree on the public handle
 are TypeError. Registration stays open after a build. Dual backends stay
 isolated. Internal ``Compiler.register_relation(Ref)`` remains for
 compiler tests. OrderedFold registration left Core in #195.
@@ -14,8 +14,9 @@ from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 from tests.myapp.models import Document, DocumentGrant
 from trusts.compile.nodes import Along
-from trusts.compile.nodes import Equal, Ref
+from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
+from trusts.plan.grammar import Tree
 from tests.support import built_catalog, compiler
 
 def _handle(registry=None, path='tests.core.handle-a'):
@@ -50,7 +51,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
         with self.assertRaises(TypeError):
             handle.register(trust=DocumentGrant, user='user', permission='permission', content=j.document)
         with self.assertRaises(TypeError):
-            handle.register(trust=DocumentGrant, user='user', permission='permission', content='document', condition=Equal(j.user, j.permission))
+            handle.register(trust=DocumentGrant, user='user', permission='permission', content='document', condition=Tree('eq', left=Tree('field', root='row', path=('user',)), right=Tree('field', root='row', path=('permission',))))
         with self.assertRaises(TypeError):
             handle.register(trust=DocumentGrant, user='user', permission='permission', content='document', along=Along(j.document, 8))
         self.assertEqual(built_catalog(handle).records, ())
@@ -67,7 +68,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
         registry = compiler()
         j = Ref(DocumentGrant)
         with self.assertRaises(TrustsConfigurationError):
-            registry.register_relation(content=j.document, user=j.user, permission=j.permission, condition=Equal('user', 'permission'))
+            registry.register_relation(content=j.document, user=j.user, permission=j.permission, condition='user')
         self.assertEqual(registry.records, ())
 
     def test_duplicate_and_conflict_leave_store_unchanged(self):

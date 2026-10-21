@@ -16,7 +16,8 @@ from django.test.utils import isolate_apps
 from tests.models import Ticket, ticket_meta_own
 from trusts.inspect.checks import CHECK_ID_INVALID_EXPR, CHECK_ID_OBSOLETE_CALLBACK_SETTING, check_obsolete_legacy_callback_setting, check_permission_conditions, iter_live_permission_conditions, permission_condition_check_messages
 from trusts.conditions import PermissionConditionError
-from trusts.plan.conditions import ConditionRecord, ConditionRegistry, Eq, FrozenConditionLookup, ModelIdentity, Ref, obsolete_legacy_callback_setting_enabled
+from trusts.plan.conditions import ConditionRecord, ConditionRegistry, FrozenConditionLookup, ModelIdentity, obsolete_legacy_callback_setting_enabled
+from trusts.plan.grammar import Tree
 
 from tests.support import built_catalog, override_catalog, compiler
 
@@ -81,7 +82,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
     def test_expr_and_builder_records_and_shape_errors(self):
         Note, Memo = _note_models()
         registry = compiler()
-        expr = Eq(Ref('principal', ()), Ref('object', ('owner',)))
+        expr = Tree('eq', left=Tree('field', root='user', path=()), right=Tree('field', root='object', path=('owner',)))
         with self.assertRaises(TypeError):
             registry.add_named_filter(Note, 'owned', expr)
         self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'owned'))
@@ -95,7 +96,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'missing'))
         self.assertIsNone(registry.conditions.get_permission_condition_record(Memo, 'owned'))
         with self.assertRaises(TypeError):
-            registry.add_named_filter(Note, 'bare', Ref('object', ('owner',)))
+            registry.add_named_filter(Note, 'bare', Tree('field', root='object', path=('owner',)))
         with self.assertRaises(TypeError):
             registry.add_named_filter(Note, 'bad', 'not-a-condition')
         self.assertEqual(len(log.calls), 1)
@@ -227,7 +228,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
         User = get_user_model()
         with _tables(Note):
             alice = User.objects.create_user('alice-16u', 'alice-16u@example.com', 'x')
-            typo = Eq(Ref('principal', ()), Ref('object', ('nope',)))
+            typo = Tree('eq', left=Tree('field', root='user', path=()), right=Tree('field', root='object', path=('nope',)))
             registry = compiler()
             with self.assertRaises(AttributeError) as missing:
                 registry.conditions.compile_registered_condition_q(Note, 'trusts_tests.change_note:missing', alice)
@@ -368,7 +369,7 @@ class ConditionRegistryCheckTest(SimpleTestCase):
     def test_invalid_stored_ir_is_check_error_not_public_register(self):
         Note, _Memo = _note_models()
         registry = ConditionRegistry()
-        expr = Eq(Ref('principal', ()), Ref('object', ('not_a_field',)))
+        expr = Tree('eq', left=Tree('field', root='user', path=()), right=Tree('field', root='object', path=('not_a_field',)))
         with self.assertRaises(TypeError):
             registry.register_permission_condition(Note, 'missing', expr)
         self.assertIsNone(registry.get_permission_condition_record(Note, 'missing'))
@@ -405,7 +406,7 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         registry = compiler()
         _store_expr(
             registry, Note, 'typo',
-            Eq(Ref('principal', ()), Ref('object', ('nope',))),
+            Tree('eq', left=Tree('field', root='user', path=()), right=Tree('field', root='object', path=('nope',))),
         )
 
         with override_catalog(
@@ -426,7 +427,7 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         owner_a.add_named_filter(Note, 'own', lambda u, p, o: u == o.owner)
         _store_expr(
             owner_b, Note, 'own',
-            Eq(Ref('principal', ()), Ref('object', ('nope',))),
+            Tree('eq', left=Tree('field', root='user', path=()), right=Tree('field', root='object', path=('nope',))),
         )
 
         with override_settings(AUTHENTICATION_BACKENDS=(
