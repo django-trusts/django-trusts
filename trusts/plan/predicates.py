@@ -91,13 +91,7 @@ class _PredicateCompiler(object):
                 'condition is not supported; omit it or pass None.'
             )
         if node.kind == 'and':
-            compiled = self.compile(node.left)
-            other = self.compile(node.right)
-            if compiled is None:
-                return other
-            if other is None:
-                return compiled
-            return compiled & other
+            return self.compile(node.left) & self.compile(node.right)
         if node.kind == 'eq':
             return self._eq(node)
         if node.kind == 'contains':

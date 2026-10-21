@@ -112,16 +112,12 @@ def _lower_user(node):
             )
         return node
     if isinstance(node, Tree) and node.kind == 'and':
-        left = _lower_user(node.left)
-        right = _lower_user(node.right)
-        if left is node.left and right is node.right:
-            return node
-        return Tree('and', left=left, right=right)
+        _lower_user(node.left)
+        _lower_user(node.right)
+        return node
     if isinstance(node, Tree) and node.kind == 'not':
-        item = _lower_user(node.item)
-        if item is node.item:
-            return node
-        return Tree('not', item=item)
+        _lower_user(node.item)
+        return node
     kind = getattr(node, 'kind', type(node).__name__)
     raise PermissionConditionError(
         '%s is not supported in a condition.' % kind

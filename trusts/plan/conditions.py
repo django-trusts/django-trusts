@@ -808,19 +808,10 @@ def _condition_model_label(model):
     return repr(model)
 
 
-_NAMED_ROOTS = frozenset(('user', 'object', 'permission'))
-
-
 def _lower_named(node):
     """Keep the shared tree when a named filter can store it."""
     kind = node.kind
-    if kind == 'field':
-        if node.root not in _NAMED_ROOTS:
-            raise PermissionConditionError(
-                'Unknown condition root %r.' % (node.root,)
-            )
-        return node
-    if kind == 'const':
+    if kind in ('field', 'const'):
         return node
     if kind in ('eq', 'ne', 'and', 'or'):
         _lower_named(node.left)
@@ -834,25 +825,14 @@ def _lower_named(node):
         raise PermissionConditionError(
             '.contains is not supported in a condition.'
         )
-    if kind == 'not':
-        raise PermissionConditionError(
-            "'~' is not supported in a condition."
-        )
     raise PermissionConditionError(
-        'Permission condition %r on %s cannot store %s.'
-        % ('builder', node, kind)
+        "'~' is not supported in a condition."
     )
 
 
 def _invoke_condition_builder(builder, model, cond_code):
     """Invoke a trusted builder once and lower it into stored nodes."""
     result = invoke(builder, ('user', 'permission', 'object'))
-    if not isinstance(result, Tree):
-        raise PermissionConditionError(
-            'Permission condition builder %r on %s did not return a '
-            'condition, got %r.'
-            % (cond_code, _condition_model_label(model), result)
-        )
     try:
         return _lower_named(result)
     except PermissionConditionError as exc:
