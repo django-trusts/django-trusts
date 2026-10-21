@@ -12,6 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
+from django.apps import apps as django_apps
 from django.contrib.auth.models import Permission
 from django.core import checks as django_checks
 from django.db import models
@@ -270,7 +271,6 @@ class PolicyLockConfigurationTest(SimpleTestCase):
 
         with override_settings(AUTHENTICATION_BACKENDS=()):
             empty = _load_policy_sql_document(render_policy_sql_bytes())
-        from django.apps import apps as django_apps
 
         paths = [row['path'] for row in empty['backends']]
         if django_apps.is_installed('tests.myapp'):
