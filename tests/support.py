@@ -71,14 +71,10 @@ def compiler(**kwargs):
 def _publish_built(built):
     """Point installed configs and the catalog walk at ``built``."""
     import trusts.apps as apps_mod
-    import trusts.inspect.snapshot as snapshot_mod
 
     configs = mixin_configs()
     saved = [(config, config.catalog) for config in configs]
-    originals = (
-        apps_mod.installed_catalogs,
-        snapshot_mod.installed_catalogs,
-    )
+    original = apps_mod.installed_catalogs
 
     def published():
         return tuple(built)
@@ -99,7 +95,6 @@ def _publish_built(built):
             for config, catalog in zip(configs, built):
                 config.catalog = catalog
         apps_mod.installed_catalogs = published
-        snapshot_mod.installed_catalogs = published
         count = max(len(built), 1)
         paths = tuple(
             '%s.%s' % (cls.__module__, cls.__name__)
@@ -108,8 +103,7 @@ def _publish_built(built):
         with override_settings(AUTHENTICATION_BACKENDS=paths):
             yield tuple(built)
     finally:
-        apps_mod.installed_catalogs = originals[0]
-        snapshot_mod.installed_catalogs = originals[1]
+        apps_mod.installed_catalogs = original
         for config, catalog in saved:
             config.catalog = catalog
 

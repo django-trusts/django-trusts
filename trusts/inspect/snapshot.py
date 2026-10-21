@@ -35,7 +35,7 @@ import uuid
 from decimal import Decimal
 from pathlib import Path
 
-from django.apps import apps as django_apps
+import trusts.apps as trusts_apps
 from django.core import checks as django_checks
 from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
@@ -71,15 +71,6 @@ from trusts.plan.aggregates import _compile_common_permissions
 from trusts.plan.users import lock_permitted_users_queryset
 from trusts.plan.contents import _compile_permitted_content_queryset
 from trusts.plan.rewrites import _AlongOnce
-
-
-def installed_catalogs():
-    return tuple(
-        config.get_catalog()
-        for config in django_apps.get_app_configs()
-        if any(
-            cls.__module__ == 'trusts.apps' and cls.__name__ == 'TrustsConfigMixin'
-            for cls in type(config).mro()))
 
 
 SCHEMA_VERSION = 1
@@ -147,7 +138,7 @@ class PolicyLockLocation(object):
 
 
 class _Symbol(object):
-
+    """One classified placeholder. Not a runtime value."""
     __slots__ = ('payload',)
 
     def __init__(self, payload):
@@ -206,7 +197,7 @@ def render_policy_sql_bytes(*, alias=None):
     A failure raises before a partial document is returned.
     """
     resolved = resolve_policy_database(alias)
-    document = _build_document(installed_catalogs(), resolved)
+    document = _build_document(trusts_apps.installed_catalogs(), resolved)
     return _dump_document(document)
 
 
@@ -475,7 +466,7 @@ class _PolicyVisitor(object):
         )
 
     def _compile_filter_by_permitted_content(self, records, model):
-
+        """One statement per proper prefix, the queryset that actually runs."""
         catalog, alias = self.catalog, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
@@ -633,6 +624,7 @@ _CONST_SOURCE = {
 
 
 def _token_literal(value):
+    """Python spelling of one bound constant, inside a ``source=value`` token."""
     if isinstance(value, bool):
         return 'True' if value else 'False'
     if isinstance(value, str):
@@ -809,34 +801,6 @@ def _role_sentinel(record, role, alias):
         getattr(record, '%s_target' % role),
         alias=alias,
     )
-
-
-def _compile_content_grant(catalog, alias, records, model):
-    return _PolicyVisitor(catalog, alias)._compile_content_grant(records, model)
-
-
-def _compile_has_perm(catalog, alias, records, model):
-    return _PolicyVisitor(catalog, alias)._compile_has_perm(records, model)
-
-
-def _compile_get_all_permissions(catalog, alias, records, model):
-    return _PolicyVisitor(catalog, alias)._compile_get_all_permissions(
-        records, model)
-
-
-def _compile_get_permitted_users(catalog, alias, records, model):
-    return _PolicyVisitor(catalog, alias)._compile_get_permitted_users(
-        records, model)
-
-
-def _compile_filter_by_permitted_content(catalog, alias, records, model):
-    return _PolicyVisitor(catalog, alias)._compile_filter_by_permitted_content(
-        records, model)
-
-
-def _compile_get_group_permissions(catalog, alias, records, model):
-    return _PolicyVisitor(catalog, alias)._compile_get_group_permissions(
-        records, model)
 
 
 class _Query(object):
@@ -1084,6 +1048,7 @@ def _concrete_target_field(model, attname):
 
 
 def _sentinel_value(field, alias):
+    """Deterministic Python value ``field`` preparation accepts."""
     internal = field.get_internal_type()
     if internal in _INTEGER_SENTINEL_TYPES:
         return 1
@@ -1333,7 +1298,7 @@ def _comparison_symbol(node):
 
 
 class _ExportOps(object):
-
+    """Database operations that build export-scoped compilers only."""
     def __init__(self, ops):
         self._ops = ops
 
@@ -1526,7 +1491,7 @@ def _value_hint(node, query):
 
 
 def _const_hint(node, value):
-
+    """Readable label for one constant placeholder."""
     if isinstance(node, Value):
         return 'literal'
     if isinstance(node, Lookup):
@@ -1719,7 +1684,7 @@ def _json_const(value):
 
 
 def _const_from_json(value):
-
+    """Inverse of :func:`_json_const` for one recorded constant value."""
     if isinstance(value, dict):
         kind = value.get('type')
         if kind == 'float':
@@ -1851,6 +1816,7 @@ def _absolute_lock_path(value):
 
 
 def _classify_lockfile(path):
+    """Classify ``path`` without searching parents for a lockfile."""
     parent = path.parent
     try:
         parent_mode = os.stat(parent).st_mode
@@ -1878,6 +1844,7 @@ def _classify_lockfile(path):
 
 
 def _presence_action(location, *, writing):
+    """Map presence to inactive, create, or present. Fail closed otherwise."""
     state = location.state
     path = location.path
     if state == 'permission':
@@ -1956,6 +1923,7 @@ def _read_lock_bytes(location):
 
 
 def _atomic_write(path, payload):
+    """Replace ``path`` via a temp file in the same directory. No CWD."""
     parent = path.parent
     fd = None
     tmp_name = None

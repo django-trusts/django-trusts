@@ -498,6 +498,7 @@ class Catalog(object):
         return False, {}
 
     def _content_groups(self):
+        """``(content_model, records, delegations)`` in document order."""
         order = []
         by_model = {}
         for kind, rows in (('records', self.records),
@@ -671,6 +672,7 @@ def _perm_codes(permission_qs):
 
 
 def _plan_is_auth_permission(plan, sponsor_records=()):
+    """True when ``plan`` terminates on ``auth.Permission``."""
     permission_model = plan.permission_model
     if (
         plan.records
@@ -688,6 +690,7 @@ def _plan_is_auth_permission(plan, sponsor_records=()):
 
 
 def _auth_permission_plan(catalog, candidates, user):
+    """Applicable plan only when the permission terminal is auth.Permission."""
     plan = catalog.plan_for(candidates, user=user)
     if not _plan_is_auth_permission(
         plan, _ordinary_records(catalog, candidates),
@@ -697,6 +700,7 @@ def _auth_permission_plan(catalog, candidates, user):
 
 
 def _auth_permission_plan_for_model(catalog, model):
+    """Zero-SQL applicable auth.Permission plan for this content model."""
     plan = catalog.plan_for(model)
     if not _plan_is_auth_permission(plan, _ordinary_records(catalog, model)):
         return None
@@ -704,6 +708,7 @@ def _auth_permission_plan_for_model(catalog, model):
 
 
 def _owns_selected_conditions(catalog, model, conditions):
+    """True when every selected name is registered with a queryable expr."""
     if not conditions:
         return True
     lookup = catalog.filter_lookup
@@ -715,6 +720,7 @@ def _owns_selected_conditions(catalog, model, conditions):
 
 
 def _selected_condition_q(catalog, model, permission, conditions, user, *, api):
+    """AND this catalog's selected names, or None when any name is missing."""
     lookup = catalog.filter_lookup
     extra_q = None
     for name in conditions:

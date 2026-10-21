@@ -24,7 +24,7 @@ from trusts.plan.recursions import _IdentInReach
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
-from trusts.inspect.snapshot import CHECK_ID_POLICY_LOCK, CONVENTIONAL_LOCKFILE_NAME, _Symbol, _classify_compiled, _compile_get_all_permissions, _compile_get_permitted_users, _compile_has_perm, _compile_content_grant, _const_from_json, _json_const, _presented_const, _sentinel, _assign_ids, _load_policy_sql_document, _render_condition, _sql_row, _symbol_for_new_param, check_policy_sql_lockfile, render_policy_sql_bytes
+from trusts.inspect.snapshot import CHECK_ID_POLICY_LOCK, CONVENTIONAL_LOCKFILE_NAME, _PolicyVisitor, _Symbol, _classify_compiled, _const_from_json, _json_const, _presented_const, _sentinel, _assign_ids, _load_policy_sql_document, _render_condition, _sql_row, _symbol_for_new_param, check_policy_sql_lockfile, render_policy_sql_bytes
 from trusts.inspect.yaml import dump_policy_yaml
 GOLDEN_SQLITE = Path(__file__).with_name('golden_document_sqlite.yaml').read_bytes()
 GOLDEN_CONSTANTS = Path(__file__).with_name('golden_condition_constants_sqlite.yaml').read_bytes()
@@ -488,7 +488,8 @@ class PolicySqlGoldenTest(SimpleTestCase):
         handle.register(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
         subject = built_catalog(handle)
         record = subject.plan_for(Folder).records[0]
-        content = {'model': 'documents.Folder', 'permitted': _sql_row(_compile_content_grant(subject, 'default', (record,), Folder)), 'has_perm': _sql_row(_compile_has_perm(subject, 'default', (record,), Folder)), 'get_all_permissions': _sql_row(_compile_get_all_permissions(subject, 'default', (record,), Folder)), 'get_permitted_users': _sql_row(_compile_get_permitted_users(subject, 'default', (record,), Folder))}
+        visitor = _PolicyVisitor(subject, 'default')
+        content = {'model': 'documents.Folder', 'permitted': _sql_row(visitor._compile_content_grant((record,), Folder)), 'has_perm': _sql_row(visitor._compile_has_perm((record,), Folder)), 'get_all_permissions': _sql_row(visitor._compile_get_all_permissions((record,), Folder)), 'get_permitted_users': _sql_row(visitor._compile_get_permitted_users((record,), Folder))}
         payload = dump_policy_yaml({'schema_version': 1, 'database': {'engine': 'django.db.backends.sqlite3'}, 'backends': [{'path': 'documents.backends.FolderAlongBackend', 'contents': [content]}]})
         self.assertEqual(payload, GOLDEN_ALONG)
         text = payload.decode('utf-8')

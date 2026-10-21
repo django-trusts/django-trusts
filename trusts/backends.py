@@ -9,8 +9,10 @@ only. A miss returns nothing. Callers OR the grant ``Q`` objects.
 from django.apps import apps
 from django.contrib.auth import get_backends, load_backend
 from django.contrib.auth.models import Permission
+from django.core.exceptions import ImproperlyConfigured
 from django.db.models import Model, Q, QuerySet
 
+from trusts.apps import TrustsConfigMixin
 from trusts.compile.catalogs import (
     assert_same_database,
     catalog_models,
@@ -31,6 +33,11 @@ class TrustModelBackendMixin(object):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         config = apps.get_containing_app_config(type(self).__module__)
+        if not isinstance(config, TrustsConfigMixin):
+            raise ImproperlyConfigured(mixin_required_message(
+                config,
+                '%s.%s' % (type(self).__module__, type(self).__qualname__),
+            ))
         self.catalog = config.catalog
         self.recorder = config.recorder
 
@@ -89,13 +96,13 @@ class TrustModelBackendMixin(object):
             catalog=self.catalog, skipped=skipped)
 
 
-def grant_users(item, subject, _user, permission, skipped, _grant_kw):
+def grant_users(item, subject, permission, skipped):
     """User predicate from this backend's catalog."""
     return item.permitted_users_predicate(
         subject, permission, skipped=skipped)
 
 
-def grant_authorized(item, subject, user, permission, skipped, _grant_kw):
+def grant_authorized(item, subject, user, permission, skipped):
     """Authorized-row grant from this backend's catalog."""
     return item.authorized_grant_q(
         subject, user, permission, skipped=skipped)
@@ -131,15 +138,6 @@ def trusts_backends(backend=None):
     return tuple(
         item for item in permission_backends(backend)
         if isinstance(item, TrustModelBackendMixin))
-
-
-def listed_catalogs(backend=None):
-    """Catalogs of those backends, in ``AUTHENTICATION_BACKENDS`` order."""
-    found = {}
-    for item in trusts_backends(backend):
-        catalog = item.get_catalog()
-        found.setdefault(id(catalog), catalog)
-    return tuple(found.values())
 
 
 def filter_listed(queryset, subject, user, permission, *, ask, backend=None,
@@ -195,6 +193,9 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
         grant_users, content, None, perm, backend=backend,
         skip_flags=skip_flags, require_user=False)
     if user_queryset is None:
+        if not chosen:
+            raise TrustsConfigurationError(
+                'No Trusts backend is listed in AUTHENTICATION_BACKENDS.')
         user_model = chosen[0].get_catalog().user_model
         user_queryset = user_model._default_manager.get_queryset()
     elif not isinstance(user_queryset, QuerySet):
@@ -217,6 +218,14 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
         user_queryset = user_queryset.using(alias)
     return bind_once(
         user_queryset.filter(combined).distinct(), user_model=principal_model)
+
+
+def mixin_required_message(config, backend_path):
+    return (
+        'Backend %s is not inside an app whose config extends '
+        'TrustsConfigMixin.' % backend_path
+        if config is None else
+        'App %s must extend TrustsConfigMixin.' % config.label)
 
 
 def _missing_condition(api, conditions, model):
@@ -248,7 +257,11 @@ def _combine(ask, subject, user, permission, chosen, skipped, grant_kw):
         if marker in seen:
             continue
         seen.add(marker)
-        part = ask(item, subject, user, permission, skipped, grant_kw)
+        part = ask(*(
+            (item, subject, permission, skipped) if ask is grant_users
+            else (item, subject, user, permission, skipped)
+            if ask is grant_authorized
+            else (item, subject, user, permission, skipped, grant_kw)))
         if part is None:
             continue
         combined = part if combined is None else combined | part

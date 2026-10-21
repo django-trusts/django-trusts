@@ -31,6 +31,7 @@ from trusts.plan.relations import (
 
 
 def _compiler_applies(compiler, plan):
+    """Applicability is ``compiler.applies``."""
     return bool(compiler.applies(plan))
 
 
@@ -84,6 +85,7 @@ def instance_match(catalog, obj, user, permission, *, kind='complete', extra_q=N
 
 def _compile_common_permissions(catalog, candidates, user, *, kind='complete',
                                 skipped=()):
+    """Permission queryset for ``catalog``. It sponsors itself."""
     qs = candidate_queryset(candidates)
     compiler = catalog.compiler
     plan = catalog.plan_for(candidates, user=user)
@@ -143,6 +145,7 @@ def _compile_common_permissions(catalog, candidates, user, *, kind='complete',
 
 def _delegated_user_exists(delegations, sponsor_records, content, permission,
                            *, content_identity=None, skipped=()):
+    """Candidate-user predicate for one-level delegated authority."""
     content = require_instance(content, 'content')
     parts = []
     for record in delegations:

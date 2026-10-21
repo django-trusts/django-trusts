@@ -175,7 +175,10 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
 
         config = _Fresh('tests.core.fresh89', tests_module)
         self.assertFalse(config.recorder.frozen)
-        self.assertIsNone(config.get_catalog())
+        with self.assertRaisesRegex(
+            TrustsConfigurationError, 'catalog not built yet',
+        ):
+            config.get_catalog()
         _contribute_recorder(config.recorder)
         self.assertFalse(config.recorder.frozen)
         with self.assertRaisesRegex(TrustsConfigurationError, 'not frozen'):
