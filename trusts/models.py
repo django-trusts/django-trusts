@@ -44,7 +44,7 @@ class AuthorizedQuerySet(QuerySet):
         if user is None:
             raise TrustsConfigurationError('user must be a model instance, not None.')
         return filter_listed(
-            self, self, user,
+            self, user,
             ask=lambda item, skipped: grant_authorized(
                 item, skipped, self, user, permission),
             backend=backend, skip_flags=skip_flags, extra_q=extra_q)
@@ -94,7 +94,7 @@ class PermittedQuerySetMixin:
         label = _condition_permission_label(model, normalized)
         binding = _permitted_binding(model, normalized)
         return filter_listed(
-            self, self, user,
+            self, user,
             ask=lambda item, skipped: grant_permitted(
                 item, skipped, self, user, label,
                 conditions=conditions, binding=binding, api='permitted'),

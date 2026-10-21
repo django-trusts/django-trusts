@@ -138,12 +138,12 @@ def trusts_backends(backend=None):
         if isinstance(item, TrustModelBackendMixin))
 
 
-def filter_listed(queryset, subject, user, *, ask, backend=None,
+def filter_listed(queryset, user, *, ask, backend=None,
                   skip_flags, require_user=True, preflight=False,
                   extra_q=None, model=None, conditions=(), api=None):
     """OR the listed grant, then filter, distinct, and bind once."""
     _inquiry, granted_q, user_model, _chosen = open_grant(
-        ask, subject, user, backend=backend, skip_flags=skip_flags,
+        ask, user, backend=backend, skip_flags=skip_flags,
         require_user=require_user, preflight=preflight, model=model,
         conditions=conditions, api=api)
     if granted_q is None:
@@ -154,7 +154,7 @@ def filter_listed(queryset, subject, user, *, ask, backend=None,
         queryset.filter(granted_q).distinct(), user_model=user_model)
 
 
-def open_grant(ask, subject, user, *, backend=None, skip_flags=None,
+def open_grant(ask, user, *, backend=None, skip_flags=None,
                require_user=True, preflight=False, model=None,
                conditions=(), api=None):
     """Preflight names, then OR. A denied user does not compile the grant."""
@@ -185,7 +185,7 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     reject_permission_shape(perm)
     _inquiry, combined, _, chosen = open_grant(
         lambda item, skipped: grant_users(item, skipped, content, perm),
-        content, None, backend=backend, skip_flags=skip_flags,
+        None, backend=backend, skip_flags=skip_flags,
         require_user=False)
     if user_queryset is None:
         if not chosen:

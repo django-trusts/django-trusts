@@ -68,7 +68,7 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
     user = require_instance(user, 'user')
     permission = require_instance(permission, 'permission')
     return filter_listed(
-        queryset, queryset, user,
+        queryset, user,
         ask=lambda item, skipped: grant_prefix(
             item, skipped, queryset, user, permission, content=content),
         backend=backend, skip_flags=skip_flags)
@@ -169,7 +169,7 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
             item, skipped, candidates, request.user, permission,
             conditions=conditions, binding=binding,
             api='authorization_required'),
-        candidates, request.user, backend=backend,
+        request.user, backend=backend,
         skip_flags=skip_flags, preflight=True, model=model,
         conditions=conditions, api='authorization_required')
     if inquiry.denied:
