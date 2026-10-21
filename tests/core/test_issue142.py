@@ -13,7 +13,6 @@ from trusts.conditions import (
     permission_condition_code,
     permission_has_condition,
 )
-from trusts.compile.factory import Compiler
 from tests.support import compiler
 
 

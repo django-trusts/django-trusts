@@ -18,12 +18,8 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from trusts.backends import TrustModelBackendMixin
 from tests.support import scoped_permitted_content as filter_by_permitted_content, built_catalog, compiler
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
-from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 from trusts.models import AuthorizedQuerySet, PermittedQuerySet, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.support import install_class_handle
 
 PERM = 'myapp.change_document'
 

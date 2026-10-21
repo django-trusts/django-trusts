@@ -15,7 +15,7 @@ from django.contrib.auth.models import Permission
 from django.core.exceptions import PermissionDenied
 from django.db import connection, models
 from django.http import HttpRequest
-from django.test import SimpleTestCase, TransactionTestCase
+from django.test import TransactionTestCase
 from django.test.utils import CaptureQueriesContext, isolate_apps
 
 from tests.core.test_issue282 import _handle, _listed, _permission, _tables

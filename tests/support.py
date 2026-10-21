@@ -17,9 +17,6 @@ from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import render_policy_sql_bytes
 
 
-ZERO_BACKEND = 'trusts.zero.backends.TrustModelBackend'
-
-
 @contextmanager
 def installed_databases(databases):
     """Install ``databases`` on settings and on the connection handler.
@@ -162,34 +159,6 @@ def sweep_listed_backends():
     for config in mixin_configs():
         config.ready()
 
-
-def live_config(apps_registry=None):
-    """There is no sweep config. Callers use the owning app config."""
-
-    del apps_registry
-    raise TrustsConfigurationError(
-        'TrustsConfigMixin apps own their catalogs. There is no sweep config.'
-    )
-
-
-@contextmanager
-def override_apps_ready(ready, apps_registry=None):
-    """Temporarily set ``Apps.ready`` so tests can simulate populate.
-
-    Contributor ``ready()`` methods run while that Apps instance is not
-    yet ready. Isolation tests that re-enter a host or package
-    AppConfig after Django has finished populate must restore this
-    window; they must not treat ``registries[path]`` as a live
-    contributor route.
-    """
-
-    target = django_apps if apps_registry is None else apps_registry
-    was = target.ready
-    target.ready = ready
-    try:
-        yield
-    finally:
-        target.ready = was
 
 def _publish_catalog(backend_cls, factory, *, path=None):
     """Store one catalog on the app that contains ``backend_cls``."""

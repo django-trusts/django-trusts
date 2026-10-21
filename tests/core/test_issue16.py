@@ -6,7 +6,6 @@ registration is rejected; compiler tests import ``trusts.plan.conditions``.
 from contextlib import contextmanager
 from decimal import Decimal
 from io import BytesIO
-from unittest.mock import patch
 from uuid import uuid4
 from django.contrib.auth import get_user_model
 from django.core.checks import Error
@@ -18,8 +17,6 @@ from tests.models import Ticket, ticket_meta_own
 from trusts.inspect.checks import CHECK_ID_INVALID_EXPR, CHECK_ID_OBSOLETE_CALLBACK_SETTING, check_obsolete_legacy_callback_setting, check_permission_conditions, iter_live_permission_conditions, permission_condition_check_messages
 from trusts.conditions import PermissionConditionError, PermissionConditionUnsupported
 from trusts.plan.conditions import ConditionRecord, ConditionRegistry, FrozenConditionLookup, ModelIdentity, Ref, condition_refs, obsolete_legacy_callback_setting_enabled
-from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 
 from tests.support import built_catalog, override_catalog, compiler
 

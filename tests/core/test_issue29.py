@@ -6,7 +6,6 @@ the obsolete-setting fail-loud check.
 """
 
 from io import StringIO
-from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.checks import Error
@@ -30,8 +29,6 @@ from trusts.plan.conditions import (
     condition_refs,
     obsolete_legacy_callback_setting_enabled,
 )
-from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 
 from tests.support import override_catalog, compiler
 

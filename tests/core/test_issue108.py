@@ -14,12 +14,9 @@ import tests as tests_module
 from tests.apps import TestsConfig
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.kernel_host.backends import HostTrustModelBackend
-from tests.support import configured_catalog, sweep_listed_backends, compiler
+from tests.support import configured_catalog, sweep_listed_backends
 from trusts.apps import TrustsConfigMixin, installed_catalogs
-from trusts.compile.nodes import Ref
 from trusts.models import PermittedUsersManagerMixin
-from trusts.decorators import filter_by_permitted_content
-from trusts.models import AuthorizedManager, AuthorizedQuerySet
 
 
 HOST = 'tests.kernel_host.backends.HostTrustModelBackend'

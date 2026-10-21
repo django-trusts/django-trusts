@@ -9,7 +9,6 @@ authorization. Membership shape is not a group.
 import yaml
 import re
 from contextlib import contextmanager
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import Group, Permission
@@ -26,11 +25,8 @@ from tests.support import (
     built_catalog,
     compiler,
 )
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
-from trusts.inspect.snapshot import render_policy_sql_bytes
 from trusts.models import AuthorizedManager
 
 

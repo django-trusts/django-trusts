@@ -1,6 +1,5 @@
 """Schema-1 SQL policy export, lockfile bytes, and trusts.E009."""
 from tests.support import (
-    built_catalog,
     compiler,
     installed_databases,
     listed_relationship,
@@ -20,7 +19,7 @@ from django.core import checks as django_checks
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection, connections, models
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.test import SimpleTestCase, override_settings
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import CHECK_ID_POLICY_LOCK, CONVENTIONAL_LOCKFILE_NAME, check_policy_sql_lockfile, render_policy_sql_bytes
 from trusts.inspect.yaml import dump_policy_yaml

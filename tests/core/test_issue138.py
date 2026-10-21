@@ -1,7 +1,6 @@
 from tests.support import listed_relationship, configured_catalog, replay_recorder, compiler
 """#138: authorization_required Trusts-only pk guard."""
 from contextlib import contextmanager
-from unittest.mock import patch
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser, Permission
@@ -16,9 +15,7 @@ from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.myapp.settings import AUTHENTICATION_BACKENDS, INSTALLED_APPS
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 from trusts.decorators import _declared_authorization_guards, authorization_required
 
 

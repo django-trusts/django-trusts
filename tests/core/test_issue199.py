@@ -1,4 +1,4 @@
-from tests.support import configured_catalog, unbound_named_filters
+from tests.support import unbound_named_filters
 """#199 / #189 B1: backend principal, object, and ownership fail-closed.
 
 Public ``TrustModelBackendMixin`` methods and
@@ -7,22 +7,19 @@ Public ``TrustModelBackendMixin`` methods and
 ``_trust_perm_cache`` shape, or patch private match/compiler helpers.
 """
 
-from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser, Permission
 from django.contrib.contenttypes.models import ContentType
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.test import TestCase, override_settings
 
 import tests as tests_module
 from tests.kernel_host.backends import HostTrustModelBackend
 from tests.backends import MixinOnlyBackend
 from tests.core import KernelHostRequiredMixin
-from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import TrustsConfigMixin
-from trusts.errors import TrustsConfigurationError
 
 
 PERM = 'myapp.change_document'

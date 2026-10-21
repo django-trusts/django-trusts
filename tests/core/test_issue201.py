@@ -25,7 +25,6 @@ from django.http import Http404, HttpRequest
 from django.test import SimpleTestCase, TestCase
 
 from tests.core import KernelHostRequiredMixin
-from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.support import unbound_named_filters
 

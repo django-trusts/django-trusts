@@ -13,14 +13,12 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
-from django.test import SimpleTestCase, TransactionTestCase
+from django.test import TransactionTestCase
 from django.test.utils import isolate_apps
 from tests.core.test_issue282 import _tables
-from trusts.compile.factory import Compiler
 from trusts.compile.nodes import Ref
 from trusts.plan.aggregates import instance_match
 from trusts.compile.catalogs import Question
-from trusts.plan.relations import PlanQueryCompiler
 from tests.support import built_catalog, compiler
 
 

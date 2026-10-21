@@ -6,7 +6,6 @@ Historical concrete imports fail. Supported owners subclass
 ``trusts.backends``; ``trusts.core_backends`` is gone.
 """
 
-from unittest.mock import patch
 
 from django.apps import apps
 from django.core.checks import run_checks

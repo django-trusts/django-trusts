@@ -14,7 +14,6 @@ import ast
 import inspect
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
@@ -27,7 +26,6 @@ from tests.support import scoped_permitted_content as filter_by_permitted_conten
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
 from trusts.plan.aggregates import all_match, instance_match
 from trusts.models import AuthorizedManager

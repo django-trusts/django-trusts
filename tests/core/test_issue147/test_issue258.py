@@ -8,10 +8,8 @@ import yaml
 import copy
 import os
 import tempfile
-import uuid
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
 
 from django.contrib.auth.models import Permission
 from django.core import checks as django_checks

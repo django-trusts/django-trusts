@@ -12,7 +12,6 @@ and reverse inquiries.
 """
 import yaml
 from contextlib import contextmanager
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import Group, Permission
@@ -23,12 +22,9 @@ from django.http import HttpRequest
 from django.test import TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
 from trusts.backends import TrustModelBackendMixin
-from trusts.plan.relations import PlanQueryCompiler
-from trusts.compile.factory import Compiler
 from trusts.decorators import _declared_authorization_guards, authorization_required
-from trusts.inspect.snapshot import render_policy_sql_bytes
 from trusts.models import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.support import render_configured_policy, built_catalog, install_class_handle, compiler
+from tests.support import render_configured_policy, built_catalog, compiler
 
 
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):

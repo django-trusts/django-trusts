@@ -1,27 +1,23 @@
 """Delegated authority registration and one-level correlated grants (#266)."""
 import yaml
 from contextlib import contextmanager
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import PermissionsMixin
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
-from django.test import SimpleTestCase, TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase
 from django.test.utils import isolate_apps, override_settings
 from tests.core import kernel_host_listed
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from trusts.backends import TrustModelBackendMixin
 from trusts.compile.factory import RegisteredDelegation
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.backends import compile_permitted_users
-from trusts.compile.factory import Compiler
-from trusts.inspect.snapshot import render_policy_sql_bytes
 from trusts.models import PermittedManager, PermittedQuerySet, PermittedUsersMixin
-from tests.support import render_configured_policy, built_catalog, install_class_handle, compiler
+from tests.support import render_configured_policy, built_catalog, compiler
 
 
 def _handle(path='tests.core.issue266'):

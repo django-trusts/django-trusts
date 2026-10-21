@@ -17,8 +17,6 @@ from django.test.utils import isolate_apps
 from trusts.compile.nodes import Ref
 from trusts.plan.relations import RelationPlan
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
-from trusts.compile.catalogs import Catalog
 from tests.support import built_catalog, compiler
 
 

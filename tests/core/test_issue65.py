@@ -5,7 +5,6 @@ types, backends, managers, or queryset readers.
 """
 
 from contextlib import contextmanager
-from unittest.mock import patch
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -21,7 +20,6 @@ from django.test.utils import isolate_apps
 from trusts.compile.nodes import Ref
 from trusts.plan.relations import RelationPlan
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 from tests.support import built_catalog, compiler
 
 

@@ -4,9 +4,7 @@
 TrustGroup SQL live only on ``trusts.zero.backends``.
 """
 
-import ast
 import importlib
-import inspect
 
 from django.test import SimpleTestCase
 

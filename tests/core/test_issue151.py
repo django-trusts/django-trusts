@@ -21,12 +21,8 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document
 from trusts.conditions import (
     PermissionConditionError,
-    permission_condition_code,
-    permission_has_condition,
 )
 from trusts.plan.conditions import ConditionRecord, FrozenConditionLookup
-from trusts.compile.catalogs import Catalog
-from trusts.compile.factory import Compiler
 
 
 ROOT = Path(__file__).resolve().parents[2]

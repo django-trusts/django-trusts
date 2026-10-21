@@ -19,11 +19,8 @@ from tests.myapp.models import Document
 import trusts.plan.rewrites as bind_once_module
 from trusts.plan.rewrites import BIND_ALIAS, BindRef, BindTable, SqlInt, bind_once, strip_exists_marker, trusts_bind_once
 from trusts.plan.walk import _render_reach_sql
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
-from trusts.inspect.snapshot import render_policy_sql_bytes
 from trusts.plan.users import _trusts_eligibility_q
 from tests.support import render_configured_policy, built_catalog, compiler
 from django.contrib.auth import get_user_model

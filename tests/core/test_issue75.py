@@ -3,7 +3,6 @@
 Live one-path Trust/Content auth stays on Zero ``tests/legacy/``.
 Generic multi-path contracts use KernelHost + DocumentConfig.
 """
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core.checks import run_checks
 from django.contrib.auth.models import Permission
@@ -16,11 +15,6 @@ from tests.apps import TestsConfig
 from tests.support import (
     built_catalog,
     configured_catalog,
-    install_writable_registry,
-    isolate_live_registry,
-    live_config,
-    override_apps_ready,
-    empty_catalogs,
     sweep_listed_backends,
     compiler,
 )

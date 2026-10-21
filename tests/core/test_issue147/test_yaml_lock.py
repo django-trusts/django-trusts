@@ -26,7 +26,6 @@ from trusts.plan.conditions import ModelIdentity
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import (
     _json_const,
-    render_policy_sql_bytes,
 )
 from trusts.inspect.yaml import (
     PolicyYamlDumper,

@@ -6,15 +6,12 @@ models use the accepted registration spelling without a consumer-local
 dialect. No historical Trusts types required.
 """
 from contextlib import contextmanager
-from unittest.mock import patch
 from django.db import connection, models
 from django.db.models.query import QuerySet
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
-from trusts.compile.factory import Compiler
 from trusts.compile.nodes import All, Equal, PermissionIn, Ref, permission_in
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.models import AuthorizedManager
 from tests.support import listed_relationship, built_catalog, compiler
 

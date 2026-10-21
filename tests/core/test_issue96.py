@@ -7,7 +7,6 @@ historical model imports fail, GH stub populates without Zero.
 """
 
 import sys
-from importlib import import_module
 
 from django.apps import apps
 from django.db import connection

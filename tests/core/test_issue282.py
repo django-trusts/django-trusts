@@ -7,21 +7,17 @@ is allowed only on objects both walks reach. Reverse inquiry agrees with
 """
 import yaml
 from contextlib import contextmanager
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
-from django.test import SimpleTestCase, TransactionTestCase, override_settings
+from django.test import TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
 from trusts.backends import TrustModelBackendMixin
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
-from trusts.inspect.snapshot import render_policy_sql_bytes
 from trusts.models import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
-from tests.support import render_configured_policy, install_class_handle, compiler
+from tests.support import render_configured_policy, compiler
 
 
 def _handle(path='tests.core.issue282'):

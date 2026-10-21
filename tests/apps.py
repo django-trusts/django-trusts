@@ -1,4 +1,4 @@
-from django.apps import AppConfig, apps as django_apps
+from django.apps import apps as django_apps
 
 import trusts.apps as trusts_apps
 from trusts.errors import TrustsConfigurationError

@@ -27,7 +27,6 @@ from trusts.plan.conditions import (
     principal_ref,
     validate_expression,
 )
-from trusts.compile.factory import Compiler
 from tests.support import compiler
 
 

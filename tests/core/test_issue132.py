@@ -5,7 +5,6 @@ relationship stays live; an unregistered model is denied with zero
 queries. Extra Trusts handles and named filters cannot manufacture a
 plan. Private ``plan_for`` is not the assertion.
 """
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
@@ -14,10 +13,8 @@ from django.test import TestCase, override_settings
 from tests.support import (
     listed_relationship,
     configured_catalog,
-    live_config,
     replay_recorder,
     bound_handle,
-    built_catalog,
     compiler,
 )
 from tests.kernel_host.backends import HostTrustModelBackend
@@ -28,8 +25,6 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 
-from trusts.plan.relations import PlanQueryCompiler
-from trusts.compile.factory import Compiler
 from trusts.models import AuthorizedQuerySet
 PERM = 'myapp.change_document'
 

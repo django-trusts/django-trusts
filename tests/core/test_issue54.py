@@ -6,35 +6,27 @@ Zero-owned pair/live Trust proofs stay on ``tests/legacy/test_issue54.py``.
 from contextlib import contextmanager
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser, Permission
+from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.db.models import Q
 from django.db.models.query import QuerySet
-from django.test import SimpleTestCase, TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
 from tests.support import (
     built_catalog,
     listed_relationship,
-    live_config,
     scoped_permitted_content,
     compiler,
 )
 from tests.core import kernel_host_listed
-from tests.kernel_host.apps import KernelHostConfig
 from tests.myapp.models import Document, DocumentGrant
-from trusts.apps import TrustsConfigMixin
 from trusts.decorators import filter_by_permitted_content
 from trusts.plan.conditions import FrozenConditionLookup
-from trusts.compile.catalogs import Catalog
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-import trusts.models as models_mod
-from trusts.compile.factory import Compiler
 from trusts.models import (
-    AuthorizedManager,
     AuthorizedManagerMixin,
     AuthorizedQuerySet,
 )

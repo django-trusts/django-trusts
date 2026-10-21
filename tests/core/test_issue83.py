@@ -20,7 +20,6 @@ from trusts.plan.aggregates import all_match
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 from tests.support import built_catalog, compiler
 
 

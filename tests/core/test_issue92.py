@@ -6,7 +6,6 @@ no source-token or frozen-SQL-string assertions.
 from contextlib import contextmanager
 from unittest.mock import patch
 from uuid import uuid4
-from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
@@ -18,7 +17,6 @@ from django.test.utils import isolate_apps
 from tests.support import (
     forget_models,
     isolate_live_registry,
-    live_config,
     built_registries,
     built_catalog,
     compiler,
@@ -32,10 +30,8 @@ from trusts.plan.users import lock_permitted_users_queryset
 from trusts.plan.walk import _render_reach_sql
 from trusts.compile.nodes import Along
 from trusts.plan.recursions import GrantReach
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
 CONCRETE = 'tests.kernel_host.backends.HostTrustModelBackend'
 

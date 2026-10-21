@@ -1,6 +1,5 @@
 """Fail-closed policy-lock SQL line breaks (issue #291)."""
 
-from unittest.mock import patch
 
 from django.test import SimpleTestCase
 

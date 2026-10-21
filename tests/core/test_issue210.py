@@ -9,9 +9,6 @@ import inspect
 import types
 from collections.abc import Callable
 from typing import TypeVar, get_args, get_origin, get_type_hints
-from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Permission
-from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
@@ -22,7 +19,6 @@ from trusts.plan.conditions import Ref as IrRef
 from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
 from trusts.compile.nodes import Along, permission_in
 from trusts.compile.nodes import All, Equal, PermissionIn, Ref
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from tests.support import built_catalog, compiler
