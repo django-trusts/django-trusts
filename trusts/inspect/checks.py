@@ -27,7 +27,7 @@ from django.db import connections
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
 from trusts.apps import TrustsConfigMixin
-from trusts.backends import TrustModelBackendMixin, mixin_required_message
+from trusts.backends import TrustModelBackendMixin, _MixinRequired
 from trusts.compile.factory import probe_along_capabilities
 from trusts.decorators import _declared_authorization_guards
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
@@ -139,44 +139,41 @@ def _unbuildable(path, exc):
     )
 
 
-def _require_mixin(errors, config, path):
+def _require_mixin(errors, config, path, message):
     key = config if config is not None else path
     if any(
-        message.id == CHECK_ID_MIXIN_REQUIRED and message.obj == key
-        for message in errors
+        message_row.id == CHECK_ID_MIXIN_REQUIRED and message_row.obj == key
+        for message_row in errors
     ):
         return
     errors.append(django_checks.Error(
-        mixin_required_message(config, path),
-        hint='Extend TrustsConfigMixin on the app config.',
+        message,
+        hint=(
+            'Move the backend into an app whose config extends '
+            'TrustsConfigMixin.'
+            if config is None else
+            'Extend TrustsConfigMixin on the app config.'
+        ),
         obj=key, id=CHECK_ID_MIXIN_REQUIRED,
     ))
 
 
 def _load_listed():
-    built, errors, catalogs = [], [], {}
+    catalogs, errors, listed = {}, [], set()
     for path in settings.AUTHENTICATION_BACKENDS:
         config = django_apps.get_containing_app_config(path.rpartition('.')[0])
         try:
-            backend_cls = import_string(path)
-            if (
-                isinstance(backend_cls, type)
-                and issubclass(backend_cls, TrustModelBackendMixin)
-                and not isinstance(config, TrustsConfigMixin)
-            ):
-                _require_mixin(errors, config, path)
-                continue
-            backend = backend_cls()
-        except (
-            ImportError, AttributeError, ImproperlyConfigured,
-            TrustsConfigurationError,
-        ) as exc:
+            backend = import_string(path)()
+        except _MixinRequired as exc:
+            _require_mixin(errors, config, path, str(exc))
+            continue
+        except (ImportError, ImproperlyConfigured, TrustsConfigurationError) as exc:
             errors.append(_unbuildable(path, exc))
             continue
         if isinstance(backend, TrustModelBackendMixin):
-            built.append(backend)
             catalogs.setdefault(id(backend.get_catalog()), backend.get_catalog())
-    return built, tuple(catalogs.values()), errors
+            listed.add(id(config))
+    return tuple(catalogs.values()), errors, listed
 
 
 def _covered_content_models(catalogs):
@@ -230,7 +227,7 @@ def check_missing_declarations(app_configs, **kwargs):
     terminals still fail closed at runtime.
     """
 
-    _built, catalogs, _errors = _load_listed()
+    catalogs, _errors, _listed = _load_listed()
     if not catalogs:
         return []
 
@@ -294,7 +291,7 @@ def iter_live_permission_conditions(apps_registry=None, catalogs=None):
     """
 
     if catalogs is None:
-        _built, catalogs, _errors = _load_listed()
+        catalogs, _errors, _listed = _load_listed()
     seen_records = set()
     for model, cond_code, record in _iter_catalog_permission_conditions(catalogs):
         marker = id(record)
@@ -352,7 +349,7 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     the superuser shortcut and never falls back to an unconditioned
     grant.
     """
-    _built, catalogs, _errors = _load_listed()
+    catalogs, _errors, _listed = _load_listed()
     messages = []
     seen = set()
     for model, _permission, conditions in _declared_authorization_guards:
@@ -414,12 +411,7 @@ def check_authorization_required_conditions(app_configs, **kwargs):
 @django_checks.register()
 def check_unlisted_catalog(app_configs, **kwargs):
     """Registrations need a listed backend whose module lives in that app."""
-    chosen, _catalogs, messages = _load_listed()
-    listed = set()
-    for candidate in chosen:
-        config = django_apps.get_containing_app_config(type(candidate).__module__)
-        if isinstance(config, TrustsConfigMixin):
-            listed.add(id(config))
+    _catalogs, messages, listed = _load_listed()
     for config in django_apps.get_app_configs():
         if not isinstance(config, TrustsConfigMixin):
             continue
@@ -445,7 +437,7 @@ def check_permission_conditions(app_configs, **kwargs):
     ``manage.py check trusts`` still reports project-model conditions.
     Builders are never invoked. No database queries.
     """
-    _built, catalogs, _errors = _load_listed()
+    catalogs, _errors, _listed = _load_listed()
     user_model = catalogs[0].user_model if catalogs else None
     return permission_condition_check_messages(
         iter_live_permission_conditions(catalogs=catalogs), user_model,
@@ -476,7 +468,7 @@ def check_along_renderer(app_configs, **kwargs):
     databases = kwargs.get('databases')
     if not databases:
         return []
-    _built, catalogs, _errors = _load_listed()
+    catalogs, _errors, _listed = _load_listed()
     if not catalogs:
         return []
     along_records = _live_along_records(catalogs)
