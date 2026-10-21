@@ -165,9 +165,10 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
     candidates = model._default_manager.filter(pk=pk)
     binding = codename_binding(model, *permission.split('.', 1))
     inquiry, granted_q, user_model, _chosen = open_grant(
-        lambda item, skipped, conditions, api: grant_permitted(
+        lambda item, skipped: grant_permitted(
             item, skipped, candidates, request.user, permission,
-            conditions=conditions, binding=binding, api=api),
+            conditions=conditions, binding=binding,
+            api='authorization_required'),
         candidates, request.user, backend=backend,
         skip_flags=skip_flags, preflight=True, model=model,
         conditions=conditions, api='authorization_required')
