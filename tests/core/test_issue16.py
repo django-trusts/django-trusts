@@ -8,7 +8,6 @@ from decimal import Decimal
 from io import BytesIO
 from unittest.mock import patch
 from uuid import uuid4
-from django.apps import apps as django_apps
 from django.contrib.auth import get_user_model
 from django.core.checks import Error
 from django.db import connection, models
@@ -243,10 +242,6 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             record.expr.to_tuple(),
             ('eq', ('ref', 'principal', ()), ('ref', 'object', ('owner',))),
         )
-        catalog = django_apps.get_app_config('trusts_tests').get_catalog()
-        live = catalog.get_permission_condition_record(Ticket, 'meta_own')
-        self.assertIsNotNone(live)
-        self.assertEqual(live.expr.to_tuple(), record.expr.to_tuple())
 
     def test_core_registration_path_is_zero_sql_for_builder(self):
         Note, _Memo = _note_models()

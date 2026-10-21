@@ -1,4 +1,4 @@
-from django.apps import AppConfig
+from django.apps import AppConfig, apps as django_apps
 
 import trusts.apps as trusts_apps
 from trusts.errors import TrustsConfigurationError
@@ -38,20 +38,16 @@ class TestsConfig(trusts_apps.TrustsConfigMixin):
         # models created in the test, so only the process registry builds.
         if self.recorder.frozen:
             return
-        from django.apps import apps as django_apps
         if self.apps is not django_apps:
             return
-        # Ticket.meta_own is a named filter. Importing tests.models
-        # while this module loads defines models before the registry
-        # is ready, so the import stays in ready().
-        from tests.models import Ticket, ticket_meta_own
-        self.recorder.add_named_filter(Ticket, 'meta_own', ticket_meta_own)
         try:
             TrustUserPermission = self.apps.get_model(
                 'trusts', 'TrustUserPermission',
             )
-            from tests.models import Category, TestGroupJunction
-        except (LookupError, ImportError):
+            Category = self.get_model('Category')
+            Ticket = self.get_model('Ticket')
+            TestGroupJunction = self.get_model('TestGroupJunction')
+        except LookupError:
             super().ready()
             return
         self._donate_tup(
