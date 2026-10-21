@@ -264,17 +264,3 @@ class RegisterFailClosedTest(TestCase):
             with self.assertRaises(TrustsConfigurationError):
                 handle.register(trust=DocumentGrant, user=lambda t: t.user, permission=lambda t: t.permission, content=lambda t: t.not_a_field)
         self.assertEqual(built_catalog(handle).records, ())
-
-    def test_register_after_build_invokes_builder(self):
-        registry = compiler()
-        handle = _handle(registry)
-        calls = []
-
-        def user(trust):
-            calls.append(trust)
-            return trust.user
-        record = handle.register(trust=DocumentGrant, user=user, permission=lambda t: t.permission, content=lambda t: t.document)
-        self.assertEqual(len(calls), 1)
-        shape = registry.compile()
-        self.assertEqual(shape.records, (record,))
-        self.assertEqual(record.user_path, ('user',))

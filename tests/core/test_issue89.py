@@ -56,7 +56,7 @@ class StandaloneIndependenceTest(SimpleTestCase):
         self.assertEqual(built_catalog(first).records, first.records)
         self.assertIsNot(first.records[0], second.records[0])
 
-    def test_build_is_repeatable_and_register_does_not_inspect_apps_ready(self):
+    def test_build_is_repeatable_and_register_after_build_is_refused(self):
         registry = compiler()
         _contribute_document(registry)
         before = registry.records

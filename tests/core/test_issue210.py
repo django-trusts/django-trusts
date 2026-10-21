@@ -207,20 +207,6 @@ class RegisterConditionFailClosedTest(TestCase):
                 handle.register(trust=DocumentGrant, user=lambda t: t.user, permission=lambda t: t.permission, content=lambda t: t.document, condition=lambda t: t.user == t.not_a_field)
         self.assertEqual(built_catalog(handle).records, ())
 
-    def test_condition_invoked_on_register_after_build(self):
-        registry = compiler()
-        handle = _handle(registry)
-        calls = []
-
-        def condition(trust):
-            calls.append(trust)
-            return trust.user == trust.user
-        record = handle.register(trust=DocumentGrant, user='user', permission='permission', content='document', condition=condition)
-        self.assertEqual(len(calls), 1)
-        shape = registry.compile()
-        self.assertEqual(shape.records, (record,))
-        self.assertIsNotNone(record.condition)
-
 class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
 
     def test_string_and_lambda_paths_still_match(self):

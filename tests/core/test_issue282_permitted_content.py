@@ -1141,7 +1141,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class AlongSurfaceAgreementTest(TransactionTestCase):
-    """``common_permissions``, ``authorization_required``, and Trust content.
+    """``permissions_for``, ``authorization_required``, and Trust content.
 
     The protected object is a Trust. ``along=`` walks ``parent`` with
     bound 1, so the child trust is permitted and the trust past that

@@ -215,14 +215,6 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
             )
         self.assertTrue(any("'typo'" in m.msg for m in errors))
 
-    def test_handle_after_build_invokes_builder(self):
-        Note = _note_model()
-        registry = compiler()
-        log = _BuilderLog()
-        record = registry.add_named_filter(Note, 'own', log)
-        self.assertEqual(len(log.calls), 1)
-        self.assertIs(registry.conditions.get_permission_condition_record(Note, 'own'), record)
-
 
 class ManagePyCheckLifecycleTest(SimpleTestCase):
     def _output(self):

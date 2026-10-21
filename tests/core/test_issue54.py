@@ -180,15 +180,15 @@ class AuthorizedQuerySetLiveTest(TestCase):
 
         manager = DocumentManager()
         manager.model = Document
-        manager._db = Document.objects.db
-        self.assertEqual(manager.application_method(), 'application-owned')
+        bound = manager.db_manager(Document.objects.db)
+        self.assertEqual(bound.application_method(), 'application-owned')
         self.assertEqual(
-            _pks(manager.authorized(self.alice, self.change)),
+            _pks(bound.authorized(self.alice, self.change)),
             _pks(Document.objects.all().authorized(self.alice, self.change)),
         )
         narrowed = Q(pk=self.doc_a.pk)
         self.assertEqual(
-            _pks(manager.authorized(self.alice, self.change, extra_q=narrowed)),
+            _pks(bound.authorized(self.alice, self.change, extra_q=narrowed)),
             {self.doc_a.pk},
         )
 

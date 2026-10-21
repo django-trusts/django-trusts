@@ -249,13 +249,3 @@ class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
         self.assertEqual(registry.records, (record,))
         self.assertEqual(built_catalog(registry).records, (record,))
         self.assertIs(registry.conditions.get_permission_condition_record(Document, 'non_confidential'), named_record)
-
-    def test_dual_backend_relationship_does_not_leak(self):
-        left = _handle(path='tests.core.cmethods-left')
-        right = _handle(path='tests.core.cmethods-right')
-        left.register(trust=DocumentGrant, user='user', permission='permission', content='document')
-        self.assertEqual(len(built_catalog(left).records), 1)
-        self.assertEqual(right.records, ())
-        right.register(trust=DocumentGrant, user='user', permission='permission', content='document')
-        self.assertEqual(len(built_catalog(left).records), 1)
-        self.assertEqual(len(built_catalog(right).records), 1)
