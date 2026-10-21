@@ -601,8 +601,11 @@ def evaluate_expression(node, user, perm, obj, model=None, user_model=None):
             node.right, user, perm, obj, model, user_model,
         )
     if _node(node, 'eq', 'ne'):
-        return _compare_values(
-            node, _node(node, 'eq'), user, perm, obj, model, user_model,
+        return values_match(
+            _resolve_runtime(node.left, user, perm, obj, model, user_model),
+            _resolve_runtime(node.right, user, perm, obj, model, user_model),
+            _node(node, 'eq'),
+            fields=_both_fields(node),
         )
     raise PermissionConditionError(
         'Permission condition did not produce a comparison expression.'
@@ -640,38 +643,26 @@ def _classify(node, model, user, perm, user_model):
     )
 
 
-def _always_true():
-    return Q()
+def values_match(left, right, equal, *, fields):
+    """The NULL rule on loaded values.
+
+    Between two fields (``fields``) NULL on either side never matches. A
+    field against a constant follows Python: ``None == None`` holds and
+    ``None != 5`` holds.
+    """
+    if fields and (left is None or right is None):
+        return False
+    return (left == right) == equal
 
 
-def _always_false():
-    return Q(pk__in=())
-
-
-def _q_eq_lookup(lookup, value):
-    if value is None:
-        return Q(**{'%s__isnull' % lookup: True})
-    return Q(**{lookup: value})
-
-
-def _q_ne_lookup(lookup, value):
-    # Match Python: ``None != x`` is True when ``x is not None``.
-    if value is None:
-        return Q(**{'%s__isnull' % lookup: False})
-    return Q(**{'%s__isnull' % lookup: True}) | ~Q(**{lookup: value})
-
-
-def _q_eq_fields(a, b):
-    """Two columns. NULL on either side does not match."""
-    return Q(**{a: F(b)})
-
-
-def _q_ne_fields(a, b):
+def columns_q(a, b, equal):
     """Two columns. NULL on either side does not match.
 
     ``~Q(a=F(b))`` alone is true for NULL, because Django negates
     ``a = b AND a IS NOT NULL AND b IS NOT NULL``.
     """
+    if equal:
+        return Q(**{a: F(b)})
     return (
         Q(**{'%s__isnull' % a: False})
         & Q(**{'%s__isnull' % b: False})
@@ -679,59 +670,43 @@ def _q_ne_fields(a, b):
     )
 
 
-def _q_ne_bound(lookup, value):
-    """Column against a non-NULL field value. NULL does not match."""
-    return (
-        Q(**{'%s__isnull' % lookup: False})
-        & ~Q(**{lookup: value})
-    )
+def column_q(lookup, value, equal, *, field):
+    """One column against a loaded value, under the NULL rule.
 
-
-def _sql_constant(value):
-    if isinstance(value, ModelIdentity):
-        return value.pk
-    return value
+    ``field`` is true when ``value`` came from another field: NULL on
+    either side then does not match. Against a constant, ``== None`` is
+    ``IS NULL`` and ``!= 5`` matches a NULL column, as in Python.
+    """
+    if isinstance(value, (Model, ModelIdentity)):
+        value = value.pk
+    if value is None and field:
+        return Q(pk__in=())
+    if value is None:
+        return Q(**{'%s__isnull' % lookup: equal})
+    if equal:
+        return Q(**{lookup: value})
+    if field:
+        return Q(**{'%s__isnull' % lookup: False}) & ~Q(**{lookup: value})
+    return Q(**{'%s__isnull' % lookup: True}) | ~Q(**{lookup: value})
 
 
 def _both_fields(node):
     return _node(node.left, 'field') and _node(node.right, 'field')
 
 
-def _compare_values(node, equal, user, perm, obj, model, user_model):
-    """Python check. Two fields do not match when either value is NULL."""
-    left = _resolve_runtime(node.left, user, perm, obj, model, user_model)
-    right = _resolve_runtime(node.right, user, perm, obj, model, user_model)
-    if _both_fields(node) and (left is None or right is None):
-        return False
-    if equal:
-        return left == right
-    return left != right
-
-
 def _compile_comparison(node, model, user, perm, user_model):
     left = _classify(node.left, model, user, perm, user_model)
     right = _classify(node.right, model, user, perm, user_model)
     equal = _node(node, 'eq')
-    both_fields = _both_fields(node)
+    fields = _both_fields(node)
     if isinstance(left, _Bound) and isinstance(right, _Bound):
-        if both_fields and (left.value is None or right.value is None):
-            return _always_false()
-        matches = (left.value == right.value) if equal else (left.value != right.value)
-        return _always_true() if matches else _always_false()
-    if isinstance(left, _Unbound) and isinstance(right, _Bound):
-        lookup, value = left.lookup, _sql_constant(right.value)
-    elif isinstance(left, _Bound) and isinstance(right, _Unbound):
-        lookup, value = right.lookup, _sql_constant(left.value)
-    else:
-        a, b = left.lookup, right.lookup
-        return _q_eq_fields(a, b) if equal else _q_ne_fields(a, b)
-    if both_fields:
-        if value is None:
-            return _always_false()
-        if equal:
-            return Q(**{lookup: value})
-        return _q_ne_bound(lookup, value)
-    return _q_eq_lookup(lookup, value) if equal else _q_ne_lookup(lookup, value)
+        if values_match(left.value, right.value, equal, fields=fields):
+            return Q()
+        return Q(pk__in=())
+    if isinstance(left, _Unbound) and isinstance(right, _Unbound):
+        return columns_q(left.lookup, right.lookup, equal)
+    column, bound = (left, right) if isinstance(left, _Unbound) else (right, left)
+    return column_q(column.lookup, bound.value, equal, field=fields)
 
 
 def compile_to_q(node, model, user, perm, user_model=None):

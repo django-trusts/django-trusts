@@ -9,9 +9,15 @@ __all__ = []
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import Permission
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import F, Model, Q, QuerySet
+from django.db.models import Model, Q, QuerySet
 
-from trusts.plan.conditions import ModelIdentity, parse_perm_code, permission_binding
+from trusts.plan.conditions import (
+    column_q,
+    columns_q,
+    parse_perm_code,
+    permission_binding,
+    values_match,
+)
 from trusts.plan.rewrites import bind_once
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import _as_q, _ordinary_records
@@ -229,19 +235,14 @@ def _comparison_outcome(expr, content, singular, user_model, *, equal):
     left = _condition_side(expr.left, content, singular, user_model)
     right = _condition_side(expr.right, content, singular, user_model)
     if left[0] == 'user' and right[0] == 'user':
-        return _user_fields_q(left[1], right[1], equal)
+        return columns_q(left[1], right[1], equal)
+    fields = 'const' not in (left[0], right[0])
     if left[0] == 'user' or right[0] == 'user':
         column, other = (left, right) if left[0] == 'user' else (right, left)
-        if other[0] == 'value':
-            return _user_field_value_q(column[1], other[1], equal)
-        return _user_const_q(column[1], other[1], equal)
-    if (
-        left[0] == 'value' and right[0] == 'value'
-        and (left[1] is None or right[1] is None)
-    ):
-        return None
-    matches = left[1] == right[1]
-    return True if matches == equal else None
+        return column_q(column[1], other[1], equal, field=fields)
+    if values_match(left[1], right[1], equal, fields=fields):
+        return True
+    return None
 
 
 def _condition_side(node, content, singular, user_model):
@@ -260,48 +261,6 @@ def _condition_side(node, content, singular, user_model):
     raise TrustsConfigurationError(
         'Reverse permission inquiry cannot compile permission condition '
         'node %r.' % (node,)
-    )
-
-
-def _user_const_q(lookup, value, equal):
-    if isinstance(value, ModelIdentity):
-        value = value.pk
-    elif isinstance(value, Model):
-        value = value.pk
-    if value is None:
-        return Q(**{'%s__isnull' % lookup: equal})
-    if equal:
-        return Q(**{lookup: value})
-    return Q(**{'%s__isnull' % lookup: True}) | ~Q(**{lookup: value})
-
-
-def _user_field_value_q(lookup, value, equal):
-    """User column against another field's loaded value.
-
-    NULL on either side does not match. A constant uses ``_user_const_q``.
-    """
-    if value is None:
-        return Q(pk__in=())
-    if isinstance(value, ModelIdentity):
-        value = value.pk
-    elif isinstance(value, Model):
-        value = value.pk
-    if equal:
-        return Q(**{lookup: value})
-    return (
-        Q(**{'%s__isnull' % lookup: False})
-        & ~Q(**{lookup: value})
-    )
-
-
-def _user_fields_q(left, right, equal):
-    """Two user columns. NULL on either side does not match."""
-    if equal:
-        return Q(**{left: F(right)})
-    return (
-        Q(**{'%s__isnull' % left: False})
-        & Q(**{'%s__isnull' % right: False})
-        & ~Q(**{left: F(right)})
     )
 
 
