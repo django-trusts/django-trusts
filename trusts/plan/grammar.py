@@ -11,10 +11,22 @@ second grammar. ``contains`` is a method, not a field hop.
 """
 
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
+from trusts.plan.hops import path_text
 
-BOOLEAN_MESSAGE = (
-    "Python 'and'/'or'/'not' and chained comparisons are unsupported "
-    "in a condition; use '&' for conjunction and '|' for disjunction."
+_KIND_LABELS = {
+    'eq': "'=='",
+    'ne': "'!='",
+    'and': "'&'",
+    'or': "'|'",
+    'not': "'~'",
+    'contains': '.contains()',
+    'bare': 'A bare boolean field',
+    'const': 'A constant',
+}
+
+_RETURN_HINT = (
+    'Return a comparison, .contains(), a boolean field, or a combination '
+    "with '&' and '|'."
 )
 
 _PREDICATE_KINDS = frozenset((
@@ -69,13 +81,46 @@ _OP_LABELS = {
 }
 
 
+def unsupported(what, where='a condition', hint=None):
+    """The one rejection error for every condition surface.
+
+    ``what`` is a tree kind or a plain-English label. ``where`` names
+    the surface.
+    """
+    message = '%s is not supported in %s.' % (
+        _KIND_LABELS.get(what, what), where,
+    )
+    if hint:
+        message = '%s %s' % (message, hint)
+    return PermissionConditionError(message)
+
+
+def missing_field(role, path, name, model):
+    """The one error for a condition or role path naming a missing field."""
+    return PermissionConditionError(
+        'The %s path %r refers to missing field %r on %s.'
+        % (role, path_text(path), name, model._meta.label)
+    )
+
+
+def _boolean_rejection():
+    return unsupported(
+        "Python 'and', 'or', 'not', or a chained comparison",
+        hint="Use '&' for conjunction and '|' for disjunction.",
+    )
+
+
+def _root_rejection():
+    return unsupported(
+        'A root without a field', hint='Name a field, for example o.owner.',
+    )
+
+
 def _unsupported(name):
-    label = _OP_LABELS.get(name, name)
+    label = _OP_LABELS[name]
 
     def _op(self, *args, **kwargs):
-        raise PermissionConditionError(
-            '%s is not supported in a condition.' % label
-        )
+        raise unsupported(label)
 
     _op.__name__ = name
     return _op
@@ -97,13 +142,13 @@ class Tree(object):
         object.__setattr__(self, 'item', item)
 
     def __setattr__(self, name, value):
-        raise PermissionConditionError('A condition is immutable.')
+        raise unsupported('Assignment')
 
     def __delattr__(self, name):
-        raise PermissionConditionError('A condition is immutable.')
+        raise unsupported('Deletion')
 
     def __bool__(self):
-        raise PermissionConditionError(BOOLEAN_MESSAGE)
+        raise _boolean_rejection()
 
     def __and__(self, other):
         return _join('and', self, other)
@@ -120,8 +165,8 @@ class Tree(object):
     def __invert__(self):
         if self.kind in ('bare', 'and', 'or', 'not'):
             return Tree('not', item=self)
-        raise PermissionConditionError(
-            "'~' is not supported on a comparison. Negate a boolean field."
+        raise unsupported(
+            "'~' on a comparison", hint="Negate a boolean field or use '!='.",
         )
 
     def __eq__(self, other):
@@ -161,38 +206,21 @@ class Symbol(object):
         return Symbol(self._root, self._path + (name,), self._token)
 
     def __setattr__(self, name, value):
-        raise PermissionConditionError(
-            'Assignment is not supported in a condition.'
-        )
+        raise unsupported('Assignment')
 
     def __delattr__(self, name):
-        raise PermissionConditionError(
-            'Deletion is not supported in a condition.'
-        )
+        raise unsupported('Deletion')
 
     def _field(self):
         return Tree('field', root=self._root, path=self._path)
 
     def contains(self, member):
-        if not self._path:
-            raise PermissionConditionError(
-                'contains collection returned an empty path.'
-            )
         right = _operand(member, self._token)
-        if (
-            isinstance(right, Tree)
-            and right.kind == 'field'
-            and not right.path
+        if not self._path or (
+            right.kind == 'field' and not right.path
             and right.root != 'inquiry'
         ):
-            raise PermissionConditionError(
-                'contains member returned an empty path.'
-            )
-        if not _is_value(right):
-            raise PermissionConditionError(
-                'contains member must be a path or a constant, not %r.'
-                % (member,)
-            )
+            raise _root_rejection()
         return Tree('contains', left=self._field(), right=right)
 
     def __eq__(self, other):
@@ -219,18 +247,15 @@ class Symbol(object):
 
     def __invert__(self):
         if not self._path:
-            raise PermissionConditionError(
-                'A condition must name a field, not the root.'
-            )
+            raise _root_rejection()
         return Tree('not', item=Tree('bare', item=self._field()))
 
     def __bool__(self):
-        raise PermissionConditionError(BOOLEAN_MESSAGE)
+        raise _boolean_rejection()
 
     def __contains__(self, item):
-        raise PermissionConditionError(
-            "Python 'in' is unsupported in a condition; "
-            "use collection.contains(member)."
+        raise unsupported(
+            "Python 'in'", hint='Use collection.contains(member).',
         )
 
     def __repr__(self):
@@ -239,27 +264,13 @@ class Symbol(object):
         return 'Symbol(%s).%s' % (self._root, '.'.join(self._path))
 
 
-def _is_value(node):
-    return (
-        isinstance(node, Tree)
-        and node.kind in ('field', 'const')
-    )
-
-
 def _operand(value, token):
     if isinstance(value, Symbol):
         if value._token is not token:
-            raise PermissionConditionError(
-                'A condition used a path from another symbolic root.'
-            )
+            raise unsupported('A path from another builder')
         return value._field()
     if isinstance(value, Tree):
-        if value.kind in ('field', 'const'):
-            return value
-        raise PermissionConditionError(
-            'A condition compares field paths and constants, not %r.'
-            % (value,)
-        )
+        raise unsupported('Comparing a condition')
     return Tree('const', value=value)
 
 
@@ -268,9 +279,9 @@ def _as_predicate(value, symbol):
         return value
     if isinstance(value, Symbol) and value._path:
         return Tree('bare', item=value._field())
-    raise PermissionConditionError(
-        "'%s' joins comparisons, .contains, or boolean fields, not %r."
-        % (symbol, value)
+    raise unsupported(
+        "'%s' on a value that is not a comparison, .contains(), or a "
+        'boolean field' % symbol
     )
 
 
@@ -286,20 +297,12 @@ def _join(kind, left, right):
 def _require_predicate(result):
     if isinstance(result, Symbol):
         if not result._path:
-            raise PermissionConditionError(
-                'A condition must name a field, not the root.'
-            )
+            raise _root_rejection()
         return Tree('bare', item=result._field())
     if isinstance(result, Tree) and result.kind in _PREDICATE_KINDS:
         return result
-    if isinstance(result, bool):
-        raise PermissionConditionError(
-            'A condition returned a boolean. Return a comparison, '
-            '.contains, a boolean field, or a combination with & and |.'
-        )
-    raise PermissionConditionError(
-        'A condition must compare values, call .contains, combine them '
-        'with & or |, or name a boolean field, not %r.' % (result,)
+    raise unsupported(
+        'Returning %s' % type(result).__name__, hint=_RETURN_HINT,
     )
 
 

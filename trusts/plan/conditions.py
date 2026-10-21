@@ -68,7 +68,7 @@ from django.db.models.fields import GenericIPAddressField
 from django.http import HttpRequest
 from django.utils.functional import Promise, SimpleLazyObject
 
-from trusts.plan.grammar import Tree, invoke
+from trusts.plan.grammar import Tree, invoke, missing_field, unsupported
 from trusts.errors import PermissionConditionError
 
 
@@ -140,12 +140,6 @@ def obsolete_legacy_callback_setting_enabled():
     ))
 
 
-def _unsupported(what):
-    raise PermissionConditionError(
-        '%s is not supported in declarative permission conditions.' % what
-    )
-
-
 def _node(node, *kinds):
     return isinstance(node, Tree) and node.kind in kinds
 
@@ -212,25 +206,29 @@ def _reject_forbidden_constant(value):
             )
         return
     if isinstance(value, QuerySet):
-        _unsupported('QuerySet constants')
+        raise unsupported('A QuerySet constant', 'a named filter')
     if isinstance(value, Manager):
-        _unsupported('Manager constants')
+        raise unsupported('A Manager constant', 'a named filter')
     if isinstance(value, (list, dict, set, tuple, frozenset)):
-        _unsupported('Mutable or collection constants of type %s' % type(value).__name__)
+        raise unsupported(
+            'A %s constant' % type(value).__name__, 'a named filter',
+        )
     if isinstance(value, IOBase):
-        _unsupported('File / stream constants')
+        raise unsupported('A file or stream constant', 'a named filter')
     if isinstance(value, HttpRequest):
-        _unsupported('HttpRequest constants')
+        raise unsupported('An HttpRequest constant', 'a named filter')
     if isinstance(value, Promise):
-        _unsupported('Lazy / promise constants')
+        raise unsupported('A lazy promise constant', 'a named filter')
     if isinstance(value, SimpleLazyObject):
-        _unsupported('Lazy / request object constants')
+        raise unsupported('A SimpleLazyObject constant', 'a named filter')
     if isinstance(value, BaseDatabaseWrapper):
-        _unsupported('Database connection constants')
+        raise unsupported('A database connection constant', 'a named filter')
     if callable(value) and not isinstance(value, type) and not isinstance(value, Model):
-        _unsupported('Callable constants')
+        raise unsupported('A callable constant', 'a named filter')
     if not _is_allowed_scalar(value) and not isinstance(value, (Model, ModelIdentity)):
-        _unsupported('Constant of type %s' % type(value).__name__)
+        raise unsupported(
+            'A %s constant' % type(value).__name__, 'a named filter',
+        )
 
 
 def normalize_constant(value):
@@ -281,14 +279,7 @@ def resolve_field_path(model, path, ref_kind='object'):
         try:
             field = current._meta.get_field(name)
         except FieldDoesNotExist:
-            raise PermissionConditionError(
-                'Permission condition field %r is not on model %s '
-                '(path %s).' % (
-                    name,
-                    current._meta.label,
-                    '.'.join(path[:i + 1]),
-                )
-            )
+            raise missing_field(ref_kind, path[:i + 1], name, current)
         if field.many_to_many or field.one_to_many:
             raise PermissionConditionError(
                 'Multi-valued relation %r on %s is not supported in V1 '
@@ -521,13 +512,8 @@ def _walk_model_path(instance, model, path):
         try:
             field = current_model._meta.get_field(name)
         except FieldDoesNotExist:
-            raise PermissionConditionError(
-                'Permission condition field %r is not on model %s '
-                '(path %s).' % (
-                    name,
-                    current_model._meta.label,
-                    '.'.join(path[:i + 1]),
-                )
+            raise missing_field(
+                'condition', path[:i + 1], name, current_model,
             )
         last = i == len(path) - 1
         if field.many_to_many or field.one_to_many:
@@ -792,17 +778,7 @@ def _lower_named(node):
         _lower_named(node.left)
         _lower_named(node.right)
         return node
-    if kind == 'bare':
-        raise PermissionConditionError(
-            'A bare field is not supported in a condition.'
-        )
-    if kind == 'contains':
-        raise PermissionConditionError(
-            '.contains is not supported in a condition.'
-        )
-    raise PermissionConditionError(
-        "'~' is not supported in a condition."
-    )
+    raise unsupported(kind, 'a named filter')
 
 
 def _invoke_condition_builder(builder, model, cond_code):

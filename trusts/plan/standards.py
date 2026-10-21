@@ -17,7 +17,7 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db.models import BooleanField, Q
 from django.db.models.expressions import RawSQL
 
-from trusts.plan.grammar import Tree, invoke
+from trusts.plan.grammar import Tree, invoke, missing_field, unsupported
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 
 # ``skip_<name>`` must not reuse an inquiry parameter. ``skip_is_active``
@@ -99,29 +99,19 @@ def condition_names(conditions, override=None):
 
 def _lower_user(node):
     """Keep the shared tree when a user rule can store it."""
-    if isinstance(node, Tree) and node.kind == 'bare':
-        field = node.item
-        if (
-            field.kind != 'field'
-            or field.root != 'user'
-            or len(field.path) != 1
-        ):
-            raise PermissionConditionError(
-                'A user condition names one concrete boolean field, not %r.'
-                % (getattr(field, 'path', field),)
-            )
+    where = 'a user condition'
+    if node.kind == 'bare' and len(node.item.path) != 1:
+        raise unsupported('A related field', where)
+    if node.kind == 'bare':
         return node
-    if isinstance(node, Tree) and node.kind == 'and':
+    if node.kind == 'and':
         _lower_user(node.left)
         _lower_user(node.right)
         return node
-    if isinstance(node, Tree) and node.kind == 'not':
+    if node.kind == 'not':
         _lower_user(node.item)
         return node
-    kind = getattr(node, 'kind', type(node).__name__)
-    raise PermissionConditionError(
-        '%s is not supported in a condition.' % kind
-    )
+    raise unsupported(node.kind, where)
 
 
 def walk_user_lambda(expr):
@@ -147,30 +137,23 @@ def _fields(expr):
         yield from _fields(expr.right)
 
 
-def field_state(model, expr):
-    """``ok``, ``missing``, or raise when a present field is not boolean."""
+def assert_concrete_booleans(model, expr, name):
+    """Require every field in user rule ``name`` to be a concrete boolean."""
     for field_name in _fields(expr):
         try:
             field = model._meta.get_field(field_name)
         except FieldDoesNotExist:
-            return 'missing'
+            raise missing_field(
+                'user condition %r' % name, (field_name,), field_name, model,
+            )
         if (
             not getattr(field, 'concrete', False)
             or field.get_internal_type() != 'BooleanField'
         ):
-            raise TrustsConfigurationError(
-                '%s.%s must be a concrete BooleanField.'
-                % (model._meta.label, field_name)
+            raise PermissionConditionError(
+                'User condition %r needs %s.%s to be a concrete '
+                'BooleanField.' % (name, model._meta.label, field_name)
             )
-    return 'ok'
-
-
-def assert_concrete_booleans(model, expr, name):
-    if field_state(model, expr) != 'ok':
-        raise TrustsConfigurationError(
-            'User condition %r needs a concrete BooleanField on %s.'
-            % (name, model._meta.label)
-        )
 
 
 def concrete_rule(expr, name, user_model):

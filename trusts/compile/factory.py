@@ -26,7 +26,7 @@ from trusts.compile.nodes import (
     _is_model_class,
     _require_ref,
 )
-from trusts.plan.grammar import Tree, inquiry_partner, invoke, is_inquiry
+from trusts.plan.grammar import Tree, inquiry_partner, invoke, unsupported
 from trusts.compile.paths import AlongWalk, _PathBuilder
 from trusts.compile.resolution import (
     _SUFFIX_KINDS,
@@ -54,7 +54,6 @@ from trusts.plan.standards import (
     builtin_user_conditions,
     compile_override_q,
     compile_user_rules,
-    field_state,
     concrete_rule,
     normalize_on,
     normalize_override_on,
@@ -878,11 +877,7 @@ class Compiler(object):
                 if concrete in seen:
                     continue
                 seen.add(concrete)
-                if field_state(concrete, slot.expr) != 'ok':
-                    raise TrustsConfigurationError(
-                        'User override %r needs a concrete BooleanField on %s.'
-                        % (slot.name, concrete._meta.label)
-                    )
+                assert_concrete_booleans(concrete, slot.expr, slot.name)
             override_q = compile_override_q(model, '', slot, {})
         rules = (primary, absent)
         plans = plan_table(
@@ -931,13 +926,13 @@ def probe_along_capabilities(connection):
 
 def _validate_equal_paths(left_path, right_path, root):
     _left_path, left_model, _left_field, left_target = _resolve_forward_singles(
-        root, left_path, 'Equal left',
+        root, left_path, 'condition',
     )
     _right_path, right_model, _right_field, right_target = (
-        _resolve_forward_singles(root, right_path, 'Equal right')
+        _resolve_forward_singles(root, right_path, 'condition')
     )
     if left_model is not right_model:
-        raise TrustsConfigurationError(
+        raise PermissionConditionError(
             'Equal paths must terminate on the same model; got %s and %s.'
             % (left_model._meta.label, right_model._meta.label)
         )
@@ -945,7 +940,7 @@ def _validate_equal_paths(left_path, right_path, root):
     # fields (``to_field``) on the same model can collide across
     # objects and fail open if only the terminal model is checked.
     if left_target != right_target:
-        raise TrustsConfigurationError(
+        raise PermissionConditionError(
             'Equal paths must share one resolved comparison field; '
             'got %s.%s and %s.%s.'
             % (
@@ -974,7 +969,7 @@ def _validate_condition(condition, root, permission_model,
         return condition
     if isinstance(condition, Tree) and condition.kind == 'contains':
         _resolve_permission_in_path(
-            root, condition.left.path, 'permission_in', permission_model,
+            root, condition.left.path, 'condition', permission_model,
             permission_target=permission_target,
         )
         return condition
@@ -1019,7 +1014,7 @@ def _validate_delegated_condition(condition, root):
     first_model, first_target = matches[0]
     for model, target in matches[1:]:
         if model is not first_model or target != first_target:
-            raise TrustsConfigurationError(
+            raise PermissionConditionError(
                 'Delegated inquiry-permission paths must share one model '
                 'and comparison target.'
             )
@@ -1408,117 +1403,49 @@ def _delegated_condition_arity(builder):
         )
     return 2 if 2 in accepted else 1
 
-def _reject_inquiry_hop(node):
-    if (
-        isinstance(node, Tree)
-        and node.kind == 'field'
-        and node.root == 'inquiry'
-        and node.path
-    ):
+def _row_path(node):
+    if node.kind != 'field' or node.root != 'row' or not node.path:
         raise PermissionConditionError(
-            'requested permission is a symbolic terminal and has no '
-            'traversable attributes.'
-        )
-
-
-def _row_path(node, role):
-    if (
-        not isinstance(node, Tree)
-        or node.kind != 'field'
-        or node.root != 'row'
-    ):
-        raise PermissionConditionError(
-            '%s must be a path rooted at the supplied trust value, '
-            'not %r.' % (role, node)
-        )
-    if not node.path:
-        raise PermissionConditionError(
-            '%s returned an empty path.' % (role,)
+            'A relation condition compares field paths on the trust row.'
         )
     return '__'.join(node.path)
 
 
 def _lower_relation(node, trust, permission_path):
     """Check a relation tree and store that same tree."""
-    if isinstance(node, Tree) and node.kind == 'and':
+    where = 'a relation condition'
+    if node.kind == 'and':
         _lower_relation(node.left, trust, permission_path)
         _lower_relation(node.right, trust, permission_path)
         return node
-    if isinstance(node, Tree) and node.kind == 'eq':
-        _reject_inquiry_hop(node.left)
-        _reject_inquiry_hop(node.right)
-        left_inquiry = is_inquiry(node.left)
-        right_inquiry = is_inquiry(node.right)
-        if left_inquiry or right_inquiry:
-            other = node.right if left_inquiry else node.left
-            if left_inquiry and right_inquiry:
-                raise PermissionConditionError(
-                    'requested permission equality requires one '
-                    'relationship path.'
-                )
-            if (
-                not isinstance(other, Tree)
-                or other.kind != 'field'
-                or other.root != 'row'
-                or not other.path
-            ):
-                raise PermissionConditionError(
-                    'requested permission equality requires one '
-                    'relationship path.'
-                )
-            return node
-        if (
-            isinstance(node.left, Tree) and node.left.kind == 'const'
-        ) or (
-            isinstance(node.right, Tree) and node.right.kind == 'const'
-        ):
-            raise PermissionConditionError(
-                'condition equality requires two trust-rooted paths, '
-                'not a constant.'
-            )
-        _row_path(node.left, 'Equal left')
-        _row_path(node.right, 'Equal right')
+    if node.kind not in ('eq', 'contains'):
+        raise unsupported(node.kind, where)
+    if 'const' in (node.left.kind, node.right.kind):
+        raise unsupported('const', where)
+    partner = inquiry_partner(node)
+    if partner is not None:
+        _row_path(partner)
         return node
-    if isinstance(node, Tree) and node.kind == 'contains':
-        _reject_inquiry_hop(node.right)
-        collection = _row_path(
-            node.left, 'condition .contains collection',
-        )
-        if is_inquiry(node.right):
-            return node
-        if (
-            not isinstance(node.right, Tree)
-            or node.right.kind != 'field'
-            or node.right.root != 'row'
-        ):
-            raise PermissionConditionError(
-                'condition .contains member must be a path rooted at the '
-                'supplied trust value, not %r.' % (node.right,)
-            )
-        if permission_path is None:
-            raise PermissionConditionError(
-                'row-only delegated condition .contains() cannot bind the '
-                'requested permission; accept a second argument and pass it '
-                'as the member.'
-            )
-        member_path = _row_path(
-            node.right, 'condition .contains member',
-        )
-        permission_segments = _public_path_segments(
-            permission_path, 'permission',
-        )
-        if tuple(member_path.split('__')) != permission_segments:
-            raise PermissionConditionError(
-                'condition .contains member must be the registered '
-                'permission path %r, not %r.'
-                % (permission_path, member_path)
-            )
+    _row_path(node.left)
+    member_path = _row_path(node.right)
+    if node.kind == 'eq':
         return node
-    raise PermissionConditionError(
-        'condition builder must return a boolean expression of path '
-        'equality, collection.contains(member), or their conjunction, '
-        'not %r.' % (node,)
+    if permission_path is None:
+        raise PermissionConditionError(
+            'row-only delegated condition .contains() cannot bind the '
+            'requested permission; accept a second argument and pass it '
+            'as the member.'
+        )
+    permission_segments = _public_path_segments(
+        permission_path, 'permission',
     )
+    if tuple(member_path.split('__')) != permission_segments:
+        raise PermissionConditionError(
+            'condition .contains member must be the registered '
+            'permission path %r, not %r.'
+            % (permission_path, member_path)
+        )
+    return node
 
 def _reject_public_condition_value(condition):
     """Public ``condition=`` is a callable, not a prebuilt tree."""

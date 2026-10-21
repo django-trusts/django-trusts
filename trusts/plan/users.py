@@ -23,7 +23,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import _as_q, _ordinary_records
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
 from trusts.plan.aggregates import _delegated_user_exists
-from trusts.plan.grammar import Tree
+from trusts.plan.grammar import Tree, missing_field
 
 
 
@@ -331,10 +331,6 @@ def _trusts_eligibility_q(model):
     return predicate
 
 
-
-
-
-
 def _object_memory_value(instance, path):
     """Field value already present on ``instance``. Does not query."""
     if not path:
@@ -345,9 +341,8 @@ def _object_memory_value(instance, path):
         try:
             field = model._meta.get_field(name)
         except FieldDoesNotExist as exc:
-            raise TrustsConfigurationError(
-                'Permission condition field %r is not on %s.'
-                % (name, model._meta.label)
+            raise missing_field(
+                'condition', path[:index + 1], name, model,
             ) from exc
         last = index == len(path) - 1
         if field.many_to_many or field.one_to_many:
@@ -380,13 +375,12 @@ def _user_lookup(user_model, path):
     if not path:
         return 'pk'
     current = user_model
-    for name in path:
+    for index, name in enumerate(path):
         try:
             field = current._meta.get_field(name)
         except FieldDoesNotExist as exc:
-            raise TrustsConfigurationError(
-                'Permission condition field %r is not on %s.'
-                % (name, current._meta.label)
+            raise missing_field(
+                'condition', path[:index + 1], name, current,
             ) from exc
         if field.many_to_many or field.one_to_many:
             raise TrustsConfigurationError(
