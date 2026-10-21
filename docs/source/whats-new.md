@@ -11,8 +11,6 @@ log.
 
 ## 1.1.0
 
-- **App config.** Every app that hosts Trusts registrations or a Trusts backend must extend `TrustsConfigMixin` on its Django `AppConfig`, so the app owns its catalog: `class ProjectsConfig(TrustsConfigMixin, AppConfig)`.
-
 - **User conditions and overrides.** `set_user_condition()` and
   `set_user_override()` add named user checks to Trusts inquiries. Skip one
   with `skip_<name>=True`. Rules use user model fields; Python properties raise

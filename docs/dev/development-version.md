@@ -41,8 +41,7 @@ recorded in [../migrates.md](../source/migrates.md).
 ## Internal registration and projection primitive
 
 Registration and projection internals remain behind the configured backend
-API. Every app that hosts Trusts registrations or a Trusts backend must extend `TrustsConfigMixin` on its Django `AppConfig`, so the app owns its catalog.
-django-trusts ships no AppConfig and no `kernel_config()`. The
+API. django-trusts ships no AppConfig and no `kernel_config()`. The
 generic mixin lives only at
 `from trusts.backends import TrustModelBackendMixin`. The transitional backend
 module is gone. Historical concrete models and `TrustModelBackend` live under

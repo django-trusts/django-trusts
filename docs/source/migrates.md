@@ -164,9 +164,7 @@ backend.register(
 ```
 
 The condition runs once after the freeze check, in the same `AppConfig.ready()`
-world as path lambdas. Every app that hosts Trusts registrations or a Trusts
-backend must extend `TrustsConfigMixin` on its Django `AppConfig`, so the app
-owns its catalog. The stored overlay is private `Equal` /
+world as path lambdas. The stored overlay is private `Equal` /
 `PermissionIn` / `All` and contains no callable. Literal Python `in` is
 unsupported and is not recovered through AST, bytecode, `dis`, or a
 `__contains__` side channel. Public `register(condition=...)` rejects

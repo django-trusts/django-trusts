@@ -31,9 +31,7 @@ secure connection settings, and operational availability.
 
 django-trusts supplies no Django application or concrete permission schema. Do not add
 `"trusts"` to `INSTALLED_APPS`. Install the application or package that owns
-the concrete Trusts implementation instead. Every app that hosts Trusts
-registrations or a Trusts backend must extend `TrustsConfigMixin` on its
-Django `AppConfig`, so the app owns its catalog.
+the concrete Trusts implementation instead.
 
 A small dependency surface reduces supply-chain exposure, but dependency count
 is not a security proof. Review exact dependency constraints and artifacts as
@@ -77,9 +75,8 @@ its skip name.
 
 ### Ordinary relationship authorization
 
-Call `registry.register()` or `registry.register_delegation()` from the
-`ready()` of an app config that extends `TrustsConfigMixin`, so the app owns
-its catalog, before the registry freezes.
+Call `registry.register()` or `registry.register_delegation()` from the owning
+implementation's `AppConfig.ready()` before the registry freezes.
 
 The public registration signature is
 `register(*, trust, user=None, permission=None, content, group=None, delegate=None, sponsor=None, condition=None, along=None)`.
@@ -244,7 +241,7 @@ not be empty.
 
 Audit all of the following:
 
-- every app that hosts Trusts registrations or a Trusts backend, extending `TrustsConfigMixin` on its Django `AppConfig`, so the app owns its catalog;
+- the implementation `AppConfig` in `INSTALLED_APPS`;
 - every dotted path in `AUTHENTICATION_BACKENDS`;
 - ownership of each configured Trusts backend path;
 - duplicate, obsolete, or missing backend paths;

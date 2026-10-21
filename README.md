@@ -31,10 +31,6 @@ permission schema, grant editor, or application workflow.
 
 Every app that hosts Trusts registrations or a Trusts backend must extend `TrustsConfigMixin` on its Django `AppConfig`, so the app owns its catalog.
 
-```python
-class ProjectsConfig(TrustsConfigMixin, AppConfig):
-```
-
 Start with **[Installation in the usage guide](https://django-trusts.readthedocs.io/en/latest/#installation)**.
 The RST guide covers models, backend configuration, trust registration
 (both one-argument path lambdas and Django `__` strings,
