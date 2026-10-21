@@ -49,7 +49,7 @@ from trusts.inspect.yaml import (
 )
 from django.conf import settings
 from django.db.utils import DEFAULT_DB_ALIAS
-from trusts.plan.conditions import compile_expression_q
+from trusts.plan.writers import compile_expression_q
 from django.contrib.auth.models import Permission
 from django.db import connections
 from trusts.plan.grammar import Tree, inquiry_partner

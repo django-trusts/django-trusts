@@ -16,10 +16,33 @@ from django.test.utils import isolate_apps
 from tests.models import Ticket, ticket_meta_own
 from trusts.inspect.checks import CHECK_ID_INVALID_EXPR, CHECK_ID_OBSOLETE_CALLBACK_SETTING, check_obsolete_legacy_callback_setting, check_permission_conditions, iter_live_permission_conditions, permission_condition_check_messages
 from trusts.conditions import PermissionConditionError
-from trusts.plan.conditions import ConditionRecord, ConditionRegistry, FrozenConditionLookup, ModelIdentity, obsolete_legacy_callback_setting_enabled
+from trusts.plan.conditions import (
+    ConditionRecord,
+    ConditionRegistry,
+    FrozenConditionLookup,
+    ModelIdentity,
+    obsolete_legacy_callback_setting_enabled,
+    permission_condition_code,
+)
+from trusts.plan.writers import compile_stored_condition_q
 from trusts.plan.grammar import Tree
 
 from tests.support import built_catalog, override_catalog, compiler
+
+def _registered_q(registry, model, perm, user):
+    code = permission_condition_code(perm)
+    record = registry.conditions.get_permission_condition_record(model, code)
+    return compile_stored_condition_q(
+        record, model, perm, user, registry.user_model,
+    )
+
+
+def _lookup_q(lookup, model, perm, user, user_model=None):
+    code = permission_condition_code(perm)
+    return compile_stored_condition_q(
+        lookup.record_for(model, code), model, perm, user, user_model,
+    )
+
 
 def _store_expr(registry, model, code, expr):
     store = getattr(registry, 'conditions', registry)
@@ -107,11 +130,11 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         owner_b = compiler()
         owner_a.add_named_filter(Note, 'own', lambda u, p, o: u == o.owner)
         owner_b.add_named_filter(Note, 'own', lambda u, p, o: o.title == 'keep')
-        qa = owner_a.conditions.compile_registered_condition_q(
-            Note, 'trusts_tests.change_note:own', get_user_model()(pk=1),
+        qa = _registered_q(
+            owner_a, Note, 'trusts_tests.change_note:own', get_user_model()(pk=1),
         )
-        qb = owner_b.conditions.compile_registered_condition_q(
-            Note, 'trusts_tests.change_note:own', None,
+        qb = _registered_q(
+            owner_b, Note, 'trusts_tests.change_note:own', None,
         )
         self.assertIn('owner', str(qa))
         self.assertIn('keep', str(qb))
@@ -151,7 +174,9 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         self.assertIsInstance(lookup, FrozenConditionLookup)
         self.assertIs(lookup.record_for(Note, 'spy'), record)
         self.assertFalse(hasattr(lookup, 'conditions'))
-        q = lookup.compile_q(Note, 'trusts_tests.change_note:spy', None, get_user_model())
+        q = _lookup_q(
+            lookup, Note, 'trusts_tests.change_note:spy', None, get_user_model(),
+        )
         self.assertIsNotNone(q)
         self.assertEqual(len(log.calls), 1)
 
@@ -173,7 +198,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
                 registry.add_named_filter(Note, 'editable', log)
             self.assertEqual(len(log.calls), 1)
             perm = 'trusts_tests.change_note:editable'
-            q = registry.conditions.compile_registered_condition_q(Note, perm, alice)
+            q = _registered_q(registry, Note, perm, alice)
             listed = set(Note.objects.filter(q).values_list('pk', flat=True))
             self.assertEqual(listed, {keep.pk})
             self.assertNotIn(drop.pk, listed)
@@ -190,8 +215,9 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
                 Ticket, 'meta_own', ticket_meta_own,
             )
         self.assertIs(record.model, Ticket)
-        q = registry.conditions.compile_registered_condition_q(
-            Ticket, 'tests.change_ticket:meta_own', get_user_model()(pk=1),
+        q = _registered_q(
+            registry, Ticket, 'tests.change_ticket:meta_own',
+            get_user_model()(pk=1),
         )
         self.assertIn('owner', str(q))
 
@@ -209,18 +235,18 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             typo = Tree('eq', left=Tree('field', root='user', path=()), right=Tree('field', root='object', path=('nope',)))
             registry = compiler()
             with self.assertRaises(AttributeError) as missing:
-                registry.conditions.compile_registered_condition_q(Note, 'trusts_tests.change_note:missing', alice)
+                _registered_q(registry, Note, 'trusts_tests.change_note:missing', alice)
             self.assertIn('missing', str(missing.exception))
             with self.assertRaises(TypeError):
                 registry.add_named_filter(Note, 'typo', typo)
             _store_expr(registry, Note, 'typo', typo)
             with self.assertRaises(PermissionConditionError) as typo:
-                registry.conditions.compile_registered_condition_q(Note, 'trusts_tests.change_note:typo', alice)
+                _registered_q(registry, Note, 'trusts_tests.change_note:typo', alice)
             self.assertIn('nope', str(typo.exception))
             empty = ConditionRecord(model=Note)
             registry.conditions._records[Note._meta.label, 'empty'] = empty
             with self.assertRaises(PermissionConditionError) as unbound:
-                registry.conditions.compile_registered_condition_q(Note, 'trusts_tests.change_note:empty', alice)
+                _registered_q(registry, Note, 'trusts_tests.change_note:empty', alice)
             self.assertIn('unbound', str(unbound.exception))
 
     def test_constant_normalization_is_durable(self):
@@ -241,12 +267,12 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             alice.save(update_fields=['username'])
             perm = 'trusts_tests.change_note:owner_is'
             listed = set(Note.objects.filter(
-                registry.conditions.compile_registered_condition_q(Note, perm, bob),
+                _registered_q(registry, Note, perm, bob),
             ).values_list('pk', flat=True))
             self.assertEqual(listed, {note.pk})
             captured = bob
             listed_again = set(Note.objects.filter(
-                registry.conditions.compile_registered_condition_q(Note, perm, bob),
+                _registered_q(registry, Note, perm, bob),
             ).values_list('pk', flat=True))
             self.assertEqual(listed_again, {note.pk})
 

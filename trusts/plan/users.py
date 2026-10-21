@@ -12,6 +12,11 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db.models import F, Model, Q, QuerySet
 
 from trusts.plan.conditions import (
+    parse_perm_code,
+    permission_binding,
+    resolve_field_path,
+)
+from trusts.plan.writers import (
     _boolean_holds,
     _boolean_q,
     _collection_contains_q,
@@ -20,9 +25,6 @@ from trusts.plan.conditions import (
     _negate_q,
     column_q,
     columns_q,
-    parse_perm_code,
-    permission_binding,
-    resolve_field_path,
     values_match,
 )
 from trusts.plan.predicates import contains_q

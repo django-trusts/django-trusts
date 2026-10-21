@@ -23,7 +23,11 @@ from tests.support import (
 from tests.core import kernel_host_listed
 from tests.myapp.models import Document, DocumentGrant
 from trusts.decorators import filter_by_permitted_content
-from trusts.plan.conditions import FrozenConditionLookup
+from trusts.plan.conditions import (
+    FrozenConditionLookup,
+    permission_condition_code,
+)
+from trusts.plan.writers import compile_stored_condition_q
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.models import (
@@ -146,14 +150,19 @@ class ConditionLookupBindTest(TestCase):
         empty = FrozenConditionLookup(())
         self.assertIsNone(empty.record_for(Document, 'named'))
         with self.assertNumQueries(0):
-            compiled = lookup.compile_q(
+            code = permission_condition_code('myapp.change_document:named')
+            compiled = compile_stored_condition_q(
+                lookup.record_for(Document, code),
                 Document, 'myapp.change_document:named', None,
             )
         self.assertIsNotNone(compiled)
         self.assertEqual(len(called), 1)
         with self.assertNumQueries(0):
             with self.assertRaises(AttributeError):
-                empty.compile_q(Document, 'myapp.change_document:named', None)
+                compile_stored_condition_q(
+                    empty.record_for(Document, code),
+                    Document, 'myapp.change_document:named', None,
+                )
 
 
 class AuthorizedQuerySetLiveTest(TestCase):

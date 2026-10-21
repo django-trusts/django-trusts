@@ -15,12 +15,14 @@ from trusts.plan.aggregates import (
     instance_match,
 )
 from trusts.plan.conditions import (
-    compile_stored_condition_q,
-    evaluate_registered_expression,
     parse_perm_code,
     permission_binding,
     permission_condition_code,
     permission_has_condition,
+)
+from trusts.plan.writers import (
+    compile_stored_condition_q,
+    evaluate_registered_expression,
 )
 from trusts.plan.contents import (
     _as_q,
@@ -482,8 +484,8 @@ class Catalog(object):
         record = lookup.record_for(model, cond)
         if record is None or not isinstance(obj, QuerySet):
             return record, None
-        return record, lookup.compile_q(
-            obj.model, permext, user_obj, self.user_model,
+        return record, compile_stored_condition_q(
+            record, obj.model, permext, user_obj, self.user_model,
         )
 
     def _resolve_skipped(self, subject, skip_flags, skipped, *, require_user=True):
@@ -732,8 +734,9 @@ def _selected_condition_q(catalog, model, permission, conditions, user, *, api):
                 '%s condition %r on %s is unsupported.'
                 % (api, name, model._meta.label)
             )
-        part = lookup.compile_q(
-            model, '%s:%s' % (permission, name), user, catalog.user_model,
+        part = compile_stored_condition_q(
+            record, model, '%s:%s' % (permission, name), user,
+            catalog.user_model,
         )
         extra_q = part if extra_q is None else extra_q & part
     return extra_q

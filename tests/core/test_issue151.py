@@ -22,7 +22,12 @@ from tests.myapp.models import Document
 from trusts.conditions import (
     PermissionConditionError,
 )
-from trusts.plan.conditions import ConditionRecord, FrozenConditionLookup
+from trusts.plan.conditions import (
+    ConditionRecord,
+    FrozenConditionLookup,
+    permission_condition_code,
+)
+from trusts.plan.writers import compile_stored_condition_q
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -214,8 +219,16 @@ class NamedConditionCompilationTest(TransactionTestCase):
                 registry.conditions.get_permission_condition_record(Note, 'owned'),
             )
             perm = 'trusts_tests.change_note:owned'
-            compiled = lookup.compile_q(Note, perm, alice, get_user_model())
-            stored = registry.conditions.compile_registered_condition_q(Note, perm, alice)
+            compiled = compile_stored_condition_q(
+                lookup.record_for(Note, permission_condition_code(perm)),
+                Note, perm, alice, get_user_model(),
+            )
+            stored = compile_stored_condition_q(
+                registry.conditions.get_permission_condition_record(
+                    Note, permission_condition_code(perm),
+                ),
+                Note, perm, alice, registry.user_model,
+            )
             self.assertEqual(str(compiled), str(stored))
             listed = set(Note.objects.filter(compiled).values_list('pk', flat=True))
             self.assertEqual(listed, {keep.pk})
@@ -232,8 +245,14 @@ class NamedConditionCompilationTest(TransactionTestCase):
             lookup = FrozenConditionLookup(())
             self.assertIsNone(lookup.record_for(Note, 'missing'))
             with self.assertRaises(AttributeError) as missing:
-                registry.conditions.compile_registered_condition_q(
+                compile_stored_condition_q(
+                    registry.conditions.get_permission_condition_record(
+                        Note, permission_condition_code(
+                            'trusts_tests.change_note:missing',
+                        ),
+                    ),
                     Note, 'trusts_tests.change_note:missing', alice,
+                    registry.user_model,
                 )
             self.assertIn('missing', str(missing.exception))
             with self.assertRaises(TypeError):
@@ -254,7 +273,13 @@ class NamedConditionCompilationTest(TransactionTestCase):
                 ConditionRecord(model=Note)
             )
             with self.assertRaises(PermissionConditionError) as unbound:
-                registry.conditions.compile_registered_condition_q(
+                compile_stored_condition_q(
+                    registry.conditions.get_permission_condition_record(
+                        Note, permission_condition_code(
+                            'trusts_tests.change_note:empty',
+                        ),
+                    ),
                     Note, 'trusts_tests.change_note:empty', alice,
+                    registry.user_model,
                 )
             self.assertIn('unbound', str(unbound.exception))
