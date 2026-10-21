@@ -4,13 +4,20 @@ from django.contrib.auth.models import Permission
 from django.db.models import F, Model, Q
 
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.grammar import Tree, inquiry_partner
+from trusts.plan.conditions import ModelIdentity
+from trusts.plan.grammar import Tree, inquiry_partner, is_inquiry
 from trusts.plan.hops import lookup_text, require_instance
+from trusts.plan.writers import (
+    _boolean_q,
+    _negate_q,
+    column_q,
+    columns_q,
+    contains_q,
+)
 
 __all__ = [
     'bind_terminal',
     'compile_predicate',
-    'contains_q',
     'permission_terminal_is_auth_permission',
     'content_type_identity',
     'bind_record_qs',
@@ -21,11 +28,6 @@ _BINDING_FIELDS = {
     'content': 'content_field',
     'permission': 'permission_field',
 }
-
-
-def contains_q(lookup, member):
-    """One membership lookup. ``member`` is a value or an ``F`` expression."""
-    return Q(**{lookup: member})
 
 
 def bind_terminal(value, role):
@@ -98,10 +100,18 @@ class _PredicateCompiler(object):
             )
         if node.kind == 'and':
             return self.compile(node.left) & self.compile(node.right)
+        if node.kind == 'or':
+            return self.compile(node.left) | self.compile(node.right)
+        if node.kind == 'not':
+            return _negate_q(self.record.root, self.compile(node.item))
         if node.kind == 'eq':
             return self._eq(node)
+        if node.kind == 'ne':
+            return self._ne(node)
         if node.kind == 'contains':
             return self._contains(node)
+        if node.kind == 'bare':
+            return _boolean_q(lookup_text(node.item.path))
         raise TrustsConfigurationError(
             'condition is not supported; omit it or pass None.'
         )
@@ -110,13 +120,53 @@ class _PredicateCompiler(object):
         partner = inquiry_partner(node)
         if partner is not None:
             return self._bind_inquiry(partner.path)
+        if node.left.kind == 'const' or node.right.kind == 'const':
+            return self._against_constant(node, True)
         return Q(**{
             lookup_text(node.left.path): F(lookup_text(node.right.path)),
         })
 
+    def _ne(self, node):
+        column = _inquiry_ne_column(node)
+        if column is not None:
+            if self.permission is None:
+                raise TrustsConfigurationError(
+                    'Delegated inquiry-permission condition needs the requested '
+                    'permission binding.'
+                )
+            return column_q(
+                lookup_text(column.path),
+                bind_terminal(self.permission, 'permission'),
+                False,
+                field=True,
+            )
+        if node.left.kind == 'const' or node.right.kind == 'const':
+            return self._against_constant(node, False)
+        return columns_q(
+            lookup_text(node.left.path),
+            lookup_text(node.right.path),
+            False,
+        )
+
+    def _against_constant(self, node, equal):
+        if node.left.kind == 'const':
+            lookup = lookup_text(node.right.path)
+            value = node.left.value
+        else:
+            lookup = lookup_text(node.left.path)
+            value = node.right.value
+        return column_q(lookup, value, equal, field=False)
+
     def _contains(self, node):
         if inquiry_partner(node) is not None:
             return self._bind_inquiry(node.left.path)
+        if node.right.kind == 'const':
+            value = node.right.value
+            if isinstance(value, (Model, ModelIdentity)):
+                value = value.pk
+            if value is None:
+                return Q(pk__in=())
+            return contains_q(lookup_text(node.left.path), value)
         return contains_q(
             lookup_text(node.left.path),
             F(self.record.permission_field),
@@ -131,6 +181,15 @@ class _PredicateCompiler(object):
         return Q(**{
             lookup_text(path): bind_terminal(self.permission, 'permission'),
         })
+
+
+def _inquiry_ne_column(node):
+    """The row column in ``column != inquiry`` or ``inquiry != column``."""
+    if not is_inquiry(node.left) and not is_inquiry(node.right):
+        return None
+    if is_inquiry(node.left):
+        return node.right
+    return node.left
 
 
 def _permission_content_type_filters(record, content_identity):

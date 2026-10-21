@@ -9,7 +9,7 @@ from typing import TypeVar
 from dataclasses import dataclass, field, replace
 
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import F, Model, Q
+from django.db.models import BooleanField, F, Model, Q
 from django.db.models.query import QuerySet
 
 from trusts.plan.hops import (
@@ -26,7 +26,13 @@ from trusts.compile.nodes import (
     _is_model_class,
     _require_ref,
 )
-from trusts.plan.grammar import Tree, inquiry_partner, invoke, unsupported
+from trusts.plan.grammar import (
+    Tree,
+    inquiry_partner,
+    invoke,
+    is_inquiry,
+    unsupported,
+)
 from trusts.compile.paths import AlongWalk, _PathBuilder
 from trusts.compile.resolution import (
     _SUFFIX_KINDS,
@@ -44,14 +50,20 @@ from trusts.errors import PermissionConditionError, TrustsConfigurationError
 T = TypeVar('T', bound=Model)
 from trusts.compile.catalogs import Catalog, CatalogShape
 from trusts.plan.conditions import (
+    _check_member_spec,
     _condition_model_key,
     _condition_model_label,
+    _spec_from_const,
+    _spec_from_field,
+    _specs_compatible,
+    _terminal_field,
+    normalize_expression,
     parse_named_filter,
 )
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan, bind_checked_user
 from trusts.plan.standards import (
     UserCondition,
-    assert_concrete_booleans,
+    validate_user_rule,
     builtin_user_conditions,
     compile_override_q,
     compile_user_rules,
@@ -540,6 +552,7 @@ class Compiler(object):
             sponsor_model, record.sponsor_field,
             _rules_for_model(conditions, sponsor_model),
             role='sponsor', values={},
+            scope=record.root,
         ))
         existing_rows = self._delegations_by_root.get(root)
         if existing_rows:
@@ -888,7 +901,7 @@ class Compiler(object):
                 if concrete in seen:
                     continue
                 seen.add(concrete)
-                assert_concrete_booleans(concrete, slot.expr, slot.name)
+                validate_user_rule(concrete, slot.expr, slot.name)
             override_q = compile_override_q(model, '', slot, {})
         rules = (primary, absent)
         plans = plan_table(
@@ -960,66 +973,203 @@ def _validate_equal_paths(left_path, right_path, root):
             )
         )
 
+def _relation_where(delegated):
+    if delegated:
+        return 'a delegated condition'
+    return 'a relation condition'
+
+
+def _row_paths_comparable(left_path, right_path, root):
+    """True when two row paths share one relation target.
+
+    A scalar terminal is not a relation walk. ``_validate_equal_paths``
+    reports that with ``traverses scalar``. A multi-valued walk, a
+    mismatched model, and a mismatched ``to_field`` propagate unchanged.
+    """
+    try:
+        _validate_equal_paths(left_path, right_path, root)
+    except TrustsConfigurationError as exc:
+        if 'traverses scalar' not in str(exc):
+            raise
+        return False
+    return True
+
+
+def _row_spec(node, root):
+    if node.kind == 'const':
+        return _spec_from_const(node.value)
+    return _spec_from_field(_terminal_field(root, node.path, 'condition'))
+
+
+def _check_row_types(node, root):
+    left = _row_spec(node.left, root)
+    right = _row_spec(node.right, root)
+    if _specs_compatible(left, right):
+        return
+    raise PermissionConditionError(
+        'Permission condition compares incompatible types (%s vs %s). '
+        'V1 does not coerce literals through Django field preparation; '
+        'CharField values are strings, and relations compare to model '
+        'instances (not raw primary keys).' % (left[2], right[2])
+    )
+
+
+def _validate_row_boolean(root, path):
+    field = _terminal_field(root, path, 'condition')
+    if not isinstance(field, BooleanField):
+        raise PermissionConditionError(
+            'A bare field in a relation condition must be a boolean, '
+            'not %s.%s.' % (root._meta.label, field.name)
+        )
+
+
+def _validate_const_contains(root, node):
+    field = _terminal_field(
+        root, node.left.path, 'condition', collection=True,
+    )
+    if node.right.value is None:
+        return
+    _check_member_spec(
+        _spec_from_const(node.right.value), field.remote_field.model,
+    )
+
+
+def _inquiry_column(node):
+    """Row column matched to the bare requested permission, including ``!=``."""
+    partner = inquiry_partner(node)
+    if partner is not None:
+        return partner
+    if isinstance(node, Tree) and node.kind == 'ne':
+        if is_inquiry(node.left):
+            return node.right
+        if is_inquiry(node.right):
+            return node.left
+    return None
+
+
+def _compares_bare_inquiry(node):
+    return is_inquiry(node.left) or is_inquiry(node.right)
+
+
+def _validate_relation_node(node, root, permission_model, *,
+                            permission_target=None, delegated=False,
+                            matches=None):
+    where = _relation_where(delegated)
+    if not isinstance(node, Tree):
+        raise unsupported('This condition', where)
+    if node.kind in ('and', 'or'):
+        _validate_relation_node(
+            node.left, root, permission_model,
+            permission_target=permission_target, delegated=delegated,
+            matches=matches,
+        )
+        _validate_relation_node(
+            node.right, root, permission_model,
+            permission_target=permission_target, delegated=delegated,
+            matches=matches,
+        )
+        return
+    if node.kind == 'not':
+        _validate_relation_node(
+            node.item, root, permission_model,
+            permission_target=permission_target, delegated=delegated,
+            matches=matches,
+        )
+        return
+    if node.kind == 'bare':
+        _validate_row_boolean(root, node.item.path)
+        return
+    if node.kind in ('eq', 'ne'):
+        _validate_row_comparison(
+            node, root, delegated=delegated, matches=matches,
+        )
+        return
+    if node.kind == 'contains':
+        _validate_row_contains(
+            node, root, permission_model,
+            permission_target=permission_target, delegated=delegated,
+            matches=matches,
+        )
+        return
+    raise unsupported(node.kind, where)
+
+
+def _validate_row_comparison(node, root, *, delegated, matches):
+    if _compares_bare_inquiry(node):
+        column = _inquiry_column(node)
+        if column is None or column.kind != 'field' or not column.path:
+            raise unsupported(
+                'Comparing the requested permission to a constant',
+                _relation_where(delegated),
+                hint=(
+                    'The permission binding is sometimes an SQL expression, '
+                    'not a loaded row.'
+                ),
+            )
+        _path, model, _field, target = _resolve_permission_path(
+            root, column.path,
+        )
+        if matches is not None:
+            matches.append((model, target))
+        return
+    if node.left.kind == 'field' and node.right.kind == 'field':
+        if _row_paths_comparable(node.left.path, node.right.path, root):
+            return
+    _check_row_types(node, root)
+
+
+def _validate_row_contains(node, root, permission_model, *,
+                           permission_target, delegated, matches):
+    member = node.right
+    if member.kind == 'const':
+        _validate_const_contains(root, node)
+        return
+    if is_inquiry(member):
+        _path, model, _field, target = _resolve_permission_path(
+            root, node.left.path,
+        )
+        if matches is not None:
+            matches.append((model, target))
+        return
+    if delegated:
+        raise unsupported(
+            '.contains() of a row field',
+            'a delegated condition',
+            hint=(
+                'Pass the requested permission as the member, or pass '
+                'a constant.'
+            ),
+        )
+    _resolve_permission_in_path(
+        root, node.left.path, 'condition', permission_model,
+        permission_target=permission_target,
+    )
+
+
 def _validate_condition(condition, root, permission_model,
                         permission_target=None):
     """Registration-time ``_meta`` validation. Zero SQL. None is a no-op."""
     if condition is None:
         return None
-    if isinstance(condition, Tree) and condition.kind == 'and':
-        _validate_condition(
-            condition.left, root, permission_model,
-            permission_target=permission_target,
-        )
-        _validate_condition(
-            condition.right, root, permission_model,
-            permission_target=permission_target,
-        )
-        return condition
-    if isinstance(condition, Tree) and condition.kind == 'eq':
-        _validate_equal_paths(condition.left.path, condition.right.path, root)
-        return condition
-    if isinstance(condition, Tree) and condition.kind == 'contains':
-        _resolve_permission_in_path(
-            root, condition.left.path, 'condition', permission_model,
-            permission_target=permission_target,
-        )
-        return condition
-    raise TrustsConfigurationError(
-        'condition is not supported; omit it or pass None.'
+    _validate_relation_node(
+        condition, root, permission_model,
+        permission_target=permission_target, delegated=False,
     )
+    return condition
 
 def _validate_delegated_condition(condition, root):
-    """Validate delegated row predicates and return inquiry terminal metadata.
+    """Validate a delegated predicate and return inquiry terminal metadata.
 
-    Row-only equality has no permission terminal. Every inquiry-permission
-    match must resolve to the same model and comparison target. Validation is
-    metadata-only and therefore remains zero SQL.
+    Row-only predicates have no permission terminal. Every match against
+    the requested permission must resolve to the same model and comparison
+    target. Validation is metadata-only and therefore remains zero SQL.
     """
     if condition is None:
         return condition, None, None
     matches = []
-
-    def visit(node):
-        if isinstance(node, Tree) and node.kind == 'and':
-            visit(node.left)
-            visit(node.right)
-            return
-        row = inquiry_partner(node)
-        if row is not None:
-            _path, model, _field, target = _resolve_permission_path(
-                root, row.path,
-            )
-            matches.append((model, target))
-            return
-        if isinstance(node, Tree) and node.kind == 'eq':
-            _validate_equal_paths(node.left.path, node.right.path, root)
-            return
-        raise TrustsConfigurationError(
-            'delegated condition is not supported; omit it or use '
-            'row equality and inquiry-permission matches.'
-        )
-
-    visit(condition)
+    _validate_relation_node(
+        condition, root, None, delegated=True, matches=matches,
+    )
     if not matches:
         return condition, None, None
     first_model, first_target = matches[0]
@@ -1363,9 +1513,9 @@ def _assert_registration_rules(*, user_model, sponsor_model, conditions,
         for rule in _rules_for_model(conditions, concrete):
             if not rule_applies(rule.on, role):
                 continue
-            assert_concrete_booleans(concrete, rule.expr, rule.name)
+            validate_user_rule(concrete, rule.expr, rule.name)
     if override is not None and user_model is not None:
-        assert_concrete_booleans(
+        validate_user_rule(
             user_model._meta.concrete_model, override.expr, override.name,
         )
 
@@ -1422,25 +1572,82 @@ def _row_path(node):
     return '__'.join(node.path)
 
 
+def _inquiry_hop(node):
+    return (
+        isinstance(node, Tree)
+        and node.kind == 'field'
+        and node.root == 'inquiry'
+        and bool(node.path)
+    )
+
+
 def _lower_relation(node, trust, permission_path):
     """Check a relation tree and store that same tree."""
     where = 'a relation condition'
-    if node.kind == 'and':
+    if node.kind in ('and', 'or'):
         _lower_relation(node.left, trust, permission_path)
         _lower_relation(node.right, trust, permission_path)
         return node
-    if node.kind not in ('eq', 'contains'):
-        raise unsupported(node.kind, where)
-    if 'const' in (node.left.kind, node.right.kind):
-        raise unsupported('const', where)
-    partner = inquiry_partner(node)
-    if partner is not None:
-        _row_path(partner)
+    if node.kind == 'not':
+        _lower_relation(node.item, trust, permission_path)
         return node
+    if node.kind == 'bare':
+        _row_path(node.item)
+        return node
+    if node.kind in ('eq', 'ne'):
+        _lower_comparison(node, where)
+        return node
+    if node.kind == 'contains':
+        _lower_contains(node, permission_path)
+        return node
+    raise unsupported(node.kind, where)
+
+
+def _lower_comparison(node, where):
+    left = node.left
+    right = node.right
+    if _inquiry_hop(left) or _inquiry_hop(right):
+        raise unsupported(
+            'A field on the requested permission',
+            where,
+            hint='Compare the permission itself to a column on the trust row.',
+        )
+    if is_inquiry(left) or is_inquiry(right):
+        other = right if is_inquiry(left) else left
+        if other.kind == 'const':
+            raise unsupported(
+                'Comparing the requested permission to a constant',
+                where,
+                hint=(
+                    'The permission binding is sometimes an SQL expression, '
+                    'not a loaded row.'
+                ),
+            )
+        _row_path(other)
+        return
+    for side in (left, right):
+        if side.kind == 'const':
+            continue
+        _row_path(side)
+    if left.kind == 'const' and right.kind == 'const':
+        raise unsupported('A constant', where)
+
+
+def _lower_contains(node, permission_path):
+    where = 'a relation condition'
     _row_path(node.left)
-    member_path = _row_path(node.right)
-    if node.kind == 'eq':
-        return node
+    member = node.right
+    if _inquiry_hop(member):
+        raise unsupported(
+            'A field on the requested permission',
+            where,
+            hint='Pass the permission itself as the member.',
+        )
+    if is_inquiry(member):
+        return
+    if member.kind == 'const':
+        return
+    member_path = _row_path(member)
     if permission_path is None:
         raise PermissionConditionError(
             'row-only delegated condition .contains() cannot bind the '
@@ -1456,7 +1663,6 @@ def _lower_relation(node, trust, permission_path):
             'permission path %r, not %r.'
             % (permission_path, member_path)
         )
-    return node
 
 def _reject_public_condition_value(condition):
     """Public ``condition=`` is a callable, not a prebuilt tree."""
@@ -1491,9 +1697,9 @@ def _normalize_public_condition(trust, condition, permission_path):
     if _prepare_condition_builder(condition) is None:
         return None
     _require_condition_arity(condition)
-    return _lower_relation(
+    return normalize_expression(_lower_relation(
         invoke(condition, ('row',)), trust, permission_path,
-    )
+    ))
 
 
 def _normalize_delegated_condition(trust, condition):
@@ -1504,7 +1710,9 @@ def _normalize_delegated_condition(trust, condition):
         roots = ('row', 'inquiry')
     else:
         roots = ('row',)
-    return _lower_relation(invoke(condition, roots), trust, None)
+    return normalize_expression(
+        _lower_relation(invoke(condition, roots), trust, None),
+    )
 
 def _normalize_public_role(trust, value, role, *, token):
     """Normalize a public string or path builder to a Django ``__`` path."""

@@ -26,9 +26,9 @@ from trusts.plan.writers import (
     _negate_q,
     column_q,
     columns_q,
+    contains_q,
     values_match,
 )
-from trusts.plan.predicates import contains_q
 from trusts.plan.rewrites import bind_once
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import _as_q, _ordinary_records

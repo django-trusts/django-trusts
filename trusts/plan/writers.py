@@ -17,7 +17,11 @@ from trusts.plan.conditions import (
     validate_expression,
 )
 from trusts.plan.grammar import Tree, is_predicate, missing_field
-from trusts.plan.predicates import contains_q
+
+
+def contains_q(lookup, member):
+    """One membership lookup. ``member`` is a value or an ``F`` expression."""
+    return Q(**{lookup: member})
 
 
 def _node(node, *kinds):

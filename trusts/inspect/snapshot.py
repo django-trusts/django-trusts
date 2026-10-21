@@ -796,10 +796,18 @@ class _PolicyConditionText(object):
         try:
             if node.kind == 'and':
                 return self._and(node)
+            if node.kind == 'or':
+                return self._join(node, 'or')
             if node.kind == 'eq':
                 return self._eq(node)
+            if node.kind == 'ne':
+                return self._pair(node, '!=')
             if node.kind == 'contains':
-                return self._membership(node.left)
+                return self._contains(node)
+            if node.kind == 'not':
+                return 'not %s' % self.render(node.item, grouped=True)
+            if node.kind == 'bare':
+                return _condition_path(node.item)
             raise TrustsConfigurationError(
                 'Policy SQL cannot render condition node %s.' % node.kind
             )
@@ -807,8 +815,12 @@ class _PolicyConditionText(object):
             self._grouped = previous
 
     def _and(self, node):
-        text = '%s and %s' % (
+        return self._join(node, 'and')
+
+    def _join(self, node, word):
+        text = '%s %s %s' % (
             self.render(node.left, grouped=True),
+            word,
             self.render(node.right, grouped=True),
         )
         if self._grouped:
@@ -819,10 +831,22 @@ class _PolicyConditionText(object):
         row = inquiry_partner(node)
         if row is not None:
             return self._membership(row)
-        return '%s == %s' % (
-            _condition_path(node.left),
-            _condition_path(node.right),
+        return self._pair(node, '==')
+
+    def _pair(self, node, operator):
+        return '%s %s %s' % (
+            _operand_text(node.left),
+            operator,
+            _operand_text(node.right),
         )
+
+    def _contains(self, node):
+        if node.right.kind == 'const':
+            return '%s in %s' % (
+                _constant_text(node.right.value),
+                _condition_path(node.left),
+            )
+        return self._membership(node.left)
 
     def _membership(self, collection):
         return '%s in %s' % (
@@ -854,6 +878,26 @@ def _condition_path(operand):
     raise TrustsConfigurationError(
         'Policy SQL condition path is not a relationship path.'
     )
+
+
+def _operand_text(operand):
+    if isinstance(operand, Tree) and operand.kind == 'field':
+        return _condition_path(operand)
+    if isinstance(operand, Tree) and operand.kind == 'const':
+        return _constant_text(operand.value)
+    raise TrustsConfigurationError(
+        'Policy SQL condition path is not a relationship path.'
+    )
+
+
+def _constant_text(value):
+    if isinstance(value, ModelIdentity):
+        return str(value.pk)
+    if value is None:
+        return 'None'
+    if isinstance(value, bool):
+        return 'True' if value else 'False'
+    return repr(value)
 
 
 def _assign_ids(records):
