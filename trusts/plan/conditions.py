@@ -2,15 +2,14 @@
 
 This module is not an application-facing import. It parses and checks
 a builder. Python evaluation and the queryset ``Q`` live in
-``trusts.plan.writers``. Register named conditions as builders on the
-recorder's ``add_named_filter``. The stored node is
-``trusts.plan.grammar.Tree``.
+``trusts.plan.writers``. ``parse_named_filter`` returns the stored
+node, a ``trusts.plan.grammar.Tree``.
 
-A callable argument to condition registration is a **builder**: Core
-invokes it exactly once with symbolic ``(u, p, o)`` refs, validates the
-returned predicate, normalizes constants into durable IR, and stores
-only that IR. The callable is discarded from the policy record and is
-never invoked during ``has_perm``, enumeration, or queryset filtering.
+A callable argument to ``parse_named_filter`` is a **builder**: this
+module invokes it exactly once with symbolic ``(u, p, o)`` refs,
+validates the returned predicate, and normalizes constants into durable
+IR. The callable is not part of the returned tree and is never invoked
+during ``has_perm``, enumeration, or queryset filtering.
 
 Builders are trusted startup/configuration code, the same class as
 ``AppConfig.ready()``. Core does not sandbox them. Core's own
@@ -18,11 +17,7 @@ registration path issues zero SQL (symbolic refs plus ``_meta``).
 
 Prebuilt trees are not accepted at register.
 ``parse_named_filter`` is the entry point: one builder in, one checked
-tree out. The caller stores that tree.
-
-Permission-condition records live on an instantiable
-``ConditionRegistry`` (also exposed on each built registry and the
-recorder's ``add_named_filter``).
+tree out. The compiler stores that tree. This module does not.
 
 V1 grammar: principal/object field refs and relationship traversal
 (``_meta`` fields on the content model and the entity/user model; not
@@ -592,25 +587,11 @@ def _validate_node(node, model, user_model):
     )
 
 
-
 def _condition_model_key(model):
     meta = getattr(model, '_meta', None)
     if meta is not None:
         return meta.label
     return model
-
-
-def _unknown_condition_error(model, cond_code):
-    meta = getattr(model, '_meta', None)
-    if meta is not None:
-        return AttributeError(
-            'Permission condition code "%s" is not associate with model "%s_%s"'
-            % (cond_code, meta.app_label, meta.model_name)
-        )
-    return AttributeError(
-        'Permission condition code "%s" is not associate with model "%s"'
-        % (cond_code, model)
-    )
 
 
 def _condition_model_label(model):
@@ -660,95 +641,3 @@ def parse_named_filter(builder, model, code, user_model):
     if getattr(model, '_meta', None) is not None:
         validate_expression(expr, model, user_model)
     return expr
-
-
-class ConditionRecord(object):
-    """Registered condition: normalized declarative IR only.
-
-    ``model`` is retained so a registration can be validated by the
-    system check after all apps have loaded. This record is
-    implementation-neutral: it does not name Zero nouns. The builder
-    callable is never stored.
-    """
-
-    __slots__ = ('expr', 'model')
-
-    def __init__(self, expr=None, model=None):
-        self.expr = expr
-        self.model = model
-
-
-class ConditionRegistry(object):
-    """Per-instance store of permission-condition records.
-
-    Create a new instance per isolated context. There is no
-    process-global singleton. Records are keyed by model identity plus
-    condition code on *this* instance, so two registries never share or
-    overwrite each other.
-
-    A callable argument is a registration-time builder: invoked once
-    with symbolic refs, then discarded. A prebuilt ``Tree`` raises
-    ``TypeError`` before this store is mutated.
-    """
-
-    def __init__(self, user_model=None):
-        self.user_model = user_model
-        self._records = {}
-
-    def register_permission_condition(self, model, cond_code, condition, user_model=None):
-        """Register a ``:cond_code`` condition on ``model``.
-
-        Pass a builder ``callable(u, p, o)`` that returns a V1
-        comparison. Core invokes it exactly once with symbolic refs,
-        normalizes constants, and stores only IR.
-
-        A prebuilt ``Tree`` raises ``TypeError`` before any record is
-        stored. Non-callables also raise ``TypeError``.
-        """
-        if isinstance(condition, Tree) or not callable(condition):
-            raise TypeError(
-                'register_permission_condition expected a builder callable, '
-                'got %r.' % (type(condition).__name__,)
-            )
-        key = (_condition_model_key(model), cond_code)
-        if key in self._records:
-            raise PermissionConditionError(
-                'Named filter %r is already registered on %s.'
-                % (cond_code, _condition_model_label(model))
-            )
-        expr = parse_named_filter(condition, model, cond_code, user_model)
-        record = ConditionRecord(expr=expr, model=model)
-        self._records[key] = record
-        return record
-
-    def get_permission_condition_record(self, model, cond_code):
-        """Return the record for ``(model, cond_code)``, or ``None``."""
-        return self._records.get((_condition_model_key(model), cond_code))
-
-    def iter_permission_conditions(self):
-        """Yield ``(model, cond_code, record)`` for every registration.
-
-        Identity comes from the record so registrations remain
-        validatable without importing extra application modules.
-        """
-        for (_key, cond_code), record in self._records.items():
-            yield record.model, cond_code, record
-
-
-class FrozenConditionLookup(object):
-    """Condition rows frozen at ``build()``.
-
-    The rows are a tuple taken once from the factory store. This lookup
-    does not share that mutable store.
-    """
-
-    __slots__ = ('_index',)
-
-    def __init__(self, rows):
-        self._index = {
-            (_condition_model_key(model), code): record
-            for model, code, record in rows
-        }
-
-    def record_for(self, model, cond_code):
-        return self._index.get((_condition_model_key(model), cond_code))

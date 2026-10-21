@@ -96,9 +96,7 @@ class ConditionGrammarTest(SimpleTestCase):
             registry.add_named_filter(object, 'bad', 'not-a-condition')
         with self.assertRaises(PermissionConditionError):
             registry.add_named_filter(object, 'truth', lambda u, p, o: True)
-        self.assertIsNone(
-            registry.conditions.get_permission_condition_record(object, 'truth'),
-        )
+        registry.add_named_filter(object, 'truth', lambda u, p, o: u == o.owner)
 
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
     def test_incompatible_literal_types_rejected_at_register(self):
@@ -141,11 +139,8 @@ class ConditionGrammarTest(SimpleTestCase):
             return u == o.owner
 
         registry = compiler()
-        record = registry.add_named_filter(Ticket, 'own', owned)
+        registry.add_named_filter(Ticket, 'own', owned)
         self.assertEqual(calls, [1])
-        self.assertIs(
-            registry.conditions.get_permission_condition_record(Ticket, 'own'),
-            record,
-        )
-        self.assertFalse(hasattr(record, 'func'))
+        with self.assertRaises(PermissionConditionError):
+            registry.add_named_filter(Ticket, 'own', owned)
         self.assertEqual(calls, [1])

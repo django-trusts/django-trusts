@@ -16,6 +16,7 @@ from tests.core.test_issue98 import _gh_models, _register_direct, _register_team
 from tests.myapp.models import Document, DocumentGrant
 from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
 from trusts.compile.nodes import Along, Ref
+from trusts.conditions import PermissionConditionError
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from trusts.plan.grammar import Tree
@@ -218,10 +219,23 @@ class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
         self.assertEqual(record, expected)
         self.assertEqual(record.along.shape, 'S')
         right = _handle(path='tests.core.issue210-right')
+        self.assertEqual(right.records, ())
+        left.add_named_filter(
+            Document, 'non_confidential', lambda u, p, o: o.confidential != True,
+        )
+        with self.assertRaises(PermissionConditionError):
+            left.add_named_filter(
+                Document, 'non_confidential',
+                lambda u, p, o: o.confidential != True,
+            )
+        other = _handle(path='tests.core.issue210-other')
+        other.add_named_filter(
+            Document, 'non_confidential', lambda u, p, o: o.confidential != True,
+        )
+        code = (Document._meta.label, 'non_confidential')
+        self.assertIn(code, built_catalog(left).named_filters)
+        self.assertNotIn(code, built_catalog(right).named_filters)
         self.assertEqual(built_catalog(right).records, ())
-        left.add_named_filter(Document, 'non_confidential', lambda u, p, o: o.confidential != True)
-        self.assertIsNotNone(built_catalog(left).get_permission_condition_record(Document, 'non_confidential'))
-        self.assertIsNone(built_catalog(right).get_permission_condition_record(Document, 'non_confidential'))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class RegisterConditionAuthorizationTest(TransactionTestCase):

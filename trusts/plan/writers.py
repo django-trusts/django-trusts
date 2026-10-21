@@ -12,9 +12,6 @@ from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
     ModelIdentity,
     _collection_terminal,
-    _condition_model_label,
-    _unknown_condition_error,
-    permission_condition_code,
     resolve_field_path,
     resolve_object_field_path,
     validate_expression,
@@ -387,36 +384,3 @@ def compile_expression_q(expr, model, user, perm, user_model=None):
         )
     validate_expression(expr, model, user_model)
     return compile_to_q(expr, model, user, perm, user_model)
-
-
-def evaluate_registered_expression(expr, user, perm, obj, model=None, user_model=None):
-    """Evaluate a registered ``Tree`` against a real principal/object."""
-    if not is_predicate(expr):
-        raise PermissionConditionError(
-            'Permission condition did not produce a comparison, '
-            '.contains(), boolean field, or combination with & and |.'
-        )
-    klass = model
-    if klass is None:
-        klass = (
-            obj.model if hasattr(obj, 'model') and not isinstance(obj, Model)
-            else obj.__class__
-        )
-    validate_expression(expr, klass, user_model)
-    return evaluate_expression(
-        expr, user, perm, obj, model=klass, user_model=user_model,
-    )
-
-
-def compile_stored_condition_q(record, model, perm, user, user_model=None):
-    """Compile one stored condition record, or raise fail-closed."""
-    cond = permission_condition_code(perm)
-    if record is None:
-        raise _unknown_condition_error(model, cond)
-    if record.expr is None:
-        raise PermissionConditionError(
-            'Permission condition %r on %s is unbound.'
-            % (cond, _condition_model_label(model))
-        )
-    grant = perm.split(':', 1)[0] if isinstance(perm, str) else perm
-    return compile_expression_q(record.expr, model, user, grant, user_model)

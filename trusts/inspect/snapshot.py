@@ -917,7 +917,10 @@ def _project_named_filters(catalog, alias):
                 'Named filter on %s has a non-portable code %r.'
                 % (model_label, code)
             )
-        expr = getattr(record, 'expr', None)
+        if isinstance(record, Tree):
+            expr = record
+        else:
+            expr = getattr(record, 'expr', None)
         sql, params = _compile_named_filter(
             model, expr, alias, catalog.user_model,
         )

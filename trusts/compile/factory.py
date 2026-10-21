@@ -44,8 +44,9 @@ from trusts.errors import PermissionConditionError, TrustsConfigurationError
 T = TypeVar('T', bound=Model)
 from trusts.compile.catalogs import Catalog, CatalogShape
 from trusts.plan.conditions import (
-    ConditionRegistry,
-    FrozenConditionLookup,
+    _condition_model_key,
+    _condition_model_label,
+    parse_named_filter,
 )
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan, bind_checked_user
 from trusts.plan.standards import (
@@ -280,7 +281,7 @@ class Compiler(object):
         self.frozen = False
         self._user_conditions = None
         self._user_override = None
-        self.conditions = ConditionRegistry(user_model=user_model)
+        self._named_filters = {}
         self.query_compiler = query_compiler
         self.path = path
         self.family = family
@@ -297,14 +298,26 @@ class Compiler(object):
     def add_named_filter(self, model, code, predicate):
         """Register a ``:code`` condition on ``model`` for this instance.
 
-        A callable is a registration-time builder, invoked once
-        here. A prebuilt ``Tree`` is rejected by the condition
-        store with ``TypeError`` before mutation.
+        A callable is a registration-time builder. This method asks
+        the condition language to parse it once and stores the checked
+        tree. A prebuilt ``Tree`` raises ``TypeError`` before the
+        mapping changes.
         """
         self._open('add_named_filter')
-        return self.conditions.register_permission_condition(
-            model, code, predicate, user_model=self.user_model,
-        )
+        if isinstance(predicate, Tree) or not callable(predicate):
+            raise TypeError(
+                'register_permission_condition expected a builder callable, '
+                'got %r.' % (type(predicate).__name__,)
+            )
+        key = (_condition_model_key(model), code)
+        if key in self._named_filters:
+            raise PermissionConditionError(
+                'Named filter %r is already registered on %s.'
+                % (code, _condition_model_label(model))
+            )
+        tree = parse_named_filter(predicate, model, code, self.user_model)
+        self._named_filters[key] = (model, tree)
+        return tree
 
     def user_conditions(self):
         """Effective user conditions.
@@ -850,14 +863,12 @@ class Compiler(object):
     def compile(self):
         """Freeze this compiler and return its ``Catalog``.
 
-        Condition rows are a tuple taken once. The condition lookup is
-        a ``FrozenConditionLookup`` over that tuple, so the catalog does
-        not share this compiler's mutable store. User-rule and override
+        Named filters are copied into a new mapping, so the catalog
+        does not share this compiler's store. User-rule and override
         fragments and the plan table are compiled here. A later call
         compiles another catalog from the same stored rows.
         """
-        rows = tuple(self.conditions.iter_permission_conditions())
-        lookup = FrozenConditionLookup(rows)
+        named_filters = dict(self._named_filters)
         stored = self._stored_user_conditions()
         model = self.user_model
         primary = compile_user_rules(
@@ -884,9 +895,9 @@ class Compiler(object):
             self.records, self.delegations, model, stored, rules, override_q)
         self.frozen = True
         shape = CatalogShape(
-            records=self.records, delegations=self.delegations, conditions=rows,
+            records=self.records, delegations=self.delegations,
+            named_filters=named_filters,
             user_conditions=stored, user_override=self._user_override,
-            filter_lookup=lookup,
             compiler=self.query_compiler,
             path=self.path, family=self.family, user_model=model,
             user_rules=rules, override_q=override_q, plans=plans,

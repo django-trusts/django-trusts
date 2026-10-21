@@ -304,8 +304,6 @@ def main() -> int:
     print('TrustsConfigMixin', TrustsConfigMixin)
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager)
     print('filter_by_permitted_content', filter_by_permitted_content)
-    from trusts.plan.conditions import FrozenConditionLookup
-    print('FrozenConditionLookup', FrozenConditionLookup)
     from django.contrib.auth import get_user_model
     standalone = Compiler(
         user_model=get_user_model(),
@@ -313,11 +311,15 @@ def main() -> int:
         path='scripts.verify',
         family='relationship',
     )
-    shape = standalone.compile()
-    bound = shape.filter_lookup
-    if not isinstance(bound, FrozenConditionLookup):
-        raise SystemExit('Compiler.compile() did not freeze a condition lookup')
-    print('condition lookup frozen')
+    catalog = standalone.compile()
+    if not isinstance(catalog.named_filters, dict):
+        raise SystemExit('Compiler.compile() did not store named filters')
+    again = standalone.compile()
+    if again.named_filters is catalog.named_filters:
+        raise SystemExit('Compiler.compile() shared the named-filter mapping')
+    if hasattr(catalog, 'filter_lookup') or hasattr(standalone, 'filter_lookup'):
+        raise SystemExit('Compiler.compile() still exposes filter_lookup')
+    print('named filters copied')
     print(
         'defining modules', Compiler, Ref, RegisteredRelation,
         RegisteredDelegation, RelationPlan,

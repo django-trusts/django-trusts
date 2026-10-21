@@ -226,16 +226,18 @@ class CMethodsNamedFilterLifecycleTest(SimpleTestCase):
     def test_predicate_runs_once_at_registration(self):
         backend = _handle()
         log = _PredicateLog()
-        record = backend.add_named_filter(Document, 'non_confidential', log)
+        backend.add_named_filter(Document, 'non_confidential', log)
         self.assertEqual(len(log.calls), 1)
-        self.assertIs(built_catalog(backend).get_permission_condition_record(Document, 'non_confidential'), record)
+        built_catalog(backend)
         self.assertEqual(len(log.calls), 1)
 
     def test_non_callable_predicate_is_rejected(self):
         backend = _handle()
         with self.assertRaises(TypeError):
             backend.add_named_filter(Document, 'non_confidential', 'not-a-predicate')
-        self.assertIsNone(built_catalog(backend).get_permission_condition_record(Document, 'non_confidential'))
+        backend.add_named_filter(
+            Document, 'non_confidential', lambda u, p, o: o.confidential != True,
+        )
 
 class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
 
@@ -244,8 +246,8 @@ class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
         backend = _handle(registry)
         log = _PredicateLog()
         record = backend.register(trust=DocumentGrant, user='user', permission='permission', content='document')
-        named_record = backend.add_named_filter(Document, 'non_confidential', log)
+        backend.add_named_filter(Document, 'non_confidential', log)
         self.assertEqual(len(log.calls), 1)
         self.assertEqual(registry.records, (record,))
         self.assertEqual(built_catalog(registry).records, (record,))
-        self.assertIs(registry.conditions.get_permission_condition_record(Document, 'non_confidential'), named_record)
+        self.assertEqual(len(log.calls), 1)

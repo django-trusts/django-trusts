@@ -12,6 +12,7 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db.models import F, Model, Q, QuerySet
 
 from trusts.plan.conditions import (
+    _condition_model_key,
     parse_perm_code,
     permission_binding,
     resolve_field_path,
@@ -181,17 +182,20 @@ def _permission_binding_for_plan(accepts_permission, content, perm, plan):
     return perm, None
 
 
-def _named_filter_q(filter_lookup, content, code, singular, user_model):
+def _named_filter_q(named_filters, content, code, singular, user_model):
     """User-queryset ``Q``, ``True``, or ``None`` (fail closed).
 
-    ``None`` means this lookup grants nobody for this condition, matching
+    ``named_filters`` maps ``(model label, code)`` to ``(model, tree)``.
+    ``None`` means this catalog grants nobody for this condition, matching
     a singular object check that returns false. Construction reads only
     values already loaded on ``content``.
     """
-    record = filter_lookup.record_for(content.__class__, code)
-    if record is None:
+    stored = named_filters.get(
+        (_condition_model_key(content.__class__), code),
+    )
+    if stored is None:
         return None
-    expr = record.expr
+    _model, expr = stored
     if expr is None:
         raise TrustsConfigurationError(
             'Permission condition on %s is unbound.' % content._meta.label

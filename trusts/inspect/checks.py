@@ -39,6 +39,7 @@ from trusts.plan.conditions import (
     obsolete_legacy_callback_setting_enabled,
     validate_expression,
 )
+from trusts.plan.grammar import Tree
 from trusts.plan.walk import along_connection_supported
 
 
@@ -279,15 +280,13 @@ def _iter_catalog_permission_conditions(catalogs):
 
 
 def iter_live_permission_conditions(apps_registry=None, catalogs=None):
-    """Yield ``(model, cond_code, record)`` from configured registries.
+    """Yield ``(model, cond_code, tree)`` from configured catalogs.
 
-    Implementation-owned catalog registries are the source of truth.
-    Every configured owner/registry record is preserved: the same
-    model/code on two owners is two records, and both are validated.
-    The only skip is the transitional Zero ``Content`` fallback when
-    that iterator returns a record object already yielded from a
-    catalog registry (same record identity, not merely the same
-    model/code).
+    Catalog rows are the source of truth. The same model and code on
+    two catalogs are two rows, and both are validated. The only skip
+    is the transitional Zero ``Content`` fallback when that iterator
+    returns an object already yielded from a catalog (same identity,
+    not merely the same model and code).
     """
 
     if catalogs is None:
@@ -313,17 +312,26 @@ def iter_live_permission_conditions(apps_registry=None, catalogs=None):
         yield model, cond_code, record
 
 
+def _stored_expression(stored):
+    """Tree from a catalog row, or ``expr`` from a historical record."""
+    if isinstance(stored, Tree):
+        return stored
+    return getattr(stored, 'expr', None)
+
+
 def permission_condition_check_messages(entries, user_model=None):
-    """Build check messages for ``(model, cond_code, record)`` entries.
+    """Build check messages for ``(model, cond_code, tree)`` entries.
 
     Builders are never invoked here; only stored IR is validated.
     ``user_model`` is the catalog user model principal paths resolve against.
+    A historical ``Content`` row may still carry ``expr`` instead of a tree.
     """
     messages = []
-    for model, cond_code, record in entries:
-        if getattr(record, 'expr', None) is not None:
+    for model, cond_code, stored in entries:
+        expr = _stored_expression(stored)
+        if expr is not None:
             messages.extend(_messages_for_expr(
-                model, cond_code, record.expr, user_model,
+                model, cond_code, expr, user_model,
             ))
     return messages
 
