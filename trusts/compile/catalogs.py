@@ -697,7 +697,6 @@ def _auth_permission_plan(catalog, candidates, user):
 
 
 def _auth_permission_plan_for_model(catalog, model):
-    """Zero-SQL applicable auth.Permission plan for this content model."""
     plan = catalog.plan_for(model)
     if not _plan_is_auth_permission(plan, _ordinary_records(catalog, model)):
         return None
@@ -716,7 +715,6 @@ def _owns_selected_conditions(catalog, model, conditions):
 
 
 def _selected_condition_q(catalog, model, permission, conditions, user, *, api):
-    """AND this catalog's selected names, or None when any name is missing."""
     lookup = catalog.filter_lookup
     extra_q = None
     for name in conditions:

@@ -475,7 +475,6 @@ class _PolicyVisitor(object):
         )
 
     def _compile_filter_by_permitted_content(self, records, model):
-        """One statement per proper prefix, the queryset that actually runs."""
 
         catalog, alias = self.catalog, self.alias
         user = _role_sentinel(records[0], 'user', alias)
@@ -831,7 +830,6 @@ def _compile_get_permitted_users(catalog, alias, records, model):
 
 
 def _compile_filter_by_permitted_content(catalog, alias, records, model):
-    """One statement per proper prefix, the queryset that actually runs."""
     return _PolicyVisitor(catalog, alias)._compile_filter_by_permitted_content(
         records, model)
 

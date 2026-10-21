@@ -388,6 +388,36 @@ class ListedBackendOrTest(TestCase):
             for message in messages
         ))
 
+    def test_non_mixin_backend_app_is_e012_once(self):
+        outside = 'tests.gh_permissions.backends.OutsideBackend'
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, outside, outside)):
+            messages = run_checks()
+        mixin = [
+            message for message in messages
+            if getattr(message, 'id', None) == 'trusts.E012'
+        ]
+        self.assertEqual(
+            [(message.msg, message.obj.label) for message in mixin],
+            [('App gh_permissions must extend TrustsConfigMixin.', 'gh_permissions')],
+        )
+        self.assertFalse(any(
+            getattr(message, 'id', None) == 'trusts.E011' and outside in message.msg
+            for message in messages
+        ))
+
+    def test_recorded_rows_outside_a_mixin_are_e012(self):
+        config = apps.get_app_config('gh_permissions')
+        config.recorder = type('Rows', (), {'_rows': (object(),)})()
+        self.addCleanup(delattr, config, 'recorder')
+        mixin = [
+            message for message in run_checks()
+            if getattr(message, 'id', None) == 'trusts.E012'
+        ]
+        self.assertEqual(
+            [message.obj.label for message in mixin],
+            ['gh_permissions'],
+        )
+
     def _assert_note(self, *, allowed, denied):
         self._assert_side(
             self.note, self.note_code, self.note_perm, Note,
