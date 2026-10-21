@@ -61,6 +61,26 @@ Migration-bot checklist:
 - `PermissionConditionNotQueryable`
 - `except PermissionConditionError`
 
+## `trusts.conditions` removed
+
+The package is gone. `PermissionConditionError` lives on `trusts.errors`.
+The condition suffix is the fourth item from `trusts.utils.parse_perm_code`.
+
+| | Old | New |
+| --- | --- | --- |
+| Condition error | `from trusts.conditions import PermissionConditionError` | `from trusts.errors import PermissionConditionError` |
+| Condition suffix | `permission_has_condition(perm)` / `permission_condition_code(perm)` | `parse_perm_code(perm)[3]` |
+
+`trusts.E001` no longer re-checks a named filter after registration. Drop
+`trusts.E001` from `SILENCED_SYSTEM_CHECKS`.
+
+Migration-bot checklist:
+
+- `trusts.conditions`
+- `permission_has_condition`
+- `permission_condition_code`
+- `trusts.E001`
+
 ## Test-only names removed
 
 These names were importable and unused by the authorization runtime.

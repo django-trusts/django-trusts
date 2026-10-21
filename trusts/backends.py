@@ -11,7 +11,7 @@ from django.contrib.auth import get_backends, load_backend
 from django.contrib.auth.models import Permission
 from django.db.models import Model, Q, QuerySet
 
-from trusts.apps import TrustsConfigMixin
+from trusts.apps import TrustsConfigMixin, installed_catalogs
 from trusts.compile.catalogs import (
     assert_same_database,
     catalog_models,
@@ -93,6 +93,37 @@ class TrustModelBackendMixin(object):
         return permitted_content_q(
             subject.model, user, permission, content=content,
             catalog=self.catalog, skipped=skipped)
+
+    def policy_document(self, *, alias=None):
+        """This backend's part of the policy document.
+
+        Same shape as the project document: ``schema_version``,
+        ``database``, and ``backends`` holding this catalog only.
+        ``alias`` overrides ``TRUSTS_POLICY_DATABASE`` for this call.
+        """
+        resolved = resolve_policy_database(alias)
+        return _build_document((self.catalog,), resolved)
+
+
+def policy_document(backend=None, *, alias=None):
+    """Policy document for one backend, or the whole project.
+
+    ``backend=None`` is every installed Trusts config, the document
+    ``trusts_policy_sql`` renders. A dotted path is loaded the way
+    ``User.objects.with_perm(..., backend=)`` loads one backend, and
+    the result is that backend's ``policy_document()``.
+    """
+    if backend is None:
+        resolved = resolve_policy_database(alias)
+        return _build_document(installed_catalogs(), resolved)
+    if not isinstance(backend, str):
+        raise TypeError(
+            'backend must be a dotted import path string (got %r).' % backend)
+    loaded = load_backend(backend)
+    if not isinstance(loaded, TrustModelBackendMixin):
+        raise TrustsConfigurationError(
+            'backend %r is not a Trusts backend.' % backend)
+    return loaded.policy_document(alias=alias)
 
 
 def grant_users(item, skipped, subject, permission):
@@ -259,3 +290,7 @@ def _combine(ask, chosen):
         if user_model is None:
             user_model = catalog.user_model
     return combined, user_model
+
+
+# snapshot imports policy_document. These names are bound first.
+from trusts.inspect.snapshot import _build_document, resolve_policy_database

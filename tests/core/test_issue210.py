@@ -16,8 +16,7 @@ from tests.core.test_issue98 import _gh_models, _register_direct, _register_team
 from tests.myapp.models import Document, DocumentGrant
 from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
 from trusts.compile.nodes import Along, Ref
-from trusts.conditions import PermissionConditionError
-from trusts.errors import TrustsConfigurationError
+from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from trusts.plan.grammar import Tree
 from tests.support import built_catalog, compiler

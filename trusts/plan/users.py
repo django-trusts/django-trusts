@@ -13,7 +13,6 @@ from django.db.models import Exists, F, Model, OuterRef, Q
 
 from trusts.plan.conditions import (
     condition_model_key,
-    parse_perm_code,
     permission_binding,
     resolve_field_path,
 )
@@ -29,6 +28,7 @@ from trusts.plan.writers import (
 )
 from trusts.plan.rewrites import bind_once
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
+from trusts.utils import parse_perm_code
 from trusts.plan.contents import _as_q, _ordinary_records
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
 from trusts.plan.aggregates import _delegated_user_exists

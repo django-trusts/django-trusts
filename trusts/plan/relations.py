@@ -1,7 +1,7 @@
-"""Relation plans and the compiler protocol they implement.
+"""Relation plans and the compiler they implement.
 
-``QueryCompiler``, ``PlanQueryCompiler``, and ``RelationPlan`` live here
-with the user-binding and candidate helpers they close over.
+``PlanQueryCompiler`` and ``RelationPlan`` live here with the
+user-binding and candidate helpers they close over.
 """
 
 __all__ = []
@@ -31,27 +31,6 @@ from trusts.plan.standards import (
 from django.contrib.auth.models import Permission
 
 
-class QueryCompiler(object):
-    """Duck-typed compiler protocol. Not a registry or store."""
-
-    historical_fallback = False
-
-    def applies(self, plan):
-        """True when this compiler has a grant plan for ``plan``.
-
-        Relationship default recognizes ordinary records and delegation
-        records. Construction issues no SQL. Inapplicable backends must not
-        compile a grant.
-        """
-        return bool(plan.records or plan.delegations)
-
-    def complete_exists(self, plan, candidates, user, permission):
-        raise NotImplementedError
-
-    def group_exists(self, plan, candidates, user, permission):
-        raise NotImplementedError
-
-
 class PlanQueryCompiler(object):
     """Immutable mixin default: registered plan; group slice is explicit.
 
@@ -61,8 +40,6 @@ class PlanQueryCompiler(object):
     path is not a Django group. ``permission=`` records stay out of
     ``get_group_permissions``.
     """
-
-    historical_fallback = False
 
     def applies(self, plan):
         """Relationship applicability: ordinary or delegated records."""

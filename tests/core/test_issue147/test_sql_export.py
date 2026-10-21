@@ -19,6 +19,10 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection, models
 from django.test import SimpleTestCase, override_settings
+from tests.kernel_host.backends import HostTrustModelBackend
+from tests.myapp.apps import DOCUMENT_BACKEND
+from tests.myapp.backends import DocumentBackend
+from trusts.backends import policy_document
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import CHECK_ID_POLICY_LOCK, CONVENTIONAL_LOCKFILE_NAME, check_policy_sql_lockfile, render_policy_sql_bytes
 from trusts.inspect.yaml import dump_policy_yaml
@@ -605,6 +609,24 @@ class PolicySqlCommandTest(SimpleTestCase):
             self.assertFalse(target.exists())
 
 class PolicySqlCheckTest(SimpleTestCase):
+
+    def test_policy_document_matches_the_lockfile_and_one_backend(self):
+        whole = policy_document()
+        self.assertEqual(yaml.safe_load(render_policy_sql_bytes()), whole)
+        part = DocumentBackend().policy_document()
+        self.assertEqual(policy_document(DOCUMENT_BACKEND), part)
+        self.assertEqual(part['schema_version'], whole['schema_version'])
+        self.assertEqual(part['database'], whole['database'])
+        self.assertEqual(len(part['backends']), 1)
+        path = part['backends'][0]['path']
+        matched = [row for row in whole['backends'] if row['path'] == path]
+        self.assertEqual(matched, part['backends'])
+        host = HostTrustModelBackend().policy_document()
+        self.assertEqual(host['database'], whole['database'])
+        self.assertEqual(host['backends'], [])
+        self.assertNotEqual(host['backends'], whole['backends'])
+        with self.assertRaises(TypeError):
+            policy_document(backend=DocumentBackend)
 
     def test_e009_is_a_model_check(self):
         self.assertEqual(check_policy_sql_lockfile.tags, (django_checks.Tags.models,))

@@ -15,17 +15,14 @@ from django.test import SimpleTestCase, override_settings
 from django.test.utils import isolate_apps
 
 from trusts.inspect.checks import (
-    CHECK_ID_INVALID_EXPR,
     CHECK_ID_OBSOLETE_CALLBACK_SETTING,
     check_obsolete_legacy_callback_setting,
-    check_permission_conditions,
 )
-from trusts.conditions import PermissionConditionError
+from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import obsolete_legacy_callback_setting_enabled
 from trusts.plan.grammar import Tree
 
-from tests.kernel_host.backends import HostTrustModelBackend
-from tests.support import override_catalog, compiler
+from tests.support import compiler
 
 
 def _note_model():
@@ -76,18 +73,6 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         registry.add_named_filter(
             Note, 'deferred_own', lambda u, p, o: u == o.owner,
         )
-        with override_catalog(
-            HostTrustModelBackend, registry,
-            'tests.kernel_host.backends.HostTrustModelBackend',
-        ):
-            errors = _messages_with_id(
-                check_permission_conditions(None),
-                CHECK_ID_INVALID_EXPR,
-            )
-        self.assertEqual(
-            [m for m in errors if 'deferred_own' in m.msg],
-            [],
-        )
         fresh = compiler()
         with self.assertRaises(PermissionConditionError) as ctx:
             fresh.add_named_filter(
@@ -104,16 +89,8 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         registry = compiler()
         registry.add_named_filter(Note, 'spy', log)
         self.assertEqual(len(log.calls), 1)
-        with override_catalog(
-            HostTrustModelBackend, registry,
-            'tests.kernel_host.backends.HostTrustModelBackend',
-        ):
-            messages = check_permission_conditions(None)
+        self.assertEqual(check_obsolete_legacy_callback_setting(None), [])
         self.assertEqual(len(log.calls), 1)
-        self.assertEqual(
-            _messages_with_id(messages, CHECK_ID_OBSOLETE_CALLBACK_SETTING),
-            [],
-        )
 
     def test_builder_exception_and_non_predicate_fail_at_register(self):
         Note = _note_model()
@@ -147,20 +124,6 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn('does not enable', errors[0].msg)
 
-    def test_catalog_check_accepts_a_registered_builder(self):
-        Note = _note_model()
-        registry = compiler()
-        registry.add_named_filter(Note, 'own', lambda u, p, o: u == o.owner)
-        with override_catalog(
-            HostTrustModelBackend, registry,
-            'tests.kernel_host.backends.HostTrustModelBackend',
-        ):
-            errors = _messages_with_id(
-                check_permission_conditions(None), CHECK_ID_INVALID_EXPR,
-            )
-        self.assertEqual([m for m in errors if "'own'" in m.msg], [])
-
-
 class ManagePyCheckLifecycleTest(SimpleTestCase):
     def _output(self):
         out = StringIO()
@@ -170,7 +133,6 @@ class ManagePyCheckLifecycleTest(SimpleTestCase):
 
     def test_manage_py_check_passes_for_valid_library_suite(self):
         output = self._output()
-        self.assertNotIn(CHECK_ID_INVALID_EXPR, output)
         self.assertNotIn(CHECK_ID_OBSOLETE_CALLBACK_SETTING, output)
 
     @override_settings(TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS=True)
