@@ -323,8 +323,8 @@ Public and historical inquiry adapters are documented in
 `TrustsRegistry` construct. `set_condition_lookup` remains for tests
 and explicit unbind. Missing methods raise
 `TrustsConfigurationError` and do not bind.
-Live registries are owned by installed `TrustsImplementationConfig`
-subclasses. Resolve them with `implementation_for_path()`,
+Extending `TrustsConfigMixin` is required, so the app owns its catalog.
+Resolve a live registry with `implementation_for_path()`,
 `implementation_for_class()`, or `configured_implementation_handles()`.
 Core ships no AppConfig and no `kernel_config()`. After Zero is
 installed, `apps.get_app_config('trusts')` is ZeroConfig (models and
