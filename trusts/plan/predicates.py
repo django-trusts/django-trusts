@@ -4,7 +4,7 @@ from django.contrib.auth.models import Permission
 from django.db.models import F, Model, Q
 
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.grammar import Tree
+from trusts.plan.grammar import Tree, inquiry_partner
 from trusts.plan.hops import lookup_text, require_instance
 
 __all__ = [
@@ -101,20 +101,15 @@ class _PredicateCompiler(object):
         )
 
     def _eq(self, node):
-        inquiry = _inquiry_path(node)
-        if inquiry is not None:
-            return self._bind_inquiry(inquiry)
+        partner = inquiry_partner(node)
+        if partner is not None:
+            return self._bind_inquiry(partner.path)
         return Q(**{
             lookup_text(node.left.path): F(lookup_text(node.right.path)),
         })
 
     def _contains(self, node):
-        if (
-            isinstance(node.right, Tree)
-            and node.right.kind == 'field'
-            and node.right.root == 'inquiry'
-            and not node.right.path
-        ):
+        if inquiry_partner(node) is not None:
             return self._bind_inquiry(node.left.path)
         return Q(**{
             lookup_text(node.left.path): F(self.record.permission_field),
@@ -129,14 +124,6 @@ class _PredicateCompiler(object):
         return Q(**{
             lookup_text(path): bind_terminal(self.permission, 'permission'),
         })
-
-
-def _inquiry_path(node):
-    if node.left.kind == 'field' and node.left.root == 'inquiry' and not node.left.path:
-        return node.right.path
-    if node.right.kind == 'field' and node.right.root == 'inquiry' and not node.right.path:
-        return node.left.path
-    return None
 
 
 def _permission_content_type_filters(record, content_identity):

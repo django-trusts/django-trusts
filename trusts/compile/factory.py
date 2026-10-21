@@ -26,7 +26,7 @@ from trusts.compile.nodes import (
     _is_model_class,
     _require_ref,
 )
-from trusts.plan.grammar import Tree, invoke
+from trusts.plan.grammar import Tree, inquiry_partner, invoke, is_inquiry
 from trusts.compile.paths import AlongWalk, _PathBuilder
 from trusts.compile.resolution import (
     _SUFFIX_KINDS,
@@ -982,17 +982,6 @@ def _validate_condition(condition, root, permission_model,
         'condition is not supported; omit it or pass None.'
     )
 
-def _inquiry_row_path(node):
-    if not isinstance(node, Tree):
-        return None
-    if node.kind == 'contains' and _is_inquiry(node.right):
-        return node.left.path
-    if node.kind == 'eq' and _is_inquiry(node.left):
-        return node.right.path
-    if node.kind == 'eq' and _is_inquiry(node.right):
-        return node.left.path
-    return None
-
 def _validate_delegated_condition(condition, root):
     """Validate delegated row predicates and return inquiry terminal metadata.
 
@@ -1009,9 +998,11 @@ def _validate_delegated_condition(condition, root):
             visit(node.left)
             visit(node.right)
             return
-        row = _inquiry_row_path(node)
+        row = inquiry_partner(node)
         if row is not None:
-            _path, model, _field, target = _resolve_permission_path(root, row)
+            _path, model, _field, target = _resolve_permission_path(
+                root, row.path,
+            )
             matches.append((model, target))
             return
         if isinstance(node, Tree) and node.kind == 'eq':
@@ -1417,15 +1408,6 @@ def _delegated_condition_arity(builder):
         )
     return 2 if 2 in accepted else 1
 
-def _is_inquiry(node):
-    return (
-        isinstance(node, Tree)
-        and node.kind == 'field'
-        and node.root == 'inquiry'
-        and not node.path
-    )
-
-
 def _reject_inquiry_hop(node):
     if (
         isinstance(node, Tree)
@@ -1465,8 +1447,8 @@ def _lower_relation(node, trust, permission_path):
     if isinstance(node, Tree) and node.kind == 'eq':
         _reject_inquiry_hop(node.left)
         _reject_inquiry_hop(node.right)
-        left_inquiry = _is_inquiry(node.left)
-        right_inquiry = _is_inquiry(node.right)
+        left_inquiry = is_inquiry(node.left)
+        right_inquiry = is_inquiry(node.right)
         if left_inquiry or right_inquiry:
             other = node.right if left_inquiry else node.left
             if left_inquiry and right_inquiry:
@@ -1502,7 +1484,7 @@ def _lower_relation(node, trust, permission_path):
         collection = _row_path(
             node.left, 'condition .contains collection',
         )
-        if _is_inquiry(node.right):
+        if is_inquiry(node.right):
             return node
         if (
             not isinstance(node.right, Tree)

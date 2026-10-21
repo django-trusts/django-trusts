@@ -52,7 +52,7 @@ from django.db.utils import DEFAULT_DB_ALIAS
 from trusts.plan.conditions import compile_expression_q
 from django.contrib.auth.models import Permission
 from django.db import connections
-from trusts.plan.grammar import Tree
+from trusts.plan.grammar import Tree, inquiry_partner
 from trusts.plan.rewrites import BindTable
 from trusts.plan.recursions import (
         GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
@@ -816,7 +816,7 @@ class _PolicyConditionText(object):
         return text
 
     def _eq(self, node):
-        row = _inquiry_row(node)
+        row = inquiry_partner(node)
         if row is not None:
             return self._membership(row)
         return '%s == %s' % (
@@ -842,14 +842,6 @@ def _render_condition(condition, *, permission_token='$permission.id'):
     if condition is None:
         return None
     return _PolicyConditionText(permission_token).render(condition)
-
-
-def _inquiry_row(node):
-    if node.left.kind == 'field' and node.left.root == 'inquiry' and not node.left.path:
-        return node.right
-    if node.right.kind == 'field' and node.right.root == 'inquiry' and not node.right.path:
-        return node.left
-    return None
 
 
 def _condition_path(operand):

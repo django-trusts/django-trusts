@@ -303,6 +303,26 @@ def _require_predicate(result):
     )
 
 
+def is_inquiry(node):
+    """True for the bare requested-permission root of a delegated condition."""
+    return node.kind == 'field' and node.root == 'inquiry' and not node.path
+
+
+def inquiry_partner(node):
+    """The path matched against the requested permission, or ``None``.
+
+    That is ``path`` in ``inquiry == path``, ``path == inquiry``, and
+    ``path.contains(inquiry)``.
+    """
+    if node.kind == 'contains' and is_inquiry(node.right):
+        return node.left
+    if node.kind == 'eq' and is_inquiry(node.left):
+        return node.right
+    if node.kind == 'eq' and is_inquiry(node.right):
+        return node.left
+    return None
+
+
 def invoke(fn, roots):
     """Call ``fn`` once with one symbol per root name. Return a predicate."""
     token = object()
