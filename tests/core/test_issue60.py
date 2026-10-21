@@ -407,9 +407,10 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         self.DocumentGrant.objects.create(
             document=self.doc_a, user=self.alice, permission=self.read,
         )
-        # The shared plan builder is Catalog.plan_for. Enumeration and
-        # the queryset filter each build one plan. The catalog object
-        # check builds the applies plan and then the grant plan.
+        # Catalog.plan_for is the shared lookup. Enumeration looks up
+        # once, then the compiler looks up again. has_perm looks up the
+        # applies plan and the grant plan. The queryset filter looks up
+        # once.
         with patch.object(
             Catalog, 'plan_for', autospec=True,
             wraps=Catalog.plan_for,
@@ -419,7 +420,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             list(built_catalog(registry).filter_authorized(
                 self.Document.objects.all(), self.alice, self.read,
             ))
-        self.assertEqual(plan_for.call_count, 4)
+        self.assertEqual(plan_for.call_count, 5)
 
         plan = built_catalog(registry).plan_for(
             self.doc_a, user=self.alice, permission=self.read,
