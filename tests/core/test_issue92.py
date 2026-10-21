@@ -15,6 +15,7 @@ from django.db.models.query import QuerySet
 from django.db.utils import OperationalError
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
+from tests.core import KernelHostRequiredMixin
 from tests.support import (
     forget_models,
     isolate_live_registry,
@@ -1001,7 +1002,7 @@ class _LiveRegistryRestoreMixin(object):
         super().tearDown()
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
+class AlongE005Test(KernelHostRequiredMixin, _LiveRegistryRestoreMixin, TransactionTestCase):
 
     def _along_registry(self):
         User = get_user_model()
