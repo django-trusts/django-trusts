@@ -68,7 +68,6 @@ from trusts.plan.rewrites import bound_exists_query
 from trusts.plan.aggregates import _compile_common_permissions
 from trusts.plan.users import lock_permitted_users_queryset
 from trusts.plan.contents import _compile_permitted_content_queryset
-from trusts.plan.rewrites import _AlongOnce
 
 
 SCHEMA_VERSION = 1
@@ -1375,6 +1374,10 @@ def _symbol_for_new_param(node, query=None):
             return _with_hint(
                 {'const': _json_const(rhs)}, _const_hint(node, rhs),
             )
+    raise TrustsConfigurationError(
+        'Policy SQL render could not classify a %s placeholder.'
+        % type(node).__name__
+    )
 
 
 _REQUEST_ROLES = frozenset((
@@ -1426,30 +1429,27 @@ def _value_hint(node, query):
 
 
 def _const_hint(node, value):
-    """Readable label for one constant placeholder."""
-    if isinstance(node, Value):
-        return 'literal'
-    if isinstance(node, Lookup):
-        lhs = getattr(node, 'lhs', None)
-        if isinstance(lhs, _AlongOnce):
-            lhs = lhs.inner
-        if isinstance(lhs, (
-            GrantReach, _IdentInReach, _KeyedReach, _AnchorInInverseReach,
-            _PrefixInForwardWalk,
-        )) and value is True:
-            return 'along match'
-        name = _lookup_field_name(node)
-        label = _lookup_model_label(node)
-        if name == 'app_label' and label == 'contenttypes.ContentType':
-            return 'content type app'
-        if name == 'model' and label == 'contenttypes.ContentType':
-            return 'content type model'
-        if name == 'is_active':
-            return 'active'
-        target = getattr(getattr(node, 'lhs', None), 'target', None)
-        if target is not None and getattr(target, 'primary_key', False):
-            return 'content pk'
-    return 'literal'
+    """Readable label for one constant lookup placeholder."""
+    lhs = getattr(node, 'lhs', None)
+    if isinstance(lhs, (
+        GrantReach, _IdentInReach, _KeyedReach, _AnchorInInverseReach,
+        _PrefixInForwardWalk,
+    )) and value is True:
+        return 'along match'
+    name = _lookup_field_name(node)
+    label = _lookup_model_label(node)
+    if name == 'app_label' and label == 'contenttypes.ContentType':
+        return 'content type app'
+    if name == 'model' and label == 'contenttypes.ContentType':
+        return 'content type model'
+    if name == 'is_active':
+        return 'active'
+    target = getattr(lhs, 'target', None)
+    if target is not None and getattr(target, 'primary_key', False):
+        return 'content pk'
+    raise TrustsConfigurationError(
+        'Policy SQL render could not label a constant placeholder.'
+    )
 
 
 def _lookup_model_label(node):
@@ -1506,6 +1506,11 @@ def _bind_name(node, record):
             )
         ):
             labels.append('content.%s' % candidate.content_target)
+    if not labels:
+        raise TrustsConfigurationError(
+            'Policy SQL render could not label a %s bind.'
+            % concrete._meta.label
+        )
     if any(label != labels[0] for label in labels):
         raise TrustsConfigurationError(
             'Composition SQL cannot label a %s bind; trusts in this '
