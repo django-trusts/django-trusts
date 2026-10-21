@@ -118,9 +118,7 @@ class TrustsConfigMixin(django.apps.AppConfig):
         self.catalog = None
 
     def get_catalog(self):
-        """Catalog built by ``ready``. Raises before that build."""
-        if self.catalog is None:
-            raise TrustsConfigurationError('catalog not built yet')
+        """Catalog built by ``ready``."""
         return self.catalog
 
     def catalog_path(self):

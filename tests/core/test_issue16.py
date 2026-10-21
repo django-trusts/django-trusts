@@ -353,7 +353,9 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         log = _BuilderLog()
         registry = ConditionRegistry()
         registry.register_permission_condition(Note, 'own', log, get_user_model())
-        messages = permission_condition_check_messages(registry.iter_permission_conditions())
+        messages = permission_condition_check_messages(
+            registry.iter_permission_conditions(), get_user_model(),
+        )
         self.assertEqual(len(log.calls), 1)
         self.assertEqual([m for m in messages if m.id == CHECK_ID_OBSOLETE_CALLBACK_SETTING], [])
 
@@ -366,7 +368,9 @@ class ConditionRegistryCheckTest(SimpleTestCase):
             registry.register_permission_condition(Note, 'missing', expr)
         self.assertIsNone(registry.get_permission_condition_record(Note, 'missing'))
         _store_expr(registry, Note, 'missing', expr)
-        errors = [m for m in permission_condition_check_messages(registry.iter_permission_conditions()) if m.id == CHECK_ID_INVALID_EXPR]
+        errors = [m for m in permission_condition_check_messages(
+            registry.iter_permission_conditions(), get_user_model(),
+        ) if m.id == CHECK_ID_INVALID_EXPR]
         self.assertEqual(len(errors), 1)
         self.assertIsInstance(errors[0], Error)
         self.assertIn('not_a_field', errors[0].msg)

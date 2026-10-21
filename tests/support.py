@@ -55,14 +55,7 @@ def mixin_configs(apps_registry=None):
 def config_for_class(backend_cls, apps_registry=None):
     """App config that contains ``backend_cls``."""
     registry = django_apps if apps_registry is None else apps_registry
-    config = registry.get_containing_app_config(backend_cls.__module__)
-    if not isinstance(config, TrustsConfigMixin):
-        raise TrustsConfigurationError(
-            '%s.%s must live inside an app whose config subclasses '
-            'TrustsConfigMixin.'
-            % (backend_cls.__module__, backend_cls.__qualname__)
-        )
-    return config
+    return registry.get_containing_app_config(backend_cls.__module__)
 
 
 def compiler(**kwargs):

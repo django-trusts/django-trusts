@@ -9,17 +9,16 @@ Historical concrete imports fail. Supported owners subclass
 from unittest.mock import patch
 
 from django.apps import apps
+from django.core.checks import run_checks
 from django.test import SimpleTestCase, override_settings
 
 import tests as tests_module
-from tests.gh_permissions.backends import OutsideBackend
 from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
 from tests.kernel_host.backends import HostTrustModelBackend
 from tests.support import configured_catalog
 from trusts.apps import TrustsConfigMixin, installed_catalogs
 from trusts.backends import TrustModelBackendMixin
 from trusts.decorators import filter_by_permitted_content
-from trusts.errors import TrustsConfigurationError
 from trusts.models import AuthorizedQuerySet
 
 
@@ -140,9 +139,16 @@ class OwnerResolutionTest(SimpleTestCase):
         self.assertTrue(callable(filter_by_permitted_content))
 
     def test_missing_owner_is_configuration_error(self):
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            OutsideBackend()
-        self.assertIn('TrustsConfigMixin', str(ctx.exception))
+        outside = 'tests.gh_permissions.backends.OutsideBackend'
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST_BACKEND, outside)):
+            messages = [
+                message for message in run_checks()
+                if getattr(message, 'id', None) == 'trusts.E012'
+            ]
+        self.assertEqual(
+            [message.msg for message in messages],
+            ['App gh_permissions must extend TrustsConfigMixin.'],
+        )
 
     def test_owner_present_resolves(self):
         backend = HostTrustModelBackend()

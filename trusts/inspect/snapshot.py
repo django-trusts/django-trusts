@@ -1048,10 +1048,6 @@ def _compile_named_filter(model, expr, alias, user_model):
 
 
 def _any_sentinel_user(alias, user_model):
-    if user_model is None:
-        raise TrustsConfigurationError(
-            'Policy SQL has no user model. The catalog is not built yet.'
-        )
     return _sentinel(user_model, user_model._meta.pk.attname, alias=alias)
 
 

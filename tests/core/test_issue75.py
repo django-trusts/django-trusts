@@ -5,6 +5,7 @@ Generic multi-path contracts use KernelHost + DocumentConfig.
 """
 from unittest.mock import patch
 from django.contrib.auth import get_user_model
+from django.core.checks import run_checks
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db.models.query import QuerySet
@@ -29,9 +30,7 @@ from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 
-from tests.gh_permissions.backends import OutsideBackend
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import granted
 import tests as tests_module
 HOST = HOST_BACKEND
@@ -82,10 +81,15 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         )
 
     def test_backend_outside_a_mixin_app_fails_loud(self):
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            OutsideBackend()
-        self.assertIn(OUTSIDE, str(ctx.exception))
-        self.assertIn('TrustsConfigMixin', str(ctx.exception))
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, OUTSIDE)):
+            messages = [
+                message for message in run_checks()
+                if getattr(message, 'id', None) == 'trusts.E012'
+            ]
+        self.assertEqual(
+            [message.obj.label for message in messages],
+            ['gh_permissions'],
+        )
 
     def test_document_and_host_catalogs_use_config_paths(self):
         from django.apps import apps
@@ -136,16 +140,19 @@ class ContributionPathTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertFalse(configured_catalog(HOST).plan_for(Document).records)
 
     def test_omitted_ambiguous_path_fails_before_writing(self):
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            OutsideBackend()
-        self.assertIn('TrustsConfigMixin', str(ctx.exception))
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, OUTSIDE)):
+            messages = run_checks()
+        self.assertTrue(any(
+            getattr(message, 'id', None) == 'trusts.E012'
+            for message in messages
+        ))
 
     def test_no_mixin_fan_out(self):
         from django.apps import apps
 
         live = apps.get_app_config('trusts_kernel_host')
-        with self.assertRaises(TrustsConfigurationError):
-            OutsideBackend()
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, OUTSIDE)):
+            run_checks()
         self.assertFalse(hasattr(live, 'registries'))
         self.assertFalse(hasattr(live, 'trusts_backend_paths'))
 

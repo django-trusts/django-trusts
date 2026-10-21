@@ -555,15 +555,6 @@ Query = _QueryNamespace()
 TQ = Query
 
 
-def _entity_model(user_model):
-    """User model for a principal path. Callers pass the catalog's model."""
-    if user_model is None:
-        raise PermissionConditionError(
-            'Principal references need the user model stored at ready().'
-        )
-    return user_model
-
-
 def resolve_field_path(model, path, ref_kind='object'):
     """Validate ``path`` against ``model`` and return the Django lookup string.
 
@@ -729,7 +720,7 @@ def _operand_spec(node, model, user_model):
         if node.source == 'object':
             return _spec_from_field(_terminal_field(model, node.path, 'object'))
         if node.source == 'principal':
-            entity = _entity_model(user_model)
+            entity = user_model
             if not node.path:
                 return ('instance', entity, entity._meta.label)
             return _spec_from_field(
@@ -799,7 +790,7 @@ def _validate_node(node, model, user_model):
         elif node.source == 'principal':
             if node.path:
                 resolve_field_path(
-                    _entity_model(user_model), node.path, ref_kind='principal',
+                    user_model, node.path, ref_kind='principal',
                 )
         elif node.source == 'permission':
             if node.path:
@@ -874,7 +865,7 @@ def _resolve_runtime(node, user, perm, obj, model, user_model):
         if node.source == 'principal':
             if not node.path:
                 return user
-            return _walk_model_path(user, _entity_model(user_model), node.path)
+            return _walk_model_path(user, user_model, node.path)
         if node.source == 'permission':
             if node.path:
                 raise PermissionConditionError(
@@ -936,9 +927,7 @@ def _classify(node, model, user, perm, user_model):
         if node.source == 'principal':
             if not node.path:
                 return _Bound(user)
-            return _Bound(_walk_model_path(
-                user, _entity_model(user_model), node.path,
-            ))
+            return _Bound(_walk_model_path(user, user_model, node.path))
         if node.source == 'permission':
             if node.path:
                 raise PermissionConditionError(

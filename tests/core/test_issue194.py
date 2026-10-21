@@ -3,11 +3,11 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
+from django.core.checks import run_checks
 from django.core.exceptions import PermissionDenied
 from django.http import HttpRequest
 from django.test import SimpleTestCase, TestCase, override_settings
 import tests as tests_module
-from tests.gh_permissions.backends import OutsideBackend
 from tests.support import built_catalog, bound_handle, replay_recorder, config_for_class, compiler
 from tests.backends import MixinOnlyBackend
 from tests.core import KernelHostRequiredMixin
@@ -20,7 +20,6 @@ from trusts.backends import TrustModelBackendMixin
 from tests.support import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import QueryCompiler
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
 from trusts.plan.aggregates import _compiler_applies
@@ -235,7 +234,13 @@ class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertIsInstance(published.records, tuple)
 
     def test_unconfigured_path_still_fails_loud(self):
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            OutsideBackend()
-        self.assertIn('tests.gh_permissions.backends.OutsideBackend', str(ctx.exception))
-        self.assertIn('TrustsConfigMixin', str(ctx.exception))
+        outside = 'tests.gh_permissions.backends.OutsideBackend'
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST_BACKEND, outside)):
+            messages = [
+                message for message in run_checks()
+                if getattr(message, 'id', None) == 'trusts.E012'
+            ]
+        self.assertEqual(
+            [message.msg for message in messages],
+            ['App gh_permissions must extend TrustsConfigMixin.'],
+        )
