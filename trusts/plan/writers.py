@@ -211,8 +211,7 @@ def column_q(lookup, value, equal, *, field):
     either side then does not match. Against a constant, ``== None`` is
     ``IS NULL`` and ``!= 5`` matches a NULL column, as in Python.
     """
-    if isinstance(value, (Model, ModelIdentity)):
-        value = value.pk
+    value = member_pk(value)
     if value is None and field:
         return Q(pk__in=())
     if value is None:
@@ -265,7 +264,8 @@ def _negate_q(model, q):
     return ~Q(pk__in=model._base_manager.filter(q).values('pk'))
 
 
-def _member_pk(value):
+def member_pk(value):
+    """A saved instance or ``ModelIdentity`` as its pk. Other values pass."""
     if isinstance(value, (Model, ModelIdentity)):
         return value.pk
     return value
@@ -298,7 +298,7 @@ def _evaluate_contains(node, user, perm, obj, model, user_model):
     member = _resolve_runtime(
         node.right, user, perm, obj, model, user_model,
     )
-    return _collection_contains(manager, _member_pk(member))
+    return _collection_contains(manager, member_pk(member))
 
 
 def _compile_bare(node, model, user, perm, user_model):
@@ -321,7 +321,7 @@ def _compile_contains(node, model, user, perm, user_model):
             return contains_q(
                 lookup, F(resolve_object_field_path(model, right.path)),
             )
-        value = _member_pk(_bound_value(right, user, perm, user_model))
+        value = member_pk(_bound_value(right, user, perm, user_model))
         if value is None:
             return Q(pk__in=())
         return contains_q(lookup, value)
@@ -332,7 +332,7 @@ def _compile_contains(node, model, user, perm, user_model):
         member = resolve_object_field_path(model, right.path)
         return Q(**{'%s__in' % member: manager.values('pk')})
     if _collection_contains(
-        manager, _member_pk(_bound_value(right, user, perm, user_model)),
+        manager, member_pk(_bound_value(right, user, perm, user_model)),
     ):
         return Q()
     return Q(pk__in=())

@@ -20,11 +20,11 @@ from trusts.plan.conditions import (
 from trusts.plan.writers import (
     _boolean_holds,
     _boolean_q,
-    _member_pk,
     _negate_q,
     column_q,
     columns_q,
     contains_q,
+    member_pk,
     values_match,
 )
 from trusts.plan.rewrites import bind_once
@@ -266,7 +266,7 @@ def _contains_outcome(expr, content, singular, user_model):
                 **{'%s__isnull' % member: False},
             )
             return Q(**{'%s__in' % lookup: saved.values(member)})
-        pk = _member_pk(_side_value(right, content, singular, user_model))
+        pk = member_pk(_side_value(right, content, singular, user_model))
         if pk is None:
             return None
         return contains_q(lookup, pk)
@@ -282,7 +282,7 @@ def _contains_outcome(expr, content, singular, user_model):
     if _is_field(right, 'object'):
         other = _object_lookup(content, right.path)
         return _exists_q(content, contains_q(lookup, F(other)))
-    pk = _member_pk(_side_value(right, content, singular, user_model))
+    pk = member_pk(_side_value(right, content, singular, user_model))
     if pk is None:
         return None
     return _exists_q(content, contains_q(lookup, pk))

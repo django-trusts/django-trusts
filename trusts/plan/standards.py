@@ -14,11 +14,10 @@ import copy
 from collections import namedtuple
 
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import BooleanField, F, Model, Q
+from django.db.models import BooleanField, F, Q
 from django.db.models.expressions import RawSQL
 
 from trusts.plan.conditions import (
-    ModelIdentity,
     _terminal_field,
     normalize_expression,
     validate_expression,
@@ -30,6 +29,7 @@ from trusts.plan.writers import (
     column_q,
     columns_q,
     contains_q,
+    member_pk,
     values_match,
 )
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
@@ -242,17 +242,11 @@ def _compile_user_comparison(path, node):
     )
 
 
-def _stored_member(value):
-    if isinstance(value, (Model, ModelIdentity)):
-        return value.pk
-    return value
-
-
 def _compile_user_contains(path, node):
     lookup = _prefixed(path, node.left.path)
     member = node.right
     if member.kind == 'const':
-        value = _stored_member(member.value)
+        value = member_pk(member.value)
         if value is None:
             return Q(pk__in=())
         return contains_q(lookup, value)

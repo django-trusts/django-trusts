@@ -4,7 +4,6 @@ from django.contrib.auth.models import Permission
 from django.db.models import F, Model, Q
 
 from trusts.errors import PermissionConditionError
-from trusts.plan.conditions import ModelIdentity
 from trusts.plan.grammar import Tree, inquiry_partner, is_inquiry, unsupported
 from trusts.plan.hops import lookup_text, require_instance
 from trusts.plan.writers import (
@@ -13,6 +12,7 @@ from trusts.plan.writers import (
     column_q,
     columns_q,
     contains_q,
+    member_pk,
 )
 
 __all__ = [
@@ -157,9 +157,7 @@ class _PredicateCompiler(object):
         if inquiry_partner(node) is not None:
             return self._bind_inquiry(node.left.path)
         if node.right.kind == 'const':
-            value = node.right.value
-            if isinstance(value, (Model, ModelIdentity)):
-                value = value.pk
+            value = member_pk(node.right.value)
             if value is None:
                 return Q(pk__in=())
             return contains_q(lookup_text(node.left.path), value)
