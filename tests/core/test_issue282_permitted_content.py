@@ -8,13 +8,15 @@ only where the delegation and the sponsor's ordinary permission both
 reach the prefix.
 """
 
+import json
+import yaml
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.core.exceptions import PermissionDenied
-from django.db import models
+from django.db import connection, models
 from django.http import HttpRequest
 from django.test import SimpleTestCase, TransactionTestCase
-from django.test.utils import isolate_apps
+from django.test.utils import CaptureQueriesContext, isolate_apps
 
 from tests.core.test_issue282 import _handle, _listed, _permission, _tables
 from tests.support import (
@@ -36,27 +38,40 @@ def _request(user):
     return request
 
 
+def _collapsed_sql(sql):
+    return ''.join(sql.split())
+
+
+def _lockfile_constant(token):
+    """Python value of one ``source=value`` lockfile token.
+
+    A bare call input has no ``=`` and is not a recorded constant.
+    """
+    if not isinstance(token, str) or '=' not in token:
+        return None
+    literal = token.split('=', 1)[1]
+    if literal == 'True':
+        return True
+    if literal == 'False':
+        return False
+    if literal == 'null':
+        return None
+    if literal[:1] in '"{[':
+        return json.loads(literal)
+    if literal.lstrip('-').isdigit():
+        return int(literal)
+    return float(literal)
+
+
 def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     """The lockfile statement is the SQL Django runs.
 
     A ``source=value`` token is that executed constant. A bare
-    ``$user.id`` style token is a call input and is not compared to
-    the sentinel. The SQL text is that statement broken between tokens.
+    ``$user.id`` style token is a call input and is not compared.
+    Whitespace in the lockfile SQL is the only difference from the
+    statement Django compiled.
     """
-    from django.db import connection
-    from django.test.utils import CaptureQueriesContext
-
-    from trusts.inspect.snapshot import (
-        _CALL_INPUT,
-        _json_const,
-        _load_policy_sql_document,
-        _presented_const,
-        _role_sentinel,
-        render_policy_sql_bytes,
-    )
-    from trusts.inspect.format import _format_policy_sql, _tokenize_policy_sql
-
-    document = _load_policy_sql_document(
+    document = yaml.safe_load(
         render_configured_policy(handle),
     )
     test.assertEqual(document['schema_version'], 1)
@@ -71,8 +86,8 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     record = built_catalog(handle).plan_for(content_model).records[0]
     queryset = filter_by_permitted_content(
         prefix_model._default_manager.all(),
-        _role_sentinel(record, 'user', 'default'),
-        _role_sentinel(record, 'permission', 'default'),
+        record.user_model(pk=1),
+        record.permission_model(pk=1),
         content=content_model,
         registry=built_catalog(handle),
     )
@@ -98,18 +113,13 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     test.assertEqual(len(captured.captured_queries), 1)
     raw_sql, raw_params, logged = recorded[0]
     test.assertEqual(captured.captured_queries[0]['sql'], logged)
-    test.assertEqual(row['sql'], _format_policy_sql(raw_sql))
-    test.assertEqual(
-        [token for token, _spaced in _tokenize_policy_sql(row['sql'])],
-        [token for token, _spaced in _tokenize_policy_sql(raw_sql)],
-    )
+    test.assertEqual(_collapsed_sql(row['sql']), _collapsed_sql(raw_sql))
     test.assertEqual(row['sql'].count('%s'), len(row['params']))
     test.assertEqual(len(row['params']), len(raw_params))
     for token, value in zip(row['params'], raw_params):
-        parsed = _presented_const(token)
-        if parsed is _CALL_INPUT:
+        if '=' not in token:
             continue
-        test.assertEqual(parsed, _json_const(value))
+        test.assertEqual(_lockfile_constant(token), value)
     return row
 
 

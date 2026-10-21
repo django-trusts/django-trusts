@@ -9,6 +9,7 @@ fails closed; that shape is deferred, not a permanent rejection. The
 record shape is unchanged, ``via_group`` stays false, and the
 collection does not contribute to ``get_group_permissions()``.
 """
+import yaml
 from contextlib import contextmanager
 from unittest.mock import patch
 from django.contrib.auth import get_user_model
@@ -23,7 +24,7 @@ from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
-from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
+from trusts.inspect.snapshot import render_policy_sql_bytes
 from trusts.models import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import (
     render_configured_policy,
@@ -484,9 +485,9 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         self._assert_unique(self._authorized(handle, self.alice, self.add), [self.spec])
 
     def test_policy_sql_describes_the_collection_without_a_group_leg(self):
-        org = _load_policy_sql_document(render_configured_policy(self.org_handle))
-        access = _load_policy_sql_document(render_configured_policy(self.access_handle))
-        classic = _load_policy_sql_document(render_configured_policy(self.classic))
+        org = yaml.safe_load(render_configured_policy(self.org_handle))
+        access = yaml.safe_load(render_configured_policy(self.access_handle))
+        classic = yaml.safe_load(render_configured_policy(self.classic))
         org_content = org['backends'][0]['contents'][0]
         access_content = access['backends'][0]['contents'][0]
         classic_content = classic['backends'][0]['contents'][0]

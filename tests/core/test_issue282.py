@@ -5,6 +5,7 @@ A delegation row may walk ``along=`` itself. When both walk, the delegate
 is allowed only on objects both walks reach. Reverse inquiry agrees with
 ``has_perm``. One delegation level stays rejected.
 """
+import yaml
 from contextlib import contextmanager
 from unittest.mock import patch
 from django.contrib.auth import get_user_model
@@ -18,7 +19,7 @@ from trusts.backends import TrustModelBackendMixin
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
-from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
+from trusts.inspect.snapshot import render_policy_sql_bytes
 from trusts.models import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
 from tests.support import render_configured_policy, install_class_handle, compiler
 
@@ -313,7 +314,7 @@ class DelegatedAlongTest(TransactionTestCase):
 
     def test_lockfile_records_the_walk_that_runs(self):
         handle = self._register(sponsor_along=('issue__parent', 2), delegation_along=('issue__parent', 1))
-        document = _load_policy_sql_document(render_configured_policy(handle))
+        document = yaml.safe_load(render_configured_policy(handle))
         self.assertEqual(document['schema_version'], 1)
         content = document['backends'][0]['contents'][0]
         trust = content['trusts'][0]
@@ -332,7 +333,7 @@ class DelegatedAlongTest(TransactionTestCase):
             self.assertNotIn('json_', row['sql'].lower())
 
     def _assert_content_walk_sql(self, handle, bounds, table=None):
-        document = _load_policy_sql_document(render_configured_policy(handle))
+        document = yaml.safe_load(render_configured_policy(handle))
         self.assertEqual(document['schema_version'], 1)
         content = document['backends'][0]['contents'][0]
         for operation in ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'):

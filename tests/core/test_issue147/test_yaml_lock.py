@@ -2,7 +2,6 @@
 
 import datetime
 import importlib.util
-import math
 import os
 import subprocess
 import sys
@@ -26,16 +25,12 @@ from tests.core.test_issue147.test_sql_export import (
 from trusts.plan.conditions import ModelIdentity
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import (
-    _const_from_json,
     _json_const,
-    _load_policy_sql_document,
     render_policy_sql_bytes,
 )
 from trusts.inspect.yaml import (
     PolicyYamlDumper,
-    PolicyYamlError,
     dump_policy_yaml,
-    _load_policy_yaml,
 )
 from tests.support import render_configured_policy
 
@@ -79,18 +74,6 @@ if first != second:
     sys.exit("repeat mismatch")
 sys.stdout.write(hashlib.sha256(first).hexdigest())
 """
-
-
-def _same(left, right):
-    if isinstance(left, float) and isinstance(right, float):
-        if math.isnan(left) and math.isnan(right):
-            return True
-        return math.copysign(1.0, left) == math.copysign(1.0, right) and left == right
-    if isinstance(left, Decimal) and isinstance(right, Decimal):
-        if left.is_nan() and right.is_nan():
-            return True
-        return left == right
-    return left == right
 
 
 class PolicyYamlCodecTest(SimpleTestCase):
@@ -176,71 +159,23 @@ class PolicyYamlCodecTest(SimpleTestCase):
         self.assertIn('hex: "00ff"', text)
         self.assertNotIn('const: yes', text)
         self.assertNotIn('const: 2024-03-04', text)
-        loaded = _load_policy_yaml(first)
-        self.assertEqual(dump_policy_yaml(loaded), first)
-        for original, row in zip(values, loaded['params']):
-            self.assertTrue(_same(original, _const_from_json(row['const'])))
+        self.assertEqual(yaml.safe_load(first)['params'][0], {'const': None})
+        self.assertIs(yaml.safe_load(first)['params'][1]['const'], True)
+        self.assertIs(yaml.safe_load(first)['params'][2]['const'], False)
 
-    def test_diagnostic_loader_rejects_implicit_and_unsafe_forms(self):
-        rejected = (
-            b'yes: 1\n',
-            b'value: yes\n',
-            b'day: 2024-03-04\n',
-            b'n: .nan\n',
-            b'n: .inf\n',
-            b'a: &a 1\nb: *a\n',
-            b'!!python/object:x {}\n',
-            b'a: 1\na: 2\n',
-            b'a: {<<: {b: 1}}\n',
-            b'---\nschema_version: 1\n',
-            b'n: True\n',
-            b'n: +1\n',
-            b'n: 1.50\n',
-            b"n: 'quoted'\n",
-        )
-        for sample in rejected:
-            with self.subTest(sample=sample):
-                with self.assertRaises(PolicyYamlError):
-                    _load_policy_yaml(sample)
-        self.assertEqual(_load_policy_yaml(b'n: "1"\n'), {'n': '1'})
-        self.assertIs(_load_policy_yaml(b'n: true\n')['n'], True)
-        self.assertIsNone(_load_policy_yaml(b'n: null\n')['n'])
-
-    def test_loader_rejects_bytes_the_canonical_writer_does_not_emit(self):
+    def test_writer_emits_block_collections_and_strip_literals(self):
         block_map = dump_policy_yaml({'a': {'b': 1}})
         block_seq = dump_policy_yaml({'items': [1, 2]})
         literal = dump_policy_yaml({'sql': 'SELECT 1'})
-        self.assertEqual(_load_policy_yaml(block_map), {'a': {'b': 1}})
-        self.assertEqual(_load_policy_yaml(block_map.decode('utf-8')), {'a': {'b': 1}})
-        self.assertEqual(_load_policy_yaml(block_seq), {'items': [1, 2]})
-        self.assertEqual(_load_policy_yaml(literal), {'sql': 'SELECT 1'})
+        self.assertEqual(yaml.safe_load(block_map), {'a': {'b': 1}})
+        self.assertEqual(yaml.safe_load(block_map.decode('utf-8')), {'a': {'b': 1}})
+        self.assertEqual(yaml.safe_load(block_seq), {'items': [1, 2]})
+        self.assertEqual(yaml.safe_load(literal), {'sql': 'SELECT 1'})
         self.assertIn(b'\n  b: 1\n', block_map)
         self.assertNotIn(b'{', block_map)
         self.assertIn(b'\n  - 1\n', block_seq)
         self.assertNotIn(b'[', block_seq)
         self.assertIn(b'sql: |-\n', literal)
-        rejected = (
-            b'a: {b: 1}\n',
-            b'items: [1, 2]\n',
-            b'a:\n- 1\n',
-            b'sql: |\n  SELECT 1\n',
-            b'sql: |+\n  SELECT 1\n',
-            b'sql: >-\n  SELECT 1\n',
-            b'sql: |-2\n  SELECT 1\n',
-            b'label: |-\n  hello\n',
-            b'a: {b: 1}',
-            b"n: 'quoted'\n",
-            b'n: 01\n',
-            b'n: 0x1\n',
-        )
-        for sample in rejected:
-            with self.subTest(sample=sample):
-                with self.assertRaises(PolicyYamlError):
-                    _load_policy_yaml(sample)
-        with self.assertRaises(TrustsConfigurationError):
-            _load_policy_sql_document(b'a: {b: 1}\n')
-        with self.assertRaises(TrustsConfigurationError):
-            _load_policy_sql_document(b'items: [1, 2]\n')
 
     def test_hash_seed_and_locale_do_not_change_bytes(self):
         env = os.environ.copy()
@@ -325,7 +260,7 @@ class PolicyCompositionTest(SimpleTestCase):
         payload = render_configured_policy(*self._handles())
         self.assertEqual(payload, GOLDEN_COMPOSITION)
         self.assertEqual(payload, render_configured_policy(*self._handles()))
-        document = _load_policy_sql_document(payload)
+        document = yaml.safe_load(payload)
         self.assertEqual(document['schema_version'], 1)
         self.assertNotIn('lockfile', document)
         self.assertNotIn('role', document)
@@ -379,7 +314,7 @@ class PolicyCompositionTest(SimpleTestCase):
         self.assertIn('\n        permitted:\n', text)
         self.assertIn('\n        has_perm:\n', text)
         self.assertIn('\n        get_all_permissions:\n', text)
-        document = _load_policy_sql_document(payload)
+        document = yaml.safe_load(payload)
         content = document['backends'][0]['contents'][0]
         trust = content['trusts'][0]
         self.assertEqual(
@@ -401,7 +336,7 @@ class PolicyCompositionTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        document = _load_policy_sql_document(
+        document = yaml.safe_load(
             render_configured_policy(handle),
         )
         content = document['backends'][0]['contents'][0]

@@ -1,5 +1,6 @@
 """Named user conditions compiled into permission SQL (#312)."""
 import inspect
+import yaml
 from asgiref.sync import async_to_sync
 from django.contrib import admin
 from django.contrib.auth import get_user_model
@@ -24,7 +25,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
 from trusts.decorators import _declared_authorization_guards, authorization_required
-from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
+from trusts.inspect.snapshot import render_policy_sql_bytes
 from trusts.models import PermittedQuerySet, PermittedUsersManagerMixin
 urlpatterns = [path('admin/', admin.site.urls)]
 
@@ -1061,7 +1062,7 @@ class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
         handle = configured_catalog(DOCUMENT_BACKEND)
         self.assertIsNone(registry.compile().user_override)
         raw = render_configured_policy(registry)
-        document = _load_policy_sql_document(raw)
+        document = yaml.safe_load(raw)
         for content in document['backends'][0]['contents']:
             for row in content.values():
                 if not isinstance(row, dict) or 'sql' not in row:

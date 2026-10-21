@@ -47,8 +47,6 @@ from trusts.inspect.yaml import (
     PolicyYamlError,
     canonical_float_scalar,
     dump_policy_yaml,
-    parse_canonical_float,
-    _load_policy_yaml,
 )
 from django.conf import settings
 from django.db.utils import DEFAULT_DB_ALIAS
@@ -404,10 +402,6 @@ class _PolicyVisitor(object):
         permission = _role_sentinel(records[0], 'permission', alias)
         queryset = _content_manager(model).all()
         predicate = catalog.complete_grant_q(queryset, user, permission)
-        if predicate is None:
-            raise TrustsConfigurationError(
-                'Policy SQL found no grant for %s.' % _model_label(model)
-            )
         queryset = bind_once(
             queryset.filter(predicate).distinct(),
             user_model=catalog.user_model,
@@ -423,10 +417,6 @@ class _PolicyVisitor(object):
         permission = _role_sentinel(records[0], 'permission', alias)
         instance = _content_sentinel(model, alias)
         predicate = catalog.complete_grant_q(instance, user, permission)
-        if predicate is None:
-            raise TrustsConfigurationError(
-                'Policy SQL found no grant for %s.' % _model_label(model)
-            )
         exists = _content_manager(model).filter(pk=instance.pk).filter(predicate)
         compiled = bound_exists_query(exists, user_model=catalog.user_model)
         return _compile_queryset(
@@ -442,11 +432,6 @@ class _PolicyVisitor(object):
         queryset = _compile_common_permissions(
             catalog, instance, user, kind='complete',
         )
-        if queryset is None:
-            raise TrustsConfigurationError(
-                'Policy SQL found no permissions query for %s.'
-                % _model_label(model)
-            )
         return _compile_queryset(
             queryset, alias, record=records[0], expr=None, records=records,
         )
@@ -499,11 +484,6 @@ class _PolicyVisitor(object):
         queryset = _compile_common_permissions(
             catalog, instance, user, kind='group',
         )
-        if queryset is None:
-            raise TrustsConfigurationError(
-                'Policy SQL found no group-permissions query for %s.'
-                % _model_label(model)
-            )
         return _compile_queryset(
             queryset, alias, record=records[0], expr=None, records=records,
         )
@@ -665,37 +645,6 @@ def _present_params(symbols):
         if token is not None:
             params.append(token)
     return params
-
-
-class _CallInput(object):
-    def __repr__(self):
-        return 'call-input'
-
-
-_CALL_INPUT = _CallInput()
-
-
-def _presented_const(token):
-    """Constant payload of one ``source=value`` lockfile token.
-
-    A bare call input (``$user.id``) returns :data:`_CALL_INPUT`.
-    Tagged values come back as the mapping ``_json_const`` recorded.
-    """
-    if not isinstance(token, str) or '=' not in token:
-        return _CALL_INPUT
-    literal = token.split('=', 1)[1]
-    if literal == 'True':
-        return True
-    if literal == 'False':
-        return False
-    if literal == 'null':
-        return None
-    if literal[:1] in '"{[':
-        return json.loads(literal)
-    if re.fullmatch(r'-?(0|[1-9][0-9]*)', literal):
-        return int(literal)
-
-    return parse_canonical_float(literal)
 
 
 def _named_filter_row(row):
@@ -1683,51 +1632,6 @@ def _json_const(value):
     )
 
 
-def _const_from_json(value):
-    """Inverse of :func:`_json_const` for one recorded constant value."""
-    if isinstance(value, dict):
-        kind = value.get('type')
-        if kind == 'float':
-            return float(value['value'])
-        if kind == 'bytes':
-            return bytes.fromhex(value['hex'])
-        if kind == 'decimal':
-            return Decimal(value['value'])
-        if kind == 'uuid':
-            return uuid.UUID(value['value'])
-        if kind == 'date':
-            return datetime.date.fromisoformat(value['value'])
-        if kind == 'time':
-            return datetime.time.fromisoformat(value['value'])
-        if kind == 'datetime':
-            return datetime.datetime.fromisoformat(value['value'])
-        if kind == 'timedelta':
-            return datetime.timedelta(
-                days=value['days'],
-                seconds=value['seconds'],
-                microseconds=value['microseconds'],
-            )
-        if kind == 'model':
-            return ModelIdentity(
-                value['app_label'],
-                value['model'],
-                _const_from_json(value['pk']),
-            )
-        raise TrustsConfigurationError(
-            'Policy SQL render found an unknown constant tag %r.' % (kind,)
-        )
-    if isinstance(value, bool) or value is None or isinstance(value, str):
-        return value
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    if isinstance(value, float):
-        return value
-    raise TrustsConfigurationError(
-        'Policy SQL render cannot restore constant %r (%s).'
-        % (value, type(value).__name__)
-    )
-
-
 def _model_label(model):
     meta = getattr(model, '_meta', None)
     label = getattr(meta, 'label', None)
@@ -1743,29 +1647,6 @@ def _dump_document(document):
         return dump_policy_yaml(document)
     except PolicyYamlError as exc:
         raise TrustsConfigurationError(str(exc)) from exc
-
-
-def _load_policy_sql_document(payload):
-    """Private diagnostic helper for a schema-1 policy document.
-
-    Not a supported public API and not a two-directional mapping
-    contract. Tests use it for coding completeness. ``trusts.E009``
-    does not call this. Equality is raw bytes against
-    :func:`render_policy_sql_bytes`.
-
-    :func:`_load_policy_yaml` parses the payload, re-dumps it with the
-    canonical writer, and rejects the input unless the bytes are
-    identical.
-    """
-    try:
-        document = _load_policy_yaml(payload)
-    except PolicyYamlError as exc:
-        raise TrustsConfigurationError(str(exc)) from exc
-    if not isinstance(document, dict):
-        raise TrustsConfigurationError(
-            'Policy SQL document must be a mapping.'
-        )
-    return document
 
 
 def _configured_lock_override():

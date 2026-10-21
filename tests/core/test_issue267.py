@@ -10,6 +10,7 @@ keeps primary-key identity. ``user.has_perm`` is tested with permission
 strings. Permission instances are tested on the registry, ``.authorized()``,
 and reverse inquiries.
 """
+import yaml
 from contextlib import contextmanager
 from unittest.mock import patch
 from django.contrib.auth import get_user_model
@@ -25,7 +26,7 @@ from trusts.backends import TrustModelBackendMixin
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.factory import Compiler
 from trusts.decorators import _declared_authorization_guards, authorization_required
-from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
+from trusts.inspect.snapshot import render_policy_sql_bytes
 from trusts.models import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import render_configured_policy, built_catalog, install_class_handle, compiler
 
@@ -295,7 +296,7 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
             self.assertEqual(list(self.Organization.objects.authorized(root, self.read)), [])
 
     def test_policy_sql_requires_the_protected_models_content_type(self):
-        document = _load_policy_sql_document(render_configured_policy(self.handle))
+        document = yaml.safe_load(render_configured_policy(self.handle))
         by_model = {row['model']: row for row in document['backends'][0]['contents']}
         org = by_model['trusts_tests.Organization']
         repo = by_model['trusts_tests.Repository']
@@ -402,7 +403,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         self.assertTrue(built_catalog(registry).has_permission(self.owner, self.repo, operation))
         registry.path = 'tests.core.issue267-operation'
         handle = registry
-        document = _load_policy_sql_document(render_configured_policy(handle))
+        document = yaml.safe_load(render_configured_policy(handle))
         for content in document['backends'][0]['contents']:
             self.assertNotIn('django_content_type', content['has_perm']['sql'])
 
@@ -423,7 +424,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         self.assertTrue(built_catalog(registry).has_permission(self.owner, self.repo, org_permit))
         registry.path = 'tests.core.issue267-typed'
         handle = registry
-        document = _load_policy_sql_document(render_configured_policy(handle))
+        document = yaml.safe_load(render_configured_policy(handle))
         for content in document['backends'][0]['contents']:
             self.assertNotIn('django_content_type', content['has_perm']['sql'])
 
