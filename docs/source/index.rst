@@ -216,16 +216,19 @@ The application provides a Django authentication backend using
 Register the trust
 ------------------
 
-Register the model paths when the application starts:
+Register the model paths when the application starts.
+Extending ``TrustsConfigMixin`` is required, so the app owns its catalog.
 
 .. code-block:: python
 
    # documents/apps.py
 
-   from trusts.apps import TrustsImplementationConfig
+   from django.apps import AppConfig
+
+   from trusts.apps import TrustsConfigMixin
 
 
-   class DocumentsConfig(TrustsImplementationConfig):
+   class DocumentsConfig(TrustsConfigMixin, AppConfig):
        name = "documents"
        trusts_backend_paths = (
            "documents.backends.DocumentBackend",
