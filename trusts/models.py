@@ -4,7 +4,12 @@
 from django.contrib.auth.models import Permission
 from django.db.models import Manager, Model, QuerySet
 
-from trusts.backends import compile_permitted_users, filter_listed
+from trusts.backends import (
+    compile_permitted_users,
+    filter_listed,
+    grant_authorized,
+    grant_permitted,
+)
 from trusts.compile.catalogs import (
     codename_binding,
     guard_conditions,
@@ -43,8 +48,8 @@ class AuthorizedQuerySet(QuerySet):
         if user is None:
             raise TrustsConfigurationError('user must be a model instance, not None.')
         return filter_listed(
-            self, self, user, permission, kind='authorized', backend=backend,
-            skip_flags=skip_flags, extra_q=extra_q)
+            self, self, user, permission, ask=grant_authorized,
+            backend=backend, skip_flags=skip_flags, extra_q=extra_q)
 
 
 class AuthorizedManagerMixin:
@@ -90,8 +95,8 @@ class PermittedQuerySetMixin:
         conditions = guard_conditions(conditions, api='permitted')
         return filter_listed(
             self, self, user, _condition_permission_label(model, normalized),
-            kind='permitted', backend=backend, skip_flags=skip_flags,
-            conditions=conditions, api='permitted',
+            ask=grant_permitted, backend=backend, skip_flags=skip_flags,
+            preflight=True, conditions=conditions, api='permitted',
             binding=_permitted_binding(model, normalized), model=model)
 
 

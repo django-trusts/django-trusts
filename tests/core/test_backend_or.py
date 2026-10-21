@@ -11,7 +11,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.checks import run_checks
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied
 from django.http import HttpRequest
 from django.test import TestCase, override_settings
 from django.utils.module_loading import import_string
@@ -22,6 +22,7 @@ from tests.core.pair_beta.backends import PairBetaBackend
 from tests.core.pair_beta.models import Binder, Page, PageDirect, PageGrant
 from tests.support import compiler, push_catalog
 from trusts.decorators import _declared_authorization_guards, authorization_required
+from trusts.errors import TrustsConfigurationError
 from trusts.models import PermittedUsersManagerMixin
 
 
@@ -29,6 +30,18 @@ ALPHA = 'tests.core.pair_alpha.backends.PairAlphaBackend'
 BETA = 'tests.core.pair_beta.backends.PairBetaBackend'
 HOST = 'tests.kernel_host.backends.HostTrustModelBackend'
 DOCUMENT = 'tests.myapp.backends.DocumentBackend'
+BROKEN_IMPROPER = 'tests.core.test_backend_or._BrokenImproper'
+BROKEN_TRUSTS = 'tests.core.test_backend_or._BrokenTrusts'
+
+
+class _BrokenImproper:
+    def __init__(self):
+        raise ImproperlyConfigured('improper boom')
+
+
+class _BrokenTrusts:
+    def __init__(self):
+        raise TrustsConfigurationError('trusts boom')
 
 
 def _grant_users():
@@ -346,6 +359,34 @@ class ListedBackendOrTest(TestCase):
                 if getattr(message, 'id', None) == 'trusts.E010'
             ]
         self.assertNotIn('pair_alpha', labels)
+
+    def test_each_unbuildable_backend_is_e011(self):
+        with override_settings(
+            AUTHENTICATION_BACKENDS=(HOST, BROKEN_IMPROPER, BROKEN_TRUSTS),
+        ):
+            messages = run_checks()
+        built = [
+            message for message in messages
+            if getattr(message, 'id', None) == 'trusts.E011'
+        ]
+        self.assertEqual(
+            [message.msg for message in built],
+            [
+                'Authentication backend %s could not be built: %s' % (
+                    BROKEN_IMPROPER, 'improper boom'),
+                'Authentication backend %s could not be built: %s' % (
+                    BROKEN_TRUSTS, 'trusts boom'),
+            ],
+        )
+        self.assertTrue(all(
+            message.hint == 'Fix AUTHENTICATION_BACKENDS so the backend constructs.'
+            for message in built
+        ))
+        self.assertFalse(any(
+            getattr(message, 'id', None) == 'trusts.E010'
+            and 'could not be built' in message.msg
+            for message in messages
+        ))
 
     def _assert_note(self, *, allowed, denied):
         self._assert_side(

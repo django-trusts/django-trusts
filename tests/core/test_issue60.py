@@ -634,6 +634,55 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
                 )),
                 [],
             )
+            self.assertEqual(
+                built_catalog(registry).plan_for(doc_alpha).permission_column,
+                'code',
+            )
+
+    def test_mixed_permission_targets_fail_at_compile(self):
+        User = get_user_model()
+
+        class Mark(models.Model):
+            code = models.CharField(max_length=40, unique=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Doc(models.Model):
+            title = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class CodeGrant(models.Model):
+            document = models.ForeignKey(Doc, on_delete=models.CASCADE)
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Mark, to_field='code', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class PkGrant(models.Model):
+            document = models.ForeignKey(Doc, on_delete=models.CASCADE)
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Mark, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        registry = compiler()
+        _register(registry, CodeGrant)
+        _register(registry, PkGrant)
+        pk = Mark._meta.pk.attname
+        with self.assertRaisesRegex(
+            TrustsConfigurationError,
+            'Applicable registrations must share one permission '
+            'comparison target; got %s.' % ', '.join(sorted(('code', pk))),
+        ):
+            registry.compile()
+        self.assertFalse(registry.frozen)
 
     def test_none_binding_is_rejected_and_does_not_broaden(self):
         User = get_user_model()

@@ -128,8 +128,8 @@ class TrustsConfigMixin(django.apps.AppConfig):
         return '%s.%s' % (type(self).__module__, type(self).__qualname__)
 
     def ready(self):
-        # phase 1 import raises AppRegistryNotReady: Apps aren't loaded yet.
-        # Compiler is built per config, not a registry singleton.
+        # phase-1 import raises AppRegistryNotReady: resolution imports
+        # auth.Permission before apps are ready.
         from trusts.compile.factory import Compiler
 
         user_model = get_user_model()
@@ -142,8 +142,8 @@ class TrustsConfigMixin(django.apps.AppConfig):
         self.recorder.freeze()
         self.recorder.play(compiler.get_recorder_target())
         self.catalog = compiler.compile()
-        # phase 1 import raises AppRegistryNotReady: Apps aren't loaded yet.
-        # checks register on import (Django convention), not a registry singleton.
+        # phase-1 import raises AppRegistryNotReady: snapshot imports
+        # auth.Permission before apps are ready.
         import trusts.inspect.checks  # noqa: F401
         install_policy_commands()
 

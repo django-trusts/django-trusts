@@ -16,7 +16,9 @@ from django.http import Http404
 from trusts.plan.hops import require_instance
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.rewrites import bind_once
-from trusts.backends import filter_listed, open_grant
+from trusts.backends import (
+    filter_listed, grant_permitted, grant_prefix, open_grant,
+)
 from trusts.compile.catalogs import (
     codename_binding,
     guard_conditions,
@@ -68,8 +70,8 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
     user = require_instance(user, 'user')
     permission = require_instance(permission, 'permission')
     return filter_listed(
-        queryset, queryset, user, permission, kind='prefix', backend=backend,
-        skip_flags=skip_flags, content=content)
+        queryset, queryset, user, permission, ask=grant_prefix,
+        backend=backend, skip_flags=skip_flags, content=content)
 
 
 def authorization_required(model, permission, conditions=(), backend=None,
@@ -161,10 +163,10 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
             'authorization_required cannot authorize before Django apps '
             'are ready.')
     candidates = model._default_manager.filter(pk=pk)
-    inquiry, granted_q, user_model = open_grant(
-        'permitted', candidates, request.user, permission, backend=backend,
-        skip_flags=skip_flags, conditions=conditions,
-        api='authorization_required', model=model,
+    inquiry, granted_q, user_model, _chosen = open_grant(
+        grant_permitted, candidates, request.user, permission,
+        backend=backend, skip_flags=skip_flags, conditions=conditions,
+        preflight=True, api='authorization_required', model=model,
         binding=codename_binding(model, *permission.split('.', 1)))
     if inquiry.denied:
         raise PermissionDenied
