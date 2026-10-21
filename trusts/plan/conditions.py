@@ -321,12 +321,6 @@ class ModelIdentity(object):
             )
         return NotImplemented
 
-    def __ne__(self, other):
-        equal = self.__eq__(other)
-        if equal is NotImplemented:
-            return NotImplemented
-        return not equal
-
     def __hash__(self):
         return hash(self.as_tuple())
 
