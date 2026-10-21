@@ -69,41 +69,34 @@ def compiler(**kwargs):
 
 @contextmanager
 def _publish_built(built):
-    """Point installed configs and the catalog walk at ``built``."""
-    import trusts.apps as apps_mod
+    """Store each catalog on one mixin config. The real walk lists them.
 
+    One catalog is not copied onto every config: that repeats its path.
+    Extra catalogs beyond the installed mixin apps are not given a
+    second backend in the same app.
+    """
     configs = mixin_configs()
+    if not configs:
+        raise TrustsConfigurationError(
+            'listed_relationship needs a TrustsConfigMixin app.')
     saved = [(config, config.catalog) for config in configs]
-    original = apps_mod.installed_catalogs
-
-    def published():
-        return tuple(built)
-
     try:
-        if not built:
-            for config in configs:
-                config.catalog = built_catalog(Compiler(
-                    path='%s.empty' % config.catalog_path(),
-                    family=config.family,
-                    query_compiler=Compiler.default_query_compiler(),
-                    user_model=get_user_model(),
-                ))
-        elif len(built) == 1:
-            for config in configs:
-                config.catalog = built[0]
-        else:
-            for config, catalog in zip(configs, built):
-                config.catalog = catalog
-        apps_mod.installed_catalogs = published
-        count = max(len(built), 1)
+        for config, catalog in zip(configs, built):
+            config.catalog = catalog
+        for config in configs[len(built):]:
+            config.catalog = built_catalog(Compiler(
+                path='%s.empty' % config.catalog_path(),
+                family=config.family,
+                query_compiler=Compiler.default_query_compiler(),
+                user_model=get_user_model(),
+            ))
+        owners = configs[:len(built)] or configs[:1]
         paths = tuple(
             '%s.%s' % (cls.__module__, cls.__name__)
-            for cls in _inquiry_backend_classes(count)
-        )
+            for cls in _inquiry_backend_classes(owners))
         with override_settings(AUTHENTICATION_BACKENDS=paths):
             yield tuple(built)
     finally:
-        apps_mod.installed_catalogs = original
         for config, catalog in saved:
             config.catalog = catalog
 
@@ -312,9 +305,8 @@ def install_writable_registry(config, path, contribute=None):
 def listed_relationship(factories):
     """Publish these factories as the catalogs inquiry and the lockfile see.
 
-    One factory is installed on every mixin config. Several factories
-    are zipped onto the first mixin configs. Each listed backend's
-    module is that config's module, so the backend reads that catalog.
+    Each factory is stored on its own mixin config, in ``INSTALLED_APPS``
+    order. Each listed backend's module lives in that config.
     """
 
     built = []
@@ -369,21 +361,10 @@ def unbound_named_filters(backend_cls):
         config.catalog = saved
 
 
-def _inquiry_backend_classes(count):
-    """Backend classes for the catalogs ``_publish_built`` just stored.
-
-    Each class lives in a submodule of a mixin app so construction finds
-    that app. A host with fewer mixin apps than catalogs reuses the last
-    app; ``installed_catalogs`` still lists every catalog for the lockfile.
-    """
-    configs = mixin_configs()
-    if not configs:
-        raise TrustsConfigurationError(
-            'listed_relationship needs a TrustsConfigMixin app.'
-        )
+def _inquiry_backend_classes(configs):
+    """One backend class in each config's package, so construction finds it."""
     built = []
-    for index in range(count):
-        config = configs[min(index, len(configs) - 1)]
+    for index, config in enumerate(configs):
         module_name = '%s.listed_inquiry' % config.name
         module = sys.modules.get(module_name)
         if module is None:

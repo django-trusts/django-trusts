@@ -27,6 +27,17 @@ from trusts.plan.rewrites import bind_once
 from trusts.plan.users import assert_persisted_principal
 
 
+class _MixinRequired(ImproperlyConfigured): pass
+
+
+def _mixin_required_message(config, backend_path):
+    return (
+        'Backend %s is not inside an app whose config extends '
+        'TrustsConfigMixin.' % backend_path
+        if config is None else
+        'App %s must extend TrustsConfigMixin.' % config.label)
+
+
 class TrustModelBackendMixin(object):
     """Object-permission backend. The catalog belongs to the app config."""
 
@@ -34,7 +45,7 @@ class TrustModelBackendMixin(object):
         super().__init__(*args, **kwargs)
         config = apps.get_containing_app_config(type(self).__module__)
         if not isinstance(config, TrustsConfigMixin):
-            raise ImproperlyConfigured(mixin_required_message(
+            raise _MixinRequired(_mixin_required_message(
                 config,
                 '%s.%s' % (type(self).__module__, type(self).__qualname__),
             ))
@@ -96,13 +107,13 @@ class TrustModelBackendMixin(object):
             catalog=self.catalog, skipped=skipped)
 
 
-def grant_users(item, subject, permission, skipped):
+def grant_users(item, subject, user, permission, skipped, grant_kw):
     """User predicate from this backend's catalog."""
     return item.permitted_users_predicate(
         subject, permission, skipped=skipped)
 
 
-def grant_authorized(item, subject, user, permission, skipped):
+def grant_authorized(item, subject, user, permission, skipped, grant_kw):
     """Authorized-row grant from this backend's catalog."""
     return item.authorized_grant_q(
         subject, user, permission, skipped=skipped)
@@ -220,14 +231,6 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
         user_queryset.filter(combined).distinct(), user_model=principal_model)
 
 
-def mixin_required_message(config, backend_path):
-    return (
-        'Backend %s is not inside an app whose config extends '
-        'TrustsConfigMixin.' % backend_path
-        if config is None else
-        'App %s must extend TrustsConfigMixin.' % config.label)
-
-
 def _missing_condition(api, conditions, model):
     raise TrustsConfigurationError(
         '%s condition %r is not registered on %s.'
@@ -257,11 +260,7 @@ def _combine(ask, subject, user, permission, chosen, skipped, grant_kw):
         if marker in seen:
             continue
         seen.add(marker)
-        part = ask(*(
-            (item, subject, permission, skipped) if ask is grant_users
-            else (item, subject, user, permission, skipped)
-            if ask is grant_authorized
-            else (item, subject, user, permission, skipped, grant_kw)))
+        part = ask(item, subject, user, permission, skipped, grant_kw)
         if part is None:
             continue
         combined = part if combined is None else combined | part

@@ -35,11 +35,11 @@ import uuid
 from decimal import Decimal
 from pathlib import Path
 
-import trusts.apps as trusts_apps
 from django.core import checks as django_checks
 from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
+from trusts.apps import installed_catalogs
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.format import _format_policy_sql
@@ -197,7 +197,7 @@ def render_policy_sql_bytes(*, alias=None):
     A failure raises before a partial document is returned.
     """
     resolved = resolve_policy_database(alias)
-    document = _build_document(trusts_apps.installed_catalogs(), resolved)
+    document = _build_document(installed_catalogs(), resolved)
     return _dump_document(document)
 
 

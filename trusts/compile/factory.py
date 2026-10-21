@@ -204,6 +204,7 @@ def relation_plan(records, delegations, content, user, permission,
         if record.content_model is content
         and (user is None or record.delegate_model is user))
     plan_permission = permission
+    column = 'pk'
     if chosen:
         models = {record.permission_model for record in chosen}
         if len(models) != 1:
@@ -216,13 +217,10 @@ def relation_plan(records, delegations, content, user, permission,
         if len(targets) != 1:
             raise TrustsConfigurationError(
                 'Applicable registrations must share one permission '
-                'comparison target; got %s.'
-                % ', '.join(sorted(targets)))
+                'comparison target; got %s.' % ', '.join(sorted(targets)))
         stored = targets.pop()
-        column = 'pk' if stored in (
-            plan_permission._meta.pk.attname, 'pk') else stored
-    else:
-        column = 'pk'
+        if stored not in (plan_permission._meta.pk.attname, 'pk'):
+            column = stored
     subject = user
     if subject is None:
         subjects = {

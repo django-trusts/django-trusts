@@ -400,6 +400,8 @@ class ListedBackendOrTest(TestCase):
             [(message.msg, message.obj.label) for message in mixin],
             [('App gh_permissions must extend TrustsConfigMixin.', 'gh_permissions')],
         )
+        self.assertEqual(
+            mixin[0].hint, 'Extend TrustsConfigMixin on the app config.')
         self.assertFalse(any(
             getattr(message, 'id', None) == 'trusts.E011' and outside in message.msg
             for message in messages
@@ -467,8 +469,15 @@ class ListedBackendOrTest(TestCase):
             if getattr(message, 'id', None) == 'trusts.E012'
         ]
         self.assertEqual(
-            [(message.msg, message.obj) for message in mixin],
-            [(wording % first, first), (wording % second, second)],
+            [(message.msg, message.obj, message.hint) for message in mixin],
+            [
+                (wording % first, first,
+                 'Move the backend into an app whose config extends '
+                 'TrustsConfigMixin.'),
+                (wording % second, second,
+                 'Move the backend into an app whose config extends '
+                 'TrustsConfigMixin.'),
+            ],
         )
         self.assertFalse(any(
             getattr(message, 'id', None) == 'trusts.E011'
