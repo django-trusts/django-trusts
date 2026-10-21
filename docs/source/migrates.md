@@ -8,6 +8,22 @@ development log. New features and changes that require no application action
 belong in [What's new](whats-new.md); development history belongs in
 [development history](../dev/development.md).
 
+## `Meta.permission_conditions` removed (#330)
+
+Named filters are not a model `Meta` option. Register the predicate on
+the app config's recorder.
+
+| | Old | New |
+| --- | --- | --- |
+| Named filter | `class Meta: permission_conditions = (('name', predicate),)` | `recorder.add_named_filter(Model, 'name', predicate)` in `AppConfig.ready()` |
+
+django-trusts does not append `permission_conditions` to
+`django.db.models.options.DEFAULT_NAMES`.
+
+Migration-bot checklist:
+
+- `permission_conditions`
+
 ## `filter_authorized_scopes` renamed (#302)
 
 `filter_authorized_scopes` is deprecated. Call `filter_by_permitted_content`.

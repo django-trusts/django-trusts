@@ -8,6 +8,7 @@ from decimal import Decimal
 from io import BytesIO
 from unittest.mock import patch
 from uuid import uuid4
+from django.apps import apps as django_apps
 from django.contrib.auth import get_user_model
 from django.core.checks import Error
 from django.db import connection, models
@@ -231,34 +232,21 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             self.assertIn('status', sql.lower())
             self.assertEqual(len(log.calls), 1)
 
-    def _donate_meta_permission_conditions(self, registry, model):
-        """Walk ``Meta.permission_conditions`` the way Zero donates them.
-
-        Idempotent per registry instance so repeated ready() does not
-        invoke builders again.
-        """
-        donated = getattr(registry, '_core_ticket_meta_donation_id', None)
-        if donated is registry:
-            return False
-        for cond_code, condition in getattr(model._meta, 'permission_conditions', ()) or ():
-            registry.add_named_filter(model, cond_code, condition)
-        registry._core_ticket_meta_donation_id = registry
-        return True
-
-    def test_ticket_meta_own_donation_is_zero_sql_and_idempotent(self):
-        self.assertEqual(Ticket._meta.permission_conditions, (('meta_own', ticket_meta_own),))
+    def test_ticket_meta_own_registers_through_the_recorder(self):
         registry = compiler()
         with self.assertNumQueries(0):
-            first = self._donate_meta_permission_conditions(registry, Ticket)
-        self.assertTrue(first)
-        record = registry.conditions.get_permission_condition_record(Ticket, 'meta_own')
-        self.assertIsNotNone(record)
+            record = registry.add_named_filter(
+                Ticket, 'meta_own', ticket_meta_own,
+            )
         self.assertIs(record.model, Ticket)
-        self.assertEqual(record.expr.to_tuple(), ('eq', ('ref', 'principal', ()), ('ref', 'object', ('owner',))))
-        with self.assertNumQueries(0):
-            second = self._donate_meta_permission_conditions(registry, Ticket)
-        self.assertFalse(second)
-        self.assertIs(registry.conditions.get_permission_condition_record(Ticket, 'meta_own'), record)
+        self.assertEqual(
+            record.expr.to_tuple(),
+            ('eq', ('ref', 'principal', ()), ('ref', 'object', ('owner',))),
+        )
+        catalog = django_apps.get_app_config('trusts_tests').get_catalog()
+        live = catalog.get_permission_condition_record(Ticket, 'meta_own')
+        self.assertIsNotNone(live)
+        self.assertEqual(live.expr.to_tuple(), record.expr.to_tuple())
 
     def test_core_registration_path_is_zero_sql_for_builder(self):
         Note, _Memo = _note_models()

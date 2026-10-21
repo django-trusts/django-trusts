@@ -18,7 +18,6 @@ from unittest.mock import patch
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
-from django.db.models import options as model_options
 from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
@@ -254,19 +253,6 @@ class CoreImportBoundaryTest(SimpleTestCase):
                 if hits:
                     forbidden.append('%s imports %s' % (path.name, ', '.join(hits)))
         self.assertEqual(forbidden, [])
-
-class PermissionConditionsMetaOptionTest(SimpleTestCase):
-
-    def test_generic_option_is_registered_once(self):
-        import trusts.apps
-
-        self.assertIn('permission_conditions', model_options.DEFAULT_NAMES)
-        self.assertEqual(
-            model_options.DEFAULT_NAMES.count('permission_conditions'), 1,
-        )
-        from django.apps import AppConfig
-
-        self.assertTrue(issubclass(trusts.apps.TrustsConfigMixin, AppConfig))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class LongPathRegistrationTest(TestCase):
