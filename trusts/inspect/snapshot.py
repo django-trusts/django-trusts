@@ -369,7 +369,6 @@ class _PolicyVisitor(object):
                 }
             condition = _render_condition(
                 record.condition,
-                member=getattr(record, 'permission_field', None),
                 permission_token=_permission_token(
                     getattr(record, 'permission_target', None),
                 ),
@@ -786,8 +785,7 @@ class _PolicyConditionText(object):
     does not change its parent's parentheses.
     """
 
-    def __init__(self, member, permission_token):
-        self.member = member
+    def __init__(self, permission_token):
         self.permission_token = permission_token
         self._grouped = False
 
@@ -825,10 +823,6 @@ class _PolicyConditionText(object):
         )
 
     def visit_permission_in(self, node):
-        if not self.member:
-            raise TrustsConfigurationError(
-                'Policy SQL condition membership has no permission field.'
-            )
         parts = [
             '%s in %s' % (self.permission_token, _condition_path(ref))
             for ref in node.refs
@@ -844,20 +838,19 @@ class _PolicyConditionText(object):
         )
 
 
-def _render_condition(condition, *, member=None, permission_token='$permission.id'):
+def _render_condition(condition, *, permission_token='$permission.id'):
     """One Python-like condition line, or ``None`` when none is stored.
 
     A trust id ending in ``__cond`` means ``record.condition`` is set.
     Field paths stay bare. ``Equal`` compares two columns.
     ``permission_in`` and ``_InquiryPermissionMatch`` are membership:
     ``$permission.<target> in <collection>``. ``permission_token`` is the
-    same token the SQL parameter uses. ``member`` is the ordinary
-    record's ``permission_field`` and is required for ``permission_in``.
-    The line is a double-quoted YAML string.
+    same token the SQL parameter uses. The line is a double-quoted YAML
+    string.
     """
     if condition is None:
         return None
-    return _PolicyConditionText(member, permission_token).render(condition)
+    return _PolicyConditionText(permission_token).render(condition)
 
 
 def _condition_path(operand):
@@ -867,8 +860,6 @@ def _condition_path(operand):
                 'Policy SQL condition path is empty.'
             )
         return '__'.join(operand._path)
-    if isinstance(operand, str) and operand:
-        return operand
     raise TrustsConfigurationError(
         'Policy SQL condition path is not a relationship path.'
     )
@@ -1313,13 +1304,9 @@ def _classify_compiled(node, sql, params, query=None):
         if isinstance(param, _Symbol):
             tagged.append(param)
             continue
-        symbol = _symbol_for_new_param(node, query=query)
-        if symbol is None:
-            raise TrustsConfigurationError(
-                'Policy SQL render could not classify a %s placeholder.'
-                % type(node).__name__
-            )
-        tagged.append(_Symbol(symbol))
+        tagged.append(_Symbol(
+            _symbol_for_new_param(node, query=query),
+        ))
     return sql, tagged
 
 
@@ -1388,7 +1375,6 @@ def _symbol_for_new_param(node, query=None):
             return _with_hint(
                 {'const': _json_const(rhs)}, _const_hint(node, rhs),
             )
-    return None
 
 
 _REQUEST_ROLES = frozenset((
@@ -1463,8 +1449,6 @@ def _const_hint(node, value):
         target = getattr(getattr(node, 'lhs', None), 'target', None)
         if target is not None and getattr(target, 'primary_key', False):
             return 'content pk'
-        if name:
-            return name
     return 'literal'
 
 
@@ -1521,19 +1505,7 @@ def _bind_name(node, record):
                 or getattr(target, 'attname', None) == candidate.content_target
             )
         ):
-            # An Along reverse row binds only the content-identity
-            # comparison on the uncorrelated walk seed. A condition
-            # literal on that same column, including ``folder__pk=<n>``
-            # after Django collapses it to the foreign key, stays a
-            # constant.
-            if (
-                getattr(candidate, 'along', None) is not None
-                and not getattr(node, 'trusts_content_bind', False)
-            ):
-                continue
             labels.append('content.%s' % candidate.content_target)
-    if not labels:
-        return None
     if any(label != labels[0] for label in labels):
         raise TrustsConfigurationError(
             'Composition SQL cannot label a %s bind; trusts in this '
@@ -1597,13 +1569,7 @@ def _json_const(value):
     if isinstance(value, bytes):
         return {'type': 'bytes', 'hex': value.hex()}
     if isinstance(value, Decimal):
-        if value.is_nan():
-            text = 'NaN'
-        elif not value.is_finite():
-            text = 'Infinity' if value > 0 else '-Infinity'
-        else:
-            text = str(value)
-        return {'type': 'decimal', 'value': text}
+        return {'type': 'decimal', 'value': str(value)}
     if isinstance(value, uuid.UUID):
         return {'type': 'uuid', 'value': str(value)}
     if isinstance(value, datetime.datetime):

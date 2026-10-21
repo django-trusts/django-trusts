@@ -312,8 +312,6 @@ class ModelIdentity(object):
         return (self.app_label, self.model_name, self.pk)
 
     def __eq__(self, other):
-        if isinstance(other, ModelIdentity):
-            return self.as_tuple() == other.as_tuple()
         if isinstance(other, Model):
             meta = other._meta.concrete_model._meta
             return (

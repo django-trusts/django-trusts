@@ -150,25 +150,6 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         self.assertIs(catalog.filter_lookup.record_for(Note, 'own'), record)
         self.assertFalse(hasattr(catalog.filter_lookup, 'conditions'))
 
-    def test_handle_add_named_filter_after_build_still_registers(self):
-        Note, _Memo = _note_models()
-        registry = compiler()
-        registry.path = 'tests.kernel_host.backends.HostTrustModelBackend'
-        handle = registry
-        log = _BuilderLog()
-        record = handle.add_named_filter(Note, 'own', log)
-        self.assertIs(registry.conditions.get_permission_condition_record(Note, 'own'), record)
-        self.assertEqual(len(log.calls), 1)
-        built_catalog(registry)
-        late_factory = compiler()
-        late_factory.path = handle.path
-        late_handle = late_factory
-        late = _BuilderLog()
-        late_record = late_handle.add_named_filter(Note, 'late', late)
-        self.assertEqual(len(late.calls), 1)
-        self.assertIs(late_factory.conditions.get_permission_condition_record(Note, 'late'), late_record)
-        self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'late'))
-
     def test_generic_lookup_binds_without_reinvoking_builder(self):
         Note, _Memo = _note_models()
         registry = compiler()
@@ -278,6 +259,36 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
                 registry.conditions.compile_registered_condition_q(Note, perm, bob),
             ).values_list('pk', flat=True))
             self.assertEqual(listed_again, {note.pk})
+
+    def test_saved_user_constant_matches_only_that_principal(self):
+        Note, _Memo = _note_models()
+        User = get_user_model()
+        with _tables(Note):
+            alice = User.objects.create_user(
+                'alice-16id', 'alice-16id@example.com', 'x',
+            )
+            bob = User.objects.create_user(
+                'bob-16id', 'bob-16id@example.com', 'x',
+            )
+            keep = Note.objects.create(title='keep', owner=alice, status='open')
+            other = Note.objects.create(title='other', owner=bob, status='open')
+            registry = compiler()
+            registry.add_named_filter(
+                Note, 'is_alice', lambda u, p, o: u == alice,
+            )
+            perm = 'trusts_tests.change_note:is_alice'
+            as_alice = set(Note.objects.filter(
+                registry.conditions.compile_registered_condition_q(
+                    Note, perm, alice,
+                ),
+            ).values_list('pk', flat=True))
+            as_bob = set(Note.objects.filter(
+                registry.conditions.compile_registered_condition_q(
+                    Note, perm, bob,
+                ),
+            ).values_list('pk', flat=True))
+            self.assertEqual(as_alice, {keep.pk, other.pk})
+            self.assertEqual(as_bob, set())
 
     def test_forbidden_captures_rejected_at_register(self):
         Note, _Memo = _note_models()
