@@ -22,7 +22,11 @@ _PREDICATE_KINDS = frozenset((
 ))
 
 _OP_LABELS = {
-    '__call__': 'Function or method calls',
+    '__call__': 'A function or method call',
+    '__lt__': 'Ordered comparison',
+    '__le__': 'Ordered comparison',
+    '__gt__': 'Ordered comparison',
+    '__ge__': 'Ordered comparison',
     '__getitem__': 'Indexing',
     '__setitem__': 'Item assignment',
     '__delitem__': 'Item deletion',
@@ -201,18 +205,6 @@ class Symbol(object):
             'ne', left=self._field(), right=_operand(other, self._token),
         )
 
-    def __lt__(self, other):
-        return _order(self, other)
-
-    def __le__(self, other):
-        return _order(self, other)
-
-    def __gt__(self, other):
-        return _order(self, other)
-
-    def __ge__(self, other):
-        return _order(self, other)
-
     def __and__(self, other):
         return _join('and', self, other)
 
@@ -245,12 +237,6 @@ class Symbol(object):
         if not self._path:
             return 'Symbol(%s)' % self._root
         return 'Symbol(%s).%s' % (self._root, '.'.join(self._path))
-
-
-def _order(symbol, other):
-    return Tree(
-        'order', left=symbol._field(), right=_operand(other, symbol._token),
-    )
 
 
 def _is_value(node):
@@ -306,10 +292,6 @@ def _require_predicate(result):
         return Tree('bare', item=result._field())
     if isinstance(result, Tree) and result.kind in _PREDICATE_KINDS:
         return result
-    if isinstance(result, Tree) and result.kind == 'order':
-        raise PermissionConditionError(
-            'Ordered comparisons are not supported in a condition.'
-        )
     if isinstance(result, bool):
         raise PermissionConditionError(
             'A condition returned a boolean. Return a comparison, '
@@ -336,28 +318,12 @@ def invoke(fn, roots):
     return _require_predicate(result)
 
 
-_REJECTED = (
-    '__call__', '__getitem__', '__setitem__', '__delitem__',
-    '__iter__', '__next__', '__len__',
-    '__add__', '__radd__', '__sub__', '__rsub__',
-    '__mul__', '__rmul__', '__truediv__', '__rtruediv__',
-    '__floordiv__', '__rfloordiv__', '__mod__', '__rmod__', '__pow__',
-    '__xor__', '__rxor__',
-    '__lshift__', '__rlshift__', '__rshift__', '__rrshift__',
-    '__neg__', '__pos__', '__abs__',
-    '__int__', '__float__', '__index__',
-    '__hash__',
-    '__enter__', '__exit__',
-    '__await__', '__aenter__', '__aexit__',
-)
-
-for _name in _REJECTED:
-    setattr(Symbol, _name, _unsupported(_name))
+for _name in _OP_LABELS:
+    # Symbol keeps its own ``in`` message, which names ``.contains``.
+    if _name != '__contains__':
+        setattr(Symbol, _name, _unsupported(_name))
     # Stored nodes are data, not callbacks, so Tree has no ``__call__``.
     # ``t.team()`` is rejected on Symbol. Calling a finished tree is a
     # plain TypeError.
     if _name != '__call__':
         setattr(Tree, _name, _unsupported(_name))
-
-for _name in ('__lt__', '__le__', '__gt__', '__ge__', '__contains__'):
-    setattr(Tree, _name, _unsupported(_name))

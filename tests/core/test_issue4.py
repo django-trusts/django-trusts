@@ -53,7 +53,7 @@ class ConditionGrammarTest(SimpleTestCase):
             compiler().add_named_filter(
                 object,
                 'range',
-                lambda u, p, o: 0 < o.amount < 100,
+                lambda u, p, o: o.low == o.amount == o.high,
             )
         self.assertIn('chained', str(ctx.exception))
 
@@ -64,7 +64,7 @@ class ConditionGrammarTest(SimpleTestCase):
                 'range',
                 lambda u, p, o: o.amount < 100,
             )
-        self.assertIn('Ordered comparisons', str(ctx.exception))
+        self.assertIn('Ordered comparison', str(ctx.exception))
         with self.assertRaises(TypeError):
             compiler().add_named_filter(object, 'range', 1)
 
