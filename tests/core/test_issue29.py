@@ -24,6 +24,7 @@ from trusts.conditions import PermissionConditionError
 from trusts.plan.conditions import obsolete_legacy_callback_setting_enabled
 from trusts.plan.grammar import Tree
 
+from tests.kernel_host.backends import HostTrustModelBackend
 from tests.support import override_catalog, compiler
 
 
@@ -70,8 +71,6 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         registry.add_named_filter(Note, 'missing', lambda u, p, o: u == o.owner)
 
     def test_builder_validates_at_register_when_models_are_ready(self):
-        from tests.kernel_host.backends import HostTrustModelBackend
-
         Note = _note_model()
         registry = compiler()
         registry.add_named_filter(
@@ -100,8 +99,6 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         )
 
     def test_builder_is_invoked_once_with_symbolic_refs(self):
-        from tests.kernel_host.backends import HostTrustModelBackend
-
         Note = _note_model()
         log = _BuilderLog()
         registry = compiler()
@@ -151,8 +148,6 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         self.assertIn('does not enable', errors[0].msg)
 
     def test_catalog_check_accepts_a_registered_builder(self):
-        from tests.kernel_host.backends import HostTrustModelBackend
-
         Note = _note_model()
         registry = compiler()
         registry.add_named_filter(Note, 'own', lambda u, p, o: u == o.owner)
