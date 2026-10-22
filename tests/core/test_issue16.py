@@ -15,6 +15,7 @@ from django.db import connection, models
 from django.http import HttpRequest
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
+from tests.core import kernel_host_listed
 from tests.models import Ticket, ticket_meta_own
 from trusts.inspect.checks import CHECK_ID_INVALID_EXPR, CHECK_ID_OBSOLETE_CALLBACK_SETTING, check_obsolete_legacy_callback_setting, check_permission_conditions, iter_live_permission_conditions, permission_condition_check_messages
 from trusts.conditions import PermissionConditionError, PermissionConditionUnsupported
@@ -411,6 +412,8 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         self.assertTrue(any(("'typo'" in m.msg for m in errors)))
 
     def test_two_owners_same_model_code_both_validated(self):
+        if not kernel_host_listed():
+            self.skipTest('kernel-only host path is not listed on the pair')
         from tests.kernel_host.backends import HostTrustModelBackend
         from tests.backends import MixinOnlyBackend
 
