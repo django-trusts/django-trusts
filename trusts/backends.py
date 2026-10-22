@@ -100,10 +100,9 @@ class TrustModelBackendMixin(object):
                          **skip_flags):
         """Rows this backend permits. Other backends are not consulted.
 
-        Binds the codename. This catalog's preflight and ``bind_once``
-        run for this backend only. No applicable ``auth.Permission``
-        plan, or a selected name this catalog does not own, returns an
-        empty queryset and does not raise.
+        Binds the codename. This catalog's grant returns nothing when it
+        has no applicable plan or does not own the selected names. That
+        is an empty queryset and does not raise.
         """
         return filter_listed(
             queryset, user,
@@ -114,8 +113,7 @@ class TrustModelBackendMixin(object):
                     queryset.model, *permission.split('.', 1)),
                 api='authorization_required'),
             backend='%s.%s' % (type(self).__module__, type(self).__qualname__),
-            skip_flags=skip_flags, preflight=True, model=queryset.model,
-            conditions=conditions, api='authorization_required')
+            skip_flags=skip_flags)
 
     def filter_by_permitted_content(self, queryset, user, permission, *,
                                     content, **skip_flags):
@@ -197,8 +195,7 @@ def trusts_backends(backend=None):
 
 
 def filter_listed(queryset, user, *, ask, backend=None,
-                  skip_flags, require_user=True, preflight=False,
-                  extra_q=None, model=None, conditions=(), api=None):
+                  skip_flags, require_user=True, extra_q=None):
     """OR each listed backend's own grant and bind that backend's user.
 
     A ``skip_<name>`` keyword is checked against the catalog being
@@ -213,8 +210,6 @@ def filter_listed(queryset, user, *, ask, backend=None,
             catalog=catalog)
         if inquiry.denied:
             return queryset.none()
-        if preflight and not all(catalog.authorization_preflight(model, conditions)):
-            continue
         part = ask(item, inquiry.values)
         if part is None:
             continue
