@@ -16,12 +16,9 @@ from django.http import Http404
 from trusts.plan.hops import require_instance
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.rewrites import bind_once
-from trusts.backends import filter_listed, grant_permitted, grant_prefix, open_grant
-from trusts.compile.factory import (
-    codename_binding,
-    guard_conditions,
-    guard_permission_string,
-)
+from trusts.backends import (
+    codename_binding, filter_listed, grant_permitted, grant_prefix, open_grant)
+from trusts.utils import guard_conditions, guard_permission_string
 
 
 CHECK_ID_AUTHORIZATION_REQUIRED = 'trusts.E008'

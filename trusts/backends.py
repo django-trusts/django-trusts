@@ -10,7 +10,7 @@ objects.
 from django.apps import apps
 from django.contrib.auth import get_backends, load_backend
 from django.contrib.auth.models import Permission
-from django.db.models import Model, Q, QuerySet
+from django.db.models import Model, Q, QuerySet, Subquery
 
 from trusts.apps import Recorder, TrustsConfigMixin, catalog_of, installed_catalogs
 from trusts.compile.catalogs import (
@@ -150,6 +150,17 @@ def grant_prefix(item, skipped, subject, user, permission, *, content):
     """Permitted-content prefix grant from this backend's catalog."""
     return item.content_prefix_q(
         subject, user, permission, skipped=skipped, content=content)
+
+
+def codename_binding(model, app_label, codename):
+    """Unevaluated pk of the exact codename on ``model``'s content type."""
+    return Subquery(
+        Permission.objects.filter(
+            content_type__app_label=app_label.lower(),
+            content_type__model=model._meta.model_name,
+            codename=codename,
+        ).values('pk')[:1]
+    )
 
 
 def grant_permitted(item, skipped, subject, user, permission, *,

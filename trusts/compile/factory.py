@@ -10,9 +10,8 @@ from typing import TypeVar
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 
-from django.contrib.auth.models import Permission
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Model, Q, Subquery
+from django.db.models import Model, Q
 
 from trusts.plan.hops import (
     concrete_model,
@@ -386,59 +385,6 @@ def question_descriptors(records, delegations, linked):
             if keep
         )
     return tuple(questions), prefixes
-
-
-def guard_permission_string(permission, *, api):
-    """Exact ``app_label.codename`` form. Does not infer a model name."""
-    if not isinstance(permission, str):
-        raise TypeError(
-            '%s permission must be an app_label.codename string, not %r.'
-            % (api, type(permission).__name__)
-        )
-    if ':' in permission or permission.count('.') != 1:
-        raise TrustsConfigurationError(
-            '%s permission must be one base "app_label.codename" string '
-            'without a colon: %r.' % (api, permission)
-        )
-    app_label, codename = permission.split('.')
-    if not app_label or not codename:
-        raise TrustsConfigurationError(
-            '%s permission must be one base "app_label.codename" string, '
-            'not %r.' % (api, permission)
-        )
-    return app_label, codename
-
-
-def guard_conditions(conditions, *, api):
-    if type(conditions) is not tuple:
-        raise TypeError(
-            '%s conditions must be an exact tuple, not %r.'
-            % (api, type(conditions).__name__)
-        )
-    seen = set()
-    for name in conditions:
-        if not isinstance(name, str) or not name or name != name.strip() or ':' in name:
-            raise TrustsConfigurationError(
-                '%s condition name is malformed: %r.' % (api, name)
-            )
-        if name in seen:
-            raise TrustsConfigurationError(
-                '%s conditions must not contain duplicates: %r.'
-                % (api, name)
-            )
-        seen.add(name)
-    return conditions
-
-
-def codename_binding(model, app_label, codename):
-    """Unevaluated pk of the exact codename on ``model``'s content type."""
-    return Subquery(
-        Permission.objects.filter(
-            content_type__app_label=app_label.lower(),
-            content_type__model=model._meta.model_name,
-            codename=codename,
-        ).values('pk')[:1]
-    )
 
 
 def _prepare_conditions(filters, user_model):

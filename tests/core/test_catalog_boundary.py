@@ -9,6 +9,8 @@ from django.test import SimpleTestCase
 
 import trusts.compile.catalogs as catalogs
 import trusts.compile.factory as factory
+import trusts.decorators as decorators
+import trusts.models as models
 from tests.support import compiler
 
 
@@ -31,6 +33,10 @@ class CatalogFactoryBoundaryTest(SimpleTestCase):
         self.assertNotIn('trusts.compile.factory', catalog_imports)
         self.assertFalse(any(name.endswith('.factory') for name in catalog_imports))
         self.assertIn('trusts.compile.catalogs', factory_imports)
+        for module in (models, decorators):
+            found = _imported_modules(module)
+            self.assertNotIn('trusts.compile.factory', found)
+            self.assertFalse(any(name.endswith('.factory') for name in found))
 
     def test_catalog_methods_do_not_assign_fields(self):
         tree = ast.parse(inspect.getsource(catalogs.Catalog))
