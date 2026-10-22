@@ -101,13 +101,13 @@ class TrustModelBackendMixin(object):
         """Rows this backend permits. Other backends are not consulted.
 
         Binds the codename, runs this catalog's preflight, and applies
-        ``bind_once``. A selected name this catalog does not own raises
-        ``TrustsConfigurationError`` when this catalog has an
-        ``auth.Permission`` plan for the model.
+        ``bind_once``. No applicable ``auth.Permission`` plan, or a
+        selected name this catalog does not own, returns an empty
+        queryset and does not raise.
         """
-        has_plan, _owns = self._catalog().authorization_preflight(
+        has_plan, owns = self._catalog().authorization_preflight(
             queryset.model, conditions)
-        if not has_plan:
+        if not has_plan or not owns:
             return queryset.none()
         return filter_listed(
             queryset, user,
@@ -123,7 +123,11 @@ class TrustModelBackendMixin(object):
 
     def filter_by_permitted_content(self, queryset, user, permission, *,
                                     content, **skip_flags):
-        """Scope rows this backend permits as a prefix of ``content``."""
+        """Scope rows this backend permits as a prefix of ``content``.
+
+        No applicable plan returns an empty queryset and does not raise.
+        ``user`` and ``permission`` must be model instances.
+        """
         user = require_instance(user, 'user')
         permission = require_instance(permission, 'permission')
         return filter_listed(

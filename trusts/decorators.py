@@ -73,10 +73,12 @@ def authorization_required(model, permission, conditions=(), backend=None,
     ``model._meta.pk``. Each listed Trusts backend is asked on its own,
     in order, or only the backend named by ``backend``. The request is
     allowed when any one returns a row. A catalog that did not register
-    the model contributes nothing. A backend with an ``auth.Permission``
-    plan that does not own every selected name raises
-    ``TrustsConfigurationError`` when it is asked. ``backend`` is one
-    dotted path. Does not use ``user.has_perm`` or the legacy
+    the model, or that does not own every selected name, contributes
+    nothing and does not raise. Denial when no backend returns a row
+    is ``PermissionDenied`` when the row exists and ``Http404`` when
+    it does not. ``trusts.E008`` reports a name no listed backend owns.
+    ``backend`` is one dotted path. Does not use ``user.has_perm`` or
+    the legacy
     ``permission_required`` / ``P`` / ``K`` / ``G`` / ``O`` surface.
     Django's object-level ``user.has_perm`` OR across authentication
     backends is a different layer.

@@ -252,9 +252,10 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     not enough. Guards whose model app is absent are skipped
     so a host that does not load that app (pair Zero, isolated Apps)
     is not failed by imported fixtures. Silencing ``trusts.E008``
-    hides only the diagnostic; first use still fails closed before
-    the superuser shortcut and never falls back to an unconditioned
-    grant.
+    hides only the diagnostic. The request is denied
+    (``PermissionDenied`` when the row exists, ``Http404`` when it
+    does not) and does not raise, and it does not fall back to an
+    unconditioned grant.
     """
     catalogs = _load_listed()[0]
     messages = []
@@ -290,8 +291,8 @@ def check_authorization_required_conditions(app_configs, **kwargs):
                     hint=(
                         'Register an auth.Permission plan for this model on a '
                         'configured Trusts backend. Silencing trusts.E008 '
-                        'suppresses only this diagnostic; first use still '
-                        'fails closed.'
+                        'suppresses only this diagnostic; the request is '
+                        'denied and does not raise.'
                     ),
                     obj=model,
                     id=CHECK_ID_AUTHORIZATION_REQUIRED,
@@ -305,7 +306,7 @@ def check_authorization_required_conditions(app_configs, **kwargs):
                     'Register the complete name set on one auth.Permission '
                     'backend with backend.add_named_filter in '
                     'AppConfig.ready(). Silencing trusts.E008 suppresses only '
-                    'this diagnostic; first use still fails closed.'
+                    'this diagnostic; the request is denied and does not raise.'
                 ),
                 obj=model,
                 id=CHECK_ID_AUTHORIZATION_REQUIRED,
