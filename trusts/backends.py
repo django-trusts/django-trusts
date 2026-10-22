@@ -100,10 +100,13 @@ class TrustModelBackendMixin(object):
                          **skip_flags):
         """Rows this backend permits. Other backends are not consulted.
 
-        Binds the codename. This catalog's grant returns nothing when it
-        has no applicable plan or does not own the selected names. That
-        is an empty queryset and does not raise.
+        No applicable plan, or a selected name this catalog does not
+        own, returns an empty queryset and does not raise.
         """
+        has_plan, owns = self._catalog().authorization_preflight(
+            queryset.model, conditions)
+        if not has_plan or not owns:
+            return queryset.none()
         return filter_listed(
             queryset, user,
             ask=lambda item, skipped: item.permitted_grant_q(
