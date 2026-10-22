@@ -22,15 +22,13 @@ from django.db.models.sql.compiler import SQLCompiler
 from django.test import SimpleTestCase, TestCase, override_settings
 
 from trusts.plan.conditions import ModelIdentity
-from trusts.core import (
-    BackendHandle,
-    PlanQueryCompiler,
-    TrustsConfigurationError,
-    TrustsRegistry,
-    _IdentInReach,
-    _InquiryPermissionMatch,
-)
-from trusts.policy_lock import (
+from trusts.compile.nodes import _InquiryPermissionMatch
+from trusts.plan.recursions import _IdentInReach
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
+from trusts.inspect.snapshot import (
     CHECK_ID_POLICY_LOCK,
     CONVENTIONAL_LOCKFILE_NAME,
     _Symbol,
@@ -51,7 +49,7 @@ from trusts.policy_lock import (
     check_policy_sql_lockfile,
     render_policy_sql_bytes,
 )
-from trusts.policy_yaml import dump_policy_yaml
+from trusts.inspect.yaml import dump_policy_yaml
 
 GOLDEN_SQLITE = (
     Path(__file__).with_name('golden_document_sqlite.yaml').read_bytes()
@@ -588,8 +586,13 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotIn('sponsor:\n', text)
 
     def test_condition_line_quotes_round_trip_through_safe_load(self):
-        from trusts.core import All, Equal, PermissionIn, _InquiryPermissionMatch
-        from trusts.policy_lock import _render_condition
+        from trusts.compile.nodes import _InquiryPermissionMatch
+        from trusts.compile.nodes import (
+            All,
+            Equal,
+            PermissionIn,
+        )
+        from trusts.inspect.snapshot import _render_condition
 
         self.assertEqual(
             _render_condition(All(
@@ -770,7 +773,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         try:
             with override_settings(DEBUG=True):
                 connection.queries_log.clear()
-                with patch('trusts.core.probe_along_capabilities') as probe:
+                with patch('trusts.compile.factory.probe_along_capabilities') as probe:
                     payload = render_policy_sql_bytes(handles=[_document_handle()])
                 probe.assert_not_called()
                 recorded = ' '.join(item['sql'] for item in connection.queries)
@@ -855,9 +858,9 @@ class PolicySqlGoldenTest(SimpleTestCase):
             content='folder',
             along=('folder__parent', 2),
         )
-        with patch('trusts.core.probe_along_capabilities') as probe:
+        with patch('trusts.compile.factory.probe_along_capabilities') as probe:
             with patch(
-                'trusts.core.along_connection_supported', return_value=False,
+                'trusts.plan.walk.along_connection_supported', return_value=False,
             ):
                 with self.assertRaises(TrustsConfigurationError):
                     render_policy_sql_bytes(handles=[handle])
@@ -923,10 +926,10 @@ class PolicySqlCommandTest(SimpleTestCase):
 
             with override_settings(TRUSTS_POLICY_LOCKFILE=str(target)):
                 with patch(
-                    'trusts.policy_commands.render_policy_sql_bytes', boom,
+                    'trusts.inspect.commands.render_policy_sql_bytes', boom,
                 ):
                     with patch(
-                        'trusts.core.probe_along_capabilities',
+                        'trusts.compile.factory.probe_along_capabilities',
                     ) as probe:
                         with self.assertRaises(CommandError) as ctx:
                             call_command(
@@ -1225,7 +1228,7 @@ class PolicySqlConcurrencyTest(TestCase):
             export_ident.append(threading.get_ident())
             try:
                 with patch(
-                    'trusts.policy_lock._classify_compiled', classifying,
+                    'trusts.inspect.snapshot._classify_compiled', classifying,
                 ):
                     outcome.append(render_policy_sql_bytes(
                         handles=[_document_handle()],

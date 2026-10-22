@@ -29,7 +29,7 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.apps import implementation_for_path
-from trusts.core import TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 from trusts.decorators import authorization_required
 
 
@@ -110,7 +110,7 @@ import django
 django.setup()
 from django.core.checks import run_checks
 from tests.myapp.models import Document
-from trusts.core import TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 from trusts.decorators import authorization_required
 
 try:
@@ -142,7 +142,7 @@ from django.db import connection
 from django.http import HttpRequest
 from django.test.utils import CaptureQueriesContext
 from tests.myapp.models import Document
-from trusts.core import TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 from trusts.decorators import authorization_required
 
 class _Principal(object):

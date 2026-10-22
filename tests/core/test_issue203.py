@@ -31,7 +31,9 @@ from django.utils.translation import gettext_lazy
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.conditions import PermissionConditionError
-from trusts.core import BackendHandle, PlanQueryCompiler, TrustsRegistry
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.compile.factory import TrustsRegistry
 
 
 PERM = 'trusts_tests.change_note'

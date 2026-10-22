@@ -26,17 +26,15 @@ from django.test.utils import isolate_apps
 
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from trusts.core import (
-    BackendHandle,
-    PlanQueryCompiler,
-    TrustsConfigurationError,
-    TrustsRegistry,
-)
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
 from trusts.decorators import (
     _declared_authorization_guards,
     authorization_required,
 )
-from trusts.policy_lock import (
+from trusts.inspect.snapshot import (
     _load_policy_sql_document,
     render_policy_sql_bytes,
 )
@@ -795,5 +793,5 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         self.assertFalse(registry.has_permission(self.owner, self.org, read))
 
     def _ref(self, model):
-        from trusts.core import Ref
+        from trusts.compile.nodes import Ref
         return Ref(model)

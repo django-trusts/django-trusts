@@ -17,20 +17,18 @@ from tests.core import kernel_host_listed
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from trusts.core import (
-    BackendHandle,
-    PlanQueryCompiler,
-    Ref,
-    RegisteredDelegation,
-    TrustsConfigurationError,
-    TrustsRegistry,
-    _compile_common_permissions,
-    _compile_granted,
-)
-from trusts.policy_lock import _load_policy_sql_document, render_policy_sql_bytes
+from trusts.plan.aggregates import _compile_common_permissions
+from trusts.compile.factory import RegisteredDelegation
+from trusts.plan.contents import _compile_granted
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.compile.nodes import Ref
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
+from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts._permitted import permitted_queryset
 from trusts.query import PermittedManager, PermittedQuerySet, PermittedUsersMixin
-from trusts.reverse import lock_permitted_users_queryset
+from trusts.plan.users import lock_permitted_users_queryset
 
 
 def _handle(path='tests.core.issue266'):
@@ -148,7 +146,7 @@ def _indirect_content_models():
         objects = PermittedManager()
 
         def get_permitted_users(self, perm):
-            from trusts.reverse import compile_permitted_users
+            from trusts.plan.users import compile_permitted_users
 
             return compile_permitted_users(
                 self, perm,
@@ -608,7 +606,7 @@ def _two_prefix_models():
         objects = PermittedManager()
 
         def get_permitted_users(self, perm):
-            from trusts.reverse import compile_permitted_users
+            from trusts.plan.users import compile_permitted_users
 
             return compile_permitted_users(
                 self, perm, user_queryset=Principal.objects.all(),
@@ -1048,7 +1046,7 @@ def _ordinary_prefix_models():
         objects = PermittedManager()
 
         def get_permitted_users(self, perm):
-            from trusts.reverse import compile_permitted_users
+            from trusts.plan.users import compile_permitted_users
 
             return compile_permitted_users(
                 self, perm, user_queryset=Principal.objects.all(),

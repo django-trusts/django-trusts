@@ -39,11 +39,16 @@ from django.core import checks as django_checks
 from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
-from trusts.core import TrustsConfigurationError
-from trusts.policy_sql_format import _format_policy_sql
-from trusts.policy_yaml import (
+from trusts.commons import _resolved_hop
+from trusts.compile.nodes import Ref
+from trusts.errors import TrustsConfigurationError
+from trusts.plan.delegations import _sponsor_record_matches
+from trusts.inspect.format import _format_policy_sql
+from trusts.inspect.yaml import (
     PolicyYamlError,
+    canonical_float_scalar,
     dump_policy_yaml,
+    parse_canonical_float,
     _load_policy_yaml,
 )
 
@@ -341,7 +346,7 @@ def _project_contents(handle, alias, records, ids, named_filters, handles):
 
 
 def _project_content(handle, alias, group, filters, handles):
-    from trusts.core import RegisteredDelegation
+    from trusts.compile.factory import RegisteredDelegation
 
     legs = group['legs']
     records = tuple(
@@ -472,8 +477,6 @@ def _token_literal(value):
     if isinstance(value, int):
         return str(value)
     if isinstance(value, float):
-        from trusts.policy_yaml import canonical_float_scalar
-
         if not math.isfinite(value):
             return json.dumps(_json_const(value), separators=(',', ':'))
         return canonical_float_scalar(value)
@@ -536,7 +539,6 @@ def _presented_const(token):
         return json.loads(literal)
     if re.fullmatch(r'-?(0|[1-9][0-9]*)', literal):
         return int(literal)
-    from trusts.policy_yaml import parse_canonical_float
 
     return parse_canonical_float(literal)
 
@@ -602,21 +604,7 @@ def _policy_classifier_records(records, delegations, handles, model):
             if id(ordinary) in seen:
                 continue
             for delegation in delegations:
-                if ordinary.content_model is not delegation.content_model:
-                    continue
-                if ordinary.user_model is not delegation.sponsor_model:
-                    continue
-                expected = delegation.condition_permission_model
-                if (
-                    expected is not None
-                    and ordinary.permission_model is not expected
-                ):
-                    continue
-                if (
-                    expected is not None
-                    and ordinary.permission_target
-                    != delegation.condition_permission_target
-                ):
+                if not _sponsor_record_matches(ordinary, delegation):
                     continue
                 selected.append(ordinary)
                 seen.add(id(ordinary))
@@ -678,9 +666,9 @@ def _role_sentinel(record, role, alias):
 
 
 def _compile_permitted(handle, alias, records, model, handles):
-    from trusts.core import _compile_granted
+    from trusts.plan.contents import _compile_granted
 
-    from trusts._bind_once import bind_once
+    from trusts.plan.rewrites import bind_once
 
     user = _role_sentinel(records[0], 'user', alias)
     permission = _role_sentinel(records[0], 'permission', alias)
@@ -700,9 +688,9 @@ def _compile_permitted(handle, alias, records, model, handles):
 
 
 def _compile_has_perm(handle, alias, records, model, handles):
-    from trusts.core import _compile_granted
+    from trusts.plan.contents import _compile_granted
 
-    from trusts._bind_once import bound_exists_query
+    from trusts.plan.rewrites import bound_exists_query
 
     user = _role_sentinel(records[0], 'user', alias)
     permission = _role_sentinel(records[0], 'permission', alias)
@@ -724,7 +712,7 @@ def _compile_has_perm(handle, alias, records, model, handles):
 
 
 def _compile_get_all_permissions(handle, alias, records, model, handles):
-    from trusts.core import _compile_common_permissions
+    from trusts.plan.aggregates import _compile_common_permissions
 
     user = _role_sentinel(records[0], 'user', alias)
     instance = _content_sentinel(model, alias)
@@ -749,7 +737,7 @@ def _compile_get_all_permissions(handle, alias, records, model, handles):
 
 
 def _compile_get_permitted_users(handle, alias, records, model, handles):
-    from trusts.reverse import lock_permitted_users_queryset
+    from trusts.plan.users import lock_permitted_users_queryset
 
     content = _content_sentinel(model, alias)
     _populate_reverse_along_identity(content, records, alias)
@@ -770,8 +758,6 @@ def _permitted_content_prefix_models(handle, model):
     The protected model is included only when an earlier hop on the same
     path also uses it.
     """
-    from trusts.core import _resolved_hop
-
     plan = handle.registry.plan_for(model)
     legs = tuple(plan.records) + tuple(getattr(plan, 'delegations', ()) or ())
     found = []
@@ -795,7 +781,7 @@ def _permitted_content_prefix_models(handle, model):
 
 def _compile_filter_by_permitted_content(handle, alias, records, model, handles):
     """One statement per proper prefix, the queryset that actually runs."""
-    from trusts.core import (
+    from trusts.plan.contents import (
         _compile_permitted_content_queryset,
         _relationship_handles,
     )
@@ -830,7 +816,7 @@ def _compile_filter_by_permitted_content(handle, alias, records, model, handles)
 
 
 def _compile_get_group_permissions(handle, alias, records, model):
-    from trusts.core import _compile_common_permissions
+    from trusts.plan.aggregates import _compile_common_permissions
 
     user = _role_sentinel(records[0], 'user', alias)
     instance = _content_sentinel(model, alias)
@@ -872,6 +858,73 @@ def _permission_token(target):
     return '$permission.%s' % name
 
 
+class _PolicyConditionText(object):
+    """Render one stored predicate as a policy-lock condition line.
+
+    The node dispatches through ``accept``, the same way
+    ``commons._PredicateCompiler`` keeps ``Q`` off the nodes. Text stays
+    here. ``grouped`` is restored around each child so a nested ``All``
+    does not change its parent's parentheses.
+    """
+
+    def __init__(self, member, permission_token):
+        self.member = member
+        self.permission_token = permission_token
+        self._grouped = False
+
+    def render(self, node, *, grouped=False):
+        accept = getattr(type(node), 'accept', None)
+        if accept is None:
+            raise TrustsConfigurationError(
+                'Policy SQL cannot render condition node %s.'
+                % type(node).__name__
+            )
+        previous = self._grouped
+        self._grouped = grouped
+        try:
+            return accept(node, self)
+        finally:
+            self._grouped = previous
+
+    def visit_all(self, node):
+        if len(node.predicates) == 1:
+            return self.render(
+                node.predicates[0], grouped=self._grouped,
+            )
+        parts = [
+            self.render(part, grouped=True) for part in node.predicates
+        ]
+        text = ' and '.join(parts)
+        if self._grouped:
+            return '(%s)' % text
+        return text
+
+    def visit_equal(self, node):
+        return '%s == %s' % (
+            _condition_path(node.left),
+            _condition_path(node.right),
+        )
+
+    def visit_permission_in(self, node):
+        if not self.member:
+            raise TrustsConfigurationError(
+                'Policy SQL condition membership has no permission field.'
+            )
+        parts = [
+            '%s in %s' % (self.permission_token, _condition_path(ref))
+            for ref in node.refs
+        ]
+        text = ' and '.join(parts)
+        if self._grouped and len(node.refs) > 1:
+            return '(%s)' % text
+        return text
+
+    def visit_inquiry_permission_match(self, node):
+        return '%s in %s' % (
+            self.permission_token, _condition_path(node.ref),
+        )
+
+
 def _render_condition(condition, *, member=None, permission_token='$permission.id'):
     """One Python-like condition line, or ``None`` when none is stored.
 
@@ -885,17 +938,10 @@ def _render_condition(condition, *, member=None, permission_token='$permission.i
     """
     if condition is None:
         return None
-    return _condition_expr(
-        condition,
-        member=member,
-        permission_token=permission_token,
-        grouped=False,
-    )
+    return _PolicyConditionText(member, permission_token).render(condition)
 
 
 def _condition_path(operand):
-    from trusts.core import Ref
-
     if isinstance(operand, Ref):
         if not operand._path:
             raise TrustsConfigurationError(
@@ -906,56 +952,6 @@ def _condition_path(operand):
         return operand
     raise TrustsConfigurationError(
         'Policy SQL condition path is not a relationship path.'
-    )
-
-
-def _condition_expr(node, *, member, permission_token, grouped):
-    from trusts.core import All, Equal, PermissionIn, _InquiryPermissionMatch
-
-    if isinstance(node, All):
-        if len(node.predicates) == 1:
-            return _condition_expr(
-                node.predicates[0],
-                member=member,
-                permission_token=permission_token,
-                grouped=grouped,
-            )
-        parts = [
-            _condition_expr(
-                part,
-                member=member,
-                permission_token=permission_token,
-                grouped=True,
-            )
-            for part in node.predicates
-        ]
-        text = ' and '.join(parts)
-        if grouped:
-            return '(%s)' % text
-        return text
-    if isinstance(node, Equal):
-        return '%s == %s' % (
-            _condition_path(node.left),
-            _condition_path(node.right),
-        )
-    if isinstance(node, PermissionIn):
-        if not member:
-            raise TrustsConfigurationError(
-                'Policy SQL condition membership has no permission field.'
-            )
-        parts = [
-            '%s in %s' % (permission_token, _condition_path(ref))
-            for ref in node.refs
-        ]
-        text = ' and '.join(parts)
-        if grouped and len(node.refs) > 1:
-            return '(%s)' % text
-        return text
-    if isinstance(node, _InquiryPermissionMatch):
-        return '%s in %s' % (permission_token, _condition_path(node.ref))
-    raise TrustsConfigurationError(
-        'Policy SQL cannot render condition node %s.'
-        % type(node).__name__
     )
 
 
@@ -1417,8 +1413,8 @@ def _classify_compiled(node, sql, params, query=None):
 
 
 def _symbol_for_new_param(node, query=None):
-    from trusts._bind_once import BindTable
-    from trusts.core import (
+    from trusts.plan.rewrites import BindTable
+    from trusts.plan.recursions import (
         GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
         _PrefixInForwardWalk,
     )
@@ -1456,8 +1452,8 @@ def _symbol_for_new_param(node, query=None):
         return _with_hint(
             {'const': _json_const(node.bound)}, 'along bound',
         )
-    from trusts._bind_once import BoundBool
-    from trusts.user_rules import SkipFlag
+    from trusts.plan.rewrites import BoundBool
+    from trusts.plan.standards import SkipFlag
     if isinstance(node, SkipFlag):
         return _with_hint(
             {'const': _json_const(node.value)}, 'skip_%s' % node.name,
@@ -1541,7 +1537,7 @@ def _value_hint(node, query):
 
 def _const_hint(node, value):
     """Readable label for one constant placeholder."""
-    from trusts.core import (
+    from trusts.plan.recursions import (
         GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
         _PrefixInForwardWalk,
     )
@@ -1550,7 +1546,7 @@ def _const_hint(node, value):
         return 'literal'
     if isinstance(node, Lookup):
         lhs = getattr(node, 'lhs', None)
-        from trusts._bind_once import _AlongOnce
+        from trusts.plan.rewrites import _AlongOnce
         if isinstance(lhs, _AlongOnce):
             lhs = lhs.inner
         if isinstance(lhs, (

@@ -21,7 +21,7 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.apps import TrustsImplementationConfig, implementation_for_path
-from trusts.core import TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 
 
 PERM = 'myapp.change_document'

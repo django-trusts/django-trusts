@@ -1,7 +1,7 @@
 """Executing proxies for public ``condition=`` builders.
 
-These nodes are not stored policy records. ``trusts.core`` re-exports the
-historical underscore names (``_ConditionProxy`` and the rest). The stored
+These nodes are not stored policy records. ``trusts.core`` does not
+re-export them. The stored
 ``_InquiryPermissionMatch`` stays in ``trusts.compile.nodes`` with ``All``.
 """
 

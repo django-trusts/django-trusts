@@ -24,14 +24,14 @@ from tests.core.test_issue147.test_sql_export import (
     _handle,
 )
 from trusts.plan.conditions import ModelIdentity
-from trusts.core import TrustsConfigurationError
-from trusts.policy_lock import (
+from trusts.errors import TrustsConfigurationError
+from trusts.inspect.snapshot import (
     _const_from_json,
     _json_const,
     _load_policy_sql_document,
     render_policy_sql_bytes,
 )
-from trusts.policy_yaml import (
+from trusts.inspect.yaml import (
     PolicyYamlDumper,
     PolicyYamlError,
     dump_policy_yaml,
@@ -48,7 +48,7 @@ GOLDEN_COMPOSITION = (
 
 _PROBE = r"""
 import hashlib, sys
-from trusts.policy_yaml import dump_policy_yaml
+from trusts.inspect.yaml import dump_policy_yaml
 doc = {
     "schema_version": 1,
     "database": {"engine": "django.db.backends.sqlite3"},
@@ -274,7 +274,7 @@ class PolicyCompositionTest(SimpleTestCase):
     def test_renderer_does_not_replace_sqlcompiler_execute_sql(self):
         from django.db.models.sql.compiler import SQLCompiler
 
-        import trusts.policy_lock as policy_lock
+        import trusts.inspect.snapshot as policy_lock
 
         self.assertIsNone(importlib.util.find_spec('trusts.policy_composition'))
         self.assertIsNone(importlib.util.find_spec(

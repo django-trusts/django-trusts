@@ -24,19 +24,19 @@ from django.test.utils import isolate_apps
 
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.core import (
-    Along,
-    BackendHandle,
-    PlanQueryCompiler,
-    Ref,
+from trusts.compile.resolution import _resolve_path
+from trusts.compile.factory import (
     RegisteredDelegation,
     RegisteredRelation,
-    TrustsConfigurationError,
-    TrustsRegistry,
     _public_path_segments,
-    _resolve_path,
     _validate_condition,
 )
+from trusts.compile.nodes import Along
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.compile.nodes import Ref
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -474,12 +474,12 @@ class RegisterFailClosedTest(TestCase):
             return trust.user
 
         with patch(
-            'trusts.core._public_path_segments',
+            'trusts.compile.factory._public_path_segments',
             wraps=_public_path_segments,
         ) as segments:
-            with patch('trusts.core._resolve_path', wraps=_resolve_path) as resolve:
+            with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
                 with patch(
-                    'trusts.core._validate_condition',
+                    'trusts.compile.factory._validate_condition',
                     wraps=_validate_condition,
                 ) as validate:
                     with self.assertRaises(TrustsConfigurationError) as ctx:

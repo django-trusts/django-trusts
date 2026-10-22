@@ -2,29 +2,7 @@
 
 from django.db.models import Manager, Model, QuerySet
 
-from trusts._bind_once import bind_once
-
-
-def require_mode_flag(value, name):
-    """A skip keyword must be a real boolean."""
-    if not isinstance(value, bool):
-        raise TypeError('%s must be a bool, not %r.' % (name, value))
-    return value
-
-
-def user_identity_denied(user):
-    """Anonymous and unauthenticated users are denied even when
-    ``skip_is_active`` is true.
-
-    Missing attributes keep the identity defaults: not anonymous, and
-    authenticated. ``None`` is not this denial; callers that require an
-    instance still raise.
-    """
-    if getattr(user, 'is_anonymous', False):
-        return True
-    if not getattr(user, 'is_authenticated', True):
-        return True
-    return False
+from trusts.plan.rewrites import bind_once
 
 
 class AuthorizedQuerySet(QuerySet):
@@ -52,7 +30,9 @@ class AuthorizedQuerySet(QuerySet):
 
     def authorized(self, user, permission, extra_q=None, **skip_flags):
         from trusts.apps import _relationship_implementation_handles
-        from trusts.core import TrustsConfigurationError, bind_checked_user, granted
+        from trusts.errors import TrustsConfigurationError
+        from trusts.plan.contents import granted
+        from trusts.plan.relations import bind_checked_user
 
         if not isinstance(permission, Model):
             raise TrustsConfigurationError(
@@ -146,7 +126,7 @@ class PermittedUsersMixin:
     """
 
     def get_permitted_users(self, perm, **skip_flags):
-        from trusts.reverse import compile_permitted_users
+        from trusts.plan.users import compile_permitted_users
 
         return compile_permitted_users(self, perm, **skip_flags)
 
@@ -164,7 +144,7 @@ class PermittedUsersManagerMixin:
     """
 
     def permitted(self, content, perm, **skip_flags):
-        from trusts.reverse import compile_permitted_users
+        from trusts.plan.users import compile_permitted_users
 
         return compile_permitted_users(
             content, perm, user_queryset=self.get_queryset(), **skip_flags,

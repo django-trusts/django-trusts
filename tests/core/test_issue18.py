@@ -22,20 +22,18 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
-from trusts.core import (
-    BackendHandle,
+from trusts.compile.nodes import permission_in
+from trusts.plan.contents import filter_by_permitted_content
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import (
     PlanQueryCompiler,
-    Ref,
     RelationPlan,
-    TrustsConfigurationError,
-    TrustsRegistry,
-    all_match,
-    common_permissions,
-    filter_by_permitted_content,
-    granted,
-    instance_match,
-    permission_in,
 )
+from trusts.compile.nodes import Ref
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
+from trusts.plan.contents import granted
+from trusts.plan.aggregates import all_match, common_permissions, instance_match
 from trusts.query import AuthorizedManager
 
 

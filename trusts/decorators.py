@@ -11,8 +11,8 @@ from trusts._permitted import (
     _guard_permission_string,
     _permission_binding,
 )
-from trusts._bind_once import bind_once
-from trusts.core import TrustsConfigurationError
+from trusts.plan.rewrites import bind_once
+from trusts.errors import TrustsConfigurationError
 
 
 CHECK_ID_AUTHORIZATION_REQUIRED = 'trusts.E008'
@@ -70,7 +70,7 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
                          skip_flags):
     from django.apps import apps as django_apps
     from trusts.apps import _relationship_implementation_handles
-    from trusts.core import bind_checked_user
+    from trusts.plan.relations import bind_checked_user
 
     handles = _relationship_implementation_handles()
 

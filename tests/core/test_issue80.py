@@ -8,7 +8,9 @@ from django.test import SimpleTestCase
 
 from tests.models import Organization
 from tests.myapp.models import Document, DocumentGrant
-from trusts.core import Ref, TrustsRegistry, any_plan_records
+from trusts.compile.nodes import Ref
+from trusts.compile.factory import TrustsRegistry
+from trusts.plan.aggregates import any_plan_records
 
 
 class _Handle(object):

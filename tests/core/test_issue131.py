@@ -17,20 +17,24 @@ from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
 from tests.myapp.models import Document, DocumentGrant
-from trusts.core import (
-    All,
-    Along,
-    BackendHandle,
-    Equal,
-    PlanQueryCompiler,
-    Ref,
-    TrustsConfigurationError,
-    TrustsRegistry,
+from trusts.compile.resolution import _resolve_path
+from trusts.compile.factory import (
     _public_path_segments,
-    _resolve_path,
     _validate_condition,
+)
+from trusts.compile.nodes import (
+    Along,
     permission_in,
 )
+from trusts.compile.nodes import (
+    All,
+    Equal,
+    Ref,
+)
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
 
 
 def _handle(registry=None, path='tests.core.handle-a'):
@@ -196,12 +200,12 @@ class HandleFreezeOrderTest(SimpleTestCase):
         handle = _handle(registry)
         registry.freeze()
         with patch(
-            'trusts.core._public_path_segments',
+            'trusts.compile.factory._public_path_segments',
             wraps=_public_path_segments,
         ) as segments:
-            with patch('trusts.core._resolve_path', wraps=_resolve_path) as resolve:
+            with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
                 with patch(
-                    'trusts.core._validate_condition',
+                    'trusts.compile.factory._validate_condition',
                     wraps=_validate_condition,
                 ) as validate:
                     with self.assertRaises(TrustsConfigurationError) as ctx:
@@ -483,12 +487,12 @@ class CMethodsFreezeAndIsolationTest(SimpleTestCase):
         registry.freeze()
         log = _PredicateLog()
         with patch(
-            'trusts.core._public_path_segments',
+            'trusts.compile.factory._public_path_segments',
             wraps=_public_path_segments,
         ) as segments:
-            with patch('trusts.core._resolve_path', wraps=_resolve_path) as resolve:
+            with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
                 with patch(
-                    'trusts.core._validate_condition',
+                    'trusts.compile.factory._validate_condition',
                     wraps=_validate_condition,
                 ) as validate:
                     with self.assertRaises(TrustsConfigurationError) as rel:

@@ -15,8 +15,11 @@ from operator import or_
 from django.contrib.auth.models import Permission
 from django.db.models import Subquery
 
-from trusts._bind_once import bind_once
-from trusts.core import TrustsConfigurationError, _ordinary_records, granted
+from trusts.plan.rewrites import bind_once
+from trusts.errors import TrustsConfigurationError
+from trusts.plan.contents import _ordinary_records, granted
+from trusts.plan.delegations import _sponsor_record_matches
+from trusts.plan.relations import bind_checked_user
 
 
 def _guard_permission_string(permission, *, api):
@@ -133,18 +136,7 @@ def _plan_is_auth_permission(plan, sponsor_records=()):
         return True
     for delegation in getattr(plan, 'delegations', ()) or ():
         for ordinary in sponsor_records:
-            if ordinary.content_model is not delegation.content_model:
-                continue
-            if ordinary.user_model is not delegation.sponsor_model:
-                continue
-            expected = delegation.condition_permission_model
-            if expected is not None and ordinary.permission_model is not expected:
-                continue
-            if (
-                expected is not None
-                and ordinary.permission_target
-                != delegation.condition_permission_target
-            ):
+            if not _sponsor_record_matches(ordinary, delegation):
                 continue
             if ordinary.permission_model._meta.concrete_model is Permission:
                 return True
@@ -326,8 +318,6 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
     _assert_authorization_preflight(
         handles, model, conditions, api='permitted',
     )
-    from trusts.core import bind_checked_user
-
     inquiry = bind_checked_user(
         user, skip_flags=skip_flags, handles=handles)
     if inquiry.denied:

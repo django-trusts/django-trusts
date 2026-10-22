@@ -31,7 +31,7 @@ class NotReadyPopulateProbeConfig(AppConfig):
         from django.test.utils import CaptureQueriesContext
 
         from tests.myapp.models import Document
-        from trusts.core import TrustsConfigurationError
+        from trusts.errors import TrustsConfigurationError
         from trusts.decorators import authorization_required
 
         if django_apps.ready:

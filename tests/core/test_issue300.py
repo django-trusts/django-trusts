@@ -22,7 +22,7 @@ from tests.core.test_issue147.test_sql_export import (
 from tests.myapp.models import Document
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 import trusts.plan.rewrites as bind_once_module
-from trusts._bind_once import (
+from trusts.plan.rewrites import (
     BIND_ALIAS,
     BindRef,
     BindTable,
@@ -31,16 +31,14 @@ from trusts._bind_once import (
     strip_exists_marker,
     trusts_bind_once,
 )
-from trusts.core import (
-    BackendHandle,
-    PlanQueryCompiler,
-    TrustsConfigurationError,
-    TrustsRegistry,
-    _render_reach_sql,
-    granted,
-)
-from trusts.policy_lock import _load_policy_sql_document, render_policy_sql_bytes
-from trusts.reverse import _trusts_eligibility_q
+from trusts.plan.walk import _render_reach_sql
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
+from trusts.plan.contents import granted
+from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
+from trusts.plan.users import _trusts_eligibility_q
 
 
 def _document_rows():
@@ -108,7 +106,7 @@ class Issue300LockfileTest(SimpleTestCase):
 
 class Issue300EligibilitySqlTest(SimpleTestCase):
     def test_skip_is_active_keeps_the_condition_in_one_statement(self):
-        from trusts.user_rules import compile_user_rules
+        from trusts.plan.standards import compile_user_rules
 
         denied = bind_once(User.objects.filter(compile_user_rules(
             User, '', None, role='user', values={'is_active': False},
@@ -279,7 +277,7 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
     def test_literal_one_is_standard_sql_on_sqlite_mysql_and_postgresql(self):
         from django.db.models import Exists
 
-        from trusts._bind_once import LiteralExists
+        from trusts.plan.rewrites import LiteralExists
 
         inner = User.objects.filter(pk=1)
         exists = LiteralExists(inner)
@@ -309,7 +307,7 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
                 self.assertEqual(list(params), [1])
 
     def test_is_active_true_stays_a_bound_parameter_on_each_engine(self):
-        from trusts.user_rules import compile_user_rules
+        from trusts.plan.standards import compile_user_rules
 
         query = bind_once(User.objects.filter(compile_user_rules(
             User, '', None, role='user', values={},
@@ -593,7 +591,7 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
             )
             candidates = RetargetNode.objects.order_by('pk')
             with patch(
-                'trusts.core._render_reach_sql', _render_parenthesized_depth,
+                'trusts.plan.recursions._render_reach_sql', _render_parenthesized_depth,
             ):
                 with override_settings(TRUSTS_SQL_BIND_ONCE=False):
                     plain = handle.registry.filter_authorized(
@@ -682,8 +680,8 @@ def _published(user, permission, obj):
 
 class Issue300ManagerAnnotationTest(SimpleTestCase):
     def test_value_annotation_stays_in_the_lockfile_for_both_settings(self):
-        from trusts.core import _compile_granted
-        from trusts.policy_lock import _content_manager, _role_sentinel
+        from trusts.plan.contents import _compile_granted
+        from trusts.inspect.snapshot import _content_manager, _role_sentinel
 
         for enabled in (True, False):
             with self.subTest(TRUSTS_SQL_BIND_ONCE=enabled):
@@ -749,6 +747,6 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
 
 
 def _presented_const_for(token):
-    from trusts.policy_lock import _presented_const
+    from trusts.inspect.snapshot import _presented_const
 
     return _presented_const(token)

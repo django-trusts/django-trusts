@@ -16,7 +16,9 @@ from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import implementation_for_path
-from trusts.core import Ref, TrustsConfigurationError, TrustsRegistry
+from trusts.compile.nodes import Ref
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
 
 
 HOST = HOST_BACKEND

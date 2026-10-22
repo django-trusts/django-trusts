@@ -11,7 +11,7 @@ import inspect
 from django.test import SimpleTestCase
 
 from trusts.backends import TrustModelBackendMixin
-from trusts.core import PlanQueryCompiler
+from trusts.plan.relations import PlanQueryCompiler
 
 
 class BackendsMixinBoundaryTest(SimpleTestCase):

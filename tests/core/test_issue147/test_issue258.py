@@ -23,8 +23,8 @@ from tests.core.test_issue147.test_sql_export import (
     _document_handle,
     _handle,
 )
-from trusts.core import TrustsConfigurationError
-from trusts.policy_lock import (
+from trusts.errors import TrustsConfigurationError
+from trusts.inspect.snapshot import (
     _const_from_json,
     _json_const,
     _load_policy_sql_document,
@@ -33,7 +33,7 @@ from trusts.policy_lock import (
     resolve_lockfile_path,
     write_policy_lock,
 )
-from trusts.policy_yaml import (
+from trusts.inspect.yaml import (
     PolicyYamlError,
     canonical_float_scalar,
     dump_policy_yaml,
@@ -526,12 +526,15 @@ class PolicyLockSentinelTest(SimpleTestCase):
 
     def test_missing_grant_or_permission_query_fails_closed(self):
         handle = _document_handle('documents.backends.MissingQueryBackend')
-        with patch('trusts.core._compile_granted', return_value=None):
+        with patch('trusts.plan.contents._compile_granted', return_value=None):
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 render_policy_sql_bytes(handles=[handle])
         self.assertIn('no grant', str(ctx.exception))
 
-        with patch('trusts.core._compile_common_permissions', return_value=None):
+        with patch(
+            'trusts.plan.aggregates._compile_common_permissions',
+            return_value=None,
+        ):
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 render_policy_sql_bytes(handles=[handle])
         self.assertIn('no permissions query', str(ctx.exception))
@@ -551,7 +554,7 @@ class PolicyLockSentinelTest(SimpleTestCase):
             group='group',
             content='paper',
         )
-        from trusts.core import _compile_common_permissions
+        from trusts.plan.aggregates import _compile_common_permissions
 
         def hide_group(handles, instance, user, kind='complete'):
             if kind == 'group':
@@ -560,7 +563,9 @@ class PolicyLockSentinelTest(SimpleTestCase):
                 handles, instance, user, kind=kind,
             )
 
-        with patch('trusts.core._compile_common_permissions', hide_group):
+        with patch(
+            'trusts.plan.aggregates._compile_common_permissions', hide_group,
+        ):
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 render_policy_sql_bytes(handles=[handle])
         self.assertIn('no group-permissions query', str(ctx.exception))
