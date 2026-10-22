@@ -1,12 +1,14 @@
-"""Registration marshaling and the ready-time sweep."""
+"""Registration walk and the one catalog build."""
 
 __all__ = []
 
 import inspect
 from collections.abc import Callable
+from functools import partial
 from typing import TypeVar
 
 from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Model, Q
@@ -31,6 +33,7 @@ from trusts.plan.grammar import (
     inquiry_partner,
     invoke,
     is_inquiry,
+    is_predicate,
     symbol_path,
     symbol_token,
     unsupported,
@@ -50,7 +53,7 @@ from trusts.compile.resolution import (
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
-from trusts.compile.catalogs import Catalog, CatalogShape
+from trusts.compile.catalogs import Catalog, Question
 from trusts.plan.conditions import (
     check_comparison_types,
     check_const_member,
@@ -58,6 +61,7 @@ from trusts.plan.conditions import (
     condition_model_label,
     normalize_expression,
     parse_named_filter,
+    validate_expression,
     require_boolean_field,
 )
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan, bind_checked_user
@@ -188,7 +192,8 @@ class PublicRegistration:
 
 
 def relation_plan(records, delegations, content, user, permission,
-                  catalog_user, user_conditions, user_rules, override_q):
+                  catalog_user, user_conditions, user_rules, override_q,
+                  query_compiler=None):
     """One plan for ``(content, user, permission)``. An empty selection is a plan."""
     chosen = tuple(
         record for record in records
@@ -233,15 +238,21 @@ def relation_plan(records, delegations, content, user, permission,
             user_conditions is not None or builtin_user_conditions(subject)
         ) else absent
         closed, override = rules, override_q
-    return RelationPlan(
+    plan = RelationPlan(
         records=chosen, delegations=bridges, permission_model=plan_permission,
         content_identity=content, user_rules=rules, user_rules_closed=closed,
         user_override_q=override, user_model=catalog_user,
-        permission_column=column)
+        permission_column=column,
+        applicable=bool(chosen or bridges),
+        query_compiler=query_compiler,
+    )
+    if query_compiler is None:
+        return plan
+    return replace(plan, applicable=bool(query_compiler.applies(plan)))
 
 
 def plan_table(records, delegations, catalog_user, user_conditions,
-               user_rules, override_q):
+               user_rules, override_q, query_compiler):
     """Selectable keys in first-seen order. ``None`` is the default plan."""
     users, perms, order = {}, {}, []
     observed = [
@@ -263,26 +274,148 @@ def plan_table(records, delegations, catalog_user, user_conditions,
     table = {
         (content, user, perm): relation_plan(
             records, delegations, content, user, perm, catalog_user,
-            user_conditions, user_rules, override_q)
+            user_conditions, user_rules, override_q, query_compiler)
         for content in order
         for user in (None, *users[content])
         for perm in (None, *perms[content])}
     table[None] = relation_plan(
         records, delegations, None, None, None, catalog_user,
-        user_conditions, user_rules, override_q)
+        user_conditions, user_rules, override_q, query_compiler)
     return table
 
 
-class Compiler(object):
-    """Replay target for one recorder.
+def content_groups(records, delegations):
+    """``(content_model, records, delegations)`` in registration order."""
+    order = []
+    by_model = {}
+    for kind, rows in (('records', records), ('delegations', delegations)):
+        for record in rows:
+            model = record.content_model
+            slot = by_model.get(model)
+            if slot is None:
+                by_model[model] = slot = {'records': [], 'delegations': []}
+                order.append(model)
+            slot[kind].append(record)
+    return tuple(
+        (model, tuple(by_model[model]['records']),
+         tuple(by_model[model]['delegations']))
+        for model in order
+    )
 
-    The app recorder stores every registration call. ``ready`` replays
-    that log onto this compiler. ``register`` performs zero SQL.
-    ``compile`` freezes this compiler and returns a ``Catalog``. A later
-    ``compile`` returns another catalog from the same stored rows.
-    After that, ``register``, ``register_delegation``,
-    ``add_named_filter``, ``set_user_condition``, and
-    ``set_user_override`` raise ``TrustsConfigurationError``.
+
+def prefix_models(records, delegations):
+    """Concrete models that are a proper prefix of these rows' content paths."""
+    found = []
+    seen = set()
+    for record in tuple(records) + tuple(delegations or ()):
+        path = record.content_path
+        if not path:
+            continue
+        current = record.root
+        last = len(path) - 1
+        for index, name in enumerate(path):
+            field = current._meta.get_field(name)
+            related, _target = resolved_hop(field, 'content', path)
+            concrete = related._meta.concrete_model
+            if index != last and concrete not in seen:
+                seen.add(concrete)
+                found.append(concrete)
+            current = related
+    return tuple(found)
+
+
+def _invoke(linked, name, head, kw, *args, **kwargs):
+    """Call one catalog method once ``linked`` holds the built catalog."""
+    return getattr(linked[0], name)(*head, *args, **{**kw, **kwargs})
+
+
+def question_descriptors(records, delegations, linked):
+    """Questions for one built catalog, in document order.
+
+    ``linked`` is a one-item list. ``Compiler.compile`` stores the catalog
+    there before returning it, so each question calls that catalog.
+    """
+    questions, prefixes = [], {}
+    for model, group_records, group_delegations in content_groups(
+        records, delegations,
+    ):
+        found = prefix_models(group_records, group_delegations)
+        prefixes[model] = found
+        questions.extend(
+            Question(name, model, group_records, group_delegations, fn)
+            for name, fn, keep in (
+                (
+                    'permitted',
+                    partial(
+                        _invoke, linked, '_question_content_grant', (model,), {},
+                    ),
+                    True,
+                ),
+                (
+                    'has_perm',
+                    partial(_invoke, linked, 'has_permission', (), {}),
+                    True,
+                ),
+                (
+                    'get_all_permissions',
+                    partial(_invoke, linked, 'permissions_for', (), {}),
+                    True,
+                ),
+                (
+                    'get_group_permissions',
+                    partial(
+                        _invoke, linked, 'permissions_for', (), {'kind': 'group'},
+                    ),
+                    any(record.via_group for record in group_records),
+                ),
+                (
+                    'get_permitted_users',
+                    partial(_invoke, linked, 'permitted_users', (), {}),
+                    True,
+                ),
+                (
+                    'filter_by_permitted_content',
+                    partial(
+                        _invoke, linked,
+                        '_question_filter_by_permitted_content', (model,), {},
+                    ),
+                    bool(found),
+                ),
+            )
+            if keep
+        )
+    return tuple(questions), prefixes
+
+
+def _prepare_conditions(filters, user_model):
+    """Check each stored condition and keep its resolved tree.
+
+    Object and principal field paths are checked against the models now.
+    The asking user and the grant are not known until the question.
+    """
+    prepared = {}
+    for key, pair in filters.items():
+        model, tree = pair
+        if not is_predicate(tree):
+            raise PermissionConditionError(
+                'Permission condition did not produce a comparison, '
+                '.contains(), boolean field, or combination with & and |.'
+            )
+        validate_expression(tree, model, user_model)
+        prepared[key] = pair
+    return prepared
+
+
+class Compiler(object):
+    """Internal registry walk and the one catalog build.
+
+    Callers register on the app's registration log. That log is replayed
+    here when the catalog is built, and the user model is already known.
+    ``register`` walks models and performs zero SQL. ``compile`` freezes
+    this registry and returns its ``Catalog``. A later ``compile`` returns
+    that same catalog. After the build, ``register``,
+    ``register_delegation``, ``add_named_filter``, ``set_user_condition``,
+    and ``set_user_override`` raise ``TrustsConfigurationError``.
     """
 
     def __init__(self, *, user_model, query_compiler, path, family):
@@ -301,11 +434,8 @@ class Compiler(object):
 
     @staticmethod
     def default_query_compiler():
-        """Plan compiler ``ready`` stores when the config does not set one."""
+        """Plan compiler stored when the config does not set one."""
         return PlanQueryCompiler()
-
-    def get_recorder_target(self):
-        return self
 
     def add_named_filter(self, model, code, predicate):
         """Register a ``:code`` condition on ``model`` for this instance.
@@ -346,10 +476,9 @@ class Compiler(object):
     def set_user_condition(self, name, expr, on='*'):
         """Set, replace, or remove one named user condition.
 
-        Record this before ``register()``. The catalog sweep checks the
-        order at ready. ``None`` removes that name. ``on`` is ``*``,
-        ``user``, or ``sponsor``.
-        The lambda is walked once against this factory's ``user_model``.
+        Record this before ``register()``. ``None`` removes that name.
+        ``on`` is ``*``, ``user``, or ``sponsor``. The lambda is walked
+        once and checked against the user model.
         """
         self._open('set_user_condition')
         self._open_for_rules('condition')
@@ -390,9 +519,8 @@ class Compiler(object):
     def set_user_override(self, name, expr, on='user'):
         """Store the one checked-user override, or clear it with ``None``.
 
-        Record this before ``register()``. The catalog sweep checks the
-        order at ready. ``on="sponsor"`` and ``on="*"`` raise. The name cannot match a
-        registered condition.
+        Record this before ``register()``. ``on="sponsor"`` and ``on="*"``
+        raise. The name cannot match a registered condition.
         """
         self._open('set_user_override')
         self._open_for_rules('override')
@@ -871,14 +999,17 @@ class Compiler(object):
         )
 
     def compile(self):
-        """Freeze this compiler and return its ``Catalog``.
+        """Build this registry's catalog once and freeze registration.
 
-        Named filters are copied into a new mapping, so the catalog
-        does not share this compiler's store. User-rule and override
+        The user model is already known. Named filters are copied into
+        a new mapping, so the catalog does not share this compiler's
+        store. Each stored condition is checked here; the asking user
+        is applied when the question is asked. User-rule and override
         fragments and the plan table are compiled here. A later call
-        compiles another catalog from the same stored rows.
+        returns that same catalog.
         """
-        named_filters = dict(self._named_filters)
+        if self.frozen:
+            return self._catalog
         stored = self._stored_user_conditions()
         model = self.user_model
         primary = compile_user_rules(
@@ -902,17 +1033,28 @@ class Compiler(object):
             override_q = compile_override_q(model, '', slot, {})
         rules = (primary, absent)
         plans = plan_table(
-            self.records, self.delegations, model, stored, rules, override_q)
-        self.frozen = True
-        shape = CatalogShape(
+            self.records, self.delegations, model, stored, rules, override_q,
+            self.query_compiler)
+        linked = []
+        questions, prefixes = question_descriptors(
+            self.records, self.delegations, linked)
+        self._catalog = Catalog(
             records=self.records, delegations=self.delegations,
-            named_filters=named_filters,
+            named_filters=MappingProxyType(dict(self._named_filters)),
             user_conditions=stored, user_override=self._user_override,
-            compiler=self.query_compiler,
             path=self.path, family=self.family, user_model=model,
-            user_rules=rules, override_q=override_q, plans=plans,
+            user_rules=rules, override_q=override_q,
+            plans=MappingProxyType(dict(plans)),
+            questions=questions,
+            content_prefixes=MappingProxyType(dict(prefixes)),
+            prepared_conditions=MappingProxyType(
+                _prepare_conditions(self._named_filters, model),
+            ),
         )
-        return Catalog(shape, user_model=model)
+        linked.append(self._catalog)
+        self.frozen = True
+        return self._catalog
+
 
     def _stored_user_conditions(self):
         """``None`` when the registry still uses the built-in rule."""
@@ -923,14 +1065,15 @@ class Compiler(object):
     def _open(self, method):
         if self.frozen:
             raise TrustsConfigurationError(
-                '%s refused: this compiler is frozen.' % method
+                '%s refused: this registry is frozen. '
+                'The catalog is already built.' % method
             )
 
     def _open_for_rules(self, kind):
         if self._order or self._delegation_order:
             raise TrustsConfigurationError(
                 'Record user conditions and the override before '
-                'register(). The catalog sweep checks this at ready().'
+                'register().'
             )
 
 

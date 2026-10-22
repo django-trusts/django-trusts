@@ -1,7 +1,9 @@
 """#115: user-facing README and package metadata for the final core library.
 
 The README consumer is ``tests.myapp``. Behavioral tests load that
-exact documented configuration and use the owner ``ready()`` registry.
+exact documented configuration. Registration is the end of models.py.
+``set_installed_apps()`` does not re-execute that module, so this
+class replays the same registration onto the rebuilt config.
 """
 
 from pathlib import Path
@@ -14,7 +16,7 @@ from django.http import HttpRequest
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import override_settings
 
-from tests.support import configured_catalog
+from tests.support import configured_catalog, register_installed_document_app
 from tests.kernel_host.apps import KernelHostConfig
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.backends import DocumentBackend
@@ -56,6 +58,7 @@ class ReadmeExampleAuthorizationTest(TestCase):
         cls._auth_override.enable()
         cls._apps_override = override_settings(INSTALLED_APPS=INSTALLED_APPS)
         cls._apps_override.enable()
+        register_installed_document_app()
         super().setUpClass()
 
     @classmethod
@@ -77,7 +80,7 @@ class ReadmeExampleAuthorizationTest(TestCase):
             permission=self.change_permission,
         )
 
-    def test_ready_contributed_the_documented_ref_to_the_owner_registry(self):
+    def test_models_registered_the_documented_rows_on_the_owner(self):
         from django.apps import apps as django_apps
 
         owner = django_apps.get_app_config('myapp')
@@ -85,7 +88,7 @@ class ReadmeExampleAuthorizationTest(TestCase):
         self.assertIsInstance(owner, TrustsConfigMixin)
         catalog = configured_catalog(DOCUMENT_BACKEND)
         self.assertEqual(catalog.path, owner.catalog_path())
-        self.assertIs(catalog, DocumentBackend().catalog)
+        self.assertIs(catalog, owner.catalog)
         self.assertTrue(catalog.records)
         self.assertIs(
             catalog.records[0].content_model,

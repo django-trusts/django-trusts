@@ -5,13 +5,10 @@ from django.contrib.auth.models import Permission
 from django.db.models import Manager, Model, QuerySet
 
 from trusts.backends import (
-    compile_permitted_users, filter_listed, grant_authorized, grant_permitted)
-from trusts.compile.catalogs import (
-    codename_binding,
-    guard_conditions,
-    guard_permission_string,
-)
+    codename_binding, compile_permitted_users, filter_listed,
+    grant_authorized, grant_permitted)
 from trusts.errors import TrustsConfigurationError
+from trusts.utils import guard_conditions, guard_permission_string
 
 
 class AuthorizedQuerySet(QuerySet):

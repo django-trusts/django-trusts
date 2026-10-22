@@ -62,7 +62,7 @@ class StandaloneIndependenceTest(SimpleTestCase):
         before = registry.records
         first_build = built_catalog(registry)
         second_build = built_catalog(registry)
-        self.assertIsNot(first_build, second_build)
+        self.assertIs(first_build, second_build)
         self.assertEqual(first_build.records, before)
         self.assertEqual(second_build.records, before)
         self.assertTrue(apps.ready)
@@ -123,13 +123,12 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
 
     def test_rows_before_ready_survive_and_later_register_is_refused(self):
         backend = DocumentBackend()
-        recorder = backend.recorder
-        catalog = backend.get_catalog()
+        registry = backend.get_registry()
+        catalog = configured_catalog(DOCUMENT)
         self.assertIsNotNone(catalog)
-        self.assertTrue(recorder.frozen)
         before = catalog.records
         with self.assertRaises(TrustsConfigurationError):
-            _contribute_recorder(recorder)
+            _contribute_recorder(registry)
         self.assertEqual(catalog.records, before)
 
     def test_catalog_paths_are_the_owning_config_classes(self):
@@ -145,73 +144,61 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
             sweep_listed_backends()
         self.assertIs(
             configured_catalog(HOST),
-            apps.get_app_config('trusts_kernel_host').get_catalog(),
+            apps.get_app_config('trusts_kernel_host').catalog,
         )
 
     def test_ready_does_not_replace_stored_objects(self):
         from django.apps import apps
-        from tests.kernel_host.backends import HostTrustModelBackend
 
         live = apps.get_app_config('trusts_kernel_host')
-        first = HostTrustModelBackend().catalog
+        first = configured_catalog(HOST)
         live.ready()
-        rebuilt = HostTrustModelBackend().catalog
+        rebuilt = configured_catalog(HOST)
         self.assertEqual(rebuilt.records, first.records)
         self.assertEqual(rebuilt.path, first.path)
-        self.assertIsNot(rebuilt, first)
+        self.assertIs(rebuilt, first)
         self.assertFalse(hasattr(live, 'registries'))
 
-    def test_fresh_config_recorder_is_writable_until_ready(self):
-        import tests as tests_module
-        from trusts.apps import TrustsConfigMixin
+    def test_registration_does_not_resolve_the_user_model(self):
+        from django.contrib.auth import get_user_model
+        from trusts.apps import Recorder
+        from trusts.compile.factory import Compiler
 
-        class _Fresh(TrustsConfigMixin):
-            name = 'tests.core.fresh89'
-            label = 'fresh89'
-
-        config = _Fresh('tests.core.fresh89', tests_module)
-        self.assertFalse(config.recorder.frozen)
-        with self.assertRaisesRegex(
-            TrustsConfigurationError, 'catalog not built yet',
-        ):
-            config.get_catalog()
-        _contribute_recorder(config.recorder)
-        self.assertFalse(config.recorder.frozen)
-        with self.assertRaisesRegex(TrustsConfigurationError, 'not frozen'):
-            config.recorder.play(compiler(path='tests.core.fresh89-open'))
-        config.recorder.freeze()
-        played = compiler(user_model=get_user_model(), path='tests.core.fresh89')
-        self.assertIs(played.get_recorder_target(), played)
-        config.recorder.play(played.get_recorder_target())
-        again = compiler(user_model=get_user_model(), path='tests.core.fresh89-again')
-        config.recorder.play(again.get_recorder_target())
-        self.assertIs(played.records[0].root, DocumentGrant)
-        self.assertIs(again.records[0].root, DocumentGrant)
+        log = Recorder()
+        _contribute_recorder(log)
+        built_from = Compiler(
+            user_model=get_user_model(),
+            query_compiler=Compiler.default_query_compiler(),
+            path='tests.core.fresh89',
+            family='relationship',
+        )
+        log.freeze()
+        log.play(built_from)
+        built = built_from.compile()
+        self.assertIs(built.records[0].root, DocumentGrant)
+        with self.assertRaises(TrustsConfigurationError):
+            _contribute_recorder(log)
+        self.assertIs(built_from.compile(), built)
 
     def test_backend_in_a_ready_app_shares_that_recorder(self):
         from django.apps import apps
-
-        class _LateAssign(TrustModelBackendMixin, ModelBackend):
-            pass
+        from tests.backends import MixinOnlyBackend
 
         owner = apps.get_app_config('trusts_tests')
-        backend = _LateAssign()
-        self.assertIs(backend.recorder, owner.recorder)
-        self.assertIs(backend.get_catalog(), owner.get_catalog())
-        self.assertTrue(backend.recorder.frozen)
+        backend = MixinOnlyBackend()
+        self.assertIs(backend.get_registry(), owner.recorder)
         with self.assertRaises(TrustsConfigurationError):
-            _contribute_recorder(backend.recorder)
+            _contribute_recorder(backend.get_registry())
 
     def test_standalone_factory_stays_writable_after_host_ready(self):
         from django.apps import apps
-        from tests.kernel_host.backends import HostTrustModelBackend
 
-        first = HostTrustModelBackend().catalog
+        first = configured_catalog(HOST)
         private = compiler()
         apps.get_app_config('trusts_kernel_host').ready()
-        rebuilt = HostTrustModelBackend().catalog
+        rebuilt = configured_catalog(HOST)
         self.assertEqual(rebuilt.records, first.records)
-        self.assertIsNot(rebuilt, first)
+        self.assertIs(rebuilt, first)
         _contribute_document(private)
         self.assertEqual(len(private.records), 1)
 
@@ -228,25 +215,24 @@ class SentinelAfterFirstReadTest(KernelHostRequiredMixin, _CatalogRestoreMixin, 
         rebuilt = configured_catalog(HOST)
         self.assertEqual(rebuilt.records, before)
         self.assertEqual(rebuilt.path, catalog.path)
-        self.assertIsNot(rebuilt, catalog)
+        self.assertIs(rebuilt, catalog)
 
     def test_second_ready_leaves_the_built_catalog_in_place(self):
         from django.apps import apps
         from tests.kernel_host.backends import HostTrustModelBackend
 
         live = apps.get_app_config('trusts_kernel_host')
-        catalog = HostTrustModelBackend().catalog
-        recorder = HostTrustModelBackend().recorder
-        self.assertTrue(recorder.frozen)
+        catalog = configured_catalog(HOST)
+        registry = HostTrustModelBackend().get_registry()
         before = catalog.records
         live.ready()
-        rebuilt = HostTrustModelBackend().catalog
+        rebuilt = configured_catalog(HOST)
         self.assertEqual(catalog.records, before)
         self.assertEqual(rebuilt.records, before)
         self.assertEqual(rebuilt.path, catalog.path)
-        self.assertIsNot(rebuilt, catalog)
+        self.assertIs(rebuilt, catalog)
         with self.assertRaises(TrustsConfigurationError):
-            recorder.register(
+            registry.register(
                 trust=DocumentGrant, user='user',
                 permission='permission', content='document',
             )
@@ -260,20 +246,23 @@ class BackendQuestionAfterLateRegistrationTest(SimpleTestCase):
     def test_register_after_build_is_refused(self):
         from trusts.errors import TrustsConfigurationError
         backend = DocumentBackend()
-        recorder = backend.recorder
-        catalog = backend.get_catalog()
+        registry = backend.get_registry()
+        catalog = configured_catalog(DOCUMENT)
         self.assertIsNotNone(catalog)
-        self.assertTrue(recorder.frozen)
         before = catalog.records
-        with self.assertRaisesRegex(TrustsConfigurationError, 'register refused: this recorder is frozen'):
-            recorder.register(trust=DocumentGrant, user='user', permission='permission', content='document')
+        with self.assertRaisesRegex(TrustsConfigurationError, 'register refused: this registry is frozen'):
+            registry.register(trust=DocumentGrant, user='user', permission='permission', content='document')
         self.assertEqual(catalog.records, before)
 
-    def test_frozen_register_names_ready_and_app_order(self):
-        recorder = DocumentBackend().recorder
+    def test_frozen_register_names_the_built_catalog(self):
+        registry = DocumentBackend().get_registry()
         with self.assertRaises(TrustsConfigurationError) as caught:
-            recorder.register(trust=DocumentGrant, user='user', permission='permission', content='document')
-        self.assertEqual(str(caught.exception), 'register refused: this recorder is frozen. The catalog was already built by TrustsConfigMixin.ready().')
+            registry.register(trust=DocumentGrant, user='user', permission='permission', content='document')
+        self.assertEqual(
+            str(caught.exception),
+            'register refused: this registry is frozen. The catalog is already built.',
+        )
+        self.assertNotIn('recorder', str(caught.exception))
 
 class HandleBuildRegistrySignalTest(SimpleTestCase):
     """A configured path holds a registry. The registry builds itself."""
@@ -283,7 +272,7 @@ class HandleBuildRegistrySignalTest(SimpleTestCase):
         handle = registry
         first = built_catalog(handle)
         second = built_catalog(handle)
-        self.assertIsNot(first, second)
+        self.assertIs(first, second)
         self.assertEqual(first.records, ())
         fresh = compiler(path='tests.core.builder')
         _contribute_document(fresh)

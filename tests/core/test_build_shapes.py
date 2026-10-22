@@ -17,7 +17,7 @@ from django.db.models import Q
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
-from trusts.compile.catalogs import Catalog, CatalogShape
+from trusts.compile.catalogs import Catalog
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan
 from trusts.compile.factory import (
     relation_plan,
@@ -315,7 +315,7 @@ class BuildCatalogShapeTest(SimpleTestCase):
             [(Document, 'owned', condition)],
         )
         again = registry.compile()
-        self.assertIsNot(again.named_filters, catalog.named_filters)
+        self.assertIs(again, catalog)
         self.assertIs(
             again.named_filters[(Document._meta.label, 'owned')][1],
             condition,
@@ -613,20 +613,19 @@ class CatalogFromShapeTest(TransactionTestCase):
                 user=grant.user,
                 permission=grant.permission,
             )
-            catalog = Catalog(CatalogShape(
+            catalog = Catalog(
                 records=(record,),
                 delegations=(),
                 named_filters={},
                 user_conditions=None,
                 user_override=None,
-                compiler=PlanQueryCompiler(),
                 path='shape-answers',
                 family='relationship',
                 user_model=User,
                 user_rules=(Q(), Q()),
                 override_q=None,
                 plans=_shape_plans((record,), User),
-            ), user_model=User)
+            )
             self.assertTrue(catalog.has_perm(holder, code, payload))
             self.assertFalse(catalog.has_perm(outsider, code, payload))
             self.assertEqual(
@@ -647,14 +646,14 @@ class CatalogFromShapeTest(TransactionTestCase):
                 ).values_list('pk', flat=True)),
                 {scope.pk},
             )
-            empty = Catalog(CatalogShape(
+            empty = Catalog(
                 records=(), delegations=(), named_filters={},
                 user_conditions=None, user_override=None,
-                compiler=PlanQueryCompiler(), path='empty-shape',
+                path='empty-shape',
                 family='relationship', user_model=User,
                 user_rules=(Q(), Q()), override_q=None,
                 plans=_shape_plans((), User),
-            ), user_model=User)
+            )
             self.assertFalse(empty.has_perm(holder, code, payload))
             self.assertFalse(empty.filter_authorized(
                 Payload.objects.all(), holder, read,
@@ -675,9 +674,11 @@ class CatalogFromShapeTest(TransactionTestCase):
 def _shape_plans(records, user_model):
     """Plans a hand-built catalog would have stored at compile()."""
     rules = (Q(), Q())
+    query_compiler = PlanQueryCompiler()
     table = {
         None: relation_plan(
             records, (), None, None, None, user_model, None, rules, None,
+            query_compiler,
         ),
     }
     for content in {record.content_model for record in records}:
@@ -685,7 +686,7 @@ def _shape_plans(records, user_model):
             for terminal in (None, Permission):
                 table[content, principal, terminal] = relation_plan(
                     records, (), content, principal, terminal,
-                    user_model, None, rules, None,
+                    user_model, None, rules, None, query_compiler,
                 )
     return table
 

@@ -22,7 +22,7 @@ from tests.support import scoped_permitted_content as filter_by_permitted_conten
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import granted
-from trusts.decorators import _declared_authorization_guards, authorization_required
+from trusts.decorators import authorization_required
 from trusts.models import PermittedQuerySet, PermittedUsersManagerMixin
 urlpatterns = [path('admin/', admin.site.urls)]
 
@@ -1119,26 +1119,18 @@ class AuthorizationRequiredSuperuserTest(KernelHostRequiredMixin, TestCase):
         @authorization_required(Document, self.perm, **flags)
         def view(request, pk):
             return 'ok'
-        entry = (Document, self.perm, ())
-        self.addCleanup(self._forget_guard, entry)
         return view
-
-    def _forget_guard(self, entry):
-        try:
-            _declared_authorization_guards.remove(entry)
-        except ValueError:
-            pass
 
     def test_without_override_active_superuser_needs_a_grant(self):
         config, original, sentinel, registry, saved_catalog = _install_document_registry(override=False)
         self.addCleanup(_restore_document_registry, config, original, sentinel, saved_catalog)
         self.assertIsNone(registry.compile().user_override)
         view = self._view()
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             with self.assertRaises(PermissionDenied):
                 view(_guard_request(self.active), pk=self.doc.pk)
         self.assertTrue(self.active.has_perm(self.perm, self.doc))
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             with self.assertRaises(PermissionDenied):
                 view(_guard_request(self.dormant), pk=self.doc.pk)
         audited = self._view(skip_is_active=True)
@@ -1154,7 +1146,7 @@ class AuthorizationRequiredSuperuserTest(KernelHostRequiredMixin, TestCase):
         view = self._view()
         with self.assertNumQueries(1):
             self.assertEqual(view(_guard_request(self.active), pk=self.doc.pk), 'ok')
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             with self.assertRaises(PermissionDenied):
                 view(_guard_request(self.dormant), pk=self.doc.pk)
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Installed-wheel Pyright proof for recorder ``register`` inference.
+"""Installed-wheel Pyright proof for ``get_registry().register`` inference.
 
 Must run from outside the checkout after installing the built wheel.
 A valid consumer must be clean; ``t.not_a_field`` must be a diagnostic.
-The consumer registers on ``TrustsConfigMixin.recorder`` and does not
-import or annotate ``BackendHandle``.
+The consumer registers through ``DocumentBackend().get_registry()`` and
+does not import or annotate ``BackendHandle``.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from pathlib import Path
 OK_SOURCE = '''\
 from django.db import models
 
+from documents.backends import DocumentBackend
 from trusts.apps import TrustsConfigMixin
 
 
@@ -39,7 +40,7 @@ class DocumentsConfig(TrustsConfigMixin):
     label = "pyright_proof"
 
     def ready(self):
-        self.recorder.register(
+        DocumentBackend().get_registry().register(
             trust=AnnotatedGrant,
             user=lambda t: t.user,
             permission=lambda t: t.permission,
@@ -52,6 +53,7 @@ class DocumentsConfig(TrustsConfigMixin):
 MISSING_SOURCE = '''\
 from django.db import models
 
+from documents.backends import DocumentBackend
 from trusts.apps import TrustsConfigMixin
 
 
@@ -70,7 +72,7 @@ class DocumentsConfig(TrustsConfigMixin):
     label = "pyright_proof"
 
     def ready(self):
-        self.recorder.register(
+        DocumentBackend().get_registry().register(
             trust=AnnotatedGrant,
             user=lambda t: t.user,
             permission=lambda t: t.permission,

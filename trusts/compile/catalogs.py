@@ -1,11 +1,10 @@
 """One built catalog. Not a builder and not a second store."""
 
 from dataclasses import dataclass, replace
-from functools import partial
 
 from django.contrib.auth.models import Permission
 from django.db import router
-from django.db.models import Model, Q, QuerySet, Subquery
+from django.db.models import Model, Q, QuerySet
 
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.utils import parse_perm_code
@@ -21,7 +20,7 @@ from trusts.plan.conditions import (
     validate_expression,
 )
 from trusts.plan.grammar import is_predicate
-from trusts.plan.writers import compile_expression_q, evaluate_expression
+from trusts.plan.writers import compile_to_q, evaluate_expression
 from trusts.plan.contents import (
     _as_q,
     _compile_granted,
@@ -34,7 +33,6 @@ from trusts.plan.hops import (
     concrete_model,
     content_model,
     require_instance,
-    resolved_hop,
 )
 from trusts.plan.relations import _candidate_model, bind_checked_user
 from trusts.plan.rewrites import bind_once
@@ -46,34 +44,6 @@ from trusts.plan.users import (
 )
 
 _NO_PRESET = object()
-
-
-@dataclass(frozen=True, slots=True)
-class CatalogShape(object):
-    """Frozen data ``Compiler.compile`` hands to one ``Catalog``.
-
-    ``path`` and ``family`` are that catalog's identity.
-    ``named_filters`` maps ``(model label, code)`` to ``(model, tree)``,
-    copied once at build. ``user_rules`` is ``(primary, absent)``: stored rules use
-    ``primary``; the built-in rule uses ``primary`` when the subject has
-    a concrete boolean ``is_active`` and ``absent`` otherwise.
-    ``override_q`` is the override compiled against the catalog user
-    model, or ``None``. ``plans`` maps keys to plans; ``None`` is the
-    default. ``compiler`` is the query compiler stored at ``compile``.
-    """
-
-    records: tuple
-    delegations: tuple
-    named_filters: dict
-    user_conditions: object
-    user_override: object
-    compiler: object
-    path: str
-    family: str
-    user_model: object
-    user_rules: tuple
-    override_q: object
-    plans: dict
 
 
 @dataclass(frozen=True)
@@ -106,22 +76,30 @@ class Question(object):
     question: object
 
 
+@dataclass(frozen=True, slots=True, eq=False)
 class Catalog(object):
-    """Answers from the shape ``Compiler.compile`` stored on the config."""
+    """Answers from the rows ``Compiler.compile`` stored.
 
-    def __init__(self, shape, *, user_model):
-        self.path = shape.path
-        self.family = shape.family
-        self.records = shape.records
-        self.delegations = shape.delegations
-        self.compiler = shape.compiler
-        self.user_model = user_model
-        self.user_conditions = shape.user_conditions
-        self.user_override = shape.user_override
-        self.named_filters = dict(shape.named_filters)
-        self.user_rules = shape.user_rules
-        self.override_q = shape.override_q
-        self.plans = shape.plans
+    ``named_filters``, ``plans``, ``content_prefixes``, and
+    ``prepared_conditions`` are immutable mappings the factory stored.
+    ``questions`` is that build's question tuple. ``plans`` maps keys to
+    plans; ``None`` is the default. ``user_rules`` is ``(primary, absent)``.
+    """
+
+    records: tuple
+    delegations: tuple
+    named_filters: object
+    user_conditions: object
+    user_override: object
+    path: str
+    family: str
+    user_model: object
+    user_rules: tuple
+    override_q: object
+    plans: object
+    questions: tuple = ()
+    content_prefixes: object = None
+    prepared_conditions: object = None
 
     def plan_for(self, content, *, user=None, permission=None):
         """Look up ``(content, user, permission)``. A miss is the default."""
@@ -141,10 +119,6 @@ class Catalog(object):
 
     def _stored_named_filter(self, model, code):
         return self.named_filters.get((condition_model_key(model), code))
-
-    def applies(self, plan):
-        """Whether this catalog's compiler will compile ``plan``."""
-        return bool(self.compiler.applies(plan))
 
     def has_permission(self, user, content, permission, *,
                        extra_q=None, permission_model=None,
@@ -328,13 +302,7 @@ class Catalog(object):
         a group whose content path has a proper prefix.
         """
         visit = visitor.visit
-        results = []
-        for model, records, delegations in self._content_groups():
-            for descriptor in self._descriptors_for(
-                model, records, delegations,
-            ):
-                results.append(visit(descriptor))
-        return tuple(results)
+        return tuple(visit(question) for question in self.questions)
 
     def authorization_preflight(self, model, conditions):
         """Zero-SQL ``(participating, owns_conditions)`` for this catalog.
@@ -408,7 +376,8 @@ class Catalog(object):
 
     def prepare_has_perm(self, user_obj, permext, obj, *, skipped):
         model = _content_model(obj)
-        if not self.applies(self.plan_for(obj, user=user_obj)):
+        plan = self.plan_for(obj, user=user_obj)
+        if not plan.applicable:
             return PreparedInquiry(model, result=False)
         stored, extra_q = self._condition_overlay(permext, obj, user_obj)
         applabel, modelname, action, cond = parse_perm_code(permext)
@@ -464,11 +433,11 @@ class Catalog(object):
         if not cond:
             return None, None
         model = _content_model(obj)
-        stored = self._stored_named_filter(model, cond)
+        stored = _condition_entry(self, model, cond)
         if stored is None or not isinstance(obj, QuerySet):
             return stored, None
-        return stored, compile_stored_condition_q(
-            stored, obj.model, permext, user_obj, self.user_model,
+        return stored, _apply_prepared(
+            stored, obj.model, user_obj, permext, self.user_model,
         )
 
     def _resolve_skipped(self, subject, skip_flags, skipped, *, require_user=True):
@@ -482,46 +451,12 @@ class Catalog(object):
             return False, skipped
         return False, {}
 
-    def _content_groups(self):
-        """``(content_model, records, delegations)`` in document order."""
-        order = []
-        by_model = {}
-        for kind, rows in (('records', self.records),
-                           ('delegations', self.delegations)):
-            for record in rows:
-                model = record.content_model
-                slot = by_model.get(model)
-                if slot is None:
-                    by_model[model] = slot = {'records': [], 'delegations': []}
-                    order.append(model)
-                slot[kind].append(record)
-        return tuple(
-            (model, tuple(by_model[model]['records']),
-             tuple(by_model[model]['delegations']))
-            for model in order
-        )
-
     def permitted_content_prefix_models(self, model):
         """Concrete models that are a proper prefix of ``model``'s path."""
-        plan = self.plan_for(model)
-        legs = tuple(plan.records) + tuple(plan.delegations or ())
-        found = []
-        seen = set()
-        for record in legs:
-            path = record.content_path
-            if not path:
-                continue
-            current = record.root
-            last = len(path) - 1
-            for index, name in enumerate(path):
-                field = current._meta.get_field(name)
-                related, _target = resolved_hop(field, 'content', path)
-                concrete = related._meta.concrete_model
-                if index != last and concrete not in seen:
-                    seen.add(concrete)
-                    found.append(concrete)
-                current = related
-        return tuple(found)
+        prefixes = self.content_prefixes
+        if not prefixes:
+            return ()
+        return prefixes.get(content_model(model), ())
 
     def _question_content_grant(self, content_model, user, permission):
         return self.filter_authorized(
@@ -536,40 +471,6 @@ class Catalog(object):
             queryset, user, permission, content=content_model,
         )
 
-    def _descriptors_for(self, content_model, records, delegations):
-        descriptors = [
-            Question(
-                'permitted', content_model, records, delegations,
-                partial(self._question_content_grant, content_model),
-            ),
-            Question(
-                'has_perm', content_model, records, delegations,
-                self.has_permission,
-            ),
-            Question(
-                'get_all_permissions', content_model, records, delegations,
-                self.permissions_for,
-            ),
-        ]
-        if any(record.via_group for record in records):
-            descriptors.append(Question(
-                'get_group_permissions', content_model, records, delegations,
-                partial(self.permissions_for, kind='group'),
-            ))
-        descriptors.append(Question(
-            'get_permitted_users', content_model, records, delegations,
-            self.permitted_users,
-        ))
-        if self.permitted_content_prefix_models(content_model):
-            descriptors.append(Question(
-                'filter_by_permitted_content', content_model, records,
-                delegations,
-                partial(
-                    self._question_filter_by_permitted_content, content_model,
-                ),
-            ))
-        return tuple(descriptors)
-
 
 class PreparedInquiry(object):
     def __init__(self, model, result=_NO_PRESET, qs=None):
@@ -583,68 +484,8 @@ class PreparedInquiry(object):
         return bool(self.qs.exists())
 
 
-def guard_permission_string(permission, *, api):
-    """Exact ``app_label.codename`` form. Does not infer a model name."""
-    if not isinstance(permission, str):
-        raise TypeError(
-            '%s permission must be an app_label.codename string, not %r.'
-            % (api, type(permission).__name__)
-        )
-    if ':' in permission or permission.count('.') != 1:
-        raise TrustsConfigurationError(
-            '%s permission must be one base "app_label.codename" string '
-            'without a colon: %r.' % (api, permission)
-        )
-    app_label, codename = permission.split('.')
-    if not app_label or not codename:
-        raise TrustsConfigurationError(
-            '%s permission must be one base "app_label.codename" string, '
-            'not %r.' % (api, permission)
-        )
-    return app_label, codename
-
-
-def guard_conditions(conditions, *, api):
-    if type(conditions) is not tuple:
-        raise TypeError(
-            '%s conditions must be an exact tuple, not %r.'
-            % (api, type(conditions).__name__)
-        )
-    seen = set()
-    for name in conditions:
-        if not isinstance(name, str) or not name or name != name.strip() or ':' in name:
-            raise TrustsConfigurationError(
-                '%s condition name is malformed: %r.' % (api, name)
-            )
-        if name in seen:
-            raise TrustsConfigurationError(
-                '%s conditions must not contain duplicates: %r.'
-                % (api, name)
-            )
-        seen.add(name)
-    return conditions
-
-
-def codename_binding(model, app_label, codename):
-    """Unevaluated pk of the exact codename on ``model``'s content type."""
-    return Subquery(
-        Permission.objects.filter(
-            content_type__app_label=app_label.lower(),
-            content_type__model=model._meta.model_name,
-            codename=codename,
-        ).values('pk')[:1]
-    )
-
-
 def _content_model(obj):
     return obj.model if isinstance(obj, QuerySet) else obj.__class__
-
-
-def _model_label(model):
-    meta = model._meta if isinstance(model, type) else getattr(model, '_meta', None)
-    if meta is None:
-        return model
-    return meta.label
 
 
 def _perm_codes(permission_qs):
@@ -703,29 +544,35 @@ def _owns_selected_conditions(catalog, model, conditions):
     return True
 
 
+def _condition_entry(catalog, model, code):
+    """The checked tree for this model and code, or None when it is absent."""
+    return (catalog.prepared_conditions or {}).get(
+        (condition_model_key(model), code),
+    )
+
+
+def _apply_prepared(entry, model, user, perm, user_model):
+    """Bind the asking user and this call's grant. ``entry`` is ``(model, tree)``."""
+    return compile_to_q(
+        entry[1], model, user,
+        perm.split(':', 1)[0] if isinstance(perm, str) else perm,
+        user_model,
+    )
+
+
 def _selected_condition_q(catalog, model, permission, conditions, user, *, api):
     """AND this catalog's selected names, or None when any name is missing."""
     extra_q = None
     for name in conditions:
-        stored = catalog._stored_named_filter(model, name)
+        stored = _condition_entry(catalog, model, name)
         if stored is None:
             return None
-        part = compile_stored_condition_q(
-            stored, model, '%s:%s' % (permission, name), user,
+        part = _apply_prepared(
+            stored, model, user, '%s:%s' % (permission, name),
             catalog.user_model,
         )
         extra_q = part if extra_q is None else extra_q & part
     return extra_q
-
-
-def compile_stored_condition_q(stored, model, perm, user, user_model=None):
-    """Compile one stored ``(model, tree)`` pair, or raise fail-closed."""
-    cond = parse_perm_code(perm)[3]
-    if stored is None:
-        raise _unknown_condition_error(model, cond)
-    _registered, tree = stored
-    grant = perm.split(':', 1)[0] if isinstance(perm, str) else perm
-    return compile_expression_q(tree, model, user, grant, user_model)
 
 
 def evaluate_registered_expression(expr, user, perm, obj, model=None, user_model=None):
@@ -744,19 +591,6 @@ def evaluate_registered_expression(expr, user, perm, obj, model=None, user_model
     validate_expression(expr, klass, user_model)
     return evaluate_expression(
         expr, user, perm, obj, model=klass, user_model=user_model,
-    )
-
-
-def _unknown_condition_error(model, cond_code):
-    meta = getattr(model, '_meta', None)
-    if meta is not None:
-        return AttributeError(
-            'Permission condition code "%s" is not associate with model "%s_%s"'
-            % (cond_code, meta.app_label, meta.model_name)
-        )
-    return AttributeError(
-        'Permission condition code "%s" is not associate with model "%s"'
-        % (cond_code, model)
     )
 
 

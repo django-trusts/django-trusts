@@ -1,12 +1,13 @@
-from tests.support import listed_relationship, configured_catalog, replay_recorder, compiler
+from tests.support import (
+    listed_relationship, configured_catalog, replay_recorder, compiler,
+    register_installed_document_app,
+)
 """#138: authorization_required Trusts-only pk guard."""
 from contextlib import contextmanager
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied
-from django.core.checks import Error, run_checks
 from django.db import connection, models
 from django.http import Http404, HttpRequest
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
@@ -16,7 +17,7 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.myapp.settings import AUTHENTICATION_BACKENDS, INSTALLED_APPS
 from trusts.errors import TrustsConfigurationError
-from trusts.decorators import _declared_authorization_guards, authorization_required
+from trusts.decorators import authorization_required
 
 
 class AlwaysGrantBackend(object):
@@ -71,20 +72,13 @@ class AuthorizationRequiredDeclarationTest(SimpleTestCase):
         with self.assertRaises(TrustsConfigurationError):
             authorization_required(Document, 'otherapp.change_document')
 
-    def test_system_check_skips_guards_when_model_app_is_absent(self):
-        installed = tuple(
-            app for app in settings.INSTALLED_APPS
-            if app != 'tests.myapp.apps.DocumentConfig'
-        )
-        with override_settings(INSTALLED_APPS=installed):
-            messages = [
-                message for message in run_checks()
-                if getattr(message, 'id', None) == 'trusts.E008'
-            ]
-        self.assertFalse(messages)
-
 @override_settings(AUTHENTICATION_BACKENDS=AUTHENTICATION_BACKENDS, INSTALLED_APPS=INSTALLED_APPS)
 class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        register_installed_document_app()
 
     def setUp(self):
         User = get_user_model()
@@ -160,28 +154,16 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
         with self.assertRaises(PermissionDenied):
             _publish(_request(self.alice), pk=self.secret.pk)
 
-    def _forget_guard(self, entry):
-        try:
-            _declared_authorization_guards.remove(entry)
-        except ValueError:
-            pass
-
     def test_unknown_condition_fails_closed_on_first_use(self):
-        entry = (Document, 'myapp.change_document', ('missing_138',))
-        self.addCleanup(self._forget_guard, entry)
-
         @authorization_required(Document, 'myapp.change_document', ('missing_138',))
         def _bad(request, pk):
             return 'no'
         for user in (self.alice, self.superuser):
-            with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError):
+            with self.assertNumQueries(1):
+                with self.assertRaises(PermissionDenied):
                     _bad(_request(user), pk=self.open_doc.pk)
 
     def test_unsupported_model_fails_closed_without_sql(self):
-        entry = (DocumentGrant, 'myapp.change_documentgrant', ())
-        self.addCleanup(self._forget_guard, entry)
-
         @authorization_required(DocumentGrant, 'myapp.change_documentgrant')
         def _unsupported(request, pk):
             return 'no'
@@ -190,30 +172,6 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
             with self.assertNumQueries(1):
                 with self.assertRaises(PermissionDenied):
                     _unsupported(_request(user), pk=granted.pk)
-
-    def test_system_check_reports_unknown_guard_condition(self):
-        entry = (Document, 'myapp.change_document', ('missing_check_138',))
-        self.addCleanup(self._forget_guard, entry)
-
-        @authorization_required(Document, 'myapp.change_document', ('missing_check_138',))
-        def _unused(request, pk):
-            return 'no'
-        self.assertIn(entry, _declared_authorization_guards)
-        messages = [message for message in run_checks() if getattr(message, 'id', None) == 'trusts.E008' and 'missing_check_138' in message.msg]
-        self.assertTrue(messages)
-        self.assertIsInstance(messages[0], Error)
-
-    def test_system_check_reports_unsupported_model(self):
-        entry = (DocumentGrant, 'myapp.change_documentgrant', ())
-        self.addCleanup(self._forget_guard, entry)
-
-        @authorization_required(DocumentGrant, 'myapp.change_documentgrant')
-        def _unused(request, pk):
-            return 'no'
-        self.assertIn(entry, _declared_authorization_guards)
-        messages = [message for message in run_checks() if getattr(message, 'id', None) == 'trusts.E008' and 'DocumentGrant' in message.msg]
-        self.assertTrue(messages)
-        self.assertIsInstance(messages[0], Error)
 
     @override_settings(AUTHENTICATION_BACKENDS=AUTHENTICATION_BACKENDS + ('tests.core.test_issue138.AlwaysGrantBackend',))
     def test_unrelated_backend_cannot_override_a_trusts_denial(self):
@@ -296,6 +254,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        register_installed_document_app()
         cls.ExtraDocumentGrant, cls.OtherPermission, cls.OtherPermissionGrant = _extra_grant_models()
 
     @classmethod
@@ -316,15 +275,6 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
         self.secret = Document.objects.create(title='secret', confidential=True)
         DocumentGrant.objects.create(document=self.open_doc, user=self.alice, permission=self.change)
         DocumentGrant.objects.create(document=self.secret, user=self.alice, permission=self.change)
-
-    def _forget_guard(self, entry):
-        try:
-            _declared_authorization_guards.remove(entry)
-        except ValueError:
-            pass
-
-    def _e008_messages(self, *needles):
-        return [message for message in run_checks() if getattr(message, 'id', None) == 'trusts.E008' and all((needle in message.msg for needle in needles))]
 
     def test_dual_backend_condition_order_does_not_broaden(self):
         primary = _document_backend()
@@ -352,7 +302,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
                 with self.assertRaises(PermissionDenied):
                     _edit_non_confidential(_request(self.alice), pk=self.secret.pk)
             with listed_relationship((extra,)):
-                with self.assertRaises(TrustsConfigurationError):
+                with self.assertRaises(PermissionDenied):
                     _edit_non_confidential(_request(self.alice), pk=self.secret.pk)
 
     def test_incompatible_permission_terminal_cannot_collide(self):
@@ -370,7 +320,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
                 with self.assertRaises(PermissionDenied):
                     _edit(_request(self.bob), pk=self.open_doc.pk)
 
-    def test_e008_split_names_across_backends_fail_closed(self):
+    def test_split_names_across_backends_deny(self):
         handle_a = _extra_handle(path='tests.core.issue138-split-a')
         handle_b = _extra_handle(path='tests.core.issue138-split-b')
         for handle in (handle_a, handle_b):
@@ -378,47 +328,89 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
         handle_a.add_named_filter(Document, 'split_a_138', lambda u, p, o: o.confidential != True)
         handle_b.add_named_filter(Document, 'split_b_138', lambda u, p, o: o.confidential != True)
         names = ('split_a_138', 'split_b_138')
-        entry = (Document, 'myapp.change_document', names)
-        self.addCleanup(self._forget_guard, entry)
 
         @authorization_required(Document, 'myapp.change_document', names)
         def _split(request, pk):
             return 'no'
         with listed_relationship((handle_a, handle_b)):
-            messages = self._e008_messages('split_a_138', 'split_b_138')
-            self.assertTrue(messages)
-            self.assertIsInstance(messages[0], Error)
             for user in (self.alice, self.superuser):
-                with self.assertNumQueries(0):
-                    with self.assertRaises(TrustsConfigurationError):
+                with self.assertNumQueries(1):
+                    with self.assertRaises(PermissionDenied):
                         _split(_request(user), pk=self.open_doc.pk)
-            with override_settings(SILENCED_SYSTEM_CHECKS=['trusts.E008']):
-                for user in (self.alice, self.superuser):
-                    with self.assertNumQueries(0):
-                        with self.assertRaises(TrustsConfigurationError):
-                            _split(_request(user), pk=self.open_doc.pk)
 
-    def test_e008_name_only_on_incompatible_permission_terminal(self):
+    def test_name_only_on_incompatible_permission_terminal_denies(self):
         primary = _document_backend()
         extra = _extra_handle(path='tests.core.issue138-other-e008')
         extra.register(trust=self.OtherPermissionGrant, user='user', permission='permission', content='document')
         extra.add_named_filter(Document, 'only_other_138', lambda u, p, o: o.confidential != True)
-        entry = (Document, 'myapp.change_document', ('only_other_138',))
-        self.addCleanup(self._forget_guard, entry)
 
         @authorization_required(Document, 'myapp.change_document', ('only_other_138',))
         def _other(request, pk):
             return 'no'
         with listed_relationship((primary, extra)):
-            messages = self._e008_messages('only_other_138')
-            self.assertTrue(messages)
-            self.assertIsInstance(messages[0], Error)
             for user in (self.alice, self.superuser):
-                with self.assertNumQueries(0):
-                    with self.assertRaises(TrustsConfigurationError):
+                with self.assertNumQueries(1):
+                    with self.assertRaises(PermissionDenied):
                         _other(_request(user), pk=self.open_doc.pk)
-            with override_settings(SILENCED_SYSTEM_CHECKS=['trusts.E008']):
-                for user in (self.alice, self.superuser):
-                    with self.assertNumQueries(0):
-                        with self.assertRaises(TrustsConfigurationError):
-                            _other(_request(user), pk=self.open_doc.pk)
+
+    def test_non_owner_is_asked_on_its_own(self):
+        primary = _document_backend()
+        extra = _extra_handle(path='tests.core.issue138-non-owner')
+        extra.register(
+            trust=self.ExtraDocumentGrant, user='user',
+            permission='permission', content='document')
+        with override_settings(
+            INSTALLED_APPS=(
+                'django.contrib.contenttypes',
+                'django.contrib.auth',
+                'tests.kernel_host.apps.KernelHostConfig',
+                'tests.myapp.apps.DocumentConfig',
+            ),
+            AUTHENTICATION_BACKENDS=(
+                'tests.kernel_host.backends.HostTrustModelBackend',
+                'tests.myapp.backends.DocumentBackend',
+            ),
+        ):
+            with _tables(self.ExtraDocumentGrant):
+                with listed_relationship((extra, primary)):
+                    self.assertEqual(
+                        _edit_non_confidential(
+                            _request(self.alice), pk=self.open_doc.pk), 'ok')
+                with listed_relationship((primary, extra)):
+                    self.assertEqual(
+                        _edit_non_confidential(
+                            _request(self.alice), pk=self.open_doc.pk), 'ok')
+                    with self.assertNumQueries(2):
+                        with self.assertRaises(PermissionDenied):
+                            _edit_non_confidential(
+                                _request(self.alice), pk=self.secret.pk)
+
+    def test_only_non_owners_deny_without_an_exception(self):
+        extra = _extra_handle(path='tests.core.issue138-only-non-owner')
+        other = _extra_handle(path='tests.core.issue138-only-non-owner-b')
+        for handle in (extra, other):
+            handle.register(
+                trust=self.ExtraDocumentGrant, user='user',
+                permission='permission', content='document')
+        with override_settings(
+            INSTALLED_APPS=(
+                'django.contrib.contenttypes',
+                'django.contrib.auth',
+                'tests.kernel_host.apps.KernelHostConfig',
+                'tests.myapp.apps.DocumentConfig',
+            ),
+            AUTHENTICATION_BACKENDS=(
+                'tests.kernel_host.backends.HostTrustModelBackend',
+                'tests.myapp.backends.DocumentBackend',
+            ),
+        ):
+            with _tables(self.ExtraDocumentGrant):
+                with listed_relationship((extra, other)):
+                    with self.assertNumQueries(1):
+                        with self.assertRaises(PermissionDenied):
+                            _edit_non_confidential(
+                                _request(self.alice), pk=self.open_doc.pk)
+                    with self.assertNumQueries(1):
+                        with self.assertRaises(Http404):
+                            _edit_non_confidential(
+                                _request(self.alice), pk=self.open_doc.pk + 1000)
