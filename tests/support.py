@@ -55,22 +55,6 @@ def config_for_class(backend_cls, apps_registry=None):
     return registry.get_containing_app_config(backend_cls.__module__)
 
 
-def authorization_guards(model):
-    """Guards ``authorization_required`` stored on ``model``'s app config."""
-    config = django_apps.get_containing_app_config(model.__module__)
-    if config is None:
-        return []
-    return getattr(config, 'authorization_guards', [])
-
-
-def forget_authorization_guard(entry):
-    """Drop one guard entry. Missing entries are already gone."""
-    try:
-        authorization_guards(entry[0]).remove(entry)
-    except ValueError:
-        pass
-
-
 def compiler(**kwargs):
     """Standalone ``Compiler``. The user model is already known."""
     kwargs.setdefault('user_model', get_user_model())

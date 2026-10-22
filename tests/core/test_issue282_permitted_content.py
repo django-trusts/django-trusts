@@ -25,7 +25,6 @@ from tests.support import (
     built_catalog,
 )
 from trusts.errors import TrustsConfigurationError
-from tests.support import forget_authorization_guard
 from trusts.decorators import authorization_required
 from trusts.models import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
 
@@ -1225,8 +1224,6 @@ class AlongSurfaceAgreementTest(TransactionTestCase):
         def view(request, pk):
             return 'ok'
 
-        entry = (self.Trust, self.code, ())
-        self.addCleanup(forget_authorization_guard, entry)
         with _listed(self.handle):
             self.assertEqual(
                 view(_request(self.alice), pk=self.child.pk), 'ok',

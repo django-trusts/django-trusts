@@ -2,7 +2,7 @@
 
 ``trusts.E007`` reports the deleted runtime-callback setting still
 being ``True``. That setting never enables callbacks. ``trusts.E001``,
-``trusts.E002``, ``trusts.E006``, and ``trusts.W001`` are retired.
+``trusts.E002``, ``trusts.E006``, ``trusts.E008``, and ``trusts.W001`` are retired.
 OrderedFold vendor diagnostics live in ``django-trusts-ordered-fold`` as
 ``trusts_ordered_fold.E001``.
 """
@@ -32,7 +32,6 @@ from trusts.plan.walk import along_connection_supported
 CHECK_ID_MISSING_DECLARATION = 'trusts.E003'
 CHECK_ID_ALONG_RENDERER = 'trusts.E005'
 CHECK_ID_OBSOLETE_CALLBACK_SETTING = 'trusts.E007'
-CHECK_ID_AUTHORIZATION_REQUIRED = 'trusts.E008'
 CHECK_ID_UNLISTED_CATALOG = 'trusts.E010'
 CHECK_ID_UNBUILDABLE_BACKEND = 'trusts.E011'
 CHECK_ID_MIXIN_REQUIRED = 'trusts.E012'
@@ -239,83 +238,6 @@ def check_missing_declarations(app_configs, **kwargs):
 def check_obsolete_legacy_callback_setting(app_configs, **kwargs):
     """Fail loud if the deleted runtime-callback setting is still True."""
     return _messages_for_obsolete_callback_setting()
-
-
-@django_checks.register()
-def check_authorization_required_conditions(app_configs, **kwargs):
-    """Report unsupported or incomplete ``authorization_required`` guards.
-
-    Uses the same zero-SQL preflight as first use: at least one
-    applicable ``auth.Permission`` plan is required, and when names
-    are selected one participating backend must own the complete
-    queryable tuple. A global union of names across registries is
-    not enough. Guards whose model app is absent are skipped
-    so a host that does not load that app (pair Zero, isolated Apps)
-    is not failed by imported fixtures. Silencing ``trusts.E008``
-    hides only the diagnostic. The request is denied
-    (``PermissionDenied`` when the row exists, ``Http404`` when it
-    does not) and does not raise, and it does not fall back to an
-    unconditioned grant.
-    """
-    catalogs = _load_listed()[0]
-    messages = []
-    seen = set()
-    for config in django_apps.get_app_configs():
-        for model, _permission, conditions in getattr(
-                config, 'authorization_guards', ()):
-            app_label = getattr(getattr(model, '_meta', None), 'app_label', None)
-            try:
-                django_apps.get_app_config(app_label)
-            except LookupError:
-                continue
-            key = (model, conditions)
-            if key in seen:
-                continue
-            seen.add(key)
-            participating = False
-            complete = False
-            for catalog in catalogs:
-                has_plan, owns = catalog.authorization_preflight(model, conditions)
-                if not has_plan:
-                    continue
-                participating = True
-                if owns:
-                    complete = True
-                    break
-            if participating and complete:
-                continue
-            if not participating:
-                messages.append(django_checks.Error(
-                    'authorization_required has no applicable auth.Permission '
-                    'plan for %s.' % _model_label(model),
-                    hint=(
-                        'Register an auth.Permission plan for this model on a '
-                        'configured Trusts backend. Silencing trusts.E008 '
-                        'suppresses only this diagnostic; the request is '
-                        'denied and does not raise.'
-                    ),
-                    obj=model,
-                    id=CHECK_ID_AUTHORIZATION_REQUIRED,
-                ))
-                continue
-            messages.append(django_checks.Error(
-                'authorization_required conditions %r are not registered '
-                'together on any auth.Permission backend for %s.'
-                % (conditions, _model_label(model)),
-                hint=(
-                    'Register the complete name set on one auth.Permission '
-                    'backend with backend.add_named_filter in '
-                    'AppConfig.ready(). Silencing trusts.E008 suppresses only '
-                    'this diagnostic; the request is denied and does not raise.'
-                ),
-                obj=model,
-                id=CHECK_ID_AUTHORIZATION_REQUIRED,
-            ))
-    messages.sort(key=lambda message: (
-        getattr(getattr(message.obj, '_meta', None), 'label', ''),
-        message.msg,
-    ))
-    return messages
 
 
 @django_checks.register()

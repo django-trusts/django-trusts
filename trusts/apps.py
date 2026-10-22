@@ -100,7 +100,6 @@ class TrustsConfigMixin(django.apps.AppConfig):
         super().__init__(app_name, app_module)
         self.recorder = Recorder()
         self.catalog = None
-        self.authorization_guards = []
 
     def catalog_path(self):
         """Identity stored on the catalog and in the policy lockfile."""

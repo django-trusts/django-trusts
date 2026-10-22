@@ -22,7 +22,6 @@ from tests.support import scoped_permitted_content as filter_by_permitted_conten
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import granted
-from tests.support import forget_authorization_guard
 from trusts.decorators import authorization_required
 from trusts.models import PermittedQuerySet, PermittedUsersManagerMixin
 urlpatterns = [path('admin/', admin.site.urls)]
@@ -1120,12 +1119,7 @@ class AuthorizationRequiredSuperuserTest(KernelHostRequiredMixin, TestCase):
         @authorization_required(Document, self.perm, **flags)
         def view(request, pk):
             return 'ok'
-        entry = (Document, self.perm, ())
-        self.addCleanup(self._forget_guard, entry)
         return view
-
-    def _forget_guard(self, entry):
-        forget_authorization_guard(entry)
 
     def test_without_override_active_superuser_needs_a_grant(self):
         config, original, sentinel, registry, saved_catalog = _install_document_registry(override=False)

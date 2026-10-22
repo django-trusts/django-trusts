@@ -22,7 +22,6 @@ from django.http import HttpRequest
 from django.test import TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
 from trusts.backends import TrustModelBackendMixin
-from tests.support import forget_authorization_guard
 from trusts.decorators import authorization_required
 from trusts.models import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import render_configured_policy, built_catalog, compiler
@@ -218,21 +217,18 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
         # the repository row (open #268). The other three inquiries grant.
         self.assertEqual(self.publish.codename, 'can_publish')
         allowed = authorization_required(self.Repository, self.publish_code)(lambda request, pk: 'ok')
-        try:
-            with _installed(self.handle):
-                self.assertFalse(self.owner.has_perm(self.publish_code, self.specs))
-                self.assertFalse(built_catalog(self.handle).has_perm(self.owner, self.publish_code, self.specs))
-                self.assertFalse(self.owner.has_perm(self.publish_code, self.acme))
-                self.assertFalse(built_catalog(self.handle).has_perm(self.owner, self.publish_code, self.acme))
-                self.assertIn(self.publish_code, self.owner.get_all_permissions(self.specs))
-                self.assertNotIn(self.publish_code, self.owner.get_all_permissions(self.acme))
-                self.assertEqual(allowed(_request(self.owner), pk=self.specs.pk), 'ok')
-                self.assertEqual(list(self.Repository.objects.authorized(self.owner, self.publish)), [self.specs])
-                self.assertEqual(list(self.Organization.objects.authorized(self.owner, self.publish)), [])
-                self.assertEqual(list(self.specs.get_permitted_users(self.publish).values_list('username', flat=True)), ['owner-267'])
-                self.assertEqual(list(self.acme.get_permitted_users(self.publish).values_list('username', flat=True)), [])
-        finally:
-            forget_authorization_guard((self.Repository, self.publish_code, ()))
+        with _installed(self.handle):
+            self.assertFalse(self.owner.has_perm(self.publish_code, self.specs))
+            self.assertFalse(built_catalog(self.handle).has_perm(self.owner, self.publish_code, self.specs))
+            self.assertFalse(self.owner.has_perm(self.publish_code, self.acme))
+            self.assertFalse(built_catalog(self.handle).has_perm(self.owner, self.publish_code, self.acme))
+            self.assertIn(self.publish_code, self.owner.get_all_permissions(self.specs))
+            self.assertNotIn(self.publish_code, self.owner.get_all_permissions(self.acme))
+            self.assertEqual(allowed(_request(self.owner), pk=self.specs.pk), 'ok')
+            self.assertEqual(list(self.Repository.objects.authorized(self.owner, self.publish)), [self.specs])
+            self.assertEqual(list(self.Organization.objects.authorized(self.owner, self.publish)), [])
+            self.assertEqual(list(self.specs.get_permitted_users(self.publish).values_list('username', flat=True)), ['owner-267'])
+            self.assertEqual(list(self.acme.get_permitted_users(self.publish).values_list('username', flat=True)), [])
 
     def test_foreign_object_stays_denied(self):
         with _installed(self.handle):
@@ -259,23 +255,19 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
         publish_allowed = authorization_required(self.Repository, self.publish_code)(lambda request, pk: 'ok')
         publish_denied = authorization_required(self.Organization, self.publish_code)(lambda request, pk: 'ok')
         missing = authorization_required(self.Widget, 'trusts_tests.view_widget')(lambda request, pk: 'ok')
-        try:
-            with _installed(self.handle):
-                self.assertEqual(allowed(_request(self.owner), pk=self.acme.pk), 'ok')
+        with _installed(self.handle):
+            self.assertEqual(allowed(_request(self.owner), pk=self.acme.pk), 'ok')
+            with self.assertRaises(PermissionDenied):
+                denied(_request(self.owner), pk=self.acme.pk)
+            self.assertEqual(repo_allowed(_request(self.owner), pk=self.specs.pk), 'ok')
+            with self.assertRaises(PermissionDenied):
+                repo_denied(_request(self.owner), pk=self.specs.pk)
+            self.assertEqual(publish_allowed(_request(self.owner), pk=self.specs.pk), 'ok')
+            with self.assertRaises(PermissionDenied):
+                publish_denied(_request(self.owner), pk=self.acme.pk)
+            with self.assertNumQueries(1):
                 with self.assertRaises(PermissionDenied):
-                    denied(_request(self.owner), pk=self.acme.pk)
-                self.assertEqual(repo_allowed(_request(self.owner), pk=self.specs.pk), 'ok')
-                with self.assertRaises(PermissionDenied):
-                    repo_denied(_request(self.owner), pk=self.specs.pk)
-                self.assertEqual(publish_allowed(_request(self.owner), pk=self.specs.pk), 'ok')
-                with self.assertRaises(PermissionDenied):
-                    publish_denied(_request(self.owner), pk=self.acme.pk)
-                with self.assertNumQueries(1):
-                    with self.assertRaises(PermissionDenied):
-                        missing(_request(self.owner), pk=self.widget.pk)
-        finally:
-            for model, permission in ((self.Organization, self.manage_code), (self.Organization, self.read_code), (self.Repository, self.read_code), (self.Repository, self.manage_code), (self.Repository, self.publish_code), (self.Organization, self.publish_code), (self.Widget, 'trusts_tests.view_widget')):
-                forget_authorization_guard((model, permission, ()))
+                    missing(_request(self.owner), pk=self.widget.pk)
 
     def test_active_superuser_has_perm_stays_outside_the_predicate(self):
         User = get_user_model()

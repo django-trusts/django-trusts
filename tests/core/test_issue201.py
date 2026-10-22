@@ -125,9 +125,8 @@ messages = [
     message for message in run_checks()
     if getattr(message, 'id', None) == 'trusts.E008'
 ]
-for message in messages:
-    if 'partial_201' in message.msg:
-        raise SystemExit('partial declaration leaked into trusts.E008')
+if messages:
+    raise SystemExit('trusts.E008 is retired')
 print('partial-declaration-ok')
 """
 
@@ -137,7 +136,6 @@ import os
 os.environ['DJANGO_SETTINGS_MODULE'] = 'tests.settings'
 import django
 django.setup()
-from django.core.checks import run_checks
 from django.core.exceptions import PermissionDenied
 from django.db import connection
 from django.http import Http404, HttpRequest
@@ -177,13 +175,6 @@ for user in (_Principal(), _Principal(superuser=True)):
         raise SystemExit('missing name must not raise TrustsConfigurationError')
     else:
         raise SystemExit('expected denial')
-
-flagged = [
-    message for message in run_checks()
-    if getattr(message, 'id', None) == 'trusts.E008' and 'missing_201' in message.msg
-]
-if not flagged:
-    raise SystemExit('trusts.E008 did not flag missing_201')
 print('missing-name-denied-ok')
 """
 

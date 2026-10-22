@@ -74,10 +74,10 @@ def authorization_required(model, permission, conditions=(), backend=None,
     in order, or only the backend named by ``backend``. The request is
     allowed when any one returns a row. A catalog that did not register
     the model, or that does not own every selected name, contributes
-    nothing and does not raise. Denial when no backend returns a row
-    is ``PermissionDenied`` when the row exists and ``Http404`` when
-    it does not. ``trusts.E008`` reports a name no listed backend owns.
-    ``backend`` is one dotted path. Does not use ``user.has_perm`` or
+    an empty queryset and does not raise. Denial when no backend
+    returns a row is ``PermissionDenied`` when the row exists and
+    ``Http404`` when it does not. ``backend`` is one dotted path.
+    Does not use ``user.has_perm`` or
     the legacy
     ``permission_required`` / ``P`` / ``K`` / ``G`` / ``O`` surface.
     Django's object-level ``user.has_perm`` OR across authentication
@@ -98,7 +98,6 @@ def authorization_required(model, permission, conditions=(), backend=None,
             'not %r.' % (model,))
     _guard_permission(model, permission)
     conditions = guard_conditions(conditions, api='authorization_required')
-    _remember_authorization_guard(model, permission, conditions)
 
     def decorator(view_func):
         @wraps(view_func)
@@ -118,13 +117,6 @@ def _guard_permission(model, permission):
             'authorization_required permission app_label %r does not match model %s.'
             % (app_label, model._meta.label))
     return app_label, codename
-
-
-def _remember_authorization_guard(model, permission, conditions):
-    guards = getattr(django_apps.get_containing_app_config(
-        model.__module__), 'authorization_guards', None)
-    if guards is not None and (model, permission, conditions) not in guards:
-        guards.append((model, permission, conditions))
 
 
 def _coerce_pk(model, raw):
