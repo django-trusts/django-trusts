@@ -22,7 +22,8 @@ from tests.support import scoped_permitted_content as filter_by_permitted_conten
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
-from trusts.decorators import _declared_authorization_guards, authorization_required
+from tests.support import forget_authorization_guard
+from trusts.decorators import authorization_required
 HOST = HOST_BACKEND
 DOCUMENT = DOCUMENT_BACKEND
 MIXIN = 'tests.backends.MixinOnlyBackend'
@@ -160,7 +161,7 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
             def _guard(request, pk):
                 return 'ok'
             entry = (Document, PERM, ())
-            self.addCleanup(lambda: _declared_authorization_guards.remove(entry) if entry in _declared_authorization_guards else None)
+            self.addCleanup(forget_authorization_guard, entry)
             self.assertEqual(_guard(_request(self.alice), pk=self.rel_doc.pk), 'ok')
             with self.assertRaises(PermissionDenied):
                 _guard(_request(self.alice), pk=self.fold_doc.pk)

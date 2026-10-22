@@ -22,7 +22,8 @@ from django.http import HttpRequest
 from django.test import TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
 from trusts.backends import TrustModelBackendMixin
-from trusts.decorators import _declared_authorization_guards, authorization_required
+from tests.support import forget_authorization_guard
+from trusts.decorators import authorization_required
 from trusts.models import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import render_configured_policy, built_catalog, compiler
 
@@ -231,10 +232,7 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
                 self.assertEqual(list(self.specs.get_permitted_users(self.publish).values_list('username', flat=True)), ['owner-267'])
                 self.assertEqual(list(self.acme.get_permitted_users(self.publish).values_list('username', flat=True)), [])
         finally:
-            try:
-                _declared_authorization_guards.remove((self.Repository, self.publish_code, ()))
-            except ValueError:
-                pass
+            forget_authorization_guard((self.Repository, self.publish_code, ()))
 
     def test_foreign_object_stays_denied(self):
         with _installed(self.handle):
@@ -277,10 +275,7 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
                         missing(_request(self.owner), pk=self.widget.pk)
         finally:
             for model, permission in ((self.Organization, self.manage_code), (self.Organization, self.read_code), (self.Repository, self.read_code), (self.Repository, self.manage_code), (self.Repository, self.publish_code), (self.Organization, self.publish_code), (self.Widget, 'trusts_tests.view_widget')):
-                try:
-                    _declared_authorization_guards.remove((model, permission, ()))
-                except ValueError:
-                    pass
+                forget_authorization_guard((model, permission, ()))
 
     def test_active_superuser_has_perm_stays_outside_the_predicate(self):
         User = get_user_model()

@@ -1,6 +1,7 @@
 from tests.support import (
     listed_relationship, configured_catalog, replay_recorder, compiler,
-    register_installed_document_app,
+    register_installed_document_app, authorization_guards,
+    forget_authorization_guard,
 )
 """#138: authorization_required Trusts-only pk guard."""
 from contextlib import contextmanager
@@ -19,7 +20,7 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.myapp.settings import AUTHENTICATION_BACKENDS, INSTALLED_APPS
 from trusts.errors import TrustsConfigurationError
-from trusts.decorators import _declared_authorization_guards, authorization_required
+from trusts.decorators import authorization_required
 
 
 class AlwaysGrantBackend(object):
@@ -73,6 +74,26 @@ class AuthorizationRequiredDeclarationTest(SimpleTestCase):
             authorization_required(Document, 'myapp.change_document', ('non_confidential', 'non_confidential'))
         with self.assertRaises(TrustsConfigurationError):
             authorization_required(Document, 'otherapp.change_document')
+
+    def test_system_check_skips_a_guard_whose_app_label_is_absent(self):
+        class Absent(models.Model):
+            class Meta:
+                app_label = 'absent_e008'
+
+        entry = (Absent, 'absent_e008.change_absent', ())
+        self.addCleanup(forget_authorization_guard, entry)
+
+        @authorization_required(Absent, 'absent_e008.change_absent')
+        def _unused(request, pk):
+            return 'no'
+
+        self.assertIn(entry, authorization_guards(Absent))
+        messages = [
+            message for message in run_checks()
+            if getattr(message, 'id', None) == 'trusts.E008'
+            and 'absent_e008' in message.msg
+        ]
+        self.assertEqual(messages, [])
 
     def test_system_check_skips_guards_when_model_app_is_absent(self):
         installed = tuple(
@@ -169,10 +190,7 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
             _publish(_request(self.alice), pk=self.secret.pk)
 
     def _forget_guard(self, entry):
-        try:
-            _declared_authorization_guards.remove(entry)
-        except ValueError:
-            pass
+        forget_authorization_guard(entry)
 
     def test_unknown_condition_fails_closed_on_first_use(self):
         entry = (Document, 'myapp.change_document', ('missing_138',))
@@ -206,7 +224,7 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
         @authorization_required(Document, 'myapp.change_document', ('missing_check_138',))
         def _unused(request, pk):
             return 'no'
-        self.assertIn(entry, _declared_authorization_guards)
+        self.assertIn(entry, authorization_guards(Document))
         messages = [message for message in run_checks() if getattr(message, 'id', None) == 'trusts.E008' and 'missing_check_138' in message.msg]
         self.assertTrue(messages)
         self.assertIsInstance(messages[0], Error)
@@ -218,7 +236,7 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
         @authorization_required(DocumentGrant, 'myapp.change_documentgrant')
         def _unused(request, pk):
             return 'no'
-        self.assertIn(entry, _declared_authorization_guards)
+        self.assertIn(entry, authorization_guards(DocumentGrant))
         messages = [message for message in run_checks() if getattr(message, 'id', None) == 'trusts.E008' and 'DocumentGrant' in message.msg]
         self.assertTrue(messages)
         self.assertIsInstance(messages[0], Error)
@@ -327,10 +345,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
         DocumentGrant.objects.create(document=self.secret, user=self.alice, permission=self.change)
 
     def _forget_guard(self, entry):
-        try:
-            _declared_authorization_guards.remove(entry)
-        except ValueError:
-            pass
+        forget_authorization_guard(entry)
 
     def _e008_messages(self, *needles):
         return [message for message in run_checks() if getattr(message, 'id', None) == 'trusts.E008' and all((needle in message.msg for needle in needles))]
@@ -431,3 +446,36 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
                     with self.assertNumQueries(0):
                         with self.assertRaises(TrustsConfigurationError):
                             _other(_request(user), pk=self.open_doc.pk)
+
+    def test_non_owner_is_asked_on_its_own(self):
+        primary = _document_backend()
+        extra = _extra_handle(path='tests.core.issue138-non-owner')
+        extra.register(
+            trust=self.ExtraDocumentGrant, user='user',
+            permission='permission', content='document')
+        with override_settings(
+            INSTALLED_APPS=(
+                'django.contrib.contenttypes',
+                'django.contrib.auth',
+                'tests.kernel_host.apps.KernelHostConfig',
+                'tests.myapp.apps.DocumentConfig',
+            ),
+            AUTHENTICATION_BACKENDS=(
+                'tests.kernel_host.backends.HostTrustModelBackend',
+                'tests.myapp.backends.DocumentBackend',
+            ),
+        ):
+            with _tables(self.ExtraDocumentGrant):
+                with listed_relationship((extra, primary)):
+                    with self.assertNumQueries(0):
+                        with self.assertRaises(TrustsConfigurationError):
+                            _edit_non_confidential(
+                                _request(self.alice), pk=self.open_doc.pk)
+                with listed_relationship((primary, extra)):
+                    self.assertEqual(
+                        _edit_non_confidential(
+                            _request(self.alice), pk=self.open_doc.pk), 'ok')
+                    with self.assertNumQueries(1):
+                        with self.assertRaises(TrustsConfigurationError):
+                            _edit_non_confidential(
+                                _request(self.alice), pk=self.secret.pk)

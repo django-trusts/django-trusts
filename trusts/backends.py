@@ -22,6 +22,7 @@ from trusts.compile.catalogs import (
 )
 from trusts.errors import TrustsConfigurationError, TrustsMixinRequired
 from trusts.plan.contents import permitted_content_q
+from trusts.plan.hops import require_instance
 from trusts.plan.relations import bind_checked_user, known_skip_names
 from trusts.plan.rewrites import bind_once
 from trusts.plan.users import assert_persisted_principal
@@ -95,12 +96,43 @@ class TrustModelBackendMixin(object):
             api=api, skipped=skipped)
         return predicate
 
-    def content_prefix_q(self, subject, user, permission, *, skipped=(),
-                         content=None):
-        """Grant for a permitted-content prefix."""
-        return permitted_content_q(
-            subject.model, user, permission, content=content,
-            catalog=self._catalog(), skipped=skipped)
+    def filter_permitted(self, queryset, user, permission, *, conditions=(),
+                         **skip_flags):
+        """Rows this backend permits. Other backends are not consulted.
+
+        Binds the codename, runs this catalog's preflight, and applies
+        ``bind_once``. A selected name this catalog does not own raises
+        ``TrustsConfigurationError`` when this catalog has an
+        ``auth.Permission`` plan for the model.
+        """
+        has_plan, _owns = self._catalog().authorization_preflight(
+            queryset.model, conditions)
+        if not has_plan:
+            return queryset.none()
+        return filter_listed(
+            queryset, user,
+            ask=lambda item, skipped: item.permitted_grant_q(
+                queryset, user, permission, skipped=skipped,
+                conditions=conditions,
+                binding=codename_binding(
+                    queryset.model, *permission.split('.', 1)),
+                api='authorization_required'),
+            backend='%s.%s' % (type(self).__module__, type(self).__qualname__),
+            skip_flags=skip_flags, preflight=True, model=queryset.model,
+            conditions=conditions, api='authorization_required')
+
+    def filter_by_permitted_content(self, queryset, user, permission, *,
+                                    content, **skip_flags):
+        """Scope rows this backend permits as a prefix of ``content``."""
+        user = require_instance(user, 'user')
+        permission = require_instance(permission, 'permission')
+        return filter_listed(
+            queryset, user,
+            ask=lambda item, skipped: permitted_content_q(
+                queryset.model, user, permission, content=content,
+                catalog=item._catalog(), skipped=skipped),
+            backend='%s.%s' % (type(self).__module__, type(self).__qualname__),
+            skip_flags=skip_flags)
 
     def policy_document(self, *, alias=None):
         """This backend's part of the policy document.
@@ -144,12 +176,6 @@ def grant_authorized(item, skipped, subject, user, permission):
     """Authorized-row grant from this backend's catalog."""
     return item.authorized_grant_q(
         subject, user, permission, skipped=skipped)
-
-
-def grant_prefix(item, skipped, subject, user, permission, *, content):
-    """Permitted-content prefix grant from this backend's catalog."""
-    return item.content_prefix_q(
-        subject, user, permission, skipped=skipped, content=content)
 
 
 def codename_binding(model, app_label, codename):

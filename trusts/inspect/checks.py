@@ -21,7 +21,6 @@ import trusts.inspect.snapshot  # noqa: F401
 from trusts.apps import TrustsConfigMixin, catalog_of
 from trusts.backends import TrustModelBackendMixin
 from trusts.compile.factory import probe_along_capabilities
-from trusts.decorators import _declared_authorization_guards
 from trusts.errors import (
     TrustsConfigurationError,
     TrustsMixinRequired,
@@ -260,55 +259,57 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     catalogs = _load_listed()[0]
     messages = []
     seen = set()
-    for model, _permission, conditions in _declared_authorization_guards:
-        app_label = getattr(getattr(model, '_meta', None), 'app_label', None)
-        try:
-            django_apps.get_app_config(app_label)
-        except LookupError:
-            continue
-        key = (model, conditions)
-        if key in seen:
-            continue
-        seen.add(key)
-        participating = False
-        complete = False
-        for catalog in catalogs:
-            has_plan, owns = catalog.authorization_preflight(model, conditions)
-            if not has_plan:
+    for config in django_apps.get_app_configs():
+        for model, _permission, conditions in getattr(
+                config, 'authorization_guards', ()):
+            app_label = getattr(getattr(model, '_meta', None), 'app_label', None)
+            try:
+                django_apps.get_app_config(app_label)
+            except LookupError:
                 continue
-            participating = True
-            if owns:
-                complete = True
-                break
-        if participating and complete:
-            continue
-        if not participating:
+            key = (model, conditions)
+            if key in seen:
+                continue
+            seen.add(key)
+            participating = False
+            complete = False
+            for catalog in catalogs:
+                has_plan, owns = catalog.authorization_preflight(model, conditions)
+                if not has_plan:
+                    continue
+                participating = True
+                if owns:
+                    complete = True
+                    break
+            if participating and complete:
+                continue
+            if not participating:
+                messages.append(django_checks.Error(
+                    'authorization_required has no applicable auth.Permission '
+                    'plan for %s.' % _model_label(model),
+                    hint=(
+                        'Register an auth.Permission plan for this model on a '
+                        'configured Trusts backend. Silencing trusts.E008 '
+                        'suppresses only this diagnostic; first use still '
+                        'fails closed.'
+                    ),
+                    obj=model,
+                    id=CHECK_ID_AUTHORIZATION_REQUIRED,
+                ))
+                continue
             messages.append(django_checks.Error(
-                'authorization_required has no applicable auth.Permission '
-                'plan for %s.' % _model_label(model),
+                'authorization_required conditions %r are not registered '
+                'together on any auth.Permission backend for %s.'
+                % (conditions, _model_label(model)),
                 hint=(
-                    'Register an auth.Permission plan for this model on a '
-                    'configured Trusts backend. Silencing trusts.E008 '
-                    'suppresses only this diagnostic; first use still '
-                    'fails closed.'
+                    'Register the complete name set on one auth.Permission '
+                    'backend with backend.add_named_filter in '
+                    'AppConfig.ready(). Silencing trusts.E008 suppresses only '
+                    'this diagnostic; first use still fails closed.'
                 ),
                 obj=model,
                 id=CHECK_ID_AUTHORIZATION_REQUIRED,
             ))
-            continue
-        messages.append(django_checks.Error(
-            'authorization_required conditions %r are not registered '
-            'together on any auth.Permission backend for %s.'
-            % (conditions, _model_label(model)),
-            hint=(
-                'Register the complete name set on one auth.Permission '
-                'backend with backend.add_named_filter in '
-                'AppConfig.ready(). Silencing trusts.E008 suppresses only '
-                'this diagnostic; first use still fails closed.'
-            ),
-            obj=model,
-            id=CHECK_ID_AUTHORIZATION_REQUIRED,
-        ))
     messages.sort(key=lambda message: (
         getattr(getattr(message.obj, '_meta', None), 'label', ''),
         message.msg,

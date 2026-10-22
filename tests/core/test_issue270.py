@@ -15,7 +15,8 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 
 from trusts.errors import TrustsConfigurationError
-from trusts.decorators import _declared_authorization_guards, authorization_required
+from tests.support import authorization_guards
+from trusts.decorators import authorization_required
 import trusts.models as query_mod
 from trusts.models import AuthorizedManager, AuthorizedQuerySet, PermittedManager, PermittedQuerySet, PermittedQuerySetMixin
 
@@ -213,11 +214,11 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
 
     def test_runtime_call_is_not_an_e008_guard(self):
         from django.core.checks import run_checks
-        before = list(_declared_authorization_guards)
+        before = list(authorization_guards(Document))
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError):
                 self.docs.permitted(self.change, AnonymousUser(), conditions=('missing_e008_270',))
-        self.assertEqual(_declared_authorization_guards, before)
+        self.assertEqual(authorization_guards(Document), before)
         messages = [message for message in run_checks() if getattr(message, 'id', None) == 'trusts.E008' and 'missing_e008_270' in message.msg]
         self.assertEqual(messages, [])
 
