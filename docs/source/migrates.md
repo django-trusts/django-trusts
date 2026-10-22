@@ -70,6 +70,7 @@ The condition suffix is the fourth item from `trusts.utils.parse_perm_code`.
 | --- | --- | --- |
 | Condition error | `from trusts.conditions import PermissionConditionError` | `from trusts.errors import PermissionConditionError` |
 | Condition suffix | `permission_has_condition(perm)` / `permission_condition_code(perm)` | `parse_perm_code(perm)[3]` |
+| Model label | `trusts.utils.get_short_model_name_lower(klass)` | removed. `trusts.utils` has no replacement |
 
 `trusts.E001` no longer re-checks a named filter after registration. Drop
 `trusts.E001` from `SILENCED_SYSTEM_CHECKS`.
@@ -79,6 +80,7 @@ Migration-bot checklist:
 - `trusts.conditions`
 - `permission_has_condition`
 - `permission_condition_code`
+- `get_short_model_name_lower`
 - `trusts.E001`
 
 ## Test-only names removed
@@ -118,19 +120,100 @@ Migration-bot checklist:
 
 - `permission_conditions`
 
-## `filter_authorized_scopes` renamed (#302)
+## Implementation config (#330)
 
-`filter_authorized_scopes` is deprecated. Call `filter_by_permitted_content`.
-The signature and behavior are the same. The old function remains and calls
-the new one.
+`TrustsImplementationConfig` is gone. Subclass `TrustsConfigMixin`.
+List the backend's dotted path in `AUTHENTICATION_BACKENDS`. That
+module must live in the app whose config extends `TrustsConfigMixin`.
+Call `self.recorder.register(...)` and `self.recorder.add_named_filter(...)`
+before `super().ready()`. `ready()` freezes the recorder and builds
+the catalog. A call after `super().ready()` raises
+`TrustsConfigurationError`.
 
 | | Old | New |
 | --- | --- | --- |
-| Rows with permitted content under them | `filter_authorized_scopes(...)` | `filter_by_permitted_content(...)` |
+| App config | `class DocumentsConfig(TrustsImplementationConfig)` | `class DocumentsConfig(TrustsConfigMixin)` |
+| Which backend | `trusts_backend_paths = ("documents.backends.DocumentBackend",)` | Delete `trusts_backend_paths`. The same path belongs in `AUTHENTICATION_BACKENDS`. |
+| Registration | `backend = self.configured_backend()` then `backend.register(...)` | `self.recorder.register(...)` before `super().ready()` |
+| Handle list | `configured_handles()` | Gone. Each listed Trusts backend answers from its app's catalog. |
+| Config does not extend the mixin | Ownership was `trusts_backend_paths` on `TrustsImplementationConfig` | Constructing the backend raises `TrustsMixinRequired`. `manage.py check` reports `trusts.E012` (`Extend TrustsConfigMixin on the app config.` or `Move the backend into an app whose config extends TrustsConfigMixin.`). |
+| Backend does not construct | Import or construction failure inside `ready()` | `trusts.E011`: `Authentication backend %s could not be built`. Hint: `Fix AUTHENTICATION_BACKENDS so the backend constructs.` |
+| Queryset classes | `from trusts.query import AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager` | `from trusts.models import AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager`. `trusts.query` is gone. |
+| `is_active_principal` | `trusts.query.is_active_principal` | Removed with that module. |
+| Backend compiler | `query_compiler = PlanQueryCompiler()` on the backend class. `compiler_for_class` required `complete_exists` and `group_exists`. | Remove it from the backend. An optional `query_compiler` belongs on the `TrustsConfigMixin` subclass (`None` uses the default). |
+| Compiler check | `trusts.E004` from `check_query_compilers` | Removed, along with `compiler_for_class`. Drop `trusts.E004` from `SILENCED_SYSTEM_CHECKS`. |
+| Family override | `_authorization_family` on `TrustsImplementationConfig` | `family` on `TrustsConfigMixin` (default `'relationship'`) |
+| `filter_authorized_scopes(..., handles=)` | Backend objects, or every relationship-family handle | `filter_by_permitted_content(..., backend=)` in `trusts.decorators`. See the next section. `handles=` is not accepted. |
+| `authorization_required` when no listed backend has a plan for the model | `TrustsConfigurationError` at request time (`authorization_required has no applicable auth.Permission plan`) | `PermissionDenied` when the row exists, `Http404` when it does not. A catalog that did not register the model contributes nothing and does not raise. `trusts.E008` still reports the gap from `manage.py check`. Selected condition names that no participating backend owns together still raise `TrustsConfigurationError` before a grant query. |
+
+```python
+# Old
+class DocumentsConfig(TrustsImplementationConfig):
+    name = "documents"
+    trusts_backend_paths = (
+        "documents.backends.DocumentBackend",
+    )
+
+    def ready(self):
+        super().ready()
+        backend = self.configured_backend()
+        backend.register(
+            trust=DocumentPermission,
+            user=lambda t: t.user,
+            permission=lambda t: t.permission,
+            content=lambda t: t.document,
+        )
+
+# New
+class DocumentsConfig(TrustsConfigMixin):
+    name = "documents"
+
+    def ready(self):
+        self.recorder.register(
+            trust=DocumentPermission,
+            user=lambda t: t.user,
+            permission=lambda t: t.permission,
+            content=lambda t: t.document,
+        )
+        super().ready()
+```
 
 Migration-bot checklist:
 
-- search `filter_authorized_scopes(` and replace with `filter_by_permitted_content(`
+- `TrustsImplementationConfig`
+- `trusts_backend_paths`
+- `configured_backend(`
+- `configured_handles(`
+- `from trusts.query import`
+- `trusts.query`
+- `is_active_principal`
+- `query_compiler`
+- `compiler_for_class`
+- `check_query_compilers`
+- `trusts.E004`
+- `_authorization_family`
+- `trusts.E011`
+- `trusts.E012`
+- `TrustsMixinRequired`
+- `TrustsConfigMixin`
+- `self.recorder.register`
+
+## `filter_authorized_scopes` removed (#302)
+
+`filter_authorized_scopes` is deleted. There is no alias and no
+deprecation wrapper. Call `filter_by_permitted_content` in
+`trusts.decorators`.
+
+| | Old | New |
+| --- | --- | --- |
+| Rows with permitted content under them | `trusts.core.filter_authorized_scopes(queryset, user, permission, *, content, handles=None)` | `trusts.decorators.filter_by_permitted_content(queryset, user, permission, *, content, backend=None)` |
+| Which backends | `handles=None` is every relationship-family implementation handle. An explicit list is filtered to that family. | Omit `backend` to OR every listed Trusts backend. `backend` is one dotted `AUTHENTICATION_BACKENDS` path. `handles=` is not a parameter. |
+| Unknown content, or no listed backend grants | `queryset.none()` | `queryset.none()` |
+
+Migration-bot checklist:
+
+- `filter_authorized_scopes(`
+- `handles=`
 
 ## Superuser bypass (#273)
 
@@ -278,8 +361,7 @@ world as path lambdas. The stored overlay is private `Equal` /
 `PermissionIn` / `All` and contains no callable. Literal Python `in` is
 unsupported and is not recovered through AST, bytecode, `dis`, or a
 `__contains__` side channel. Public `register(condition=...)` rejects
-prebuilt `All` / `Equal` / `permission_in` values (`TypeError`). Internal
-`TrustsRegistry.register` may still accept those private records.
+prebuilt `All` / `Equal` / `permission_in` values (`TypeError`).
 
 `.contains` is a reserved method on the condition proxy. A model field
 actually named `contains` cannot be walked in `condition=`. Path lambdas
