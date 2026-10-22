@@ -247,10 +247,7 @@ def relation_plan(records, delegations, content, user, permission,
     )
     if query_compiler is None:
         return plan
-    decided = bool(query_compiler.applies(plan))
-    if decided == plan.applicable:
-        return plan
-    return replace(plan, applicable=decided)
+    return replace(plan, applicable=bool(query_compiler.applies(plan)))
 
 
 def plan_table(records, delegations, catalog_user, user_conditions,
@@ -328,40 +325,38 @@ def prefix_models(records, delegations):
 
 def question_descriptors(catalog):
     """Questions for one built catalog, in document order."""
-    questions = []
-    prefixes = {}
+    questions, prefixes = [], {}
     for model, records, delegations in content_groups(
         catalog.records, catalog.delegations,
     ):
         found = prefix_models(records, delegations)
         prefixes[model] = found
-        questions.append(Question(
-            'permitted', model, records, delegations,
-            partial(catalog._question_content_grant, model),
-        ))
-        questions.append(Question(
-            'has_perm', model, records, delegations, catalog.has_permission,
-        ))
-        questions.append(Question(
-            'get_all_permissions', model, records, delegations,
-            catalog.permissions_for,
-        ))
-        if any(record.via_group for record in records):
-            questions.append(Question(
-                'get_group_permissions', model, records, delegations,
-                partial(catalog.permissions_for, kind='group'),
-            ))
-        questions.append(Question(
-            'get_permitted_users', model, records, delegations,
-            catalog.permitted_users,
-        ))
-        if found:
-            questions.append(Question(
-                'filter_by_permitted_content', model, records, delegations,
-                partial(
-                    catalog._question_filter_by_permitted_content, model,
+        questions.extend(
+            Question(name, model, records, delegations, fn)
+            for name, fn, keep in (
+                (
+                    'permitted',
+                    partial(catalog._question_content_grant, model),
+                    True,
                 ),
-            ))
+                ('has_perm', catalog.has_permission, True),
+                ('get_all_permissions', catalog.permissions_for, True),
+                (
+                    'get_group_permissions',
+                    partial(catalog.permissions_for, kind='group'),
+                    any(record.via_group for record in records),
+                ),
+                ('get_permitted_users', catalog.permitted_users, True),
+                (
+                    'filter_by_permitted_content',
+                    partial(
+                        catalog._question_filter_by_permitted_content, model,
+                    ),
+                    bool(found),
+                ),
+            )
+            if keep
+        )
     return tuple(questions), prefixes
 
 
@@ -989,7 +984,6 @@ class Compiler(object):
         if self._catalog is not None:
             return self._catalog
         self._resolve_user_model()
-        named_filters = dict(self._named_filters)
         stored = self._stored_user_conditions()
         model = self.user_model
         primary = compile_user_rules(
@@ -1018,7 +1012,7 @@ class Compiler(object):
         self.frozen = True
         catalog = Catalog(
             records=self.records, delegations=self.delegations,
-            named_filters=named_filters,
+            named_filters=self._named_filters,
             user_conditions=stored, user_override=self._user_override,
             path=self.path, family=self.family, user_model=model,
             user_rules=rules, override_q=override_q, plans=plans,
