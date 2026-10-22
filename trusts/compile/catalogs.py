@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, replace
 from functools import partial
+from types import MappingProxyType
 
 from django.contrib.auth.models import Permission
 from django.db import router
@@ -48,34 +49,6 @@ from trusts.plan.users import (
 _NO_PRESET = object()
 
 
-@dataclass(frozen=True, slots=True)
-class CatalogShape(object):
-    """Frozen data ``Compiler.compile`` hands to one ``Catalog``.
-
-    ``path`` and ``family`` are that catalog's identity.
-    ``named_filters`` maps ``(model label, code)`` to ``(model, tree)``,
-    copied once at build. ``user_rules`` is ``(primary, absent)``: stored rules use
-    ``primary``; the built-in rule uses ``primary`` when the subject has
-    a concrete boolean ``is_active`` and ``absent`` otherwise.
-    ``override_q`` is the override compiled against the catalog user
-    model, or ``None``. ``plans`` maps keys to plans; ``None`` is the
-    default. ``compiler`` is the query compiler stored at ``compile``.
-    """
-
-    records: tuple
-    delegations: tuple
-    named_filters: dict
-    user_conditions: object
-    user_override: object
-    compiler: object
-    path: str
-    family: str
-    user_model: object
-    user_rules: tuple
-    override_q: object
-    plans: dict
-
-
 @dataclass(frozen=True)
 class Question(object):
     """One possible permission question for one content group.
@@ -106,22 +79,35 @@ class Question(object):
     question: object
 
 
+@dataclass(frozen=True, slots=True, eq=False)
 class Catalog(object):
-    """Answers from the shape ``Compiler.compile`` stored on the config."""
+    """Answers from the rows ``Compiler.compile`` stored.
 
-    def __init__(self, shape, *, user_model):
-        self.path = shape.path
-        self.family = shape.family
-        self.records = shape.records
-        self.delegations = shape.delegations
-        self.compiler = shape.compiler
-        self.user_model = user_model
-        self.user_conditions = shape.user_conditions
-        self.user_override = shape.user_override
-        self.named_filters = dict(shape.named_filters)
-        self.user_rules = shape.user_rules
-        self.override_q = shape.override_q
-        self.plans = shape.plans
+    ``named_filters`` and ``plans`` are immutable mappings copied at
+    build. ``plans`` maps keys to plans; ``None`` is the default.
+    ``user_rules`` is ``(primary, absent)``.
+    """
+
+    records: tuple
+    delegations: tuple
+    named_filters: object
+    user_conditions: object
+    user_override: object
+    compiler: object
+    path: str
+    family: str
+    user_model: object
+    user_rules: tuple
+    override_q: object
+    plans: object
+
+    def __post_init__(self):
+        object.__setattr__(
+            self, 'named_filters', MappingProxyType(dict(self.named_filters)),
+        )
+        object.__setattr__(
+            self, 'plans', MappingProxyType(dict(self.plans)),
+        )
 
     def plan_for(self, content, *, user=None, permission=None):
         """Look up ``(content, user, permission)``. A miss is the default."""

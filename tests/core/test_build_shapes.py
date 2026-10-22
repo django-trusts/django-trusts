@@ -17,7 +17,7 @@ from django.db.models import Q
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
-from trusts.compile.catalogs import Catalog, CatalogShape
+from trusts.compile.catalogs import Catalog
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan
 from trusts.compile.factory import (
     relation_plan,
@@ -613,7 +613,7 @@ class CatalogFromShapeTest(TransactionTestCase):
                 user=grant.user,
                 permission=grant.permission,
             )
-            catalog = Catalog(CatalogShape(
+            catalog = Catalog(
                 records=(record,),
                 delegations=(),
                 named_filters={},
@@ -626,7 +626,7 @@ class CatalogFromShapeTest(TransactionTestCase):
                 user_rules=(Q(), Q()),
                 override_q=None,
                 plans=_shape_plans((record,), User),
-            ), user_model=User)
+            )
             self.assertTrue(catalog.has_perm(holder, code, payload))
             self.assertFalse(catalog.has_perm(outsider, code, payload))
             self.assertEqual(
@@ -647,14 +647,14 @@ class CatalogFromShapeTest(TransactionTestCase):
                 ).values_list('pk', flat=True)),
                 {scope.pk},
             )
-            empty = Catalog(CatalogShape(
+            empty = Catalog(
                 records=(), delegations=(), named_filters={},
                 user_conditions=None, user_override=None,
                 compiler=PlanQueryCompiler(), path='empty-shape',
                 family='relationship', user_model=User,
                 user_rules=(Q(), Q()), override_q=None,
                 plans=_shape_plans((), User),
-            ), user_model=User)
+            )
             self.assertFalse(empty.has_perm(holder, code, payload))
             self.assertFalse(empty.filter_authorized(
                 Payload.objects.all(), holder, read,

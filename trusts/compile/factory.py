@@ -50,7 +50,7 @@ from trusts.compile.resolution import (
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
-from trusts.compile.catalogs import Catalog, CatalogShape
+from trusts.compile.catalogs import Catalog
 from trusts.plan.conditions import (
     check_comparison_types,
     check_const_member,
@@ -925,7 +925,7 @@ class Compiler(object):
         plans = plan_table(
             self.records, self.delegations, model, stored, rules, override_q)
         self.frozen = True
-        shape = CatalogShape(
+        catalog = Catalog(
             records=self.records, delegations=self.delegations,
             named_filters=named_filters,
             user_conditions=stored, user_override=self._user_override,
@@ -933,7 +933,6 @@ class Compiler(object):
             path=self.path, family=self.family, user_model=model,
             user_rules=rules, override_q=override_q, plans=plans,
         )
-        catalog = Catalog(shape, user_model=model)
         self._catalog = catalog
         return catalog
 
