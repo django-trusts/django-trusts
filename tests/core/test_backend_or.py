@@ -485,17 +485,15 @@ class ListedBackendOrTest(TestCase):
             for message in messages
         ))
 
-    def test_no_listed_trusts_backend_names_the_gap(self):
+    def test_no_listed_trusts_backend_is_an_empty_queryset(self):
         from trusts.backends import compile_permitted_users
 
         with override_settings(AUTHENTICATION_BACKENDS=(
             'django.contrib.auth.backends.ModelBackend',
         )):
-            with self.assertRaisesRegex(
-                TrustsConfigurationError,
-                'No Trusts backend is listed in AUTHENTICATION_BACKENDS.',
-            ):
-                compile_permitted_users(self.note, self.note_perm)
+            empty = compile_permitted_users(self.note, self.note_perm)
+        self.assertEqual(list(empty), [])
+        self.assertIs(empty.model, get_user_model())
 
     def _assert_note(self, *, allowed, denied):
         self._assert_side(

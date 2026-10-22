@@ -89,8 +89,8 @@ def authorization_required(model, permission, conditions=(), backend=None,
     the override parameter and leaves ordinary grants in place.
 
     ``PermittedQuerySet.permitted`` uses the same permission codec. It
-    still asks the listed backends in one combined inquiry and has no
-    HTTP status.
+    asks each listed backend from that backend's own catalog and ORs
+    those grants. It has no HTTP status.
     """
     if not isinstance(model, type) or not issubclass(model, Model):
         raise TypeError(
