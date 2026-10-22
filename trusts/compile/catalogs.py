@@ -1,7 +1,6 @@
 """One built catalog. Not a builder and not a second store."""
 
 from dataclasses import dataclass, replace
-from functools import partial
 from types import MappingProxyType
 
 from django.contrib.auth.models import Permission
@@ -35,7 +34,6 @@ from trusts.plan.hops import (
     concrete_model,
     content_model,
     require_instance,
-    resolved_hop,
 )
 from trusts.plan.relations import _candidate_model, bind_checked_user
 from trusts.plan.rewrites import bind_once
@@ -99,6 +97,8 @@ class Catalog(object):
     user_rules: tuple
     override_q: object
     plans: object
+    questions: tuple = ()
+    content_prefixes: object = None
 
     def __post_init__(self):
         object.__setattr__(
@@ -106,6 +106,12 @@ class Catalog(object):
         )
         object.__setattr__(
             self, 'plans', MappingProxyType(dict(self.plans)),
+        )
+        from trusts.compile.factory import question_descriptors
+        questions, prefixes = question_descriptors(self)
+        object.__setattr__(self, 'questions', questions)
+        object.__setattr__(
+            self, 'content_prefixes', MappingProxyType(prefixes),
         )
 
     def plan_for(self, content, *, user=None, permission=None):
@@ -309,13 +315,7 @@ class Catalog(object):
         a group whose content path has a proper prefix.
         """
         visit = visitor.visit
-        results = []
-        for model, records, delegations in self._content_groups():
-            for descriptor in self._descriptors_for(
-                model, records, delegations,
-            ):
-                results.append(visit(descriptor))
-        return tuple(results)
+        return tuple(visit(question) for question in self.questions)
 
     def authorization_preflight(self, model, conditions):
         """Zero-SQL ``(participating, owns_conditions)`` for this catalog.
@@ -464,46 +464,12 @@ class Catalog(object):
             return False, skipped
         return False, {}
 
-    def _content_groups(self):
-        """``(content_model, records, delegations)`` in document order."""
-        order = []
-        by_model = {}
-        for kind, rows in (('records', self.records),
-                           ('delegations', self.delegations)):
-            for record in rows:
-                model = record.content_model
-                slot = by_model.get(model)
-                if slot is None:
-                    by_model[model] = slot = {'records': [], 'delegations': []}
-                    order.append(model)
-                slot[kind].append(record)
-        return tuple(
-            (model, tuple(by_model[model]['records']),
-             tuple(by_model[model]['delegations']))
-            for model in order
-        )
-
     def permitted_content_prefix_models(self, model):
         """Concrete models that are a proper prefix of ``model``'s path."""
-        plan = self.plan_for(model)
-        legs = tuple(plan.records) + tuple(plan.delegations or ())
-        found = []
-        seen = set()
-        for record in legs:
-            path = record.content_path
-            if not path:
-                continue
-            current = record.root
-            last = len(path) - 1
-            for index, name in enumerate(path):
-                field = current._meta.get_field(name)
-                related, _target = resolved_hop(field, 'content', path)
-                concrete = related._meta.concrete_model
-                if index != last and concrete not in seen:
-                    seen.add(concrete)
-                    found.append(concrete)
-                current = related
-        return tuple(found)
+        prefixes = self.content_prefixes
+        if not prefixes:
+            return ()
+        return prefixes.get(content_model(model), ())
 
     def _question_content_grant(self, content_model, user, permission):
         return self.filter_authorized(
@@ -517,40 +483,6 @@ class Catalog(object):
         return self.filter_by_permitted_content(
             queryset, user, permission, content=content_model,
         )
-
-    def _descriptors_for(self, content_model, records, delegations):
-        descriptors = [
-            Question(
-                'permitted', content_model, records, delegations,
-                partial(self._question_content_grant, content_model),
-            ),
-            Question(
-                'has_perm', content_model, records, delegations,
-                self.has_permission,
-            ),
-            Question(
-                'get_all_permissions', content_model, records, delegations,
-                self.permissions_for,
-            ),
-        ]
-        if any(record.via_group for record in records):
-            descriptors.append(Question(
-                'get_group_permissions', content_model, records, delegations,
-                partial(self.permissions_for, kind='group'),
-            ))
-        descriptors.append(Question(
-            'get_permitted_users', content_model, records, delegations,
-            self.permitted_users,
-        ))
-        if self.permitted_content_prefix_models(content_model):
-            descriptors.append(Question(
-                'filter_by_permitted_content', content_model, records,
-                delegations,
-                partial(
-                    self._question_filter_by_permitted_content, content_model,
-                ),
-            ))
-        return tuple(descriptors)
 
 
 class PreparedInquiry(object):

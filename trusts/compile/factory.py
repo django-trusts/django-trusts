@@ -4,6 +4,7 @@ __all__ = []
 
 import inspect
 from collections.abc import Callable
+from functools import partial
 from typing import TypeVar
 
 from dataclasses import dataclass, field, replace
@@ -50,7 +51,7 @@ from trusts.compile.resolution import (
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
-from trusts.compile.catalogs import Catalog
+from trusts.compile.catalogs import Catalog, Question
 from trusts.plan.conditions import (
     check_comparison_types,
     check_const_member,
@@ -283,6 +284,85 @@ def plan_table(records, delegations, catalog_user, user_conditions,
         records, delegations, None, None, None, catalog_user,
         user_conditions, user_rules, override_q, query_compiler)
     return table
+
+
+def content_groups(records, delegations):
+    """``(content_model, records, delegations)`` in registration order."""
+    order = []
+    by_model = {}
+    for kind, rows in (('records', records), ('delegations', delegations)):
+        for record in rows:
+            model = record.content_model
+            slot = by_model.get(model)
+            if slot is None:
+                by_model[model] = slot = {'records': [], 'delegations': []}
+                order.append(model)
+            slot[kind].append(record)
+    return tuple(
+        (model, tuple(by_model[model]['records']),
+         tuple(by_model[model]['delegations']))
+        for model in order
+    )
+
+
+def prefix_models(records, delegations):
+    """Concrete models that are a proper prefix of these rows' content paths."""
+    found = []
+    seen = set()
+    for record in tuple(records) + tuple(delegations or ()):
+        path = record.content_path
+        if not path:
+            continue
+        current = record.root
+        last = len(path) - 1
+        for index, name in enumerate(path):
+            field = current._meta.get_field(name)
+            related, _target = resolved_hop(field, 'content', path)
+            concrete = related._meta.concrete_model
+            if index != last and concrete not in seen:
+                seen.add(concrete)
+                found.append(concrete)
+            current = related
+    return tuple(found)
+
+
+def question_descriptors(catalog):
+    """Questions for one built catalog, in document order."""
+    questions = []
+    prefixes = {}
+    for model, records, delegations in content_groups(
+        catalog.records, catalog.delegations,
+    ):
+        found = prefix_models(records, delegations)
+        prefixes[model] = found
+        questions.append(Question(
+            'permitted', model, records, delegations,
+            partial(catalog._question_content_grant, model),
+        ))
+        questions.append(Question(
+            'has_perm', model, records, delegations, catalog.has_permission,
+        ))
+        questions.append(Question(
+            'get_all_permissions', model, records, delegations,
+            catalog.permissions_for,
+        ))
+        if any(record.via_group for record in records):
+            questions.append(Question(
+                'get_group_permissions', model, records, delegations,
+                partial(catalog.permissions_for, kind='group'),
+            ))
+        questions.append(Question(
+            'get_permitted_users', model, records, delegations,
+            catalog.permitted_users,
+        ))
+        if found:
+            questions.append(Question(
+                'filter_by_permitted_content', model, records, delegations,
+                partial(
+                    catalog._question_filter_by_permitted_content, model,
+                ),
+            ))
+    return tuple(questions), prefixes
 
 
 class Compiler(object):
