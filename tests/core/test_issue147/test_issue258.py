@@ -11,6 +11,7 @@ import tempfile
 from decimal import Decimal
 from pathlib import Path
 
+from django.apps import apps as django_apps
 from django.contrib.auth.models import Permission
 from django.core import checks as django_checks
 from django.db import models
@@ -222,8 +223,14 @@ class PolicyLockConfigurationTest(SimpleTestCase):
         with override_settings(AUTHENTICATION_BACKENDS=()):
             empty = yaml.safe_load(render_policy_sql_bytes())
         paths = [row['path'] for row in empty['backends']]
-        self.assertIn('tests.myapp.apps.DocumentConfig', paths)
-        self.assertNotIn('tests.kernel_host.apps.KernelHostConfig', paths)
+        if django_apps.is_installed('tests.myapp'):
+            self.assertIn('tests.myapp.apps.DocumentConfig', paths)
+            self.assertNotIn(
+                'tests.kernel_host.apps.KernelHostConfig', paths,
+            )
+        else:
+            self.assertIn('tests.apps.TestsConfig', paths)
+            self.assertIn('trusts.zero.apps.ZeroConfig', paths)
         self.assertTrue(all(row['contents'] for row in empty['backends']))
 
         handle = _document_handle('documents.backends.FilterlessBackend')

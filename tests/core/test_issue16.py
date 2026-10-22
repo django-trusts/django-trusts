@@ -14,7 +14,7 @@ from django.db import connection, models
 from django.http import HttpRequest
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
-
+from tests.core import kernel_host_listed
 from tests.models import Organization, Ticket, ticket_meta_own
 from tests.support import built_catalog, compiler, override_catalog
 from trusts.conditions import PermissionConditionError
@@ -469,6 +469,8 @@ class NamedFilterCheckTest(SimpleTestCase):
         self.assertIn('does not enable', messages[0].msg)
 
     def test_two_catalogs_keep_distinct_filters_for_one_code(self):
+        if not kernel_host_listed():
+            self.skipTest('kernel-only host path is not listed on the pair')
         from tests.backends import MixinOnlyBackend
         from tests.kernel_host.backends import HostTrustModelBackend
 

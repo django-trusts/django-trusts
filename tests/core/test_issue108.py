@@ -12,6 +12,7 @@ from django.test.utils import isolate_apps
 
 import tests as tests_module
 from tests.apps import TestsConfig
+from tests.core import KernelHostRequiredMixin, kernel_host_listed
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.kernel_host.backends import HostTrustModelBackend
 from tests.support import configured_catalog, sweep_listed_backends
@@ -23,7 +24,7 @@ HOST = 'tests.kernel_host.backends.HostTrustModelBackend'
 OUTSIDE = 'tests.gh_permissions.backends.OutsideBackend'
 
 
-class ImplementationRoutingTest(SimpleTestCase):
+class ImplementationRoutingTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_exact_path_routing_is_the_owning_config(self):
         host = configured_catalog(HOST)
         owner = apps.get_app_config('trusts_kernel_host')
@@ -43,7 +44,7 @@ class ImplementationRoutingTest(SimpleTestCase):
         )
 
 
-class ImplementationReadyTest(SimpleTestCase):
+class ImplementationReadyTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_empty_authentication_backends_still_build_installed_configs(self):
         before = [catalog.path for catalog in installed_catalogs()]
         with override_settings(AUTHENTICATION_BACKENDS=()):
@@ -88,6 +89,8 @@ class ImplementationReadyTest(SimpleTestCase):
 
 class MixinCatalogResolveTest(SimpleTestCase):
     def test_outside_backend_is_not_constructed(self):
+        if not apps.is_installed('tests.gh_permissions'):
+            self.skipTest('gh_permissions is not installed on the pair')
         with override_settings(AUTHENTICATION_BACKENDS=(HOST, OUTSIDE, OUTSIDE)):
             messages = [
                 message for message in run_checks()
@@ -132,6 +135,8 @@ class MixinCatalogResolveTest(SimpleTestCase):
         )
 
     def test_listed_host_catalog_path_is_the_config_class(self):
+        if not kernel_host_listed():
+            self.skipTest('kernel-only host path is not listed on the pair')
         catalog = configured_catalog(HOST)
         self.assertEqual(
             catalog.path,
@@ -157,6 +162,8 @@ class MixinCatalogResolveTest(SimpleTestCase):
 )
 class IsolatedImplementationStoreTest(SimpleTestCase):
     def test_implementation_registry_does_not_touch_live_owner(self):
+        if not kernel_host_listed():
+            self.skipTest('kernel-only host path is not listed on the pair')
         before = HostTrustModelBackend().catalog
         before_records = before.records
         contributor = TestsConfig('tests', tests_module)
