@@ -76,7 +76,6 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         lookup = registry.condition_lookup
         self.assertIsInstance(lookup, RegistryConditionLookup)
         self.assertIs(lookup.conditions, registry.conditions)
-        self.assertFalse(registry.frozen)
 
     def test_handles_do_not_share_lookup_or_store(self):
         left = TrustsRegistry()
@@ -86,22 +85,22 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         self.assertIs(left.condition_lookup.conditions, left.conditions)
         self.assertIs(right.condition_lookup.conditions, right.conditions)
 
-    def test_freeze_and_ready_do_not_bind_or_rebind(self):
+    def test_build_and_ready_do_not_bind_or_rebind(self):
         import inspect
 
         registry = TrustsRegistry()
         lookup = registry.condition_lookup
-        registry.freeze()
-        self.assertTrue(registry.frozen)
+        built = registry.build_registry()
+        self.assertIs(built.condition_lookup, lookup)
         self.assertIs(registry.condition_lookup, lookup)
         self.assertIs(lookup.conditions, registry.conditions)
         self.assertNotIn(
             'set_condition_lookup',
-            inspect.getsource(TrustsRegistry.freeze),
+            inspect.getsource(TrustsRegistry.build_registry),
         )
         self.assertNotIn(
             'RegistryConditionLookup',
-            inspect.getsource(TrustsRegistry.freeze),
+            inspect.getsource(TrustsRegistry.build_registry),
         )
         self.assertNotIn(
             'set_condition_lookup',
@@ -124,7 +123,7 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         self.assertEqual(permission_condition_code('change_note:own'), 'own')
 
     def test_companion_pin_is_exact_zero_candidate(self):
-        z_methods = '8d7c729ad7153d30600c151188794efe9a59a882'
+        z_methods = '833866b9a096ac8a31e8bc60424e01a02f05389c'
         stale_r5a = '462c83b59edfb51011b4373e8214b2daaab7f500'
         stale_38 = 'c7dc4f11f728ad3c4c22249e471daa4bf9849404'
         stale_191 = '517307170f954f187da78c56e236ec1779c46e29'
@@ -248,7 +247,6 @@ class LiveEnsureSelfBindTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_live_ensure_registry_is_self_bound_without_host_wiring(self):
         owner = implementation_for_path(DOCUMENT_BACKEND)
         registry = owner.configured_backend().registry
-        self.assertTrue(registry.frozen)
         lookup = registry.condition_lookup
         self.assertIsInstance(lookup, RegistryConditionLookup)
         self.assertIs(lookup.conditions, registry.conditions)
@@ -313,8 +311,8 @@ class NamedConditionCompilationTest(TransactionTestCase):
             registry.register_permission_condition(
                 Note, 'owned', lambda u, p, o: u == o.owner,
             )
-            registry.freeze()
-        self.assertTrue(registry.frozen)
+            built = registry.build_registry()
+        self.assertIs(built.condition_lookup, lookup)
         self.assertIs(registry.condition_lookup, lookup)
         self.assertIsNotNone(
             registry.get_permission_condition_record(Note, 'owned'),

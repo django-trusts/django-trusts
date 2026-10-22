@@ -1,7 +1,9 @@
-"""Spike: a frozen registry built by injecting lowered state and builders.
+"""Spike: a registry built whole from lowered values.
 
-``TrustsRegistry`` stays the registration front end. ``FrozenRegistry``
-does not import ``trusts.core``. Core imports the frozen class.
+``TrustsRegistry`` stays the registration front end. ``Registry``
+takes records, delegations, the shared condition store, stored user
+conditions, and the user override as data. It does not import
+``trusts.core``. Core re-exports it as ``_FrozenRegistry``.
 """
 
 import ast
@@ -14,23 +16,13 @@ from django.db import connection, models
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
-from trusts.commons import (
-    _bind_record_qs,
-    _require_instance,
-)
-from trusts.compile.factory import (
-    _concrete_model,
-    _content_model,
-)
 from trusts.compile.nodes import Along
 from trusts.plan.recursions import GrantReach
-from trusts.plan.relations import _candidate_model
 from trusts.core import (
     Ref,
-    RelationPlan,
     TrustsRegistry,
 )
-from trusts.plan.registry import FrozenRegistry
+from trusts.plan.registry import Registry
 
 
 def _sql(expr, model):
@@ -39,26 +31,19 @@ def _sql(expr, model):
     return compiler.as_sql()
 
 
-def _frozen_from(registry, *, compiler, handles):
-    return FrozenRegistry(
+def _built_from(registry):
+    return Registry(
         records=registry.records,
         delegations=registry.delegations,
-        compiler=compiler,
-        handles=handles,
-        relation_plan=RelationPlan,
-        bind_record_qs=_bind_record_qs,
-        grant_reach=GrantReach,
-        content_model=_content_model,
-        concrete_model=_concrete_model,
-        require_instance=_require_instance,
-        candidate_model=_candidate_model,
-        rule_fragment=registry._rule_fragment,
-        override_fragment=registry._override_fragment,
+        conditions=registry.conditions,
+        user_conditions=registry._stored_user_conditions(),
+        user_override=registry._user_override,
+        condition_lookup=registry.condition_lookup,
     )
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class FrozenRegistryInjectionSpikeTest(SimpleTestCase):
+class RegistryInjectionSpikeTest(SimpleTestCase):
     def test_module_does_not_import_core_or_compile(self):
         import trusts.compile.factory as factory_module
         import trusts.core as core
@@ -83,7 +68,7 @@ class FrozenRegistryInjectionSpikeTest(SimpleTestCase):
                         or name.startswith('trusts.compile.'),
                         name,
                     )
-        self.assertIs(core._FrozenRegistry, FrozenRegistry)
+        self.assertIs(core._FrozenRegistry, Registry)
         self.assertTrue(registry_module.__file__.endswith('registry.py'))
 
     def test_direct_trusts_registry_still_registers(self):
@@ -97,26 +82,32 @@ class FrozenRegistryInjectionSpikeTest(SimpleTestCase):
         Document, DocumentGrant = _document_models()
         registry = TrustsRegistry()
         _register_document(registry, DocumentGrant)
-        compiler = object()
-        sibling = object()
-        frozen = _frozen_from(registry, compiler=compiler, handles=(sibling,))
-        self.assertIs(frozen.compiler, compiler)
-        self.assertEqual(frozen.handles, (sibling,))
+        built_registry = _built_from(registry)
+        self.assertIs(built_registry.conditions, registry.conditions)
+        self.assertIs(built_registry.condition_lookup, registry.condition_lookup)
+        self.assertEqual(built_registry.records, registry.records)
+        self.assertEqual(built_registry.delegations, registry.delegations)
 
         live = registry.plan_for(Document)
-        built = frozen.plan_for(Document)
+        built = built_registry.plan_for(Document)
         self.assertEqual(built.records, live.records)
+        self.assertIs(built.records[0], live.records[0])
         self.assertEqual(built.delegations, live.delegations)
         self.assertIs(built.permission_model, live.permission_model)
         self.assertIs(built.content_identity, live.content_identity)
-        self.assertIs(built.user_rules, live.user_rules)
-        self.assertIs(built.user_override_q, live.user_override_q)
+        # Rule fragments are computed inside each registry from the
+        # same user-condition data, so compare SQL, not identity.
+        self.assertEqual(
+            _sql(built.user_rules, get_user_model()),
+            _sql(live.user_rules, get_user_model()),
+        )
+        self.assertEqual(built.user_override_q, live.user_override_q)
 
         User = get_user_model()
         user = User(pk=1)
         permission = Permission(pk=2)
         self.assertEqual(
-            _sql(frozen.compile_content_exists(built, user, permission), Document),
+            _sql(built.content_exists(user, permission), Document),
             _sql(live.content_exists(user, permission), Document),
         )
 
@@ -130,15 +121,15 @@ class FrozenRegistryInjectionSpikeTest(SimpleTestCase):
             permission=root.permission,
             along=Along(root.folder.parent, 2),
         )
-        frozen = _frozen_from(registry, compiler=object(), handles=())
+        built_registry = _built_from(registry)
         live = registry.plan_for(Folder)
-        built = frozen.plan_for(Folder)
+        built = built_registry.plan_for(Folder)
         self.assertIsNotNone(built.records[0].along)
         User = get_user_model()
         user = User(pk=1)
         permission = Permission(pk=2)
         live_expr = live.content_exists(user, permission)
-        built_expr = frozen.compile_content_exists(built, user, permission)
+        built_expr = built.content_exists(user, permission)
         self.assertIsInstance(live_expr, GrantReach)
         self.assertIs(type(built_expr), type(live_expr))
         self.assertIs(built_expr.record, live_expr.record)

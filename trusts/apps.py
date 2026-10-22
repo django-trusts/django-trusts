@@ -109,19 +109,22 @@ class _TrustsRegistryOwner(object):
         return self.registries[path]
 
     def _exposed_registry(self, path):
-        """Return the stored registry; freeze on first live read after ready."""
-        registry = self._ensure(path)
-        if self._apps_instance_ready():
-            registry.freeze()
-        return registry
+        """Return the stored registry for ``path``.
+
+        The stored builder is returned as-is at any readiness stage;
+        each backend question builds a fresh ``Registry`` from its
+        current records, so late registration takes effect on the
+        next question.
+        """
+        return self._ensure(path)
 
     def configured_backend(self, path=None) -> BackendHandle:
         """Return the configured backend for one exact Trusts path.
 
         With one Trusts path, ``path`` may be omitted. With zero or
         several, omission fails loud. An unconfigured path fails loud.
-        After this AppConfig's Apps instance is ready, the stored
-        registry is frozen before the backend is returned.
+        The stored builder is returned as-is; building a query-time
+        registry happens per question, on demand.
         """
         from django.utils.module_loading import import_string
 
@@ -211,14 +214,9 @@ class _TrustsRegistryOwner(object):
                 'registry alias needs exactly one configured Trusts path; '
                 'got %r' % (paths,)
             )
-        # After populate, the compatibility setter is a live surface:
-        # it must not install a writable registry. Freeze the replacement
-        # before storing so a caller-held reference cannot mutate late.
-        # Assignment before ready stays writable for contributor setup.
-        if self._apps_instance_ready():
-            freeze = getattr(value, 'freeze', None)
-            if callable(freeze):
-                freeze()
+        # Install the replacement as-is at any readiness stage.
+        # Registration on it (by a contributor, or through a
+        # caller-held reference) takes effect on the next build.
         self.registries[paths[0]] = value
 
 

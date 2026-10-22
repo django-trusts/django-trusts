@@ -1,9 +1,11 @@
 """Registration marshaling and the builder-half registry.
 
 ``TrustsRegistry`` collects ``register`` and ``set_*`` calls and stores
-lowered rows. ``assemble_frozen`` builds the query-time
-``FrozenRegistry``. ``trusts.core`` re-exports ``TrustsRegistry``. This
-module does not import ``trusts.core``.
+lowered rows. Its ``build_*`` methods return the lowered shapes without
+storing them; the ``register*`` methods own duplicate and
+rule checks and append those shapes. ``build_registry`` builds the
+query-time ``Registry`` from stored values. ``trusts.core`` re-exports
+``TrustsRegistry``. This module does not import ``trusts.core``.
 """
 
 __all__ = []
@@ -18,7 +20,8 @@ from django.db.models.query import QuerySet
 
 from trusts.commons import (
     _auth_group_and_permission,
-    _bind_record_qs,
+    _concrete_model,
+    _content_model,
     _lookup_text,
     _path_text,
     _require_instance,
@@ -59,13 +62,8 @@ from trusts.compile.resolution import (
     _resolve_permission_path,
 )
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.recursions import GrantReach
-from trusts.plan.registry import FrozenRegistry
-from trusts.plan.relations import (
-    RelationPlan,
-    _candidate_model,
-    bind_checked_user,
-)
+from trusts.plan.registry import Registry
+from trusts.plan.relations import bind_checked_user
 from trusts.plan.standards import (
     UserCondition,
     assert_concrete_booleans,
@@ -79,31 +77,6 @@ from trusts.plan.standards import (
     rule_applies,
     validate_user_rule_name,
 )
-
-
-def assemble_frozen(
-    registry, *, compiler, handles, relation_plan, bind_record_qs,
-    grant_reach, content_model, concrete_model, require_instance,
-    candidate_model,
-):
-    """Build the query-time registry from already-lowered rows."""
-    return FrozenRegistry(
-        records=registry.records,
-        delegations=registry.delegations,
-        compiler=compiler,
-        handles=tuple(handles),
-        relation_plan=relation_plan,
-        bind_record_qs=bind_record_qs,
-        grant_reach=grant_reach,
-        content_model=content_model,
-        concrete_model=concrete_model,
-        require_instance=require_instance,
-        candidate_model=candidate_model,
-        rule_fragment=registry._rule_fragment,
-        override_fragment=registry._override_fragment,
-    )
-
-
 
 
 def _validate_equal(predicate, root):
@@ -628,6 +601,29 @@ class RegisteredDelegation:
     sponsor_rules: object | None = field(default=None, compare=False, repr=False)
 
 
+@dataclass(frozen=True, slots=True)
+class PublicRegistration:
+    """Normalized public registration, before it is stored.
+
+    ``build_public_registration`` returns this shape: root-relative refs
+    for exactly one mode (ordinary ``user`` plus ``permission`` or
+    ``group``, or delegated ``delegate`` plus ``sponsor``), the already
+    lowered ``condition``, and the bound ``along``. The unused mode's
+    refs are ``None``. Storing it is ``_register_public``'s job, via
+    ``register`` or ``register_delegation``.
+    """
+
+    trust: type
+    content: object
+    user: object | None = None
+    permission: object | None = None
+    group: object | None = None
+    delegate: object | None = None
+    sponsor: object | None = None
+    condition: object | None = None
+    along: object | None = None
+
+
 def _same_terminal_bindings(existing, record):
     """True when two records share content/user/permission/along bindings."""
     return (
@@ -643,28 +639,6 @@ def _same_terminal_bindings(existing, record):
         and existing.along == record.along
         and existing.via_group == record.via_group
         and existing.group_path == record.group_path
-    )
-
-
-def _concrete_model(value):
-    opts = getattr(value, '_meta', None)
-    if opts is None:
-        raise TrustsConfigurationError(
-            'Expected a model class or instance, not %r.' % (value,)
-        )
-    return opts.concrete_model
-
-
-def _content_model(content):
-    if isinstance(content, QuerySet):
-        return content.model._meta.concrete_model
-    if _is_model_class(content):
-        return content._meta.concrete_model
-    if isinstance(content, Model):
-        return content._meta.concrete_model
-    raise TrustsConfigurationError(
-        'content must be a model class, instance, or QuerySet, not %r.'
-        % (content,)
     )
 
 
@@ -1006,13 +980,11 @@ class TrustsRegistry(object):
     store several records when they terminate on different content
     models, or when the same bindings use a different closed condition.
 
-        Frozen state is instance-owned. ``freeze()`` is idempotent.
-        ``register`` and ``register_permission_condition`` on that exact
-        frozen instance raise ``TrustsConfigurationError`` before
-        validation, builder invoke, or mutation. Existing records,
-        plans, compilers, and authorization reads stay usable.
-    A standalone ``TrustsRegistry()`` never inspects Django readiness
-    and never auto-freezes.
+        Registration stays open for the life of the instance:
+        ``build_registry()`` builds a fresh ``Registry`` from the
+        current records on each call, so registering after a build
+        takes effect on the next build. A standalone
+        ``TrustsRegistry()`` never inspects Django readiness.
     """
 
     def __init__(self):
@@ -1026,7 +998,6 @@ class TrustsRegistry(object):
         self._order = []
         self._delegations_by_root = {}
         self._delegation_order = []
-        self._frozen = False
         self._condition_lookup = None
         self._user_conditions = None
         self._user_override = None
@@ -1034,10 +1005,6 @@ class TrustsRegistry(object):
         self._override_fragments = {}
         self.conditions = ConditionRegistry()
         self.set_condition_lookup(RegistryConditionLookup(self))
-
-    @property
-    def frozen(self):
-        return self._frozen
 
     @property
     def condition_lookup(self):
@@ -1068,16 +1035,10 @@ class TrustsRegistry(object):
     def register_permission_condition(self, model, cond_code, condition):
         """Register a ``:cond_code`` condition on ``model`` for this instance.
 
-        A callable is a registration-time builder. A frozen instance
-        raises ``TrustsConfigurationError`` before the builder is
-        invoked. A prebuilt ``Expr`` is rejected by the condition
+        A callable is a registration-time builder, invoked once
+        here. A prebuilt ``Expr`` is rejected by the condition
         store with ``TypeError`` before mutation.
         """
-        if self._frozen:
-            raise TrustsConfigurationError(
-                'Cannot register a permission condition on a frozen '
-                'TrustsRegistry.'
-            )
         return self.conditions.register_permission_condition(
             model, cond_code, condition,
         )
@@ -1188,14 +1149,6 @@ class TrustsRegistry(object):
         return None
 
     def _open_for_rules(self, kind):
-        if self._frozen:
-            verb = (
-                'set a user condition' if kind == 'condition'
-                else 'set a user override'
-            )
-            raise TrustsConfigurationError(
-                'Cannot %s on a frozen TrustsRegistry.' % verb
-            )
         if self._order or self._delegation_order:
             raise TrustsConfigurationError(
                 'Set user conditions and the user override before '
@@ -1297,10 +1250,6 @@ class TrustsRegistry(object):
         self._clear_compiled_rules()
         return self._user_override
 
-    def freeze(self):
-        """Seal relation and condition registration on this instance."""
-        self._frozen = True
-
     @property
     def records(self):
         return tuple(self._order)
@@ -1331,21 +1280,16 @@ class TrustsRegistry(object):
                 % (getattr(root, '__name__', root),)
             )
 
-    def register_delegation(self, *, content, delegate, sponsor, condition=None,
-                            along=None):
-        """Register one non-granting delegation relationship.
+    def build_delegation(self, *, content, delegate, sponsor, condition=None,
+                         along=None):
+        """Build one ``RegisteredDelegation`` without storing it.
 
-        The three paths share one root. Delegate and sponsor are
-        single-valued forward paths to the same persisted principal model.
-        The condition is row-only or may contain a private symbolic match to
-        the requested permission. Optional ``along`` is the same bounded
-        walk as an ordinary registration: the delegation anchor reaches
-        objects within that walk. Registration validates metadata only.
+        Pure shape-building half of ``register_delegation``: same ref,
+        path, condition, and ``along`` validation and errors, but no
+        duplicate check, no user-rule assertion or sponsor
+        fragment (``sponsor_rules`` stays ``None``), and no append.
+        ``register_delegation`` owns those steps and appends the shape.
         """
-        if self._frozen:
-            raise TrustsConfigurationError(
-                'Cannot register on a frozen TrustsRegistry.'
-            )
         content_ref = _require_ref(content, 'content')
         delegate_ref = _require_ref(delegate, 'delegate')
         sponsor_ref = _require_ref(sponsor, 'sponsor')
@@ -1393,7 +1337,7 @@ class TrustsRegistry(object):
             along_walk = _build_along_walk(
                 root, content_path, content_model, along,
             )
-        record = RegisteredDelegation(
+        return RegisteredDelegation(
             root=root,
             content_path=content_path,
             content_model=content_model,
@@ -1412,6 +1356,23 @@ class TrustsRegistry(object):
             condition_permission_target=condition_permission_target,
             along=along_walk,
         )
+
+    def register_delegation(self, *, content, delegate, sponsor, condition=None,
+                            along=None):
+        """Register one non-granting delegation relationship.
+
+        The three paths share one root. Delegate and sponsor are
+        single-valued forward paths to the same persisted principal model.
+        The condition is row-only or may contain a private symbolic match to
+        the requested permission. Optional ``along`` is the same bounded
+        walk as an ordinary registration: the delegation anchor reaches
+        objects within that walk. Registration validates metadata only.
+        """
+        record = self.build_delegation(
+            content=content, delegate=delegate, sponsor=sponsor,
+            condition=condition, along=along,
+        )
+        root = record.root
         existing_rows = self._delegations_by_root.get(root)
         if existing_rows:
             if record in existing_rows:
@@ -1432,13 +1393,13 @@ class TrustsRegistry(object):
                         )
                     )
         self._assert_rules_for_registration(
-            user_model=delegate_model,
-            sponsor_model=sponsor_model,
+            user_model=record.delegate_model,
+            sponsor_model=record.sponsor_model,
         )
-        self._rule_fragment(delegate_model, role='user')
-        self._override_fragment(delegate_model)
+        self._rule_fragment(record.delegate_model, role='user')
+        self._override_fragment(record.delegate_model)
         record = replace(record, sponsor_rules=self._rule_fragment(
-            sponsor_model, role='sponsor', path=sponsor_field,
+            record.sponsor_model, role='sponsor', path=record.sponsor_field,
         ))
         if existing_rows:
             existing_rows.append(record)
@@ -1447,43 +1408,16 @@ class TrustsRegistry(object):
         self._delegation_order.append(record)
         return record
 
-    def register(self, *, content, user, permission=None, group=None,
-                 condition=None, along=None):
-        """Register one permission-bearing relation from root-relative refs.
+    def build_relation(self, *, content, user, permission=None, group=None,
+                       condition=None, along=None):
+        """Build one ``RegisteredRelation`` without storing it.
 
-        ``permission`` and ``group`` are mutually exclusive. ``permission``
-        is one direct single-valued hop, or zero or more forward
-        single-valued hops followed by exactly one terminal many-to-many
-        to ``auth.Permission``. ``group`` is a forward single-valued
-        path that must end at ``auth.Group``; this method appends
-        ``Group.permissions`` and stores that as the permission terminal.
-        A ``permission=`` record stays ``via_group`` false.
-        Supplying both, or neither, raises ``TrustsConfigurationError``.
-
-        Exact duplicate normalized registration raises
-        ``TrustsConfigurationError``. The same root plus the same content
-        terminal with different content/user/permission/along bindings is
-        a conflict and also raises. The same bindings with a *different*
-        closed condition is an allowed alternative (the plan ORs complete
-        records). The same root may register different content terminals.
-        Both error outcomes leave stored records unchanged.
-
-        Optional ``along`` is an ``Along`` that replaces equality at the
-        walk-site with bounded reachability. Along validation uses
-        ``_meta`` only (zero SQL) and runs after the frozen check.
-
-        Optional ``condition`` is a closed predicate tree (``All``,
-        ``Equal``, ``permission_in``) compiled as an AND overlay on the
-        same root row. Validation uses ``_meta`` only (zero SQL).
-
-        A frozen instance raises ``TrustsConfigurationError`` before
-        validation or mutation. This method does not inspect Django's
-        global ``apps.ready``.
+        Pure shape-building half of ``register``: same permission-source,
+        ref, path, condition, and ``along`` validation and errors, but no
+        duplicate/conflict check, no user-rule assertion or
+        fragment compilation, and no append. ``register`` owns those
+        steps and appends the returned shape.
         """
-        if self._frozen:
-            raise TrustsConfigurationError(
-                'Cannot register on a frozen TrustsRegistry.'
-            )
         _require_one_permission_source(permission, group)
         if along is not None and not isinstance(along, Along):
             raise TrustsConfigurationError(
@@ -1538,7 +1472,7 @@ class TrustsRegistry(object):
             permission_target=permission_target,
         )
 
-        record = RegisteredRelation(
+        return RegisteredRelation(
             root=root,
             content_path=content_path,
             content_model=content_model,
@@ -1560,6 +1494,43 @@ class TrustsRegistry(object):
             group_field=group_field,
             group_target=group_target,
         )
+
+    def register(self, *, content, user, permission=None, group=None,
+                 condition=None, along=None):
+        """Register one permission-bearing relation from root-relative refs.
+
+        ``permission`` and ``group`` are mutually exclusive. ``permission``
+        is one direct single-valued hop, or zero or more forward
+        single-valued hops followed by exactly one terminal many-to-many
+        to ``auth.Permission``. ``group`` is a forward single-valued
+        path that must end at ``auth.Group``; this method appends
+        ``Group.permissions`` and stores that as the permission terminal.
+        A ``permission=`` record stays ``via_group`` false.
+        Supplying both, or neither, raises ``TrustsConfigurationError``.
+
+        Exact duplicate normalized registration raises
+        ``TrustsConfigurationError``. The same root plus the same content
+        terminal with different content/user/permission/along bindings is
+        a conflict and also raises. The same bindings with a *different*
+        closed condition is an allowed alternative (the plan ORs complete
+        records). The same root may register different content terminals.
+        Both error outcomes leave stored records unchanged.
+
+        Optional ``along`` is an ``Along`` that replaces equality at the
+        walk-site with bounded reachability. Along validation uses
+        ``_meta`` only (zero SQL).
+
+        Optional ``condition`` is a closed predicate tree (``All``,
+        ``Equal``, ``permission_in``) compiled as an AND overlay on the
+        same root row. Validation uses ``_meta`` only (zero SQL).
+
+        This method does not inspect Django's global ``apps.ready``.
+        """
+        record = self.build_relation(
+            content=content, user=user, permission=permission, group=group,
+            condition=condition, along=along,
+        )
+        root = record.root
 
         existing_rows = self._by_root.get(root)
         if existing_rows:
@@ -1584,9 +1555,9 @@ class TrustsRegistry(object):
                             record,
                         )
                     )
-        self._assert_rules_for_registration(user_model=user_model)
-        self._rule_fragment(user_model, role='user')
-        self._override_fragment(user_model)
+        self._assert_rules_for_registration(user_model=record.user_model)
+        self._rule_fragment(record.user_model, role='user')
+        self._override_fragment(record.user_model)
         if existing_rows:
             existing_rows.append(record)
         else:
@@ -1594,19 +1565,20 @@ class TrustsRegistry(object):
         self._order.append(record)
         return record
 
-    def _register_public(
+    def build_public_registration(
         self, *, trust, user=None, permission=None, content, group=None,
         delegate=None, sponsor=None, condition=None, along=None,
     ):
-        """Public ``BackendHandle.register`` body, on the registry it stores.
+        """Build a normalized ``PublicRegistration`` without storing it.
 
-        The handle forwards here so ``trusts.plan.handles`` does not import
-        this module. Callers keep using ``BackendHandle.register``.
+        Shape-building half of ``_register_public``: same mode, trust,
+        path-builder, condition, and ``along`` validation and errors, in
+        the same order, but no append. Path and
+        condition builders are invoked exactly once, here; the returned
+        shape carries only refs, lowered condition IR, and ``Along``.
+        ``_register_public`` stores the shape
+        via ``register`` or ``register_delegation``.
         """
-        if getattr(self, 'frozen', False):
-            raise TrustsConfigurationError(
-                'Cannot register on a frozen TrustsRegistry.'
-            )
         ordinary = user is not None or permission is not None or group is not None
         delegated = delegate is not None or sponsor is not None
         if ordinary and delegated:
@@ -1650,7 +1622,8 @@ class TrustsRegistry(object):
             sponsor_path = _normalize_public_role(
                 trust, sponsor, 'sponsor', token=token,
             )
-            return self.register_delegation(
+            return PublicRegistration(
+                trust=trust,
                 content=_public_ref(trust, content_path, 'content'),
                 delegate=_public_ref(trust, delegate_path, 'delegate'),
                 sponsor=_public_ref(trust, sponsor_path, 'sponsor'),
@@ -1671,7 +1644,8 @@ class TrustsRegistry(object):
             _perm_path, _perm_model, permission_text, _perm_target = (
                 _append_group_permissions(group_segments, group_field)
             )
-            return self.register(
+            return PublicRegistration(
+                trust=trust,
                 content=_public_ref(trust, content_path, 'content'),
                 user=_public_ref(trust, user_path, 'user'),
                 group=_public_ref(trust, group_text, 'group'),
@@ -1683,7 +1657,8 @@ class TrustsRegistry(object):
         permission_path = _normalize_public_role(
             trust, permission, 'permission', token=token,
         )
-        return self.register(
+        return PublicRegistration(
+            trust=trust,
             content=_public_ref(trust, content_path, 'content'),
             user=_public_ref(trust, user_path, 'user'),
             permission=_public_ref(trust, permission_path, 'permission'),
@@ -1691,6 +1666,44 @@ class TrustsRegistry(object):
                 trust, condition, permission_path, token=token,
             ),
             along=_bind_public_along(trust, along),
+        )
+
+    def _register_public(
+        self, *, trust, user=None, permission=None, content, group=None,
+        delegate=None, sponsor=None, condition=None, along=None,
+    ):
+        """Public ``BackendHandle.register`` body, on the registry it stores.
+
+        The handle forwards here so ``trusts.plan.handles`` does not import
+        this module. Callers keep using ``BackendHandle.register``.
+        """
+        shape = self.build_public_registration(
+            trust=trust, user=user, permission=permission, content=content,
+            group=group, delegate=delegate, sponsor=sponsor,
+            condition=condition, along=along,
+        )
+        if shape.delegate is not None:
+            return self.register_delegation(
+                content=shape.content,
+                delegate=shape.delegate,
+                sponsor=shape.sponsor,
+                condition=shape.condition,
+                along=shape.along,
+            )
+        if shape.group is not None:
+            return self.register(
+                content=shape.content,
+                user=shape.user,
+                group=shape.group,
+                condition=shape.condition,
+                along=shape.along,
+            )
+        return self.register(
+            content=shape.content,
+            user=shape.user,
+            permission=shape.permission,
+            condition=shape.condition,
+            along=shape.along,
         )
 
     def _records_for(self, content_model, user_model=None, permission_model=None):
@@ -1721,6 +1734,22 @@ class TrustsRegistry(object):
             chosen.append(record)
         return tuple(chosen)
 
+    def build_registry(self):
+        """Build a query-time ``Registry`` from stored values.
+
+        Records, delegations, the shared condition store, stored user
+        conditions, the user override, and the bound condition lookup
+        are passed as data, all at once. No builders are injected.
+        """
+        return Registry(
+            records=self.records,
+            delegations=self.delegations,
+            conditions=self.conditions,
+            user_conditions=self._stored_user_conditions(),
+            user_override=self._user_override,
+            condition_lookup=self._condition_lookup,
+        )
+
     def plan_for(self, content, *, user=None, permission=None):
         """Build the common relation plan for these terminals.
 
@@ -1728,76 +1757,30 @@ class TrustsRegistry(object):
         Optional ``user`` / ``permission`` instances keep only registrations
         whose inferred terminals match those models. Construction is lazy.
         """
-        return assemble_frozen(
-            self,
-            compiler=None,
-            handles=(),
-            relation_plan=RelationPlan,
-            bind_record_qs=_bind_record_qs,
-            grant_reach=GrantReach,
-            content_model=_content_model,
-            concrete_model=_concrete_model,
-            require_instance=_require_instance,
-            candidate_model=_candidate_model,
-        ).plan_for(content, user=user, permission=permission)
+        return self.build_registry().plan_for(
+            content, user=user, permission=permission,
+        )
 
     def permissions_for(self, user, content, **skip_flags):
-        """Distinct permission rows granted to ``user`` on ``content``."""
-        user = _require_instance(user, 'user')
-        content = _require_instance(content, 'content')
-        inquiry = bind_checked_user(
-            user, skip_flags=skip_flags, registry=self)
-        plan = self.plan_for(content, user=user)
-        if inquiry.denied:
-            if not plan.records or plan.permission_model is None:
-                return ()
-            return plan.permission_model._default_manager.none()
-        skipped = inquiry.values
-        return plan.permissions(
-            user, content,
-            skipped=skipped,
+        """Distinct permission rows granted to ``user`` on ``content``.
+
+        Delegates to the built registry, so delegations/sponsors use
+        production semantics rather than the old plan-only trio.
+        """
+        return self.build_registry().permissions_for(
+            user, content, **skip_flags,
         )
 
     def has_permission(self, user, content, permission, **skip_flags):
-        """Whether ``permission`` exists in the common plan for this pair."""
-        user = _require_instance(user, 'user')
-        content = _require_instance(content, 'content')
-        permission = _require_instance(permission, 'permission')
-        inquiry = bind_checked_user(
-            user, skip_flags=skip_flags, registry=self)
-        plan = self.plan_for(
-            content, user=user, permission=permission,
-        )
-        if inquiry.denied:
-            return False
-        skipped = inquiry.values
-        return plan.has_permission(
-            user, content, permission,
-            skipped=skipped,
+        """Whether ``permission`` is granted to ``user`` on ``content``."""
+        return self.build_registry().has_permission(
+            user, content, permission, **skip_flags,
         )
 
     def filter_authorized(self, queryset, user, permission, **skip_flags):
-        """Lazy queryset of rows ``user`` holds ``permission`` on.
-
-        Consumes ``RelationPlan.content_exists`` through ``filter_content``.
-        """
-        if not isinstance(queryset, QuerySet):
-            raise TrustsConfigurationError(
-                'filter_authorized requires a QuerySet, not %r.' % (queryset,)
-            )
-        user = _require_instance(user, 'user')
-        permission = _require_instance(permission, 'permission')
-        inquiry = bind_checked_user(
-            user, skip_flags=skip_flags, registry=self)
-        plan = self.plan_for(
-            queryset, user=user, permission=permission,
-        )
-        if inquiry.denied:
-            return queryset.none()
-        skipped = inquiry.values
-        return plan.filter_content(
-            queryset, user, permission,
-            skipped=skipped,
+        """Lazy queryset of rows ``user`` holds ``permission`` on."""
+        return self.build_registry().filter_authorized(
+            queryset, user, permission, **skip_flags,
         )
 
 

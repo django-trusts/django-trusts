@@ -213,7 +213,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
                 permission=ref.paper,
                 group=ref.group,
             )
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
         self.assertEqual(registry.records, ())
 
     def test_one_of_permission_or_group_is_required(self):
@@ -235,7 +235,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
             TrustsConfigurationError, 'requires permission= or group=',
         ):
             registry.register(content=ref.paper, user=ref.group.user)
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
         self.assertEqual(registry.records, ())
 
     def test_group_path_must_end_at_auth_group(self):
@@ -286,7 +286,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
                 group='group',
                 content='paper',
             )
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
 
     def test_public_group_registration_matches_ref_and_compiler_hop(self):
         Grant = self._grant_model()

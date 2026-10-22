@@ -6,7 +6,7 @@ builders, ``along=(path, bound)``, ``register(*, trust=...)``, and
 ``BackendHandle.register`` forms and
 ``register_permission_condition`` remain removed. ``Ref`` input and
 prebuilt ``All`` / ``Equal`` / ``permission_in`` on the public handle
-are TypeError. Freeze raises before path resolution. Dual backends stay
+are TypeError. Registration stays open after a build. Dual backends stay
 isolated. Internal ``TrustsRegistry.register(Ref)`` remains for
 compiler tests. OrderedFold registration left Core in #195.
 """
@@ -132,7 +132,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                 content='document',
                 along=Along(j.document, 8),
             )
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
 
     def test_invalid_public_path_grammar_is_rejected(self):
         handle = _handle()
@@ -154,7 +154,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                         permission='permission',
                         content='document',
                     )
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
 
     def test_string_condition_is_not_legal_on_bare_registry(self):
         registry = TrustsRegistry()
@@ -183,7 +183,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                 permission='permission',
                 content='document',
             )
-        self.assertEqual(handle.registry.records, (first,))
+        self.assertEqual(handle.build_registry().records, (first,))
         with self.assertRaisesRegex(TrustsConfigurationError, r'Conflicting'):
             handle.register(
                 trust=DocumentGrant,
@@ -191,14 +191,14 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                 permission='user',
                 content='document',
             )
-        self.assertEqual(handle.registry.records, (first,))
+        self.assertEqual(handle.build_registry().records, (first,))
 
 
-class HandleFreezeOrderTest(SimpleTestCase):
-    def test_freeze_raises_before_path_resolution(self):
+class HandleAfterBuildOrderTest(SimpleTestCase):
+    def test_register_after_build_resolves_paths(self):
         registry = TrustsRegistry()
         handle = _handle(registry)
-        registry.freeze()
+        self.assertEqual(registry.build_registry().records, ())
         with patch(
             'trusts.compile.factory._public_path_segments',
             wraps=_public_path_segments,
@@ -208,23 +208,22 @@ class HandleFreezeOrderTest(SimpleTestCase):
                     'trusts.compile.factory._validate_condition',
                     wraps=_validate_condition,
                 ) as validate:
-                    with self.assertRaises(TrustsConfigurationError) as ctx:
-                        handle.register(
-                            trust=DocumentGrant,
-                            user='user',
-                            permission='permission',
-                            content='document',
-                        )
-        self.assertIn('frozen', str(ctx.exception).lower())
-        segments.assert_not_called()
-        resolve.assert_not_called()
-        validate.assert_not_called()
-        self.assertEqual(registry.records, ())
+                    record = handle.register(
+                        trust=DocumentGrant,
+                        user='user',
+                        permission='permission',
+                        content='document',
+                    )
+        segments.assert_called()
+        resolve.assert_called()
+        validate.assert_called()
+        self.assertEqual(registry.records, (record,))
+        self.assertEqual(registry.build_registry().records, (record,))
 
-    def test_freeze_wins_over_invalid_grammar(self):
+    def test_invalid_grammar_after_build_raises_its_own_error(self):
         registry = TrustsRegistry()
         handle = _handle(registry)
-        registry.freeze()
+        registry.build_registry()
         with self.assertRaises(TrustsConfigurationError) as ctx:
             handle.register(
                 trust=DocumentGrant,
@@ -232,7 +231,7 @@ class HandleFreezeOrderTest(SimpleTestCase):
                 permission='permission',
                 content='document',
             )
-        self.assertIn('frozen', str(ctx.exception).lower())
+        self.assertNotIn('frozen', str(ctx.exception).lower())
         self.assertEqual(registry.records, ())
 
 
@@ -246,18 +245,18 @@ class HandleIsolationTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        self.assertEqual(len(left.registry.records), 1)
-        self.assertEqual(right.registry.records, ())
+        self.assertEqual(len(left.build_registry().records), 1)
+        self.assertEqual(right.build_registry().records, ())
         right.register(
             trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        self.assertEqual(len(left.registry.records), 1)
-        self.assertEqual(len(right.registry.records), 1)
-        self.assertIsNot(left.registry.records[0], right.registry.records[0])
-        self.assertEqual(left.registry.records[0], right.registry.records[0])
+        self.assertEqual(len(left.build_registry().records), 1)
+        self.assertEqual(len(right.build_registry().records), 1)
+        self.assertIsNot(left.build_registry().records[0], right.build_registry().records[0])
+        self.assertEqual(left.build_registry().records[0], right.build_registry().records[0])
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -366,7 +365,7 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
                 content='document',
                 strategy=object(),
             )
-        self.assertEqual(backend.registry.records, ())
+        self.assertEqual(backend.build_registry().records, ())
 
     def test_incomplete_signatures_are_type_error(self):
         backend = _handle()
@@ -374,7 +373,7 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
             backend.register(trust=DocumentGrant, user='user')
         with self.assertRaises(TypeError):
             backend.add_named_filter(Document, 'non_confidential')
-        self.assertEqual(backend.registry.records, ())
+        self.assertEqual(backend.build_registry().records, ())
 
     def test_register_ref_is_type_error(self):
         backend = _handle()
@@ -383,7 +382,7 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
             backend.register(
                 trust=j, user='user', permission='permission', content='document',
             )
-        self.assertEqual(backend.registry.records, ())
+        self.assertEqual(backend.build_registry().records, ())
 
     def test_duplicate_relationship_leaves_store_unchanged(self):
         backend = _handle()
@@ -400,7 +399,7 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
                 permission='permission',
                 content='document',
             )
-        self.assertEqual(backend.registry.records, (first,))
+        self.assertEqual(backend.build_registry().records, (first,))
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -460,7 +459,7 @@ class CMethodsNamedFilterLifecycleTest(SimpleTestCase):
         record = backend.add_named_filter(Document, 'non_confidential', log)
         self.assertEqual(len(log.calls), 1)
         self.assertIs(
-            backend.registry.get_permission_condition_record(
+            backend.build_registry().get_permission_condition_record(
                 Document, 'non_confidential',
             ),
             record,
@@ -474,17 +473,17 @@ class CMethodsNamedFilterLifecycleTest(SimpleTestCase):
                 Document, 'non_confidential', 'not-a-predicate',
             )
         self.assertIsNone(
-            backend.registry.get_permission_condition_record(
+            backend.build_registry().get_permission_condition_record(
                 Document, 'non_confidential',
             ),
         )
 
 
-class CMethodsFreezeAndIsolationTest(SimpleTestCase):
-    def test_freeze_blocks_relationship_and_filter_before_validation(self):
+class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
+    def test_relationship_and_filter_register_after_build(self):
         registry = TrustsRegistry()
         backend = _handle(registry)
-        registry.freeze()
+        registry.build_registry()
         log = _PredicateLog()
         with patch(
             'trusts.compile.factory._public_path_segments',
@@ -495,28 +494,26 @@ class CMethodsFreezeAndIsolationTest(SimpleTestCase):
                     'trusts.compile.factory._validate_condition',
                     wraps=_validate_condition,
                 ) as validate:
-                    with self.assertRaises(TrustsConfigurationError) as rel:
-                        backend.register(
-                            trust=DocumentGrant,
-                            user='user',
-                            permission='permission',
-                            content='document',
-                        )
-                    with self.assertRaises(TrustsConfigurationError) as named:
-                        backend.add_named_filter(
-                            Document, 'non_confidential', log,
-                        )
-        self.assertIn('frozen', str(rel.exception).lower())
-        self.assertIn('frozen', str(named.exception).lower())
-        segments.assert_not_called()
-        resolve.assert_not_called()
-        validate.assert_not_called()
-        self.assertEqual(log.calls, [])
-        self.assertEqual(registry.records, ())
-        self.assertIsNone(
+                    record = backend.register(
+                        trust=DocumentGrant,
+                        user='user',
+                        permission='permission',
+                        content='document',
+                    )
+                    named_record = backend.add_named_filter(
+                        Document, 'non_confidential', log,
+                    )
+        segments.assert_called()
+        resolve.assert_called()
+        validate.assert_called()
+        self.assertEqual(len(log.calls), 1)
+        self.assertEqual(registry.records, (record,))
+        self.assertEqual(registry.build_registry().records, (record,))
+        self.assertIs(
             registry.get_permission_condition_record(
                 Document, 'non_confidential',
             ),
+            named_record,
         )
 
     def test_dual_backend_relationship_does_not_leak(self):
@@ -528,13 +525,13 @@ class CMethodsFreezeAndIsolationTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        self.assertEqual(len(left.registry.records), 1)
-        self.assertEqual(right.registry.records, ())
+        self.assertEqual(len(left.build_registry().records), 1)
+        self.assertEqual(right.build_registry().records, ())
         right.register(
             trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        self.assertEqual(len(left.registry.records), 1)
-        self.assertEqual(len(right.registry.records), 1)
+        self.assertEqual(len(left.build_registry().records), 1)
+        self.assertEqual(len(right.build_registry().records), 1)

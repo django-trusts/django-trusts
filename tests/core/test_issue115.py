@@ -84,12 +84,12 @@ class ReadmeExampleAuthorizationTest(TestCase):
         handle = owner.configured_backend()
         self.assertEqual(handle.path, DOCUMENT_BACKEND)
         self.assertIs(handle.registry, owner.registries[DOCUMENT_BACKEND])
-        self.assertTrue(handle.registry.records)
+        self.assertTrue(handle.build_registry().records)
         self.assertIs(
-            handle.registry.records[0].content_model,
+            handle.build_registry().records[0].content_model,
             Document,
         )
-        record = handle.registry.get_permission_condition_record(
+        record = handle.build_registry().get_permission_condition_record(
             Document, 'non_confidential',
         )
         self.assertIsNotNone(record)

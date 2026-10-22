@@ -84,7 +84,7 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
                 permission='permission',
                 content='document',
             )
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
 
     def test_honest_contextual_typing_does_not_prove_attributes(self):
         hints = get_type_hints(BackendHandle.register)
@@ -365,7 +365,7 @@ class RegisterNormalizeTest(SimpleTestCase):
                 permission=lambda t: t.operation,
                 content=lambda t: t.repository,
             )
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
 
 
 class RegisterOnceAtRegistrationTest(TestCase):
@@ -449,7 +449,7 @@ class RegisterFailClosedTest(TestCase):
                             permission=lambda t: t.permission,
                             content=lambda t: t.document,
                         )
-                self.assertEqual(handle.registry.records, ())
+                self.assertEqual(handle.build_registry().records, ())
 
     def test_failed_third_role_does_not_partially_mutate(self):
         handle = _handle()
@@ -461,12 +461,12 @@ class RegisterFailClosedTest(TestCase):
                     permission=lambda t: t.permission,
                     content=lambda t: t.not_a_field,
                 )
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
 
-    def test_freeze_wins_before_builder_invocation(self):
+    def test_register_after_build_invokes_builder(self):
         registry = TrustsRegistry()
         handle = _handle(registry)
-        registry.freeze()
+        registry.build_registry()
         calls = []
 
         def user(trust):
@@ -482,16 +482,15 @@ class RegisterFailClosedTest(TestCase):
                     'trusts.compile.factory._validate_condition',
                     wraps=_validate_condition,
                 ) as validate:
-                    with self.assertRaises(TrustsConfigurationError) as ctx:
-                        handle.register(
-                            trust=DocumentGrant,
-                            user=user,
-                            permission=lambda t: t.permission,
-                            content=lambda t: t.document,
-                        )
-        self.assertIn('frozen', str(ctx.exception).lower())
-        self.assertEqual(calls, [])
-        segments.assert_not_called()
-        resolve.assert_not_called()
-        validate.assert_not_called()
-        self.assertEqual(registry.records, ())
+                    record = handle.register(
+                        trust=DocumentGrant,
+                        user=user,
+                        permission=lambda t: t.permission,
+                        content=lambda t: t.document,
+                    )
+        self.assertEqual(len(calls), 1)
+        segments.assert_called()
+        resolve.assert_called()
+        validate.assert_called()
+        self.assertEqual(registry.records, (record,))
+        self.assertEqual(registry.build_registry().records, (record,))

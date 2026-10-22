@@ -4,7 +4,7 @@ In-repo modules import the defining modules directly. This file
 defines nothing.
 
 django-trusts-zero production on the same-named branch ``45ea795``
-(the pair job still pins ``8d7c729``):
+(the pair job still pins ``833866b``):
 
 - ``TrustsConfigurationError`` — ``trusts/zero/apps.py``,
   ``trusts/zero/query.py``
@@ -12,7 +12,7 @@ django-trusts-zero production on the same-named branch ``45ea795``
 - ``BackendHandle`` — ``trusts/zero/registration.py``
 - ``granted`` — ``trusts/zero/query.py``
 - ``filter_authorized_scopes`` and ``any_plan_records`` — still
-  imported by the pair pin ``8d7c729`` (``trusts/zero/query.py``).
+  imported by the pair pin ``833866b`` (``trusts/zero/query.py``).
   Same-branch Zero ``45ea795`` does not import either name from
   production code. ``filter_authorized_scopes`` remains a Zero test
   import (``tests/legacy/test_issue54.py``). The re-exports stay
@@ -34,8 +34,8 @@ Zero and gh-permissions tests also import ``TrustsRegistry``, ``Ref``,
 ``ConditionLookup``, and ``TrustsCompilerError``. Those stay until
 those tests move. Deleting this module waits on that downstream set.
 
-``_FrozenRegistry`` stays because ``test_registry_spike`` asserts this
-alias. ``permission_in`` stays because ``test_issue98`` asserts that
+``_FrozenRegistry`` is the compat alias for ``Registry``;
+``test_registry_spike`` asserts the identity. ``permission_in`` stays because ``test_issue98`` asserts that
 export. ``plan.registry`` does not import ``compile``.
 """
 
@@ -49,7 +49,7 @@ from trusts.plan.aggregates import (
 )
 from trusts.plan.contents import filter_authorized_scopes, granted
 from trusts.plan.handles import BackendHandle
-from trusts.plan.registry import FrozenRegistry as _FrozenRegistry
+from trusts.plan.registry import Registry as _FrozenRegistry
 from trusts.plan.relations import (
     ConditionLookup,
     PlanQueryCompiler,

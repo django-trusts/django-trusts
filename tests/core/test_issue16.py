@@ -211,18 +211,17 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         third = ConditionRegistry()
         self.assertIsNone(third.get_permission_condition_record(Note, 'own'))
 
-    def test_freeze_seals_condition_registration_before_builder(self):
+    def test_condition_registration_after_build_invokes_builder(self):
         Note, _Memo = _note_models()
         log = _BuilderLog()
         registry = TrustsRegistry()
-        registry.freeze()
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            registry.register_permission_condition(Note, 'own', log)
-        self.assertIn('frozen', str(ctx.exception).lower())
-        self.assertEqual(log.calls, [])
-        self.assertIsNone(registry.get_permission_condition_record(Note, 'own'))
+        registry.build_registry()
+        record = registry.register_permission_condition(Note, 'own', log)
+        self.assertEqual(len(log.calls), 1)
+        self.assertIs(registry.get_permission_condition_record(Note, 'own'), record)
+        self.assertIs(registry.build_registry().conditions, registry.conditions)
 
-    def test_handle_add_named_filter_and_freeze_is_before_builder(self):
+    def test_handle_add_named_filter_after_build_still_registers(self):
         Note, _Memo = _note_models()
         registry = TrustsRegistry()
         handle = BackendHandle(
@@ -236,11 +235,13 @@ class ConditionRegistryShapeTest(SimpleTestCase):
             registry.get_permission_condition_record(Note, 'own'), record,
         )
         self.assertEqual(len(log.calls), 1)
-        registry.freeze()
+        registry.build_registry()
         late = _BuilderLog()
-        with self.assertRaises(TrustsConfigurationError):
-            handle.add_named_filter(Note, 'late', late)
-        self.assertEqual(late.calls, [])
+        late_record = handle.add_named_filter(Note, 'late', late)
+        self.assertEqual(len(late.calls), 1)
+        self.assertIs(
+            registry.get_permission_condition_record(Note, 'late'), late_record,
+        )
 
     def test_generic_lookup_binds_without_reinvoking_builder(self):
         Note, _Memo = _note_models()

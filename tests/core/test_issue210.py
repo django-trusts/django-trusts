@@ -1,6 +1,6 @@
 """#210: one symbolic ``condition=`` language on public ``register``.
 
-Trust-rooted callable, invoked once after freeze. 1.0 grammar is path
+Trust-rooted callable, invoked once at registration. 1.0 grammar is path
 ``==``, collection-rooted ``.contains(member)``, and ``&``. Literal
 Python ``in`` is unsupported. Lower only to private ``Equal`` /
 ``PermissionIn`` / ``All``. Public handle rejects prebuilt IR.
@@ -96,7 +96,7 @@ class RegisterConditionSurfaceTest(SimpleTestCase):
                 content='document',
                 predicate=lambda u, p, o: u == o.user,
             )
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
 
     def test_condition_is_contextually_typed_as_trust(self):
         hints = get_type_hints(BackendHandle.register)
@@ -309,7 +309,7 @@ class RegisterConditionRejectPublicIRTest(TestCase):
                             content='document',
                             condition=value,
                         )
-                self.assertEqual(handle.registry.records, ())
+                self.assertEqual(handle.build_registry().records, ())
 
 
 class RegisterConditionFailClosedTest(TestCase):
@@ -392,7 +392,7 @@ class RegisterConditionFailClosedTest(TestCase):
                             content=lambda t: t.repository,
                             condition=builder,
                         )
-                self.assertEqual(handle.registry.records, ())
+                self.assertEqual(handle.build_registry().records, ())
 
     def test_failed_condition_does_not_partially_mutate(self):
         handle = _handle()
@@ -405,17 +405,17 @@ class RegisterConditionFailClosedTest(TestCase):
                     content=lambda t: t.document,
                     condition=lambda t: t.user == t.not_a_field,
                 )
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
 
-    def test_freeze_wins_before_condition_invocation(self):
+    def test_condition_invoked_on_register_after_build(self):
         registry = TrustsRegistry()
         handle = _handle(registry)
-        registry.freeze()
+        registry.build_registry()
         calls = []
 
         def condition(trust):
             calls.append(trust)
-            return trust.user == trust.permission
+            return trust.user == trust.user
 
         with patch(
             'trusts.compile.factory._public_path_segments',
@@ -430,21 +430,19 @@ class RegisterConditionFailClosedTest(TestCase):
                         'trusts.compile.factory._normalize_public_condition',
                         wraps=_normalize_public_condition,
                     ) as normalize:
-                        with self.assertRaises(TrustsConfigurationError) as ctx:
-                            handle.register(
-                                trust=DocumentGrant,
-                                user='user',
-                                permission='permission',
-                                content='document',
-                                condition=condition,
-                            )
-        self.assertIn('frozen', str(ctx.exception).lower())
-        self.assertEqual(calls, [])
-        segments.assert_not_called()
-        resolve.assert_not_called()
-        validate.assert_not_called()
-        normalize.assert_not_called()
-        self.assertEqual(registry.records, ())
+                        record = handle.register(
+                            trust=DocumentGrant,
+                            user='user',
+                            permission='permission',
+                            content='document',
+                            condition=condition,
+                        )
+        self.assertEqual(len(calls), 1)
+        segments.assert_called()
+        resolve.assert_called()
+        validate.assert_called()
+        normalize.assert_called()
+        self.assertEqual(registry.records, (record,))
 
 
 class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
@@ -496,18 +494,18 @@ class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
         self.assertEqual(record.along.shape, 'S')
 
         right = _handle(path='tests.core.issue210-right')
-        self.assertEqual(right.registry.records, ())
+        self.assertEqual(right.build_registry().records, ())
         left.add_named_filter(
             Document, 'non_confidential',
             lambda u, p, o: o.confidential != True,
         )
         self.assertIsNotNone(
-            left.registry.get_permission_condition_record(
+            left.build_registry().get_permission_condition_record(
                 Document, 'non_confidential',
             )
         )
         self.assertIsNone(
-            right.registry.get_permission_condition_record(
+            right.build_registry().get_permission_condition_record(
                 Document, 'non_confidential',
             )
         )

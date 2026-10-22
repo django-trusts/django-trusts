@@ -82,7 +82,7 @@ def _contribute_document(registry):
 
 
 def _evaluate(handle, queryset, user, permission):
-    plan = handle.registry.plan_for(
+    plan = handle.build_registry().plan_for(
         queryset, user=user, permission=permission,
     )
     return handle.compiler.complete_exists(plan, queryset, user, permission)
@@ -314,8 +314,8 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
         self.document = implementation_for_path(DOCUMENT).configured_backend()
 
     def test_grant_only_through_document_path(self):
-        self.assertFalse(self.host.registry.plan_for(Document).records)
-        self.assertTrue(self.document.registry.plan_for(Document).records)
+        self.assertFalse(self.host.build_registry().plan_for(Document).records)
+        self.assertTrue(self.document.build_registry().plan_for(Document).records)
         qs = Document.objects.all()
         pred_host = _evaluate(self.host, qs, self.alice, self.change)
         pred_doc = _evaluate(self.document, qs, self.alice, self.change)
@@ -360,9 +360,9 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
     def test_different_terminals_route_only_through_applicable_handles(self):
         from tests.models import Organization
 
-        self.assertTrue(self.document.registry.plan_for(Document).records)
-        self.assertFalse(self.document.registry.plan_for(Organization).records)
-        self.assertFalse(self.host.registry.plan_for(Document).records)
+        self.assertTrue(self.document.build_registry().plan_for(Document).records)
+        self.assertFalse(self.document.build_registry().plan_for(Organization).records)
+        self.assertFalse(self.host.build_registry().plan_for(Document).records)
         self.assertEqual(
             _pks(Document.objects.authorized(self.alice, self.change)),
             {self.doc_a.pk},

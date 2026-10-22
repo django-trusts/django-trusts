@@ -287,22 +287,26 @@ class AlongRegistrationTest(SimpleTestCase):
         self.assertEqual(rec_rev.along.rewrite_attname, 'node')
         self.assertIs(rec_rev.content_model, Item)
 
-    def test_frozen_raises_before_along_validation(self):
+    def test_along_validation_runs_after_build(self):
         _n, _p, _r, _i, _im, _m, _po, _l, Grant, _np = _node_graph_models()
         registry = TrustsRegistry()
-        registry.freeze()
+        registry.build_registry()
         j = Ref(Grant)
+        record = registry.register(
+            content=j.node, user=j.user, permission=j.permission,
+            along=Along(j.node.parent, bound=16),
+        )
+        self.assertEqual(registry.records, (record,))
+        self.assertEqual(registry.build_registry().records, (record,))
         for kwargs in (
-            dict(content=j.node, user=j.user, permission=j.permission,
-                 along=Along(j.node.parent, bound=16)),
             dict(content=j.node, user=j.user, permission=j.permission, along='bad'),
             dict(content=j.node, user=j.user, permission=j.permission,
                  along=Along(j.node.parent, bound=0)),
         ):
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 registry.register(**kwargs)
-            self.assertIn('frozen', str(ctx.exception).lower())
-        self.assertEqual(registry.records, ())
+            self.assertNotIn('frozen', str(ctx.exception).lower())
+        self.assertEqual(registry.records, (record,))
 
     def test_zero_mutation_on_every_rejection(self):
         Node, _p, _r, _i, _im, _m, _po, Link, Grant, Permit = _node_graph_models()

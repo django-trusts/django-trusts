@@ -123,14 +123,29 @@ def _reverse_checked(plan, exists, user_model, permission, content, values,
     return _trusts_eligibility_q(user_model) & checked.predicate
 
 
-def trusts_mixin_predicate(backend, content, perm, *,
-                           skipped=()):
-    """Complete-path reverse predicate for one ``TrustModelBackendMixin``."""
-    # Same call-time patch point as ``compile_permitted_users``.
-    from trusts.apps import _relationship_implementation_handles
+def permitted_users_predicate_for_registry(registry, content, perm, *,
+                                           sponsor_handles=(),
+                                           skipped=(), backend=None):
+    """Reverse predicate for one built (or builder) registry.
 
-    handle = backend._own_handle()
-    plan = handle.registry.plan_for(content)
+    This is the single implementation behind both
+    ``trusts_mixin_predicate`` (backend adapter, which supplies its
+    own sponsor handles and ``:condition`` overlay) and
+    ``Registry.permitted_users_predicate`` (standalone, where
+    sponsors are other built registries and the overlay comes from
+    this registry's condition lookup). ``backend=None`` uses the
+    mixin default singular-permission acceptance (auth.Permission).
+    Sponsor records are read through ``handle.registry`` for every
+    sponsor handle, exactly as the production path does.
+    """
+    # A builder registry answers plan_for by building; a built
+    # registry answers directly. Both expose plan_for.
+    plan_for = getattr(registry, 'plan_for', None)
+    if not callable(plan_for):
+        build = getattr(registry, 'build_registry', None)
+        registry = build() if callable(build) else registry
+        plan_for = registry.plan_for
+    plan = plan_for(content)
     if not plan.records and not plan.delegations:
         return None
     binding, condition = _permission_binding_for_plan(
@@ -143,7 +158,7 @@ def trusts_mixin_predicate(backend, content, perm, *,
             if isinstance(binding, Model) else Permission
         )
         sponsor_records = _ordinary_records(
-            _relationship_implementation_handles(), content, permission_model,
+            tuple(sponsor_handles), content, permission_model,
         )
         delegated = _delegated_user_exists(
             plan.delegations, sponsor_records, content, binding,
@@ -162,14 +177,33 @@ def trusts_mixin_predicate(backend, content, perm, *,
     if predicate is None:
         return None
     if condition:
-        overlay = _named_filter_q(
-            backend, content, perm, condition[0], user_model,
-        )
+        if backend is not None:
+            overlay = _named_filter_q(
+                backend, content, perm, condition[0], user_model,
+            )
+        else:
+            overlay = _named_filter_q_for_registry(
+                registry, content, condition[1], condition[0], user_model,
+            )
         if overlay is None:
             return None
         if overlay is not True:
             predicate &= overlay
     return predicate
+
+
+def trusts_mixin_predicate(backend, content, perm, *,
+                           skipped=()):
+    """Complete-path reverse predicate for one ``TrustModelBackendMixin``."""
+    # Same call-time patch point as ``compile_permitted_users``.
+    from trusts.apps import _relationship_implementation_handles
+
+    handle = backend._own_handle()
+    return permitted_users_predicate_for_registry(
+        handle.registry, content, perm,
+        sponsor_handles=_relationship_implementation_handles(),
+        skipped=skipped, backend=backend,
+    )
 
 
 def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
@@ -367,13 +401,19 @@ def _permission_binding_for_plan(backend, content, perm, plan):
         singular = '%s.%s_%s' % (applabel, action, modelname)
         return binding, (singular, code)
     accepted = False
-    checker = getattr(backend, 'singular_permission_accepted', None)
+    checker = getattr(backend, 'singular_permission_accepted', None) if backend is not None else None
     if callable(checker):
         accepted = bool(checker(perm))
+    elif backend is None:
+        # Standalone registry question: the mixin default.
+        accepted = isinstance(perm, Permission)
     if not accepted:
         raise TrustsConfigurationError(
             '%s does not accept %s as a singular object permission.'
-            % (type(backend).__name__, type(perm).__name__)
+            % (
+                type(backend).__name__ if backend is not None else 'Registry',
+                type(perm).__name__,
+            )
         )
     if (
         permission_model is not None
@@ -407,6 +447,30 @@ def _named_filter_q(backend, content, perm, singular, user_model):
         )
     outcome = _condition_outcome(expr, content, singular, user_model)
     return outcome
+
+
+def _named_filter_q_for_registry(registry, content, code, singular, user_model):
+    """Registry analogue of ``_named_filter_q`` (no backend overlay).
+
+    Fail closed (``None``) when this registry has no bound lookup or
+    no record for ``code``, matching a singular object check that
+    returns false for an absent ``:condition`` name.
+    """
+    lookup = getattr(registry, 'condition_lookup', None)
+    if lookup is None:
+        return None
+    record_for = getattr(lookup, 'record_for', None)
+    if not callable(record_for):
+        return None
+    record = record_for(content.__class__, code)
+    if record is None:
+        return None
+    expr = getattr(record, 'expr', None)
+    if expr is None:
+        raise TrustsConfigurationError(
+            'Permission condition on %s is unbound.' % content._meta.label
+        )
+    return _condition_outcome(expr, content, singular, user_model)
 
 
 def _condition_outcome(expr, content, singular, user_model):
