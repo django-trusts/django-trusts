@@ -144,7 +144,7 @@ the catalog. A call after `super().ready()` raises
 | Compiler check | `trusts.E004` from `check_query_compilers` | Removed, along with `compiler_for_class`. Drop `trusts.E004` from `SILENCED_SYSTEM_CHECKS`. |
 | Family override | `_authorization_family` on `TrustsImplementationConfig` | `family` on `TrustsConfigMixin` (default `'relationship'`) |
 | `filter_authorized_scopes(..., handles=)` | Backend objects, or every relationship-family handle | `filter_by_permitted_content(..., backend=)` in `trusts.decorators`. See the next section. `handles=` is not accepted. |
-| `authorization_required` when no listed backend has a plan for the model | `TrustsConfigurationError` at request time (`authorization_required has no applicable auth.Permission plan`) | `PermissionDenied` when the row exists, `Http404` when it does not. A catalog that did not register the model contributes nothing and does not raise. `trusts.E008` still reports the gap from `manage.py check`. Selected condition names that no participating backend owns together still raise `TrustsConfigurationError` before a grant query. |
+| `authorization_required` when no listed backend has a plan for the model | `TrustsConfigurationError` at request time (`authorization_required has no applicable auth.Permission plan`) | `PermissionDenied` when the row exists, `Http404` when it does not. A catalog that did not register the model, or that does not own the selected names, returns an empty queryset and does not raise. There is no system check for decorator condition names. `.permitted()` still raises `TrustsConfigurationError` before SQL when a backend has a plan and does not own the selected names. |
 
 ```python
 # Old

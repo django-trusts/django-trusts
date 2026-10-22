@@ -123,11 +123,6 @@ Non-owners contribute nothing. Their unconditioned grants are not OR'd in.
 If no participating backend owns the name set, the call raises
 `TrustsConfigurationError`. Backend order does not change the condition.
 
-`trusts.E008` reports this ownership rule for `authorization_required`
-declarations only. A runtime `.permitted()` call is not registered with
-that check. The same failure still raises when the queryset is built.
-Silencing `trusts.E008` does not disable `.permitted()`.
-
 ### Compilation
 
 The queryset supplies the protected content model. The method uses the same

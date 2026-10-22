@@ -482,10 +482,10 @@ including a custom model that has a `content_type` foreign key.
 String `has_perm` still infers the model from the codename suffix. That
 codec gap is [issue #268](https://github.com/django-trusts/django-trusts/issues/268).
 `.permitted()` and `authorization_required` bind the exact codename to the
-protected model's content type instead. `trusts.E008` covers declared
-`authorization_required` guards only. A runtime `.permitted()` call uses
-the same ownership rule and raises, but it is not registered with that
-check.
+protected model's content type instead. `.permitted()` uses that ownership rule and raises.
+`authorization_required` asks each backend; a backend that does not own
+the names returns an empty queryset, and the view is 403 or 404. There
+is no system check for those decorator names.
 
 The [Django backend boundary](#django-auths-checks-before-calling-backends)
 still applies to native `user.has_perm()`. Trusts-owned inquiries use the

@@ -452,9 +452,9 @@ A relationship-family backend participates only when it has an applicable
 ``auth.Permission`` plan for the queryset model and owns every selected
 name as a queryable condition. Other backends contribute nothing. If none
 own the full set, the call raises ``TrustsConfigurationError`` before SQL.
-``trusts.E008`` reports that configuration for ``authorization_required``
-declarations only. A runtime ``.permitted()`` call is not one of those
-declarations; it still validates and raises on first use.
+``.permitted()`` still validates and raises on first use.
+``authorization_required`` does not: a backend that does not own the
+names returns an empty queryset, and the view is 403 or 404.
 
 Malformed permissions and conditions raise before SQL. A well-formed
 permission for another content type produces an empty queryset. Named conditions remain explicit:
