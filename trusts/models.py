@@ -109,10 +109,9 @@ class PermittedUsersMixin:
     """Content-instance adapter for the reverse permission inquiry.
 
     ``content.get_permitted_users(perm)`` asks each listed backend for
-    its own user predicate. Those predicates are OR'd when the backends
-    share one user model. Differing user models yield an empty queryset.
-    It is not a content-manager method: ``Content.objects`` keeps
-    returning content rows.
+    its own user predicate and ORs those predicates. The user model is
+    ``AUTH_USER_MODEL``. It is not a content-manager method:
+    ``Content.objects`` keeps returning content rows.
     """
 
     def get_permitted_users(self, perm, backend=None, **skip_flags):

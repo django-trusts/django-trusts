@@ -199,12 +199,11 @@ def trusts_backends(backend=None):
 
 def filter_listed(queryset, user, *, ask, backend=None,
                   skip_flags, require_user=True, extra_q=None):
-    """OR each listed backend's own grant and bind that backend's user.
+    """OR each listed backend's own grant and bind ``AUTH_USER_MODEL``.
 
     A ``skip_<name>`` keyword is checked against the catalog being
     asked. A catalog that does not own the selected names contributes
-    nothing. Each part is bound with that catalog's user model, then
-    the querysets are OR'd. No contributor yields an empty queryset.
+    nothing. No contributor yields an empty queryset.
     """
     combined = None
     for item, catalog in _catalogs(backend):
@@ -217,10 +216,11 @@ def filter_listed(queryset, user, *, ask, backend=None,
         if part is None:
             continue
         clause = part if extra_q is None else part & extra_q
-        bound = bind_once(
-            queryset.filter(clause).distinct(), user_model=catalog.user_model)
-        combined = bound if combined is None else combined | bound
-    return queryset.none() if combined is None else combined
+        combined = clause if combined is None else combined | clause
+    if combined is None:
+        return queryset.none()
+    return bind_once(
+        queryset.filter(combined).distinct(), user_model=get_user_model())
 
 
 def compile_permitted_users(content, perm, *, user_queryset=None,
@@ -230,12 +230,11 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     Listed backends are asked once, in order. Each catalog that
     registered the content contributes its own user predicate, including
     that catalog's override. ``skip_<name>`` is checked against that
-    catalog. Predicates are OR'd when the contributing catalogs share
-    one user model. Differing user models, or no contribution, yield an
-    empty queryset and do not raise. A passed ``user_queryset`` stays
-    the candidate. A contributor whose registered user model is not that
-    candidate raises ``TrustsConfigurationError``. ``backend`` is one
-    dotted path.
+    catalog. Predicates are OR'd and bound with ``AUTH_USER_MODEL``.
+    No contribution yields an empty queryset and does not raise. A
+    passed ``user_queryset`` stays the candidate. A contributor whose
+    registered user model is not that candidate raises
+    ``TrustsConfigurationError``. ``backend`` is one dotted path.
     """
     require_saved_content(content)
     reject_permission_shape(perm)
@@ -246,9 +245,8 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     principal = None if user_queryset is None else user_queryset.model
     if principal is not None:
         assert_persisted_principal(principal)
-    expected = None if principal is None else principal._meta.concrete_model
-    combined = agreed = None
-    used, mismatched = [], False
+    combined = None
+    used = []
     for item, catalog in listed:
         inquiry = bind_checked_user(
             None, skip_flags=skip_flags, require_user=False, catalog=catalog)
@@ -256,19 +254,12 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
             content, perm, skipped=inquiry.values)
         if predicate is None:
             continue
-        if expected is None and agreed is None:
-            agreed = catalog.user_model
-        elif expected is None and catalog.user_model is not agreed:
-            mismatched = True
-            continue
         combined = predicate if combined is None else combined | predicate
         used.append(catalog)
-    if mismatched or combined is None:
-        return _empty_users(
-            user_queryset, () if mismatched else tuple(
-                catalog for _item, catalog in listed))
+    if combined is None:
+        return _empty_users(user_queryset)
     if user_queryset is None:
-        user_queryset = agreed._default_manager.get_queryset()
+        user_queryset = get_user_model()._default_manager.get_queryset()
         principal = user_queryset.model
         assert_persisted_principal(principal)
     involved = [principal, type(content)]
@@ -305,17 +296,11 @@ def _catalogs(backend):
     return chosen
 
 
-def _empty_users(user_queryset, catalogs):
-    """Empty user queryset. One shared model is kept; several use auth's."""
+def _empty_users(user_queryset):
+    """Empty user queryset. No caller queryset uses ``AUTH_USER_MODEL``."""
     if user_queryset is not None:
         return user_queryset.none()
-    models = []
-    for catalog in catalogs:
-        concrete = catalog.user_model._meta.concrete_model
-        if concrete not in models:
-            models.append(concrete)
-    model = models[0] if len(models) == 1 else get_user_model()
-    return model._default_manager.none()
+    return get_user_model()._default_manager.none()
 
 
 # snapshot imports policy_document. These names are bound first.
