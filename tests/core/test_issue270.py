@@ -202,7 +202,7 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
 
     def test_condition_shape_and_missing_names_raise_at_zero_sql(self):
         anonymous = AnonymousUser()
-        cases = ((TypeError, 'non_confidential'), (TypeError, ['non_confidential']), (TypeError, {'non_confidential'}), (TypeError, frozenset(('non_confidential',))), (TypeError, None), (TrustsConfigurationError, ('',)), (TrustsConfigurationError, (' padded ',)), (TrustsConfigurationError, ('has:colon',)), (TrustsConfigurationError, (None,)), (TrustsConfigurationError, ('non_confidential', 'non_confidential')), (TrustsConfigurationError, ('missing_270',)))
+        cases = ((TypeError, 'non_confidential'), (TypeError, ['non_confidential']), (TypeError, {'non_confidential'}), (TypeError, frozenset(('non_confidential',))), (TypeError, None), (TrustsConfigurationError, ('',)), (TrustsConfigurationError, (' padded ',)), (TrustsConfigurationError, ('has:colon',)), (TrustsConfigurationError, (None,)), (TrustsConfigurationError, ('non_confidential', 'non_confidential')))
         for expected, conditions in cases:
             with self.subTest(conditions=conditions):
                 with self.assertNumQueries(0):
@@ -210,12 +210,17 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
                         self.docs.permitted('myapp.change_document', self.alice, conditions=conditions)
                     with self.assertRaises(expected):
                         self.docs.permitted(self.change, anonymous, conditions=conditions)
+        with self.assertNumQueries(0):
+            missing = self.docs.permitted('myapp.change_document', self.alice, conditions=('missing_270',))
+            missing_anonymous = self.docs.permitted(self.change, anonymous, conditions=('missing_270',))
+        self.assertEqual(list(missing), [])
+        self.assertEqual(list(missing_anonymous), [])
 
-    def test_runtime_missing_name_raises_and_registers_no_check(self):
+    def test_runtime_missing_name_is_empty_and_registers_no_check(self):
         from django.core.checks import run_checks
         with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError):
-                self.docs.permitted(self.change, AnonymousUser(), conditions=('missing_e008_270',))
+            missing = self.docs.permitted(self.change, AnonymousUser(), conditions=('missing_e008_270',))
+        self.assertEqual(list(missing), [])
         messages = [message for message in run_checks() if getattr(message, 'id', None) == 'trusts.E008']
         self.assertEqual(messages, [])
 
@@ -228,15 +233,15 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
         self.assertEqual(list(missing), [])
         self.assertEqual(list(anonymous), [])
 
-    def test_unbound_filter_lookup_fails_before_the_principal(self):
+    def test_unbound_filter_lookup_is_empty_before_the_principal(self):
         from tests.myapp.backends import DocumentBackend
 
         with unbound_named_filters(DocumentBackend):
             with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError):
-                    self.docs.permitted('myapp.change_document', self.alice, conditions=('non_confidential',))
-                with self.assertRaises(TrustsConfigurationError):
-                    self.docs.permitted(self.change, AnonymousUser(), conditions=('non_confidential',))
+                empty = self.docs.permitted('myapp.change_document', self.alice, conditions=('non_confidential',))
+                empty_anonymous = self.docs.permitted(self.change, AnonymousUser(), conditions=('non_confidential',))
+            self.assertEqual(list(empty), [])
+            self.assertEqual(list(empty_anonymous), [])
         self.assertEqual(_pks(self.docs.permitted('myapp.change_document', self.alice, conditions=('non_confidential',))), {self.open_doc.pk})
 
     def test_filter_permitted_filter_chains(self):
@@ -373,7 +378,7 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
         self.docs = PermittedManager()
         self.docs.model = Document
 
-    def test_split_and_foreign_terminal_conditions_raise(self):
+    def test_split_and_foreign_terminal_conditions_are_empty(self):
         handle_a = _handle('tests.core.issue270-split-a')
         handle_b = _handle('tests.core.issue270-split-b')
         for handle in (handle_a, handle_b):
@@ -386,14 +391,14 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
         primary = _document_factory()
         with listed_relationship((handle_a, handle_b)):
             with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError):
-                    self.docs.permitted('myapp.change_document', self.alice, conditions=('split_a_270', 'split_b_270'))
-                with self.assertRaises(TrustsConfigurationError):
-                    self.docs.permitted(self.change, AnonymousUser(), conditions=('split_a_270', 'split_b_270'))
+                split = self.docs.permitted('myapp.change_document', self.alice, conditions=('split_a_270', 'split_b_270'))
+                split_anonymous = self.docs.permitted(self.change, AnonymousUser(), conditions=('split_a_270', 'split_b_270'))
+            self.assertEqual(list(split), [])
+            self.assertEqual(list(split_anonymous), [])
         with listed_relationship((primary, foreign)):
             with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError):
-                    self.docs.permitted(self.change, self.alice, conditions=('only_other_270',))
+                foreign_only = self.docs.permitted(self.change, self.alice, conditions=('only_other_270',))
+            self.assertEqual(list(foreign_only), [])
 
     def test_non_owner_grant_is_omitted_and_two_names_are_anded(self):
         primary = _document_factory()
@@ -410,8 +415,9 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
             with listed_relationship((primary,)):
                 self.assertEqual(_pks(self.docs.permitted('myapp.change_document', self.alice, conditions=('non_confidential',))), {self.open_doc.pk})
             with listed_relationship((extra,)):
-                with self.assertRaises(TrustsConfigurationError):
-                    self.docs.permitted('myapp.change_document', self.alice, conditions=('non_confidential',))
+                with self.assertNumQueries(0):
+                    omitted = self.docs.permitted('myapp.change_document', self.alice, conditions=('non_confidential',))
+                self.assertEqual(list(omitted), [])
             with listed_relationship((owned,)):
                 self.assertEqual(_pks(self.docs.permitted(self.change, self.alice, conditions=('open_title_270', 'not_secret_270'))), {self.open_doc.pk})
 
