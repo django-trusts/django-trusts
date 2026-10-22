@@ -89,8 +89,10 @@ class TrustsConfigMixin(django.apps.AppConfig):
     """App config whose backend registers through ``get_registry()``.
 
     ``ready`` freezes this config's registration log, replays it, and
-    builds the catalog. A later registration raises. Order across apps
-    does not matter. Request time does not build the catalog.
+    builds the catalog. A catalog with registrations and no listed
+    backend raises ``TrustsConfigurationError``. A later registration
+    raises. Order across apps does not matter. Request time does not
+    build the catalog.
     """
 
     family = 'relationship'
@@ -126,17 +128,14 @@ class TrustsConfigMixin(django.apps.AppConfig):
         self.recorder.freeze()
         self.recorder.play(compiler)
         self.catalog = compiler.compile()
-
-
-def catalog_of(config):
-    """Catalog built in ``ready``. Request time does not build it."""
-    return config.catalog
-
-
-def installed_catalogs():
-    """Built catalogs of installed mixin configs, in ``INSTALLED_APPS`` order."""
-    found = []
-    for config in django.apps.apps.get_app_configs():
-        if isinstance(config, TrustsConfigMixin):
-            found.append(catalog_of(config))
-    return tuple(found)
+        if self.catalog.records or self.catalog.delegations:
+            from django.conf import settings
+            if not any(
+                django.apps.apps.get_containing_app_config(
+                    path.rpartition('.')[0]) is self
+                for path in settings.AUTHENTICATION_BACKENDS
+            ):
+                raise TrustsConfigurationError(
+                    'Trusts app %s has registrations but no AUTHENTICATION_BACKENDS '
+                    'entry resolves to it. List a backend whose module lives in this app.'
+                    % self.label)

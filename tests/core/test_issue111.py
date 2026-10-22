@@ -15,7 +15,7 @@ import tests as tests_module
 from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
 from tests.kernel_host.backends import HostTrustModelBackend
 from tests.support import configured_catalog
-from trusts.apps import TrustsConfigMixin, installed_catalogs
+from trusts.apps import TrustsConfigMixin
 from trusts.backends import TrustModelBackendMixin
 from trusts.decorators import filter_by_permitted_content
 from trusts.models import AuthorizedQuerySet
@@ -91,10 +91,16 @@ class OwnerResolutionTest(SimpleTestCase):
         self.assertFalse(HostTrustModelBackend().has_perm(
             AnonymousUser(), 'auth.view_user', None,
         ))
-        self.assertIn(handle, installed_catalogs())
+        self.assertIn(handle, tuple(
+            config.catalog for config in apps.get_app_configs()
+            if isinstance(config, TrustsConfigMixin)
+        ))
 
     def test_authorized_and_filter_scopes_use_owners(self):
-        registries = installed_catalogs()
+        registries = tuple(
+            config.catalog for config in apps.get_app_configs()
+            if isinstance(config, TrustsConfigMixin)
+        )
         self.assertTrue(registries)
         self.assertEqual(
             registries[0].path,

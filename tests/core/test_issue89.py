@@ -111,12 +111,12 @@ class _CatalogRestoreMixin(object):
 
     def setUp(self):
         super().setUp()
-        from tests.support import snapshot_installed_catalogs
-        self._saved_catalogs = snapshot_installed_catalogs()
+        from tests.support import snapshot_config_catalogs
+        self._saved_catalogs = snapshot_config_catalogs()
 
     def tearDown(self):
-        from tests.support import restore_installed_catalogs
-        restore_installed_catalogs(self._saved_catalogs)
+        from tests.support import restore_config_catalogs
+        restore_config_catalogs(self._saved_catalogs)
         super().tearDown()
 
 class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, SimpleTestCase):

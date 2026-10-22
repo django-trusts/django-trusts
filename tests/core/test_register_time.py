@@ -82,12 +82,25 @@ class RegisterTimeCheckTest(TestCase):
             config.ready()
         self.assertIn('missing field', str(caught.exception))
 
-    def test_register_after_ready_is_refused(self):
+    def test_ready_raises_when_no_backend_resolves_to_the_app(self):
         config = _probe()
         config.recorder.register(**_grant())
-        config.ready()
+        with self.assertNumQueries(0):
+            with self.assertRaises(TrustsConfigurationError) as caught:
+                config.ready()
+        message = str(caught.exception)
+        self.assertIn(
+            'Trusts app register_time_probe has registrations but no '
+            'AUTHENTICATION_BACKENDS entry resolves to it.',
+            message,
+        )
+        self.assertIn(
+            'List a backend whose module lives in this app.', message,
+        )
+
+    def test_register_after_ready_is_refused(self):
         with self.assertRaises(TrustsConfigurationError) as caught:
-            config.recorder.register(**_grant())
+            DocumentBackend().get_registry().register(**_grant())
         self.assertEqual(
             str(caught.exception),
             'register refused: this registry is frozen. '
@@ -116,6 +129,9 @@ class RegisterTimeCheckTest(TestCase):
 class DotlessHasPermTest(TestCase):
 
     def test_dotless_permission_returns_false(self):
+        from django.apps import apps
+        if not apps.is_installed('tests.myapp'):
+            self.skipTest('document app is not installed')
         user = get_user_model().objects.create_user('dotless-user', password='x')
         document = Document.objects.create(title='dotless')
         backend = DocumentBackend()

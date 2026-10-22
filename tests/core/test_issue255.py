@@ -190,9 +190,9 @@ def _seal_document_factory(factory):
         built_catalog,
         config_for_class,
         mixin_configs,
-        snapshot_installed_catalogs,
+        snapshot_config_catalogs,
     )
-    saved = snapshot_installed_catalogs()
+    saved = snapshot_config_catalogs()
     previous = config_for_class(DocumentBackend).catalog
     family = config_for_class(DocumentBackend).family if previous is None else previous.family
     factory.path = DOCUMENT_BACKEND
@@ -205,15 +205,15 @@ def _seal_document_factory(factory):
 @contextmanager
 def _document_registry():
     from tests.support import (
-        restore_installed_catalogs,
-        snapshot_installed_catalogs,
+        restore_config_catalogs,
+        snapshot_config_catalogs,
     )
-    saved = snapshot_installed_catalogs()
+    saved = snapshot_config_catalogs()
     registry = compiler(path=DOCUMENT_BACKEND)
     try:
         yield registry
     finally:
-        restore_installed_catalogs(saved)
+        restore_config_catalogs(saved)
 
 def _handle(registry):
     registry.path = DOCUMENT_BACKEND

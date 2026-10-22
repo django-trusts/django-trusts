@@ -9,7 +9,7 @@ from django.contrib.auth.backends import ModelBackend
 from django.test import override_settings
 from django.utils.module_loading import import_string
 
-from trusts.apps import TrustsConfigMixin, catalog_of
+from trusts.apps import TrustsConfigMixin
 from trusts.backends import TrustModelBackendMixin
 from trusts.compile.factory import Compiler
 from trusts.errors import TrustsConfigurationError
@@ -119,7 +119,7 @@ def configured_catalog(path):
     """Catalog of the app that contains the backend class at ``path``."""
 
     cls = import_string(path)
-    return catalog_of(config_for_class(cls))
+    return config_for_class(cls).catalog
 
 
 @contextmanager
@@ -203,14 +203,14 @@ def published_class_catalog(backend_cls, factory):
         restore()
 
 
-def snapshot_installed_catalogs():
+def snapshot_config_catalogs():
     """``(config, catalog)`` pairs for the installed mixin configs."""
 
     return tuple((config, config.catalog) for config in mixin_configs())
 
 
-def restore_installed_catalogs(saved):
-    """Put back catalogs captured by ``snapshot_installed_catalogs``."""
+def restore_config_catalogs(saved):
+    """Put back catalogs captured by ``snapshot_config_catalogs``."""
 
     for config, catalog in saved:
         config.catalog = catalog

@@ -12,7 +12,7 @@ from django.contrib.auth import get_backends, load_backend
 from django.contrib.auth.models import Permission
 from django.db.models import Model, Q, QuerySet, Subquery
 
-from trusts.apps import Recorder, TrustsConfigMixin, catalog_of, installed_catalogs
+from trusts.apps import Recorder, TrustsConfigMixin
 from trusts.compile.catalogs import (
     assert_same_database,
     catalog_models,
@@ -51,7 +51,7 @@ class TrustModelBackendMixin(object):
 
     def _catalog(self):
         """Catalog this instance answers from. The app config owns it."""
-        return catalog_of(self._config)
+        return self._config.catalog
 
     def has_perm(self, user_obj, permext, obj=None, **skip_flags):
         """Object check. No object denies."""
@@ -159,7 +159,9 @@ def policy_document(backend=None, *, alias=None):
     """
     if backend is None:
         resolved = resolve_policy_database(alias)
-        return _build_document(installed_catalogs(), resolved)
+        return _build_document(tuple(
+            config.catalog for config in apps.get_app_configs()
+            if isinstance(config, TrustsConfigMixin)), resolved)
     if not isinstance(backend, str):
         raise TypeError(
             'backend must be a dotted import path string (got %r).' % backend)
