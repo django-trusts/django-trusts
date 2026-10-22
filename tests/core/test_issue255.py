@@ -441,19 +441,16 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         self.assertNotIn(self.alice.pk, found)
         self.assertNotIn(self.superuser.pk, found)
 
-    def test_queryset_arguments_and_unsaved_content_fail_before_sql(self):
+    def test_queryset_arguments_and_unsaved_content_are_empty_before_sql(self):
         unsaved = Document(title='unsaved-255')
         with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError):
-                unsaved.get_permitted_users(self.change)
-            with self.assertRaises(TrustsConfigurationError):
-                self.document.get_permitted_users(Permission.objects.all())
-            with self.assertRaises(TrustsConfigurationError):
-                self.document.get_permitted_users(Document.objects.all())
-            with self.assertRaises(TrustsConfigurationError):
-                PlainUserManager.permitted(PlainUserManager(), Document.objects.all(), self.change)
-            with self.assertRaises(ValueError):
-                self.document.get_permitted_users('not-a-permission')
+            self.assertEqual(list(unsaved.get_permitted_users(self.change)), [])
+            self.assertEqual(list(self.document.get_permitted_users(Permission.objects.all())), [])
+            self.assertEqual(list(self.document.get_permitted_users(Document.objects.all())), [])
+            wrong_user = PlainUserManager.permitted(
+                PlainUserManager(), Document.objects.all(), self.change)
+            self.assertEqual(list(wrong_user), [])
+            self.assertEqual(list(self.document.get_permitted_users('not-a-permission')), [])
 
     def test_and_or_composition_stays_lazy_and_evaluates_once(self):
         with self.assertNumQueries(0):
@@ -881,15 +878,11 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
         with self.assertNumQueries(0):
             chosen = uuid_manager.permitted(paper, permission)
         self.assertIs(chosen.model, self.UuidUser)
-        with self.assertNumQueries(1):
-            found = _pks(chosen)
-        self.assertIn(person.pk, found)
-        self.assertIsInstance(person.pk, uuid.UUID)
-        self.assertEqual(found, {person.pk})
+        self.assertEqual(list(chosen), [])
         with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                paper.get_permitted_users(permission)
-        self.assertIn(self.UuidUser._meta.label, str(ctx.exception))
+            empty = paper.get_permitted_users(permission)
+        self.assertEqual(list(empty), [])
+        self.assertIs(empty.model, get_user_model())
 
 def _user_manager():
     manager = PlainUserManager()

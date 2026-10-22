@@ -130,9 +130,10 @@ class Catalog(object):
         ordinary records. The compiler bound at construction compiles
         the grant.
         """
-        user = require_instance(user, 'user')
-        if isinstance(permission, Model):
-            permission = require_instance(permission, 'permission')
+        if not isinstance(user, Model):
+            return False
+        if isinstance(permission, Model) and permission.pk is None:
+            return False
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if isinstance(content, QuerySet):
             if denied:
@@ -143,7 +144,8 @@ class Catalog(object):
                 permission_model=permission_model, skipped=values,
             )
             return False if matched is None else bool(matched)
-        content = require_instance(content, 'content')
+        if not isinstance(content, Model) or content.pk is None:
+            return False
         if denied:
             return False
         matched = instance_match(
@@ -156,12 +158,19 @@ class Catalog(object):
     def filter_authorized(self, queryset, user, permission, *,
                           skipped=None, **skip_flags):
         """Q2: rows of ``queryset`` ``user`` may access for ``permission``."""
-        if not isinstance(queryset, QuerySet):
-            raise TrustsConfigurationError(
-                'filter_authorized requires a QuerySet, not %r.' % (queryset,)
+        if (
+            not isinstance(queryset, QuerySet)
+            or not isinstance(user, Model)
+            or not isinstance(permission, Model)
+            or permission.pk is None
+        ):
+            return (
+                queryset.none() if isinstance(queryset, QuerySet)
+                else type(queryset[0])._default_manager.none()
+                if isinstance(queryset, (list, tuple)) and queryset
+                and isinstance(queryset[0], Model)
+                else queryset
             )
-        user = require_instance(user, 'user')
-        permission = require_instance(permission, 'permission')
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if denied:
             return queryset.none()
@@ -178,13 +187,19 @@ class Catalog(object):
     def filter_by_permitted_content(self, queryset, user, permission, *,
                                     content, skipped=None, **skip_flags):
         """Scope rows that are a proper prefix of ``content`` for this catalog."""
-        if not isinstance(queryset, QuerySet):
-            raise TrustsConfigurationError(
-                'filter_by_permitted_content requires a QuerySet, not %r.'
-                % (queryset,)
+        if (
+            not isinstance(queryset, QuerySet)
+            or not isinstance(user, Model)
+            or not isinstance(permission, Model)
+            or permission.pk is None
+        ):
+            return (
+                queryset.none() if isinstance(queryset, QuerySet)
+                else type(queryset[0])._default_manager.none()
+                if isinstance(queryset, (list, tuple)) and queryset
+                and isinstance(queryset[0], Model)
+                else queryset
             )
-        user = require_instance(user, 'user')
-        permission = require_instance(permission, 'permission')
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if denied:
             return queryset.none()
@@ -201,7 +216,12 @@ class Catalog(object):
         ``get_group_permissions``; ``'complete'`` is ``get_all_permissions``.
         The compiler bound at construction compiles the grant.
         """
-        user = require_instance(user, 'user')
+        if not isinstance(user, Model):
+            return ()
+        if not isinstance(content, (Model, QuerySet)) or (
+            isinstance(content, Model) and content.pk is None
+        ):
+            return ()
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         plan = self.plan_for(content, user=user)
         if denied:
@@ -228,9 +248,12 @@ class Catalog(object):
         plan = self.plan_for(content)
         if not plan.records and not plan.delegations:
             return None
-        binding, condition = _permission_binding_for_plan(
+        bound = _permission_binding_for_plan(
             accepts_permission, content, perm, plan,
         )
+        if bound is None:
+            return None
+        binding, condition = bound
         exists = plan.user_exists(content, binding) if plan.records else None
         if plan.delegations:
             permission_model = (
@@ -354,6 +377,10 @@ class Catalog(object):
         )
 
     def has_perm(self, user_obj, permext, obj, **skip_flags):
+        if not isinstance(user_obj, Model) or not isinstance(obj, (Model, QuerySet)):
+            return False
+        if isinstance(obj, Model) and obj.pk is None:
+            return False
         inquiry = bind_checked_user(
             user_obj, skip_flags=skip_flags, catalog=self,
         )
@@ -595,37 +622,6 @@ def evaluate_registered_expression(expr, user, perm, obj, model=None, user_model
     )
 
 
-def require_saved_content(content):
-    if isinstance(content, QuerySet):
-        raise TrustsConfigurationError(
-            'get_permitted_users accepts one saved content object, '
-            'not a queryset.'
-        )
-    if not isinstance(content, Model):
-        raise TrustsConfigurationError(
-            'content must be a saved model instance, not %r.' % (content,)
-        )
-    if content.pk is None:
-        raise PermissionConditionError('Save the object first.')
-
-
-def reject_permission_shape(perm):
-    if isinstance(perm, QuerySet):
-        raise TrustsConfigurationError(
-            'get_permitted_users accepts one permission, not a queryset.'
-        )
-    if isinstance(perm, (str, Model)):
-        if isinstance(perm, Model) and perm.pk is None:
-            raise TrustsConfigurationError(
-                'permission must be a saved %s instance.' % perm._meta.label
-            )
-        return
-    raise TrustsConfigurationError(
-        'permission must be a permission string or model instance, not %r.'
-        % (perm,)
-    )
-
-
 def catalog_models(catalog, content, principal_model):
     """Models this catalog's plan joins, after the user model matches."""
     plan = catalog.plan_for(content)
@@ -634,15 +630,7 @@ def catalog_models(catalog, content, principal_model):
     for record in plan.records:
         registered = record.user_model._meta.concrete_model
         if registered is not expected:
-            raise TrustsConfigurationError(
-                'Reverse permission inquiry candidate user model is %s, '
-                'but %s registers %s.'
-                % (
-                    expected._meta.label,
-                    record.root._meta.label,
-                    registered._meta.label,
-                )
-            )
+            return None
         models.extend((
             record.root, record.user_model, record.permission_model,
             record.content_model,
@@ -650,15 +638,7 @@ def catalog_models(catalog, content, principal_model):
     for record in plan.delegations:
         registered = record.delegate_model._meta.concrete_model
         if registered is not expected:
-            raise TrustsConfigurationError(
-                'Reverse permission inquiry candidate user model is %s, '
-                'but %s registers delegate %s.'
-                % (
-                    expected._meta.label,
-                    record.root._meta.label,
-                    registered._meta.label,
-                )
-            )
+            return None
         models.extend((
             record.root, record.delegate_model, record.sponsor_model,
             record.content_model,

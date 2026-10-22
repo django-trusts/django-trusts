@@ -485,12 +485,14 @@ class ListedBackendOrTest(TestCase):
             for message in messages
         ))
 
-    def test_user_queryset_must_be_a_queryset(self):
+    def test_user_queryset_that_is_not_a_queryset_is_empty(self):
+        from django.contrib.auth import get_user_model
         from trusts.backends import compile_permitted_users
 
-        with self.assertRaises(TrustsConfigurationError):
-            compile_permitted_users(
-                self.note, self.note_perm, user_queryset=object())
+        empty = compile_permitted_users(
+            self.note, self.note_perm, user_queryset=object())
+        self.assertEqual(list(empty), [])
+        self.assertIs(empty.model, get_user_model())
 
     def test_no_listed_trusts_backend_is_an_empty_queryset(self):
         from trusts.backends import compile_permitted_users
