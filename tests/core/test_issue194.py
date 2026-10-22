@@ -7,7 +7,10 @@ from django.core.exceptions import PermissionDenied
 from django.http import HttpRequest
 from django.test import SimpleTestCase, TestCase, override_settings
 import tests as tests_module
-from tests.support import built_catalog, bound_handle, replay_recorder, config_for_class, compiler
+from tests.support import (
+    built_catalog, bound_handle, replay_recorder, config_for_class, compiler,
+    configured_catalog,
+)
 from tests.backends import MixinOnlyBackend
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
@@ -109,7 +112,7 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         self.fold_doc = Document.objects.create(title='fold-194')
         DocumentGrant.objects.create(document=self.rel_doc, user=self.alice, permission=self.change)
         DocumentAltGrant.objects.create(document=self.fold_doc, user=self.alice, permission=self.change)
-        self.rel_handle = DocumentBackend().catalog
+        self.rel_handle = configured_catalog(DOCUMENT)
         self.fold_registry = compiler(path=MIXIN, family='ordered_fold')
         self.fold_handle = self.fold_registry
         self.fold_handle.register(trust=DocumentAltGrant, user='user', permission='permission', content='document')
@@ -144,7 +147,7 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
             self.assertEqual(list(rel_scopes), [])
             self.assertEqual(list(fold_scopes), [])
             listed = installed_catalogs()
-            self.assertIn(DocumentBackend().catalog, listed)
+            self.assertIn(configured_catalog(DOCUMENT), listed)
             self.assertIn(self.fold_handle, listed)
             self.assertEqual(self.fold_handle.path, MIXIN)
             self.assertEqual(self.fold_handle.family, 'ordered_fold')
@@ -208,7 +211,6 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
 class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
 
     def test_standalone_factory_rebuilds_and_a_published_registry_does_not(self):
-        from tests.kernel_host.backends import HostTrustModelBackend
         isolated = compiler()
         first_build = built_catalog(isolated)
         second_build = built_catalog(isolated)
@@ -219,7 +221,7 @@ class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         j = Ref(DocumentGrant)
         fresh.register_relation(content=j.document, user=j.user, permission=j.permission)
         self.assertEqual(built_catalog(fresh).records, fresh.records)
-        published = HostTrustModelBackend().catalog
+        published = configured_catalog(HOST)
         self.assertIsInstance(published.records, tuple)
 
     def test_unconfigured_path_still_fails_loud(self):

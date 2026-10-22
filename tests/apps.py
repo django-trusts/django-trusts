@@ -30,6 +30,7 @@ class TestsConfig(trusts_apps.TrustsConfigMixin):
     default_auto_field = 'django.db.models.AutoField'
 
     def ready(self):
+        # This app registers only here. Document registers in models.py.
         # Zero's TrustUserPermission is absent from kernel settings.
         # Register those rows on this config when the model is installed.
         # Re-entry finds the rows already registered and stops.

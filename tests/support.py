@@ -56,7 +56,7 @@ def config_for_class(backend_cls, apps_registry=None):
 
 
 def compiler(**kwargs):
-    """Test ``Compiler``. Supplies the arguments ``ready`` passes."""
+    """Standalone ``Compiler``. The user model is already known."""
     kwargs.setdefault('user_model', get_user_model())
     kwargs.setdefault('query_compiler', Compiler.default_query_compiler())
     kwargs.setdefault('path', 'tests.support.Compiler')
@@ -164,14 +164,11 @@ def bound_handle(backend, factory):
 
     config = config_for_class(type(backend))
     previous = config.catalog
-    previous_backend = backend.catalog
     _publish_catalog(type(backend), factory)
-    backend.catalog = config.catalog
     try:
         yield
     finally:
         config.catalog = previous
-        backend.catalog = previous_backend
 
 
 def push_catalog(backend_cls, factory):
@@ -290,22 +287,28 @@ def listed_relationship(factories):
 def replay_recorder(compiler, backend_cls):
     """Register the document app's rows onto a compiler this test owns.
 
-    Grants are the models.py registrations. The named filter is the
-    ready() registration. The host app registers nothing, so other
-    backends are left empty.
+    Those rows are the models.py registration. The host app registers
+    nothing, so other backends are left empty.
     """
     from tests.myapp.backends import DocumentBackend
-    from tests.myapp.models import Document, register_document_grants
+    from tests.myapp.models import register_document_app
 
     if backend_cls is not DocumentBackend:
         return compiler
-    register_document_grants(compiler)
-    compiler.add_named_filter(
-        Document,
-        'non_confidential',
-        lambda u, p, o: o.confidential != True,
-    )
+    register_document_app(compiler)
     return compiler
+
+
+def register_installed_document_app():
+    """Register document rows on the current myapp config.
+
+    ``override_settings(INSTALLED_APPS=...)`` builds a new app config
+    and does not re-execute models.py.
+    """
+    from django.apps import apps
+    from tests.myapp.models import register_document_app
+
+    register_document_app(apps.get_app_config('myapp').recorder)
 
 
 @contextmanager

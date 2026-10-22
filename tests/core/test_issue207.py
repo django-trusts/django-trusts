@@ -23,6 +23,7 @@ from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
 from trusts.compile.nodes import Along
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
+from trusts.apps import Recorder
 from trusts.compile.factory import Compiler
 from tests.support import built_catalog, compiler
 ROOT = Path(__file__).resolve().parents[2]
@@ -88,7 +89,7 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         wheel = (ROOT / 'scripts' / 'verify-wheel-install.py').read_text()
         self.assertIn('trusts/py.typed', wheel)
         self.assertIn('register contextual typing', wheel)
-        self.assertIn('Compiler.register', wheel)
+        self.assertIn('Recorder.register', wheel)
         metadata = (ROOT / 'scripts' / 'verify-package-metadata.py').read_text()
         self.assertIn('trusts/py.typed', metadata)
         pyright = (ROOT / 'scripts' / 'verify-wheel-pyright.py').read_text()
@@ -106,6 +107,13 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         self.assertEqual(names, ['trust', 'user', 'permission', 'content', 'group', 'delegate', 'sponsor', 'condition', 'along'])
         for name in names:
             self.assertEqual(signature.parameters[name].kind, inspect.Parameter.KEYWORD_ONLY, name)
+        public = inspect.signature(Recorder.register)
+        public_names = [name for name in public.parameters if name != 'self']
+        self.assertEqual(public_names, names)
+        for name in public_names:
+            self.assertEqual(
+                public.parameters[name].kind, inspect.Parameter.KEYWORD_ONLY, name,
+            )
 
 def _wheel_install_module():
     path = ROOT / 'scripts' / 'verify-wheel-install.py'

@@ -18,7 +18,6 @@ from tests.support import (
     sweep_listed_backends,
     compiler,
 )
-from tests.kernel_host.backends import HostTrustModelBackend
 from tests.backends import RaisingCompilerBackend
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
@@ -59,7 +58,9 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
             catalog.path,
             apps.get_app_config('trusts_kernel_host').catalog_path(),
         )
-        self.assertIs(catalog, HostTrustModelBackend().catalog)
+        self.assertIs(
+            catalog, apps.get_app_config('trusts_kernel_host').catalog,
+        )
 
     def test_duplicate_identical_paths_do_not_raise(self):
         from django.apps import apps
@@ -74,7 +75,6 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
 
     def test_document_and_host_catalogs_use_config_paths(self):
         from django.apps import apps
-        from tests.myapp.backends import DocumentBackend
 
         self.assertEqual(
             configured_catalog(HOST).path,
@@ -85,15 +85,15 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
             handle_doc.path,
             apps.get_app_config('myapp').catalog_path(),
         )
-        self.assertIs(handle_doc, DocumentBackend().catalog)
+        self.assertIs(handle_doc, apps.get_app_config('myapp').catalog)
 
     def test_ready_does_not_replace_store_or_registry(self):
         from django.apps import apps
 
         live = apps.get_app_config('trusts_kernel_host')
-        first = HostTrustModelBackend().catalog
+        first = configured_catalog(HOST)
         live.ready()
-        rebuilt = HostTrustModelBackend().catalog
+        rebuilt = configured_catalog(HOST)
         self.assertEqual(rebuilt.records, first.records)
         self.assertEqual(rebuilt.path, first.path)
         self.assertIs(rebuilt, first)
@@ -101,7 +101,7 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_live_catalog_denies_an_anonymous_user(self):
         from django.contrib.auth.models import AnonymousUser
 
-        catalog = HostTrustModelBackend().catalog
+        catalog = configured_catalog(HOST)
         self.assertFalse(catalog.has_perm(
             AnonymousUser(), 'auth.view_user', None,
         ))
@@ -110,12 +110,12 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
 class IsolatedAppsPathStoreTest(SimpleTestCase):
 
     def test_isolate_apps_without_owner_does_not_donate(self):
-        before = HostTrustModelBackend().catalog.records
+        before = configured_catalog(HOST).records
         contributor = TestsConfig('tests', tests_module)
         contributor.apps = self.isolated_apps
         contributor.ready()
         self.assertIsNone(getattr(contributor, '_trusts_tup_category_registry_id', None))
-        self.assertEqual(HostTrustModelBackend().catalog.records, before)
+        self.assertEqual(configured_catalog(HOST).records, before)
 
 class ContributionPathTest(KernelHostRequiredMixin, SimpleTestCase):
 

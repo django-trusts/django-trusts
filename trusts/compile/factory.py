@@ -59,7 +59,6 @@ from trusts.plan.conditions import (
     condition_model_label,
     normalize_expression,
     parse_named_filter,
-    validate_expression,
     require_boolean_field,
 )
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan, bind_checked_user
@@ -74,7 +73,6 @@ from trusts.plan.standards import (
     normalize_override_on,
     rule_applies,
     validate_user_rule_name,
-    walk_user_lambda,
 )
 
 
@@ -361,17 +359,18 @@ def question_descriptors(catalog):
 
 
 class Compiler(object):
-    """Registry walk and the one catalog build.
+    """Internal registry walk and the one catalog build.
 
-    ``register`` walks models and performs zero SQL. It does not resolve
-    the user model. ``compile`` resolves that model, freezes this
-    registry, and returns its ``Catalog``. A later ``compile`` returns
+    Callers register on the app's registration log. That log is replayed
+    here when the catalog is built, and the user model is already known.
+    ``register`` walks models and performs zero SQL. ``compile`` freezes
+    this registry and returns its ``Catalog``. A later ``compile`` returns
     that same catalog. After the build, ``register``,
     ``register_delegation``, ``add_named_filter``, ``set_user_condition``,
     and ``set_user_override`` raise ``TrustsConfigurationError``.
     """
 
-    def __init__(self, *, query_compiler, path, family, user_model=None):
+    def __init__(self, *, user_model, query_compiler, path, family):
         self._by_root = {}
         self._order = []
         self._delegations_by_root = {}
@@ -380,10 +379,6 @@ class Compiler(object):
         self._user_conditions = None
         self._user_override = None
         self._named_filters = {}
-        self._pending_user_edits = []
-        self._pending_filters = []
-        self._override_unvalidated = False
-        self._catalog = None
         self.query_compiler = query_compiler
         self.path = path
         self.family = family
@@ -414,17 +409,7 @@ class Compiler(object):
                 'Named filter %r is already registered on %s.'
                 % (code, condition_model_label(model))
             )
-        if self.user_model is None:
-            tree = normalize_expression(
-                invoke(predicate, ('user', 'permission', 'object')),
-            )
-            if getattr(model, '_meta', None) is not None:
-                if _mentions_user(tree):
-                    self._pending_filters.append(key)
-                else:
-                    validate_expression(tree, model, None)
-        else:
-            tree = parse_named_filter(predicate, model, code, self.user_model)
+        tree = parse_named_filter(predicate, model, code, self.user_model)
         self._named_filters[key] = (model, tree)
         return tree
 
@@ -437,8 +422,6 @@ class Compiler(object):
         that model's own fields.
         """
         if self._user_conditions is None:
-            if self.user_model is None:
-                return ()
             return builtin_user_conditions(self.user_model)
         return tuple(self._user_conditions.values())
 
@@ -447,15 +430,12 @@ class Compiler(object):
 
         Record this before ``register()``. ``None`` removes that name.
         ``on`` is ``*``, ``user``, or ``sponsor``. The lambda is walked
-        once. Field checks against the user model wait until ``compile``
-        when that model is not known yet.
+        once and checked against the user model.
         """
         self._open('set_user_condition')
         self._open_for_rules('condition')
         validate_user_rule_name(name, kind='condition')
         target = normalize_on(on)
-        if self.user_model is None:
-            return self._defer_user_condition(name, expr, target)
         if (
             expr is not None and self._user_override is not None
             and self._user_override.name == name
@@ -498,8 +478,6 @@ class Compiler(object):
         self._open_for_rules('override')
         validate_user_rule_name(name, kind='override')
         normalize_override_on(on)
-        if self.user_model is None:
-            return self._defer_user_override(name, expr)
         if expr is not None and any(
             rule.name == name for rule in self.user_conditions()
         ):
@@ -649,14 +627,13 @@ class Compiler(object):
             sponsor_model=record.sponsor_model,
             conditions=conditions, override=override,
         )
-        if not self._pending_user_edits:
-            sponsor_model = record.sponsor_model._meta.concrete_model
-            record = replace(record, sponsor_rules=compile_user_rules(
-                sponsor_model, record.sponsor_field,
-                _rules_for_model(conditions, sponsor_model),
-                role='sponsor', values={},
-                scope=record.root,
-            ))
+        sponsor_model = record.sponsor_model._meta.concrete_model
+        record = replace(record, sponsor_rules=compile_user_rules(
+            sponsor_model, record.sponsor_field,
+            _rules_for_model(conditions, sponsor_model),
+            role='sponsor', values={},
+            scope=record.root,
+        ))
         existing_rows = self._delegations_by_root.get(root)
         if existing_rows:
             existing_rows.append(record)
@@ -976,14 +953,13 @@ class Compiler(object):
     def compile(self):
         """Build this registry's catalog once and freeze registration.
 
-        The user model is resolved here. Named filters are copied into
+        The user model is already known. Named filters are copied into
         a new mapping, so the catalog does not share this compiler's
         store. User-rule and override fragments and the plan table are
         compiled here. A later call returns that same catalog.
         """
-        if self._catalog is not None:
+        if self.frozen:
             return self._catalog
-        self._resolve_user_model()
         stored = self._stored_user_conditions()
         model = self.user_model
         primary = compile_user_rules(
@@ -1009,148 +985,16 @@ class Compiler(object):
         plans = plan_table(
             self.records, self.delegations, model, stored, rules, override_q,
             self.query_compiler)
-        self.frozen = True
-        catalog = Catalog(
+        self._catalog = Catalog(
             records=self.records, delegations=self.delegations,
             named_filters=self._named_filters,
             user_conditions=stored, user_override=self._user_override,
             path=self.path, family=self.family, user_model=model,
             user_rules=rules, override_q=override_q, plans=plans,
         )
-        self._catalog = catalog
-        return catalog
+        self.frozen = True
+        return self._catalog
 
-    def _resolve_user_model(self):
-        if self.user_model is None:
-            from django.contrib.auth import get_user_model
-            self.user_model = get_user_model()
-        recheck = bool(self._pending_user_edits) or self._override_unvalidated
-        if self._pending_user_edits:
-            rules = {
-                rule.name: rule
-                for rule in builtin_user_conditions(self.user_model)
-            }
-            for edit in self._pending_user_edits:
-                if edit[0] == 'drop':
-                    name = edit[1]
-                    if name not in rules:
-                        raise TrustsConfigurationError(
-                            'User condition %r is not registered.' % (name,)
-                        )
-                    del rules[name]
-                    continue
-                _op, name, walked, target = edit
-                validate_user_rule(self.user_model, walked, name)
-                rules[name] = UserCondition(name, walked, target)
-            self._user_conditions = rules
-            self._pending_user_edits = []
-        if self._override_unvalidated:
-            slot = self._user_override
-            if slot is not None:
-                if any(
-                    rule.name == slot.name for rule in self.user_conditions()
-                ):
-                    raise TrustsConfigurationError(
-                        'User override name %r collides with a user condition.'
-                        % (slot.name,)
-                    )
-                validate_user_rule(self.user_model, slot.expr, slot.name)
-            self._override_unvalidated = False
-        if recheck:
-            self._recheck_registered_rules()
-        for key in self._pending_filters:
-            model, tree = self._named_filters[key]
-            validate_expression(tree, model, self.user_model)
-        self._pending_filters = []
-        self._finish_sponsor_rules()
-
-    def _defer_user_condition(self, name, expr, target):
-        if (
-            expr is not None and self._user_override is not None
-            and self._user_override.name == name
-        ):
-            raise TrustsConfigurationError(
-                'User condition name %r collides with the user override.'
-                % (name,)
-            )
-        if expr is None:
-            explicit = {
-                edit[1] for edit in self._pending_user_edits if edit[0] == 'set'
-            }
-            if name not in explicit and name != 'is_active':
-                raise TrustsConfigurationError(
-                    'User condition %r is not registered.' % (name,)
-                )
-            self._pending_user_edits.append(('drop', name))
-            return None
-        walked = walk_user_lambda(expr)
-        self._pending_user_edits.append(('set', name, walked, target))
-        return UserCondition(name, walked, target)
-
-    def _defer_user_override(self, name, expr):
-        if expr is not None and any(rule.name == name for rule in self.user_conditions()):
-            raise TrustsConfigurationError(
-                'User override name %r collides with a user condition.'
-                % (name,)
-            )
-        pending = {
-            edit[1] for edit in self._pending_user_edits
-            if edit[0] == 'set'
-        }
-        if expr is not None and name in pending:
-            raise TrustsConfigurationError(
-                'User override name %r collides with a user condition.'
-                % (name,)
-            )
-        if expr is None:
-            current = self._user_override
-            if current is None or current.name != name:
-                raise TrustsConfigurationError(
-                    'User override %r is not the current override.' % (name,)
-                )
-            self._user_override = None
-            self._override_unvalidated = False
-            return None
-        self._user_override = UserCondition(
-            name, walk_user_lambda(expr), 'user',
-        )
-        self._override_unvalidated = True
-        return self._user_override
-
-    def _recheck_registered_rules(self):
-        conditions = self._stored_user_conditions()
-        override = self._user_override
-        for record in self.records:
-            _assert_registration_rules(
-                user_model=record.user_model, sponsor_model=None,
-                conditions=conditions, override=override,
-            )
-        for record in self.delegations:
-            _assert_registration_rules(
-                user_model=record.delegate_model,
-                sponsor_model=record.sponsor_model,
-                conditions=conditions, override=override,
-            )
-
-    def _finish_sponsor_rules(self):
-        if not any(record.sponsor_rules is None for record in self._delegation_order):
-            return
-        conditions = self._stored_user_conditions()
-        order = []
-        by_root = {}
-        for record in self._delegation_order:
-            if record.sponsor_rules is None:
-                sponsor_model = record.sponsor_model._meta.concrete_model
-                record = replace(record, sponsor_rules=compile_user_rules(
-                    sponsor_model, record.sponsor_field,
-                    _rules_for_model(conditions, sponsor_model),
-                    role='sponsor', values={},
-                    scope=record.root,
-                ))
-            order.append(record)
-            by_root.setdefault(record.root, []).append(record)
-        self._delegation_order = order
-        self._delegations_by_root = by_root
 
     def _stored_user_conditions(self):
         """``None`` when the registry still uses the built-in rule."""
@@ -1719,18 +1563,6 @@ def _same_terminal_bindings(existing, record):
         and existing.via_group == record.via_group
         and existing.group_path == record.group_path
     )
-
-def _mentions_user(node):
-    if node is None or not hasattr(node, 'kind'):
-        return False
-    if getattr(node, 'root', None) == 'user':
-        return True
-    return (
-        _mentions_user(getattr(node, 'left', None))
-        or _mentions_user(getattr(node, 'right', None))
-        or _mentions_user(getattr(node, 'item', None))
-    )
-
 
 def _rules_for_model(conditions, model):
     """Stored rules, or the built-in ``is_active`` rule for ``model``."""
