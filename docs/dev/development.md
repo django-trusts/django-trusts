@@ -242,14 +242,10 @@ companion's pin. The job is `continue-on-error`, so a failure shows on
 the workflow and the other jobs still count. It does not post a pull
 request comment.
 
-For every pull request and every push, each companion is chosen the
-same way:
-
-1. The branch with the same name as the Core branch under test. On a
-   pull request that name is the head branch. On a push it is the
-   branch that was pushed.
-2. `dev`, when the companion has no branch of that name.
-3. The companion's stable branch, when it also has no `dev`.
+For every pull request and every push, a same-named companion branch
+wins. Otherwise the job tests the pinned SHA until that commit is in
+companion `dev`, then uses `dev`, and uses the stable branch only when
+`dev` is missing.
 
 The stable branch is that repository's GitHub default branch. The job
 reads it with `git ls-remote --symref` from `HEAD`. The workflow does
@@ -258,15 +254,6 @@ relies on each repository's GitHub default branch being its stable
 branch (`master` or `main`). An admin must not set that default to
 `dev`. If a repository renames its stable branch, point the GitHub
 default at the new name.
-
-Core leads. Core's `dev` and Core's `master` are tested against the
-companion `dev` branch. Core changes land in Core first, and a companion
-pins that commit afterwards, so the companion stable branch does not yet
-have the pieces those Core changes need. A companion has no branch
-named `master`, so a Core `master` run misses the same-name step and
-uses companion `dev`. It uses the stable branch only when `dev` is
-missing too. A same-name branch wins when the companion has one,
-including a pull request branch that exists on both repositories.
 
 The job checks out Core and the companion. It installs the companion's
 requirements, then installs this Core checkout with
