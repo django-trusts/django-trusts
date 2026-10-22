@@ -49,42 +49,54 @@ was entitled to create that state.
 
 ## Backend and registration
 
-A configured Trusts implementation backend is the public registration
-boundary. Application code uses the object returned by
-`configured_backend()`; it must not construct private registry or compiler
-objects.
+The app config that extends `TrustsConfigMixin` owns the recorder and the
+catalog. There is no global registry and no `TrustsImplementationConfig`.
+
+Application code records registrations on `self.recorder` in
+`AppConfig.ready()`, then calls `super().ready()`. `ready` freezes the
+recorder, replays the calls onto the compiler, and stores the catalog.
+The authentication backend borrows that catalog and answers only from it.
+Another backend's grants, registrations, and conditions do not feed this
+one. Do not construct a compiler, and do not read another app's catalog.
+
+Companions use the public API: `trusts.utils.parse_perm_code`,
+`trusts.backends.policy_document`, the recorder methods, and the queryset
+and decorator helpers. They do not import private modules.
 
 The registration APIs define permission sources and restrictions:
 
 | API | Meaning | Can grant independently? |
 | --- | --- | --- |
-| `register(...)` | Register an ordinary grant or a delegated relationship and its protected content | Yes, when the registered policy matches |
-| `add_named_filter(...)` | Bind a model-scoped name to a registration-time condition | No |
-| `registry.set_user_condition(..., on="*")` | Require a named user condition on the users named by `on=` unless skipped | No |
-| `registry.set_user_override(..., on="user")` | Register an optional alternative to ordinary grants for the checked user only | Yes, subject to required user conditions |
+| `recorder.register(...)` | Register an ordinary grant or a delegated relationship and its protected content | Yes, when the registered policy matches |
+| `recorder.add_named_filter(...)` | Bind a model-scoped name to a registration-time condition | No |
+| `recorder.set_user_condition(..., on="*")` | Require a named user condition on the users named by `on=` unless skipped | No |
+| `recorder.set_user_override(..., on="user")` | Register an optional alternative to ordinary grants for the checked user only | Yes, subject to required user conditions |
 
-django-trusts registration is intended not to issue SQL. Unsupported paths,
-types, constants, and combinations are intended to be rejected during setup.
-User conditions and overrides must use database fields; properties such as `is_authenticated`
-raise at registration. Registration closes when the registry freezes.
+Registration does not issue SQL. Unsupported paths, types, constants, and
+combinations are rejected during setup. User conditions and overrides must
+use database fields; properties such as `is_authenticated` raise at
+registration. `ready()` freezes the recorder. A registration after that
+raises.
 
-Set user conditions and overrides before any ordinary or delegated registration; later calls raise without changing the registry.
+Record user conditions and the override before any `register()` call.
+`ready()` rejects a later user-rule call and does not publish the catalog.
 Names must be unique Python identifiers and must not conflict with inquiry
 parameters. Skip values must be booleans. Replacing the override also replaces
 its skip name.
 
 ### Ordinary relationship authorization
 
-Call `registry.register()` or `registry.register_delegation()` from the owning
-implementation's `AppConfig.ready()` before the registry freezes.
+Call `self.recorder.register()` from the owning app's `AppConfig.ready()`,
+before `super().ready()`.
 
 The public registration signature is
 `register(*, trust, user=None, permission=None, content, group=None, delegate=None, sponsor=None, condition=None, along=None)`.
 An ordinary registration supplies `user=` and exactly one of `permission=` or
-`group=`. The required `trust=` model is the root of its non-empty paths:
+`group=`. A delegation supplies `delegate=` and `sponsor=` instead.
+The required `trust=` model is the root of its non-empty paths:
 
 ```python
-registry.register(
+self.recorder.register(
     trust=DocumentPermission,
     user="user",
     permission="permission",
@@ -104,30 +116,43 @@ validates the resulting path with Django model metadata, stores its normalized
 
 The lambda runs during `AppConfig.ready()`, in the same application context
 as the surrounding registration code. django-trusts does not inspect or sandbox
-unrelated Python in its body. Its path validation is designed not to issue SQL;
-that statement does not cover other application code executed by the lambda.
-An exception, an empty or invalid path, or an unsupported relationship shape is
-rejected before django-trusts updates the registry. Side effects already
+unrelated Python in its body. Path validation does not issue SQL; that
+statement does not cover other application code executed by the lambda.
+An exception, an empty or invalid path, or an unsupported relationship shape
+is rejected and does not publish a catalog. Side effects already performed
+by application code are outside that behavior.
+
+`condition=` is a function. An ordinary registration passes the trust row.
+A delegation passes the relationship, and may pass the requested permission
+as a second argument. django-trusts calls the function once during `ready()`,
+stores one condition tree, and does not keep the function. Named filters and
+user rules use that same language. The
+[setup guide](index.rst#more-expressive-permission-policies) lists the
+operations: `==`, `!=`, constants, `&`, `|`, a bare boolean, `~` on a
+boolean, and `.contains()` on a forward many-to-many.
+
+Literal Python `in` is unsupported and is not recovered through AST, bytecode,
+`dis`, or a `__contains__` side channel. Pass the function. A prebuilt
+condition object is rejected. `.contains` is reserved on the path; a model
+field of that name cannot be walked there. `~` does not apply to a
+comparison, to `.contains()`, or to `|`. Two fields never match when either
+value is NULL. A comparison with a constant follows Python, so a NULL column
+matches `!= 'open'`, and `~flag` includes a NULL boolean. On an ordinary
+registration, the member of `.contains()` is the registered permission path
+or a constant. A delegation uses the requested permission, passed as the
+function's second argument, or a constant. The condition cannot follow a
+field on the requested permission or compare that permission to a constant.
+
+Invalid arity, foreign roots, empty or non-expression returns, unsupported
+operations, and condition exceptions fail closed. Validation does not issue
+SQL. A rejected condition does not publish a catalog. Side effects already
 performed by application code are outside that behavior.
 
-`condition=` is the same one-argument symbolic condition, rooted at `trust=`.
-It is invoked once after the freeze check. Supported operations are path equality
-(`==`), collection-rooted `.contains(member)`, and conjunction (`&`). Literal
-Python `in` is unsupported and is not recovered through AST, bytecode, `dis`,
-or a `__contains__` side channel. The stored overlay is private `Equal` /
-`PermissionIn` / `All` and contains no callable. Public
-`register(condition=...)` rejects prebuilt `All` / `Equal` / `permission_in`
-values. `.contains` is a reserved condition-proxy method; a model field of
-that name cannot be walked there. The `predicate=` keyword is reserved and
-unsupported. Invalid arity, foreign roots, empty or non-expression
-returns, unsupported operations, and condition exceptions fail closed.
-django-trusts' own validation is designed not to issue SQL and does not
-partially mutate the registry.
-
 A matching path is positive authorization evidence. Multiple matching
-relationship registrations for the same protected model are alternatives and
-combine with OR in one generated query. A condition attached to a relationship
-narrows only that branch and cannot create a grant.
+relationship registrations for the same protected model, on one catalog,
+are alternatives and combine with OR in one generated query. A condition
+attached to a relationship narrows only that branch and cannot create a
+grant. Another catalog's registrations are not part of that query.
 
 ### Delegated authority
 
@@ -202,10 +227,10 @@ Audit the following boundaries:
 
 - the exact delegation row must bind its delegate, sponsor, content, and
   condition state; rows must not borrow fields from one another;
-- the sponsor-grant query is the live OR-union of applicable ordinary grants,
-  including other configured Trusts handles;
-- the current compiler excludes delegated registrations from the sponsor
-  ordinary-grant union, preventing an unbounded chain or cycle;
+- the sponsor-grant query is that catalog's own ordinary grants;
+  another backend's grants are not included;
+- delegated registrations are excluded from that sponsor query, so a
+  delegation cannot sponsor another delegation;
 - relationship scope can narrow the sponsor ceiling but cannot manufacture a
   permission the ordinary sponsor-grant query does not provide;
 - delegate and sponsor eligibility must be enforced inside the shared plan,
@@ -241,11 +266,12 @@ not be empty.
 
 Audit all of the following:
 
-- the implementation `AppConfig` in `INSTALLED_APPS`;
+- the app config extends `TrustsConfigMixin` (`trusts.E012` otherwise);
 - every dotted path in `AUTHENTICATION_BACKENDS`;
-- ownership of each configured Trusts backend path;
+- each Trusts backend's module lives in the app that owns its catalog;
+- an app with registrations and no listed backend (`trusts.E010`);
 - duplicate, obsolete, or missing backend paths;
-- the point at which registration freezes; and
+- `ready()` freezes the recorder before the catalog is published; and
 - the output of `python manage.py check`.
 
 django-trusts is schema-neutral and has no final `AppConfig`. Concrete implementations
@@ -262,9 +288,9 @@ The supported projections consume the same normalized registration:
 | --- | --- | --- |
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
-| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Registered user conditions and overrides and relationship-family SQL before pagination |
-| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query combining backend contributions, including registered user conditions and overrides within each Trusts branch |
-| View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
+| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | The chosen catalog's user conditions, overrides, and grant query, before pagination. When more than one Trusts backend registers the model and `backend=` is omitted, the call raises `TrustsConfigurationError` and asks for `backend=` |
+| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | Each Trusts backend answers from its own catalog, including that catalog's user conditions and overrides. When more than one Trusts backend registers the object's model and `backend=` is omitted, the call raises `TrustsConfigurationError` and asks for `backend=`, as Django's `with_perm` does. Object fields are read from the saved row |
+| View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding. The chosen catalog authorizes the row. The same `backend=` rule applies |
 
 `.permitted(permission, user)` is the public content-list inquiry.
 `.authorized(user, permission, extra_q=None)` is the lower-level instance
@@ -300,7 +326,7 @@ subject to tenant, parent, object, or named-filter restrictions.
 To opt into a Trusts override, register its own activity requirement:
 
 ```python
-registry.set_user_override(
+self.recorder.set_user_override(
     "superuser",
     lambda u: u.is_active & u.is_superuser,
 )
@@ -310,13 +336,13 @@ registry.set_user_override(
 To inspect only ordinary
 grants, use a Trusts inquiry with `skip_superuser=True`. That keyword is valid
 only while `superuser` names the current override. Pass
-`set_user_override("superuser", None)` to remove it; any other name raises.
+`self.recorder.set_user_override("superuser", None)` to remove it; any other name raises.
 
 Conditions apply to both the checked user and sponsors by default. To prevent
 superusers from sponsoring even their ordinary grants, an application can add:
 
 ```python
-registry.set_user_condition(
+self.recorder.set_user_condition(
     "superuser_cannot_sponsor",
     lambda u: ~u.is_superuser,
     on="sponsor",
@@ -362,7 +388,7 @@ A named filter is registered against the protected model during application
 setup:
 
 ```python
-registry.add_named_filter(
+self.recorder.add_named_filter(
     Document,
     "non_confidential",
     predicate=lambda u, p, o: o.confidential != True,
@@ -372,14 +398,14 @@ registry.add_named_filter(
 The [setup guide](index.rst#named-filters) shows how callers select
 that filter.
 
-The backend invokes the callable once with symbolic user, permission, and
-object references. Operations on those references construct a closed expression
-tree; django-trusts validates and normalizes that result, stores only the
-immutable IR, and discards the callable. The condition runs in the same
-application-startup context as its surrounding code and receives no additional
-authority from django-trusts. django-trusts does not inspect or sandbox the
-callable body; SQL, I/O, request state, and mutable captures remain application
-behavior outside the returned-expression validation.
+The compiler calls the function once with symbolic user, permission, and
+object references. Operations on those references build a condition tree.
+django-trusts checks that tree, stores it, and discards the function.
+The condition runs in the same application-startup context as its
+surrounding code and receives no additional authority from django-trusts.
+django-trusts does not inspect or sandbox the function body; SQL, I/O,
+request state, and mutable captures remain application behavior outside
+the returned-expression validation.
 
 At an authorization site, the named filter restricts an existing grant:
 
@@ -501,6 +527,20 @@ checks. Runtime denial should not fall back to a broader Trusts path.
 the generated parameterized SQL. It lets reviewers inspect the queries and
 notice changes. The YAML is not a public schema or an input format.
 
+`trusts.backends.policy_document()` returns that document for every
+installed catalog that has registrations. A Trusts backend's
+`policy_document()` returns that backend's catalog only. `backend=` is a
+dotted path. A value that is not a string raises `TypeError`. A
+non-Trusts backend raises `TrustsConfigurationError`. `alias` overrides
+`TRUSTS_POLICY_DATABASE` for the call. Each entry is one catalog's own
+registrations. A catalog with no contents is left out.
+
+A nested `and` inside `and`, or `or` inside `or`, prints as one flat
+chain (`A and B and C`). Parentheses stay for mixed `and`/`or` and for
+the operand of `not`. Companions read the document through
+`policy_document` and split permission strings with
+`trusts.utils.parse_perm_code`.
+
 ### Renderer, connection, and stability boundary
 
 One lockfile records output from one selected Django database renderer.
@@ -580,8 +620,8 @@ answer:
 3. Do object, queryset, enumeration, and guard projections still agree?
 4. Does the change introduce registration-time database access or partial mutation?
 5. Is the final authorization query still within its tested statement bound?
-6. Did any unsupported database, callback, private registry, or private IR
-   surface become reachable?
+6. Did any unsupported database, callback, or private compiler surface
+   become reachable, or did one catalog read another's grants?
 7. If a policy lockfile is in play, does equality show only that the live
    declared authorization surface and rendered SQL match the reviewed
    artifact, and has every change to the Trusts backend or registration,

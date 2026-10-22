@@ -60,7 +60,9 @@ django-trusts requires Python 3.12--3.14 and Django 6.1.
    python -m pip install "django-trusts @ git+https://github.com/django-trusts/django-trusts@dev"
 
 Every app that hosts Trusts registrations or a Trusts backend must extend
-``TrustsConfigMixin`` on its Django ``AppConfig``, so the app owns its catalog.
+``TrustsConfigMixin`` on its Django ``AppConfig``. That config owns the
+recorder and the catalog built from it. There is no global registry, and
+no ``TrustsImplementationConfig``.
 
 Define the models
 -----------------
@@ -75,7 +77,7 @@ The application owns its protected content and trust models.
    from django.contrib.auth.models import Group, Permission
    from django.db import models
 
-   from trusts.query import PermittedQuerySetMixin, PermittedUsersMixin
+   from trusts.models import PermittedQuerySetMixin, PermittedUsersMixin
 
 
    class DocumentQuerySet(PermittedQuerySetMixin, models.QuerySet):
@@ -164,7 +166,7 @@ the same queryset with ``from_queryset``:
 ``PermittedManager = Manager.from_queryset(PermittedQuerySet)`` are the
 concrete forms when no custom queryset is required. Plain
 ``user.has_perm(permission, document)`` object checks do not require
-either one. ``.authorized(user, permission, extra_q=None)`` remains the lower-level instance
+either one. ``.authorized(user, permission, extra_q=None, backend=None)`` remains the lower-level instance
 projection. It accepts a saved permission instance rather than a permission
 string and does not select named conditions. ``.permitted(permission, user,
 conditions=())`` is the public content-list inquiry and keeps the same
@@ -232,13 +234,8 @@ Register the model paths when the application starts:
 
    class DocumentsConfig(TrustsConfigMixin, AppConfig):
        name = "documents"
-       trusts_backend_paths = (
-           "documents.backends.DocumentBackend",
-       )
 
        def ready(self):
-           super().ready()
-
            from .models import (
                Document,
                DocumentDelegation,
@@ -246,31 +243,38 @@ Register the model paths when the application starts:
                GroupDocumentPermission,
            )
 
-           registry = DocumentBackend().get_registry()
-           registry.register(
+           self.recorder.register(
                trust=DocumentPermission,
                user=lambda t: t.user,
                permission=lambda t: t.permission,
                content=lambda t: t.document,
            )
-           registry.register(
+           self.recorder.register(
                trust=GroupDocumentPermission,
                user=lambda t: t.group.user,
                group=lambda t: t.group,
                content=lambda t: t.document,
            )
-           registry.register(
+           self.recorder.register(
                trust=DocumentDelegation,
                delegate=lambda d: d.delegate,
                sponsor=lambda d: d.sponsor,
                content=lambda d: d.document,
                condition=lambda d, p: d.permissions.contains(p),
            )
-           registry.add_named_filter(
+           self.recorder.add_named_filter(
                Document,
                "non_confidential",
                predicate=lambda u, p, o: o.confidential != True,
            )
+           super().ready()
+
+Record the calls on ``self.recorder``, then call ``super().ready()``.
+``ready`` freezes the recorder, replays those calls onto the compiler,
+and stores the catalog the compiler builds. A registration, a named
+filter, and a user rule are stored as one condition tree. A call after
+the recorder is frozen raises. List the backend in
+``AUTHENTICATION_BACKENDS``. The app config does not name it.
 
 The first registration reaches permission objects directly. The second reaches
 Django ``auth.Group`` objects; ``django-trusts`` follows each group's
@@ -295,7 +299,7 @@ equivalent of the first registration is:
 
 .. code-block:: python
 
-   registry.register(
+   self.recorder.register(
        trust=DocumentPermission,
        user="user",
        permission="permission",
@@ -342,11 +346,12 @@ The same correlated policy drives object checks, permission enumeration,
 ``QuerySet.permitted()``, users from content, and authorization
 policy SQL. The sponsor's authority limits all of those inquiries.
 
-Several delegated relationship models may target the same content model. Each
-relationship provides another way to receive permission: its own delegate,
-content, condition, and sponsor authority are ANDed before that branch is
-ORed with the others. A branch cannot borrow another relationship's approval
-or sponsor.
+Several delegated relationship models may target the same content model on
+one catalog. Each relationship provides another way to receive permission:
+its own delegate, content, condition, and sponsor authority are ANDed before
+that branch is ORed with the other branches on that catalog. A branch cannot
+borrow another relationship's approval or sponsor, and it cannot borrow
+another catalog's grants.
 
 For ordinary and delegated registrations, ``content=`` may also reach a bounded content
 set rather than a foreign key on the relationship row. For example,
@@ -388,7 +393,12 @@ backend:
 
 Django's ``ModelBackend`` remains available for ordinary global permissions.
 ``DocumentBackend`` answers object-level permission questions declared
-through ``django-trusts``.
+through ``django-trusts``. Its module lives in the ``documents`` app, so
+it uses ``DocumentsConfig``'s catalog.
+
+Django calls ``has_perm`` on each listed backend. A Trusts backend
+answers from its own catalog and returns ``False`` when that catalog
+does not grant the object. It does not read another backend's grants.
 
 Ask permission questions
 ------------------------
@@ -451,13 +461,24 @@ as ``user.has_perm(permission, document)``, not the same string codec.
 ``has_perm`` still infers a model from the codename suffix
 (`issue #268 <https://github.com/django-trusts/django-trusts/issues/268>`_).
 
-A relationship-family backend participates only when it has an applicable
-``auth.Permission`` plan for the queryset model and owns every selected
-name as a queryable condition. Other backends contribute nothing. If none
-own the full set, the call raises ``TrustsConfigurationError`` before SQL.
-``trusts.E008`` reports that configuration for ``authorization_required``
-declarations only. A runtime ``.permitted()`` call is not one of those
-declarations; it still validates and raises on first use.
+Each Trusts backend answers from its own catalog. If no Trusts backend
+has registered the queryset's model, the result is empty. If one has,
+that catalog answers. When more than one Trusts backend has registered
+that model and the call omits ``backend=``, django-trusts raises
+``TrustsConfigurationError`` and asks for ``backend=``. ``backend`` is
+the dotted path of one entry in ``AUTHENTICATION_BACKENDS``. Django's
+``with_perm`` asks for ``backend`` the same way when more than one
+authentication backend is configured. The same rule applies to
+``.authorized()``, ``filter_by_permitted_content``,
+``get_permitted_users``, ``User.objects.permitted``, and
+``authorization_required``.
+
+A selected condition name that the catalog did not register raises
+``TrustsConfigurationError`` before SQL. ``trusts.E008`` reports an
+``authorization_required`` declaration whose model has no plan, or whose
+selected names are not registered together on one catalog. A runtime
+``.permitted()`` call is not one of those declarations; it still
+validates and raises on first use.
 
 Malformed permissions and conditions raise before SQL. A well-formed
 permission for another content type produces an empty queryset. Named conditions remain explicit:
@@ -478,15 +499,16 @@ permitted content sits under those rows. The result is a lazy queryset of
 the same model.
 
 ``permission`` is a saved permission row. ``content`` is the protected
-model. ``handles`` is optional and defaults to the installed relationship
-backends.
+model. The same ``backend=`` rule applies: one catalog answers, and
+more than one Trusts backend registered for that model requires
+``backend=``.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
 the user may read:
 
 .. code-block:: python
 
-   from trusts.core import filter_by_permitted_content
+   from trusts.decorators import filter_by_permitted_content
 
    cabinets = filter_by_permitted_content(
        Cabinet.objects.all(),
@@ -513,14 +535,17 @@ The permission may also use Django's string form:
    )
 
 The result is a lazy queryset of the configured user model. Normal queryset
-operations remain available.
+operations remain available. ``get_permitted_users`` and
+``User.objects.permitted`` use one catalog, under the same ``backend=``
+rule. A condition that reads the object uses the saved row. An object
+that has not been saved raises before any query.
 
 Applications that own their user model may expose the same inquiry on their
 existing user manager:
 
 .. code-block:: python
 
-   from trusts.query import PermittedUsersManagerMixin
+   from trusts.models import PermittedUsersManagerMixin
 
 
    class UserManager(PermittedUsersManagerMixin, ExistingUserManager):
@@ -557,20 +582,19 @@ checked user without an ordinary grant.
 The only default condition is ``is_active``, if the field exists.
 No user override is registered by default.
 
-Set user conditions and overrides in ``AppConfig.ready()``, before
-registering permissions or delegations. For example, replace the activity
-condition:
+Set user conditions and overrides on ``self.recorder`` in
+``AppConfig.ready()``, before any ``register()`` call and before
+``super().ready()``. For example, replace the activity condition:
 
 .. code-block:: python
 
-   registry = backend.registry
-   registry.set_user_condition("is_active", lambda u: u.is_active)
+   self.recorder.set_user_condition("is_active", lambda u: u.is_active)
 
 Setting the same name replaces that condition. Pass ``None`` to remove it:
 
 .. code-block:: python
 
-   registry.set_user_condition("is_active", None)
+   self.recorder.set_user_condition("is_active", None)
 
 Use ``skip_<name>=True`` to skip a condition for one Trusts inquiry. For
 example, inspect an inactive user's grants:
@@ -584,11 +608,12 @@ example, inspect an inactive user's grants:
        "documents.change_document", skip_is_active=True,
    )
 
-Condition names must be Python identifiers with no name conflict; their
-lambdas must return Boolean expressions.
+Condition names must be Python identifiers with no name conflict. The
+function uses the same condition language as a registration condition.
 
-Use ``set_user_override()`` to set the single override; setting another
-replaces it. Pass its current name with ``None`` to remove it.
+Use ``set_user_override()`` on the recorder to set the single override;
+setting another replaces it. Pass its current name with ``None`` to
+remove it.
 
 Django allows active superusers before asking backends; see the `security audit <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#django-auths-checks-before-calling-backends>`_.
 
@@ -616,7 +641,8 @@ Protect a view with the Trusts-only primary-key guard:
        return HttpResponse("Authorized")
 
 The guard binds only the URL keyword argument named ``pk`` to the model's
-primary-key field. It performs configuration preflight before candidate lookup;
+primary-key field. It uses one catalog, under the same ``backend=`` rule.
+It performs configuration preflight before candidate lookup;
 a missing object produces 404 and an existing unauthorized object produces
 403. Named ``skip_<name>`` values may be passed after ``conditions`` when a
 view deliberately needs one, for example
@@ -632,15 +658,23 @@ Named filters
 
 A named filter further constrains an existing permission; it cannot grant
 permission by itself. Register it against the protected model during
-``AppConfig.ready()`` with ``registry.add_named_filter(...)``.
+``AppConfig.ready()`` with ``self.recorder.add_named_filter(...)``, before
+``super().ready()``.
 
-Its condition is a three-argument lambda or function: ``u`` is the requesting
-user, ``p`` is the requested permission, and ``o`` is the protected object. It
-must return a supported boolean expression that django-trusts can translate
-into the Django QuerySet used for authorization. The example above registers
-``non_confidential`` against ``Document.confidential``. Object checks select
-one named filter with the ``:name`` suffix; ``authorization_required`` accepts
-a tuple of names. Unsupported expressions fail registration.
+Its condition is a three-argument function: ``u`` is the requesting
+user, ``p`` is the requested permission, and ``o`` is the protected object.
+It uses the same condition language as a registration condition.
+django-trusts calls it once, stores the condition tree, and does not
+keep the function. The example above registers ``non_confidential``
+against ``Document.confidential``. Object checks select one named filter
+with the ``:name`` suffix; ``authorization_required`` accepts a tuple of
+names. Unsupported expressions fail registration.
+
+``trusts.utils.parse_perm_code`` reads a permission string. It splits
+``app.action_model`` on the dot and the last underscore, then takes an
+optional ``:condition``. It returns ``(app label, model name, action,
+condition)``. The condition is ``''`` when there is no suffix. It does
+not choose the model for ``.permitted()``.
 
 .. code-block:: python
 
@@ -655,30 +689,43 @@ API also supports paths through multiple relationships:
 
 .. code-block:: python
 
-   registry.register(
+   self.recorder.register(
        trust=TeamDocumentPermission,
        user=lambda t: t.team.members,  # or "team__members"
        permission=lambda t: t.permission,  # or "permission"
        content=lambda t: t.document,  # or "document"
    )
 
-For an ordinary registration, the ``condition=`` argument is a one-argument
-symbolic condition rooted at the trust model. A delegated registration may
-use the same one-argument form for row-only restrictions or the two-argument
-form shown above when its relationship scope must compare with the requested
-permission. django-trusts invokes either builder once during registration and
-stores no callable. The condition grammar is path equality
-(``==``), collection-rooted membership (``.contains(member)``), and
-conjunction (``&``). Parenthesize ``==`` when combining it with ``&``.
-Python ``in``, ``and`` / ``or`` / ``not``, and prebuilt ``All`` /
-``Equal`` / ``permission_in`` values are not accepted. ``.contains`` is a
-reserved method on the condition proxy; a model field actually named
-``contains`` cannot be walked there. ``predicate=`` is reserved and
-unsupported in 1.0.
+A registration condition, a named filter, and a user rule share one
+condition language. An ordinary registration passes the trust row. A
+delegation passes the relationship, and may pass the requested permission
+as a second argument. django-trusts calls the function once while it
+builds the catalog, stores the condition tree, and does not keep the
+function. A rejected condition raises ``PermissionConditionError``, which
+is a ``TrustsConfigurationError``.
+
+A condition may use ``==``, ``!=``, a constant, ``&``, ``|``, a bare
+boolean field, ``~`` on a boolean, and ``.contains()`` on a forward
+many-to-many. Parenthesize a comparison joined with ``&``. Python
+``in``, ``and``, ``or``, and ``not`` are not accepted. Pass the function,
+not a prebuilt condition object. ``.contains`` is reserved on the path,
+so a field named ``contains`` cannot be walked.
+
+``~`` applies to a boolean field and to ``&`` of boolean fields. It does
+not apply to a comparison, to ``.contains()``, or to ``|``. Two fields
+never match when either value is NULL. A comparison with a constant
+follows Python, so a NULL column matches ``!= 'open'``. ``~flag``
+includes a NULL boolean.
+
+On an ordinary registration, the member of ``.contains()`` is the
+registered permission path or a constant. A delegation uses the requested
+permission, passed as the function's second argument, or a constant.
+The condition cannot follow a field on the requested permission, and it
+cannot compare that permission to a constant.
 
 .. code-block:: python
 
-   backend.register(
+   self.recorder.register(
        trust=TeamDocumentPermission,
        user=lambda t: t.team.members,
        permission=lambda t: t.permission,
@@ -701,7 +748,7 @@ Inherited relationships
 
 ``along=`` declares bounded hierarchical reachability and also works with
 delegated registrations. For example, ``along=("parent", 8)`` on
-``registry.register`` applies the same bounded walk to object checks,
+``self.recorder.register`` applies the same bounded walk to object checks,
 permitted-content querysets, permission enumeration, users from content, and
 authorization-policy output. See the `bounded-reach security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
@@ -732,6 +779,26 @@ A host app opts in with ``management/commands/trusts_policy_sql.py``:
 .. code-block:: python
 
    from trusts.inspect.commands import PolicySqlCommand as Command
+
+``policy_document()`` on a Trusts backend returns that backend's part of
+the same document. ``trusts.backends.policy_document()`` returns every
+installed catalog that has registrations, which is what the command
+writes. Pass ``backend=`` as a dotted path to select one backend. A
+value that is not a string raises ``TypeError``. A path that is not a
+Trusts backend raises ``TrustsConfigurationError``. ``alias`` overrides
+``TRUSTS_POLICY_DATABASE`` for that call. Each entry is one catalog's
+own registrations. The document does not merge one catalog's grants
+into another.
+
+The document has ``schema_version``, ``database`` (the engine), and
+``backends``. Each backend entry has the catalog path and its
+``contents``. A catalog with no contents is left out. A chain of
+``and``, or a chain of ``or``, prints flat: ``A and B and C``.
+Parentheses stay when ``and`` and ``or`` are mixed, and around the
+operand of ``not``.
+
+Companions use this public API, including ``trusts.utils.parse_perm_code``
+and ``policy_document``. They do not import private modules.
 
 This output is for examining the queries and noticing changes. It is not a
 public file format or an input API. Write the current output to a lockfile
