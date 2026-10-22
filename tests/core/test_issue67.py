@@ -10,7 +10,7 @@ from tests.apps import TestsConfig
 from django.apps import apps
 
 from tests.support import configured_catalog, compiler
-from tests.core import KernelHostRequiredMixin
+from tests.core import KernelHostRequiredMixin, kernel_host_listed
 from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
 from trusts.apps import TrustsConfigMixin
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
@@ -93,6 +93,8 @@ class ContributorIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
 )
 class IsolatedAppsDoesNotDonateToLiveRegistryTest(SimpleTestCase):
     def test_isolate_apps_ready_does_not_touch_live_registry(self):
+        if not kernel_host_listed():
+            self.skipTest('kernel-only host path is not listed on the pair')
         from tests.kernel_host.backends import HostTrustModelBackend
         live = HostTrustModelBackend().catalog
         before = live.records

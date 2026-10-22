@@ -19,6 +19,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection, models
 from django.test import SimpleTestCase, override_settings
+from tests.core import kernel_host_listed
 from tests.kernel_host.backends import HostTrustModelBackend
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
@@ -628,6 +629,8 @@ class PolicySqlCommandTest(SimpleTestCase):
 class PolicySqlCheckTest(SimpleTestCase):
 
     def test_policy_document_matches_the_lockfile_and_one_backend(self):
+        if not kernel_host_listed():
+            self.skipTest('kernel-only host path is not listed on the pair')
         whole = policy_document()
         self.assertEqual(yaml.safe_load(render_policy_sql_bytes()), whole)
         part = DocumentBackend().policy_document()

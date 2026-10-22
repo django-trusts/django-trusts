@@ -8,11 +8,14 @@ import importlib
 
 from django.test import SimpleTestCase
 
+from tests.core import kernel_host_listed
 from trusts.plan.relations import PlanQueryCompiler
 
 
 class BackendsMixinBoundaryTest(SimpleTestCase):
     def test_canonical_mixin_import_and_plan_compiler(self):
+        if not kernel_host_listed():
+            self.skipTest('kernel-only host path is not listed on the pair')
         from django.apps import apps
 
         catalog = apps.get_app_config('trusts_kernel_host').get_catalog()

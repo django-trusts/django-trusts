@@ -30,6 +30,7 @@ INSTALLED_APPS = (
 
 AUTHENTICATION_BACKENDS = (
     'trusts.zero.backends.TrustModelBackend',
+    'tests.backends.TestsTrustBackend',
 )
 
 MIDDLEWARE = (
