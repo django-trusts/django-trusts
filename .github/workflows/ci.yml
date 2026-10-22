@@ -10,7 +10,7 @@ permissions:
 
 env:
   # Exact Zero candidate companion.
-  COMPANION_ZERO_SHA: 833866b9a096ac8a31e8bc60424e01a02f05389c
+  COMPANION_ZERO_SHA: 36f577c3774b7851c03fcd13c3203adb24cd07e9
 
 jobs:
   tests:
