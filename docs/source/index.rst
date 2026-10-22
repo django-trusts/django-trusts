@@ -9,45 +9,29 @@ django-trusts
 Declarative object permissions for Django
 -----------------------------------------
 
-``django-trusts`` is a Django permission system for object-level
-authorization. It integrates with Django's authentication backend interface,
-allowing applications to use familiar checks such as
-``user.has_perm(permission, object)`` while defining authorization policies
-with ordinary Django models.
+``django-trusts`` is object permissions for Django. You keep using
+``user.has_perm(permission, object)`` and define the policy with ordinary
+models. A **trust model** is the model those paths start from. A matching
+row is a grant.
 
-At its simplest, a permission is a persisted relationship among a user, an
-operation, and protected content. The application model from which those paths
-begin is the **trust model**. A matching trust record is a candidate grant. A
-trust model may be an explicit many-to-many relation model, a direct grant
-model, or another relational structure owned by the application.
-
-``django-trusts`` compiles these declarations into database queries via
-QuerySet, keeping permission decisions based on persisted truth. The same
-declarations support object checks, permitted querysets,
-``filter_by_permitted_content``, permission enumeration, and decorators
-for protecting views. The separate `security audit guide
+The same registration answers object checks, permitted querysets,
+``filter_by_permitted_content``, permission lists, and view guards. The
+`security audit guide
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md>`_
-defines the boundary these APIs enforce and the responsibilities that remain
-with the application.
+is the boundary those APIs keep.
 
 How permissions are represented
 --------------------------------
 
-A registered trust connects a user, protected content, and a permission
-source:
+A registration names:
 
-* **user** -- who is requesting access;
-* **permission** -- a path that reaches Django permission objects directly; or
-* **group** -- a path that reaches Django ``auth.Group`` objects, whose
-  permissions are used indirectly; and
-* **content** -- the object being protected.
+* **user** -- who is asking;
+* **permission** -- a path to Django permission rows; or
+* **group** -- a path to ``auth.Group``, whose permissions apply; and
+* **content** -- the protected object.
 
-``permission`` and ``group`` are mutually exclusive. All paths begin from the
-same trust model. In the simplest cases, that model connects the protected
-object to either a user and Django permission or a Django group.
-
-Multiple registered trusts may authorize the same kind of content. Each
-trust is an independent way to receive permission.
+Use ``permission=`` or ``group=``, not both. Every path starts on the
+trust model.
 
 Installation
 ------------
@@ -59,15 +43,11 @@ django-trusts requires Python 3.12--3.14 and Django 6.1.
    python -m pip install "Django>=6.1,<6.2"
    python -m pip install "django-trusts @ git+https://github.com/django-trusts/django-trusts@dev"
 
-Every app that hosts Trusts registrations or a Trusts backend must extend
-``TrustsConfigMixin`` on its Django ``AppConfig``. That config owns the
-recorder and the catalog built from it. There is no global registry, and
-no ``TrustsImplementationConfig``.
+Extend ``TrustsConfigMixin`` on the ``AppConfig`` of every app that
+registers trusts or hosts a Trusts backend.
 
 Define the models
 -----------------
-
-The application owns its protected content and trust models.
 
 .. code-block:: python
 
@@ -88,123 +68,53 @@ The application owns its protected content and trust models.
        title = models.CharField(max_length=200)
        confidential = models.BooleanField(default=False)
 
-       # Document.objects.filter(...).permitted(permission, user) chains.
        objects = DocumentQuerySet.as_manager()
 
 
    class DocumentPermission(models.Model):
-       user = models.ForeignKey(
-           settings.AUTH_USER_MODEL,
-           on_delete=models.CASCADE,
-       )
-       permission = models.ForeignKey(
-           Permission,
-           on_delete=models.CASCADE,
-       )
-       document = models.ForeignKey(
-           Document,
-           on_delete=models.CASCADE,
-       )
+       user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+       permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+       document = models.ForeignKey(Document, on_delete=models.CASCADE)
 
 
    class GroupDocumentPermission(models.Model):
-       group = models.ForeignKey(
-           Group,
-           on_delete=models.CASCADE,
-       )
-       document = models.ForeignKey(
-           Document,
-           on_delete=models.CASCADE,
-       )
+       group = models.ForeignKey(Group, on_delete=models.CASCADE)
+       document = models.ForeignKey(Document, on_delete=models.CASCADE)
 
 
    class DocumentDelegation(models.Model):
        delegate = models.ForeignKey(
-           settings.AUTH_USER_MODEL,
-           on_delete=models.CASCADE,
+           settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
            related_name="received_document_delegations",
        )
        sponsor = models.ForeignKey(
-           settings.AUTH_USER_MODEL,
-           on_delete=models.CASCADE,
+           settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
            related_name="sponsored_document_delegations",
        )
-       document = models.ForeignKey(
-           Document,
-           on_delete=models.CASCADE,
-       )
+       document = models.ForeignKey(Document, on_delete=models.CASCADE)
        permissions = models.ManyToManyField(Permission)
 
-``DocumentPermission`` connects one user and one permission to one document.
-``GroupDocumentPermission`` connects a Django group to one document; users
-receive the group's permissions through group membership.
-``DocumentDelegation`` lets its delegate act within its sponsor's current
-permissions on one document, limited to the relationship's approved
-operations.
+``Document.objects.permitted(permission, user)`` lists documents that
+user may access. ``document.get_permitted_users(permission)`` lists the
+users. ``user.has_perm(permission, document)`` does not need either mixin.
+If you already have a manager, use
+``Manager.from_queryset(DocumentQuerySet)``. ``PermittedQuerySet`` and
+``PermittedManager`` are the ready-made forms.
+``.authorized(user, permission)`` takes a saved permission row, not a
+permission string, and does not take named conditions.
 
-``PermittedQuerySetMixin`` adds
-``permitted(permission, user, conditions=())`` to the application's
-queryset. ``as_manager()`` is enough when the application does not need
-its own manager class. An application that already owns a manager supplies
-the same queryset with ``from_queryset``:
-
-.. code-block:: python
-
-   class DocumentQuerySet(PermittedQuerySetMixin, models.QuerySet):
-       def published(self):
-           return self.filter(confidential=False)
-
-
-   class DocumentManager(models.Manager.from_queryset(DocumentQuerySet)):
-       pass
-
-
-   class Document(models.Model):
-       objects = DocumentManager()
-
-``PermittedQuerySet`` and
-``PermittedManager = Manager.from_queryset(PermittedQuerySet)`` are the
-concrete forms when no custom queryset is required. Plain
-``user.has_perm(permission, document)`` object checks do not require
-either one. ``.authorized(user, permission, extra_q=None, backend=None)`` remains the lower-level instance
-projection. It accepts a saved permission instance rather than a permission
-string and does not select named conditions. ``.permitted(permission, user,
-conditions=())`` is the public content-list inquiry and keeps the same
-registered user conditions, overrides, and relationship grants as the object
-check.
-
-``PermittedUsersMixin`` adds
-``document.get_permitted_users(permission)``, which returns the users whose
-object check succeeds for one saved document and permission. The optional
-``User.objects.permitted(document, permission)`` manager adapter asks the same
-question. Neither changes ``Document.objects``.
-
-Granting and revoking permission are ordinary changes to persisted application
-data:
+Create and delete grants as ordinary rows:
 
 .. code-block:: python
 
    DocumentPermission.objects.create(
-       user=user,
-       permission=change_document,
-       document=document,
+       user=user, permission=change_document, document=document,
    )
-
-   DocumentPermission.objects.filter(
-       user=user,
-       permission=change_document,
-       document=document,
-   ).delete()
-
-An application may instead change a team membership, organizational
-relationship, ACL entry, or another persisted fact. ``django-trusts`` does
-not impose one grant-management workflow.
 
 Define the backend
 ------------------
 
-The application provides a Django authentication backend using
-``TrustModelBackendMixin``.
+Put the backend in the same app.
 
 .. code-block:: python
 
@@ -221,7 +131,7 @@ The application provides a Django authentication backend using
 Register the trust
 ------------------
 
-Register the model paths when the application starts:
+Call ``self.recorder`` in ``ready()``, then ``super().ready()``.
 
 .. code-block:: python
 
@@ -237,144 +147,61 @@ Register the model paths when the application starts:
 
        def ready(self):
            from .models import (
-               Document,
-               DocumentDelegation,
-               DocumentPermission,
+               Document, DocumentDelegation, DocumentPermission,
                GroupDocumentPermission,
            )
 
            self.recorder.register(
                trust=DocumentPermission,
-               user=lambda t: t.user,
-               permission=lambda t: t.permission,
-               content=lambda t: t.document,
+               user="user",              # or lambda t: t.user
+               permission="permission",
+               content="document",
            )
            self.recorder.register(
                trust=GroupDocumentPermission,
                user=lambda t: t.group.user,
-               group=lambda t: t.group,
-               content=lambda t: t.document,
+               group="group",
+               content="document",
            )
            self.recorder.register(
                trust=DocumentDelegation,
-               delegate=lambda d: d.delegate,
-               sponsor=lambda d: d.sponsor,
-               content=lambda d: d.document,
+               delegate="delegate",
+               sponsor="sponsor",
+               content="document",
                condition=lambda d, p: d.permissions.contains(p),
            )
            self.recorder.add_named_filter(
-               Document,
-               "non_confidential",
-               predicate=lambda u, p, o: o.confidential != True,
+               Document, "non_confidential",
+               lambda u, p, o: o.confidential != True,
            )
            super().ready()
 
-Record the calls on ``self.recorder``, then call ``super().ready()``.
-``ready`` freezes the recorder, replays those calls onto the compiler,
-and stores the catalog the compiler builds. A registration, a named
-filter, and a user rule are stored as one condition tree. A call after
-the recorder is frozen raises. List the backend in
-``AUTHENTICATION_BACKENDS``. The app config does not name it.
-
-The first registration reaches permission objects directly. The second reaches
-Django ``auth.Group`` objects; ``django-trusts`` follows each group's
-permissions. Applications do not append ``permissions`` to the ``group`` path.
-Each registration supplies either ``permission=`` or ``group=``, never both.
-
-A ``permission=`` path may also end on one forward to-many collection of
-``auth.Permission``. Zero or more forward to-one steps may precede that
-terminal step (``permissions`` or ``team__permissions``). To-one means a
-foreign key or one-to-one; to-many means a many-to-many. That is the
-relation shape, not a count of permission rows. A reverse many-to-many, or
-a collection that does not end on ``auth.Permission``, is rejected when the
-relationship is registered. An intermediate many-to-many is still rejected
-at registration; support for that shape is deferred and is not a design
-rejection. The collection still does not contribute to
-``get_group_permissions()``; only an explicit ``group=`` registration does.
-
-``user``, ``permission``, ``group``, and ``content`` each accept either a
-one-argument path lambda (the form in ``ready()`` above) or a Django ``__``
-path string. Both forms of the same registration are valid; the string
-equivalent of the first registration is:
-
-.. code-block:: python
-
-   self.recorder.register(
-       trust=DocumentPermission,
-       user="user",
-       permission="permission",
-       content="document",
-   )
-
+Paths are a ``__`` string or a one-argument lambda. A ``permission=``
+path may end on one forward many-to-many of ``auth.Permission``. Only an
+explicit ``group=`` registration is listed by ``get_group_permissions()``.
 
 Delegate live authority
 -----------------------
 
-A delegation lets a **delegate** act with a **sponsor**'s live ordinary
-permissions on the protected content. For a requested permission,
-django-trusts requires the same delegation row, its selected content and
-condition, and sponsor authority on that content. Conditions that apply to
-the sponsor are described in :ref:`user conditions and overrides
-<user-conditions-and-overrides>`. The actor's own ordinary grants remain
-available as independent alternatives.
-
-The delegated ``condition=`` builder receives the relationship as a symbolic
-value and may receive the requested permission as a second symbolic value.
-The one-argument form applies row-only restrictions. The two-argument form in
-the example checks the requested permission against ``permissions``.
-Create the relationship and its scope with ordinary application data writes:
+``delegate=`` and ``sponsor=`` replace ``user=`` plus ``permission=`` or
+``group=``. The delegate may use the sponsor's grants on that content,
+from that backend's catalog. Write the row yourself:
 
 .. code-block:: python
 
    delegation = DocumentDelegation.objects.create(
-       delegate=automation_user,
-       sponsor=owner,
-       document=document,
+       delegate=automation_user, sponsor=owner, document=document,
    )
    delegation.permissions.add(change_document)
 
-Permission checks keep the familiar Django spelling:
-
-.. code-block:: python
-
-   automation_user.has_perm(
-       "documents.change_document",
-       document,
-   )
-
-The same correlated policy drives object checks, permission enumeration,
-``QuerySet.permitted()``, users from content, and authorization
-policy SQL. The sponsor's authority limits all of those inquiries.
-
-Several delegated relationship models may target the same content model on
-one catalog. Each relationship provides another way to receive permission:
-its own delegate, content, condition, and sponsor authority are ANDed before
-that branch is ORed with the other branches on that catalog. A branch cannot
-borrow another relationship's approval or sponsor, and it cannot borrow
-another catalog's grants.
-
-For ordinary and delegated registrations, ``content=`` may also reach a bounded content
-set rather than a foreign key on the relationship row. For example,
-``sponsor__personal_organization__repositories`` crosses a reverse one-to-one
-personal organization and then the one reverse one-to-many repository gateway.
-One or more reverse one-to-one relations may be chained as single-valued
-prefix hops before that gateway. A reverse one-to-one is not itself a
-supported content terminal or gateway.
-
-A sponsor's ordinary grant may use ``along=``. That bounded walk is part of
-the sponsor's live authority on every object it reaches, including when the
-check is a delegation. A delegated registration may use ``along=`` on the
-same call. The delegate is allowed on an object only when the delegation walk
-and the sponsor's ordinary grant both reach that object. Each contributing
-ordinary sponsor grant's ``along=`` walk or exact match must reach the object.
-A delegate cannot sponsor a further delegation.
-
+``content=`` may be a foreign key, or reverse one-to-one steps followed
+by one reverse one-to-many. ``along=`` on the delegation and on the
+sponsor's grant must both reach the object. A delegation cannot sponsor
+another delegation. Sponsor checks are described in
+:ref:`user conditions and overrides <user-conditions-and-overrides>`.
 
 Configure Django
 ----------------
-
-Install the application that owns the permission implementation and add its
-backend:
 
 .. code-block:: python
 
@@ -391,183 +218,66 @@ backend:
        "documents.backends.DocumentBackend",
    ]
 
-Django's ``ModelBackend`` remains available for ordinary global permissions.
-``DocumentBackend`` answers object-level permission questions declared
-through ``django-trusts``. Its module lives in the ``documents`` app, so
-it uses ``DocumentsConfig``'s catalog.
-
-Django calls ``has_perm`` on each listed backend. A Trusts backend
-answers from its own catalog and returns ``False`` when that catalog
-does not grant the object. It does not read another backend's grants.
+``ModelBackend`` still answers global permissions. Django calls
+``has_perm`` on each listed backend. Each Trusts backend answers from
+its own catalog.
 
 Ask permission questions
 ------------------------
 
-Use Django's familiar object-permission API:
-
 .. code-block:: python
 
-   user.has_perm(
-       "documents.change_document",
-       document,
-   )
-
-An ``auth.Permission`` matches an object only when ``Permission.content_type``
-is that object's content type. Asking a repository permission about an
-organization is a denial (``False``, and the codename is absent from
-``get_all_permissions`` and ``.permitted()``), including when one group
-holds both permissions and a registration reaches both models. A proxy
-model keeps its own content type. Any other permission terminal, including
-a custom model with a ``content_type`` foreign key, is still matched by
-primary key.
-
-List the user's permissions on an object:
-
-.. code-block:: python
-
+   user.has_perm("documents.change_document", document)
    user.get_all_permissions(document)
-   # {"documents.change_document"}
-
-List only the permissions obtained through registered Django groups:
-
-.. code-block:: python
-
    user.get_group_permissions(document)
-   # {"documents.change_document"}
 
-A ``group=`` registration participates in the same object checks, permission
-enumeration, and queryset filtering as a ``permission=`` registration. Its
-explicit group classification also lets ``get_group_permissions()`` select the
-group-derived subset.
-
-A ``permission=`` registration is not treated as group-derived merely because its
-``user=`` path crosses ``auth.Group``; only explicit ``group=`` registrations
-contribute to ``get_group_permissions()``.
-
-Filter a queryset to the objects permitted for a particular permission:
-
-.. code-block:: python
-
+   documents = Document.objects.permitted("documents.change_document", user)
    documents = Document.objects.permitted(
-       "documents.change_document",
-       user,
+       "documents.change_document", user, conditions=("non_confidential",),
    )
 
-The permission may instead be the corresponding saved ``auth.Permission``
-instance. The queryset supplies the protected content model. A string is
-the exact ``app_label.codename`` bound to that model's content type; the
-codename is not parsed to guess a model. This is the same kind of question
-as ``user.has_perm(permission, document)``, not the same string codec.
-``has_perm`` still infers a model from the codename suffix
+   permitted_users = document.get_permitted_users("documents.change_document")
+
+To list users from your user manager, mix in
+``PermittedUsersManagerMixin`` from ``trusts.models``. Stock
+``auth.User`` does not gain ``permitted``.
+
+.. code-block:: python
+
+   from trusts.models import PermittedUsersManagerMixin
+
+   class UserManager(PermittedUsersManagerMixin, ExistingUserManager):
+       pass
+
+   User.objects.permitted(document, change_document)
+
+An ``auth.Permission`` matches an object only when its content type is
+that object's. A string passed to ``.permitted()`` is the codename for
+the queryset's model. ``has_perm`` still guesses the model from the
+codename suffix
 (`issue #268 <https://github.com/django-trusts/django-trusts/issues/268>`_).
 
-Each Trusts backend answers from its own catalog. If no Trusts backend
-has registered the queryset's model, the result is empty. If one has,
-that catalog answers. When more than one Trusts backend has registered
-that model and the call omits ``backend=``, django-trusts raises
-``TrustsConfigurationError`` and asks for ``backend=``. ``backend`` is
-the dotted path of one entry in ``AUTHENTICATION_BACKENDS``. Django's
-``with_perm`` asks for ``backend`` the same way when more than one
-authentication backend is configured. The same rule applies to
-``.authorized()``, ``filter_by_permitted_content``,
+Each Trusts backend answers from its own catalog. Pass ``backend=``, a
+dotted ``AUTHENTICATION_BACKENDS`` path, when more than one Trusts
+backend registers that model; otherwise the call raises. The same rule
+applies to ``.authorized()``, ``filter_by_permitted_content``,
 ``get_permitted_users``, ``User.objects.permitted``, and
 ``authorization_required``.
-
-A selected condition name that the catalog did not register raises
-``TrustsConfigurationError`` before SQL. ``trusts.E008`` reports an
-``authorization_required`` declaration whose model has no plan, or whose
-selected names are not registered together on one catalog. A runtime
-``.permitted()`` call is not one of those declarations; it still
-validates and raises on first use.
-
-Malformed permissions and conditions raise before SQL. A well-formed
-permission for another content type produces an empty queryset. Named conditions remain explicit:
-
-.. code-block:: python
-
-   documents = Document.objects.permitted(
-       "documents.change_document",
-       user,
-       conditions=("non_confidential",),
-   )
 
 Filter by permitted content
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``filter_by_permitted_content`` keeps rows of the queryset you pass when
-permitted content sits under those rows. The result is a lazy queryset of
-the same model.
-
-``permission`` is a saved permission row. ``content`` is the protected
-model. The same ``backend=`` rule applies: one catalog answers, and
-more than one Trusts backend registered for that model requires
-``backend=``.
-
-A cabinet holds sheets. This call keeps the cabinets that have a sheet
-the user may read:
+``filter_by_permitted_content`` keeps rows that have permitted content
+under them. ``permission`` is a saved permission row. Pass ``backend=``
+when two Trusts backends register that model.
 
 .. code-block:: python
 
    from trusts.decorators import filter_by_permitted_content
 
    cabinets = filter_by_permitted_content(
-       Cabinet.objects.all(),
-       user,
-       read_sheet,
-       content=Sheet,
+       Cabinet.objects.all(), user, read_sheet, content=Sheet,
    )
-
-``filter_by_permitted_content`` follows ``along=`` walks and one-level
-delegation.
-
-List the users who may perform one permission on one saved object:
-
-.. code-block:: python
-
-   permitted_users = document.get_permitted_users(change_document)
-
-The permission may also use Django's string form:
-
-.. code-block:: python
-
-   permitted_users = document.get_permitted_users(
-       "documents.change_document",
-   )
-
-The result is a lazy queryset of the configured user model. Normal queryset
-operations remain available. ``get_permitted_users`` and
-``User.objects.permitted`` use one catalog, under the same ``backend=``
-rule. A condition that reads the object uses the saved row. An object
-that has not been saved raises before any query.
-
-Applications that own their user model may expose the same inquiry on their
-existing user manager:
-
-.. code-block:: python
-
-   from trusts.models import PermittedUsersManagerMixin
-
-
-   class UserManager(PermittedUsersManagerMixin, ExistingUserManager):
-       pass
-
-After installing that manager on the application's user model, the equivalent
-user-side spelling is:
-
-.. code-block:: python
-
-   from django.contrib.auth import get_user_model
-
-
-   User = get_user_model()
-   permitted_users = User.objects.permitted(document, change_document)
-
-The manager method is spelled ``permitted`` because the manager already
-identifies the user model, and Django's ``get`` convention implies one row.
-This method returns a lazy queryset. Both spellings return the same rows.
-The user-manager mixin is optional; an application that cannot change its
-user manager uses ``content.get_permitted_users(perm)``. Stock ``auth.User``
-does not grow ``permitted``.
 
 .. _user-is-active-checks:
 
@@ -576,367 +286,169 @@ does not grow ``permitted``.
 User conditions and overrides
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A user condition must hold for every grant. A user override grants the
-checked user without an ordinary grant.
+A user condition must hold for a grant. A user override grants without
+an ordinary row. The default condition is ``is_active``, when that field
+exists. No override is installed.
 
-The only default condition is ``is_active``, if the field exists.
-No user override is registered by default.
-
-Set user conditions and overrides on ``self.recorder`` in
-``AppConfig.ready()``, before any ``register()`` call and before
-``super().ready()``. For example, replace the activity condition:
+Set them on ``self.recorder`` before any ``register()``, and before
+``super().ready()``. The same name replaces a condition. ``None`` removes
+it. ``skip_<name>=True`` skips one condition for that call.
 
 .. code-block:: python
 
    self.recorder.set_user_condition("is_active", lambda u: u.is_active)
+   self.recorder.set_user_override(
+       "superuser", lambda u: u.is_active & u.is_superuser,
+   )
 
-Setting the same name replaces that condition. Pass ``None`` to remove it:
-
-.. code-block:: python
-
-   self.recorder.set_user_condition("is_active", None)
-
-Use ``skip_<name>=True`` to skip a condition for one Trusts inquiry. For
-example, inspect an inactive user's grants:
-
-.. code-block:: python
-
-   documents = Document.objects.permitted(
+   Document.objects.permitted(
        "documents.change_document", user, skip_is_active=True,
    )
-   users = document.get_permitted_users(
-       "documents.change_document", skip_is_active=True,
-   )
 
-Condition names must be Python identifiers with no name conflict. The
-function uses the same condition language as a registration condition.
-
-Use ``set_user_override()`` on the recorder to set the single override;
-setting another replaces it. Pass its current name with ``None`` to
-remove it.
-
-Django allows active superusers before asking backends; see the `security audit <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#django-auths-checks-before-calling-backends>`_.
+Django allows an active superuser before it asks backends. See the
+`security audit <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#django-auths-checks-before-calling-backends>`_.
 
 .. _protect-a-view:
 
-Protect a view with the Trusts-only primary-key guard:
+Protect a view with ``authorization_required``. It binds the URL argument
+``pk``. A missing row is 404. An unauthorized row is 403. Pass
+``backend=`` when two Trusts backends register the model.
 
 .. code-block:: python
-
-   # documents/views.py
 
    from django.http import HttpResponse
 
    from trusts.decorators import authorization_required
 
-   from .models import Document
-
-
    @authorization_required(
-       Document,
-       "documents.change_document",
-       ("non_confidential",),
+       Document, "documents.change_document", ("non_confidential",),
    )
    def edit_document(request, pk):
        return HttpResponse("Authorized")
 
-The guard binds only the URL keyword argument named ``pk`` to the model's
-primary-key field. It uses one catalog, under the same ``backend=`` rule.
-It performs configuration preflight before candidate lookup;
-a missing object produces 404 and an existing unauthorized object produces
-403. Named ``skip_<name>`` values may be passed after ``conditions`` when a
-view deliberately needs one, for example
-``authorization_required(Document, permission, (), skip_is_active=True)``.
-Those values are fixed when the decorator is created and forwarded to the
-Trusts inquiry; they are not selected from request data.
-
-Object checks, permission enumeration, queryset filtering, and view protection
-consume the same normalized registrations.
+``skip_<name>`` on the decorator is fixed there. It is not read from the
+request.
 
 Named filters
 -------------
 
-A named filter further constrains an existing permission; it cannot grant
-permission by itself. Register it against the protected model during
-``AppConfig.ready()`` with ``self.recorder.add_named_filter(...)``, before
-``super().ready()``.
-
-Its condition is a three-argument function: ``u`` is the requesting
-user, ``p`` is the requested permission, and ``o`` is the protected object.
-It uses the same condition language as a registration condition.
-django-trusts calls it once, stores the condition tree, and does not
-keep the function. The example above registers ``non_confidential``
-against ``Document.confidential``. Object checks select one named filter
-with the ``:name`` suffix; ``authorization_required`` accepts a tuple of
-names. Unsupported expressions fail registration.
-
-``trusts.utils.parse_perm_code`` reads a permission string. It splits
-``app.action_model`` on the dot and the last underscore, then takes an
-optional ``:condition``. It returns ``(app label, model name, action,
-condition)``. The condition is ``''`` when there is no suffix. It does
-not choose the model for ``.permitted()``.
+A named filter narrows a grant. It does not create one. Register it with
+``self.recorder.add_named_filter(model, name, function)`` before
+``super().ready()``. The function takes the user, the permission, and the
+object. Select it with a ``:name`` suffix, or pass a tuple of names to
+``authorization_required``.
 
 .. code-block:: python
 
    user.has_perm("documents.change_document:non_confidential", document)
 
+``trusts.utils.parse_perm_code(permission)`` returns ``(app label, model
+name, action, condition)``. The condition is ``''`` when there is no
+suffix.
+
 More expressive permission policies
 -----------------------------------
 
-The ``DocumentPermission`` example uses the shortest useful trust: one record
-directly connects a user, a permission, and a document. The same registration
-API also supports paths through multiple relationships:
+Point ``user=``, ``permission=``, and ``content=`` through relations.
+``condition=`` is a function. A delegation may take the requested
+permission as a second argument. Use ``==``, ``!=``, ``&``, ``|``,
+``~`` on a boolean, and ``.contains()``. Parenthesize a comparison joined
+with ``&``. Pass the function, not a prebuilt condition.
 
 .. code-block:: python
 
    self.recorder.register(
        trust=TeamDocumentPermission,
-       user=lambda t: t.team.members,  # or "team__members"
-       permission=lambda t: t.permission,  # or "permission"
-       content=lambda t: t.document,  # or "document"
-   )
-
-A registration condition, a named filter, and a user rule share one
-condition language. An ordinary registration passes the trust row. A
-delegation passes the relationship, and may pass the requested permission
-as a second argument. django-trusts calls the function once while it
-builds the catalog, stores the condition tree, and does not keep the
-function. A rejected condition raises ``PermissionConditionError``, which
-is a ``TrustsConfigurationError``.
-
-A condition may use ``==``, ``!=``, a constant, ``&``, ``|``, a bare
-boolean field, ``~`` on a boolean, and ``.contains()`` on a forward
-many-to-many. Parenthesize a comparison joined with ``&``. Python
-``in``, ``and``, ``or``, and ``not`` are not accepted. Pass the function,
-not a prebuilt condition object. ``.contains`` is reserved on the path,
-so a field named ``contains`` cannot be walked.
-
-``~`` applies to a boolean field and to ``&`` of boolean fields. It does
-not apply to a comparison, to ``.contains()``, or to ``|``. Two fields
-never match when either value is NULL. A comparison with a constant
-follows Python, so a NULL column matches ``!= 'open'``. ``~flag``
-includes a NULL boolean.
-
-On an ordinary registration, the member of ``.contains()`` is the
-registered permission path or a constant. A delegation uses the requested
-permission, passed as the function's second argument, or a constant.
-The condition cannot follow a field on the requested permission, and it
-cannot compare that permission to a constant.
-
-.. code-block:: python
-
-   self.recorder.register(
-       trust=TeamDocumentPermission,
-       user=lambda t: t.team.members,
-       permission=lambda t: t.permission,
-       content=lambda t: t.document,
+       user="team__members",
+       permission="permission",
+       content="document",
        condition=lambda t: (
            t.team.allowed_operations.contains(t.permission)
            & (t.team.organization == t.document.organization)
        ),
    )
 
-A relationship condition is always applied to its branch; a named filter is
-selected by an authorization caller. Neither can create permission by itself.
-
-Applications may register more than one valid path to the same content. A
-direct user grant and a team-derived grant can coexist, with either
-path providing permission.
+A condition narrows its own registration. A named filter is selected by
+the caller. Neither grants on its own.
 
 Inherited relationships
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-``along=`` declares bounded hierarchical reachability and also works with
-delegated registrations. For example, ``along=("parent", 8)`` on
-``self.recorder.register`` applies the same bounded walk to object checks,
-permitted-content querysets, permission enumeration, users from content, and
-authorization-policy output. See the `bounded-reach security audit
-<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
-for the recursive-query and database boundaries.
+``along=("parent", 8)`` on ``register`` walks that relation up to the
+bound, for object checks, querysets, permission lists, users, and the
+policy output. See the `bounded-reach security audit
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_.
 
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
 
 `django-trusts-ordered-fold
 <https://github.com/django-trusts/django-trusts-ordered-fold>`_ is a
-provisional extension of django-trusts for ordered allow and deny policies.
-An example Windows declaration lives in
+provisional extension for ordered allow and deny.
 `django-trusts-windows-acl
-<https://github.com/django-trusts/django-trusts-windows-acl>`_.
+<https://github.com/django-trusts/django-trusts-windows-acl>`_ is an
+example.
 
 Permission policy in SQL
 ------------------------
 
-django-trusts can render its registered authorization policy as reviewable
-output containing generated parameterized SQL:
+Render the registered policy for review. It is not an input format.
 
 .. code-block:: console
 
    python manage.py trusts_policy_sql
+   python manage.py trusts_policy_sql --lock
 
-A host app opts in with ``management/commands/trusts_policy_sql.py``:
+Opt in with ``management/commands/trusts_policy_sql.py``:
 
 .. code-block:: python
 
    from trusts.inspect.commands import PolicySqlCommand as Command
 
-``policy_document()`` on a Trusts backend returns that backend's part of
-the same document. ``trusts.backends.policy_document()`` returns every
-installed catalog that has registrations, which is what the command
-writes. Pass ``backend=`` as a dotted path to select one backend. A
-value that is not a string raises ``TypeError``. A path that is not a
-Trusts backend raises ``TrustsConfigurationError``. ``alias`` overrides
-``TRUSTS_POLICY_DATABASE`` for that call. Each entry is one catalog's
-own registrations. The document does not merge one catalog's grants
-into another.
+``trusts.backends.policy_document()`` returns that document for every
+installed Trusts backend. ``DocumentBackend().policy_document()`` returns
+that backend only. Pass ``backend=`` as a dotted path to select one.
+``alias=`` selects the database, as ``--database`` does. Each entry is
+that catalog's own registrations. A chain of ``and``, or a chain of
+``or``, prints flat. Companions call ``policy_document`` and
+``trusts.utils.parse_perm_code``.
 
-The document has ``schema_version``, ``database`` (the engine), and
-``backends``. Each backend entry has the catalog path and its
-``contents``. A catalog with no contents is left out. A chain of
-``and``, or a chain of ``or``, prints flat: ``A and B and C``.
-Parentheses stay when ``and`` and ``or`` are mixed, and around the
-operand of ``not``.
-
-Companions use this public API, including ``trusts.utils.parse_perm_code``
-and ``policy_document``. They do not import private modules.
-
-This output is for examining the queries and noticing changes. It is not a
-public file format or an input API. Write the current output to a lockfile
-after registration is complete:
-
-.. code-block:: console
-
-   python manage.py trusts_policy_sql --lock
-
-The Django model check ``trusts.E009`` compares the generated bytes with the
-committed lockfile when the conventional file exists or
-``TRUSTS_POLICY_LOCKFILE`` selects an explicit absolute path. Run
-``python manage.py check`` in CI and before deployment.
-
-.. note::
-
-   Example SQLite output for the direct ``DocumentPermission`` registration
-   above; the layout is not a stable format. The `historical policy-output record
-   <https://github.com/django-trusts/django-trusts/blob/dev/docs/dev/permission-policy-sql.rst>`_
-   retains the wider example and implementation details.
-
-.. code-block:: yaml
-
-   get_permitted_users:
-     params: ["$permission.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False"]
-     sql: |-
-       SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined"
-       FROM "auth_user"
-       CROSS JOIN (
-         SELECT %s AS "permission_id", %s AS "content_id", %s AS "is_active", %s AS "app_label", %s AS "model"
-       ) "trusts_bind"
-       WHERE (((%s)
-             OR "auth_user"."is_active" = ("trusts_bind"."is_active")
-         )
-         AND EXISTS (
-           SELECT 1 AS "a"
-           FROM "documents_documentpermission" "U0"
-           INNER JOIN "auth_permission" "U2" ON ("U0"."permission_id" = "U2"."id")
-           INNER JOIN "django_content_type" "U3" ON ("U2"."content_type_id" = "U3"."id")
-           WHERE ("U0"."document_id" = ("trusts_bind"."content_id")
-               AND "U0"."permission_id" = ("trusts_bind"."permission_id")
-               AND "U3"."app_label" = ("trusts_bind"."app_label")
-               AND "U3"."model" = ("trusts_bind"."model")
-               AND "U0"."user_id" = ("auth_user"."id")
-           )
-           LIMIT 1
-         ) )
-
-``TRUSTS_SQL_BIND_ONCE`` defaults to true and enables the one-row bind-table
-rewrite. Leave it enabled. Set it to false only if that SQL misbehaves;
-django-trusts then uses the plain queryset SQL. If the queryset does not have
-the Django query structure required by the rewrite, django-trusts keeps the
-plain SQL and logs a warning.
-
-See the `lockfile security audit guide
-<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#authorization-policy-sql-and-lockfile>`_ for the
-renderer, dependency, connection, and enforcement boundaries.
+``python manage.py check`` compares a committed lockfile when the usual
+file is present or ``TRUSTS_POLICY_LOCKFILE`` is an absolute path.
+``TRUSTS_SQL_BIND_ONCE`` defaults to true. Set it to false only if that
+SQL misbehaves.
 
 Reference implementations
 -------------------------
 
-Two reference implementations demonstrate how different permission systems
-can be built with ``django-trusts``.
-
-Organization and team permissions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
 `django-trusts-gh-permissions
-<https://github.com/django-trusts/django-trusts-gh-permissions>`_ models
-permissions implied by organization, team, repository, and membership
-relationships.
-
-It demonstrates:
-
-* direct and team-derived permission paths;
-* many-to-many team membership;
-* operation ceilings;
-* organization-alignment conditions; and
-* multiple valid paths to the same protected content.
-
-It is a focused example of a GitHub-shaped permission model, not a complete
-reimplementation of GitHub.
-
-Ordered access-control entries
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
+<https://github.com/django-trusts/django-trusts-gh-permissions>`_ is an
+organization, team, and repository example.
 `django-trusts-windows-acl
-<https://github.com/django-trusts/django-trusts-windows-acl>`_ models
-permissions using persisted access-control entries with ordering, allow and
-deny effects, permission masks, and inheritance.
-
-It demonstrates an ACL-style permission system built with
-``django-trusts-ordered-fold``, a provisional extension of ``django-trusts``,
-while
-retaining the same Django-facing permission APIs. It is not intended to
-reproduce every feature or security behavior of Windows ACLs.
+<https://github.com/django-trusts/django-trusts-windows-acl>`_ is an
+ordered allow-and-deny example built with ``django-trusts-ordered-fold``.
 
 Migrating from django-trusts 0.x
 --------------------------------
 
-Earlier versions of ``django-trusts`` included a concrete permission system
-based on ``Trust``, ``Content``, groups, roles, and their associated
-migrations.
-
-That implementation now continues as `django-trusts-zero
-<https://github.com/django-trusts/django-trusts-zero>`_. Applications
-upgrading from 0.x, or applications that specifically want that model, should
-use ``django-trusts-zero``.
-
-Its Django application label, database tables, content types, permissions, and
-migration identities are preserved. Python imports and Django settings move to
-the explicit ``trusts.zero`` paths described in the `Zero migration guide
-<https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md>`_.
-
-django-trusts keeps a terse migration-boundary record in `migrates.md
-<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/migrates.md>`_,
-while the supported 0.x migration guide is Zero's ``migrates.md``
-(linked above).
-
-A runnable application using that implementation is available in
-`django-trusts-zero-example
+The old ``Trust`` and ``Content`` schema lives in `django-trusts-zero
+<https://github.com/django-trusts/django-trusts-zero>`_. Imports move to
+``trusts.zero``, as its `migration guide
+<https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md>`_
+describes. This package's boundary notes are in `migrates.md
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/migrates.md>`_.
+A sample app is `django-trusts-zero-example
 <https://github.com/django-trusts/django-trusts-zero-example/tree/dev>`_.
 
 Validation and support
 ----------------------
 
-Run Django's system checks during development and deployment:
-
 .. code-block:: console
 
    python manage.py check
 
-django-trusts is designed to reject invalid declarations during application
-setup. Missing registrations and unsupported permission paths are intended to
-fail closed.
-
-Current Python, Django, database, and evaluation-strategy support is recorded
-in the `support matrix
+Invalid registrations fail at startup. Supported Python, Django, and
+databases are in the `support matrix
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/dev/support-matrix.md>`_.
 
 Copyright BeeDesk, Inc., 2015--2026. Released under the BSD 2-Clause License.
