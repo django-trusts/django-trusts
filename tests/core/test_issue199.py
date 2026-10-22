@@ -1,4 +1,4 @@
-from tests.support import unbound_named_filters
+from tests.support import configured_catalog, unbound_named_filters
 """#199 / #189 B1: backend principal, object, and ownership fail-closed.
 
 Public ``TrustModelBackendMixin`` methods and
@@ -212,16 +212,15 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
 
 class ImplementationOwnershipReadyTest(TestCase):
     def test_non_mixin_path_is_skipped_at_ready_with_zero_sql(self):
-        from tests.kernel_host.backends import HostTrustModelBackend
         from trusts.apps import installed_catalogs
 
         config = _bind(NonMixinOwnerConfig, ready=False)
-        before = HostTrustModelBackend().catalog
+        before = configured_catalog(HOST)
         self.assertFalse(hasattr(config, 'registries'))
         with override_settings(AUTHENTICATION_BACKENDS=(MODEL_BACKEND, HOST)):
             with self.assertNumQueries(0):
                 config.ready()
-        self.assertIs(HostTrustModelBackend().catalog, before)
+        self.assertIs(configured_catalog(HOST), before)
         paths = [catalog.path for catalog in installed_catalogs()]
         self.assertIsNone(config.catalog)
         self.assertNotIn(MODEL_BACKEND, paths)

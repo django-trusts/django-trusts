@@ -67,7 +67,6 @@ from django.http import HttpRequest
 from django.utils.functional import Promise, SimpleLazyObject
 
 from trusts.errors import PermissionConditionError
-from trusts.plan.hops import relation_target
 from trusts.plan.grammar import (
     Tree,
     invoke,
@@ -349,7 +348,7 @@ def _scalar_types_for_field(field):
 
 def _spec_from_field(field):
     if field.is_relation and not field.many_to_many and not field.one_to_many:
-        related = relation_target(field)
+        related = field.related_model
         return ('instance', related, '%s %s' % (field.get_internal_type(), field.name))
     types = _scalar_types_for_field(field)
     return ('scalar', types, '%s %s' % (field.get_internal_type(), field.name))

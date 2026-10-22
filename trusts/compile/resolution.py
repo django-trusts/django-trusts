@@ -16,7 +16,6 @@ from django.contrib.auth.models import Group, Permission
 from trusts.plan.hops import (
     lookup_text,
     path_text,
-    relation_target,
     resolved_hop,
 )
 from trusts.compile.nodes import _is_model_class
@@ -37,7 +36,8 @@ def _classify_field(field):
         return 'reverse_o2m'
     if getattr(field, 'auto_created', False) and not getattr(field, 'concrete', False):
         return 'reverse'
-    if relation_target(field) is None:
+    related = getattr(field, 'related_model', None)
+    if related is None:
         return 'gfk'
     return 'single'
 
@@ -159,7 +159,12 @@ _SUFFIX_MAX = 2
 
 def _m2m_related_model(field):
     """Related model of a many-to-many field. Metadata only (zero SQL)."""
-    related = relation_target(field)
+    related = getattr(field, 'related_model', None)
+    if not _is_model_class(related):
+        remote = getattr(field, 'remote_field', None)
+        model = getattr(remote, 'model', None) if remote is not None else None
+        if _is_model_class(model):
+            related = model
     if not _is_model_class(related):
         return None
     return related._meta.concrete_model
@@ -171,20 +176,12 @@ def _m2m_related_target_attname(field, related):
     if through is None:
         pk = related._meta.pk
         return getattr(pk, 'attname', None)
-    # get_fields() builds the reverse graph and refuses until every model
-    # is imported. models.py registration only needs the through table's
-    # own concrete foreign keys. Once models are ready, keep the full
-    # field list so a non-concrete hop still resolves.
-    if through._meta.apps.models_ready:
-        hops = through._meta.get_fields()
-    else:
-        hops = through._meta.concrete_fields
-    for hop in hops:
+    for hop in through._meta.get_fields():
         if not getattr(hop, 'is_relation', False):
             continue
         if getattr(hop, 'many_to_many', False):
             continue
-        remote = relation_target(hop)
+        remote = getattr(hop, 'related_model', None)
         if not _is_model_class(remote):
             continue
         if remote._meta.concrete_model is not related._meta.concrete_model:

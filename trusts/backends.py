@@ -12,9 +12,7 @@ from django.contrib.auth import get_backends, load_backend
 from django.contrib.auth.models import Permission
 from django.db.models import Model, Q, QuerySet
 
-from typing import TYPE_CHECKING
-
-from trusts.apps import TrustsConfigMixin, catalog_of, installed_catalogs, open_registry
+from trusts.apps import Recorder, TrustsConfigMixin, catalog_of, installed_catalogs
 from trusts.compile.catalogs import (
     assert_same_database,
     catalog_models,
@@ -27,9 +25,6 @@ from trusts.plan.contents import permitted_content_q
 from trusts.plan.relations import bind_checked_user, known_skip_names
 from trusts.plan.rewrites import bind_once
 from trusts.plan.users import assert_persisted_principal
-
-if TYPE_CHECKING:
-    from trusts.compile.factory import Compiler
 
 
 class TrustModelBackendMixin(object):
@@ -44,25 +39,18 @@ class TrustModelBackendMixin(object):
                 '%s.%s' % (type(self).__module__, type(self).__qualname__),
             ))
         self._config = config
-        self.catalog = config.catalog
 
-    def get_registry(self) -> "Compiler":
-        """Open registry for this backend's app.
+    def get_registry(self) -> Recorder:
+        """Open registration log for this backend's app.
 
-        Registration walks models and does not build the catalog.
+        Not the built catalog. Registration does not resolve the user
+        model and does not build the catalog.
         """
-        return open_registry(self._config)
+        return self._config.recorder
 
     def _catalog(self):
-        """Catalog this instance answers from.
-
-        Construction copies the app catalog. The first question builds
-        that catalog when it does not exist yet. A catalog stored on
-        this instance is the one the question uses.
-        """
-        if self.catalog is None:
-            self.catalog = catalog_of(self._config)
-        return self.catalog
+        """Catalog this instance answers from. The app config owns it."""
+        return catalog_of(self._config)
 
     def has_perm(self, user_obj, permext, obj=None, **skip_flags):
         """Object check. No object denies."""
