@@ -9,7 +9,9 @@ with the repository root as cwd or on sys.path.
 from __future__ import annotations
 
 import argparse
+import importlib
 import importlib.metadata
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -286,7 +288,6 @@ def main() -> int:
     if 'trusts.zero' in decorators_src:
         raise SystemExit('library wheel decorators import Zero')
     print('legacy decorator family absent')
-    import importlib.util
 
     def _find_spec(name):
         try:
