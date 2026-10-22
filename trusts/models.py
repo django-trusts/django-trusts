@@ -98,8 +98,7 @@ class PermittedQuerySetMixin:
             ask=lambda item, skipped: item.permitted_grant_q(
                 self, user, label, skipped=skipped,
                 conditions=conditions, binding=binding, api='permitted'),
-            backend=backend, skip_flags=skip_flags, preflight=True,
-            model=model, conditions=conditions, api='permitted')
+            backend=backend, skip_flags=skip_flags)
 
 
 class PermittedQuerySet(PermittedQuerySetMixin, QuerySet):
