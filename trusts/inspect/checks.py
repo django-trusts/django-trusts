@@ -21,6 +21,9 @@ from django.core import checks as django_checks
 
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
+from django.contrib.auth import get_backends
+
+from trusts.backends import TrustModelBackendMixin
 from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
     obsolete_legacy_callback_setting_enabled,
@@ -122,7 +125,7 @@ def check_query_compilers(app_configs, **kwargs):
 
     messages = []
     seen = []
-    listed = getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ()
+    listed = settings.AUTHENTICATION_BACKENDS
     for path in listed:
         if path in seen:
             continue
@@ -131,7 +134,7 @@ def check_query_compilers(app_configs, **kwargs):
             cls = import_string(path)
         except ImportError:
             continue
-        if not issubclass(cls, TrustModelBackendMixin):
+        if not isinstance(cls, type) or not issubclass(cls, TrustModelBackendMixin):
             continue
         try:
             compiler_for_class(cls)
@@ -163,28 +166,36 @@ def _is_concrete_model(model):
     return not opts.abstract and not opts.proxy
 
 
-def _covered_content_models(config):
-    """Content terminals that already have a plan record on any valid handle.
-
-    Path-scoped: coverage on one configured valid Trusts handle is
-    enough. Does not register, does not invent union authority, and
-    does not require every backend to hold the declaration.
-    """
-    from trusts.errors import TrustsCompilerError, TrustsConfigurationError
-
-    covered = set()
-    try:
-        paths = config._configured_trusts_paths()
-    except TrustsConfigurationError:
-        return covered
-    for path in paths:
-        try:
-            handle = config.configured_backend(path)
-        except (TrustsConfigurationError, TrustsCompilerError):
+def _built_catalogs():
+    """Catalogs of listed mixin backends. Missing catalogs are skipped."""
+    found = []
+    seen = set()
+    for backend in get_backends():
+        if not isinstance(backend, TrustModelBackendMixin):
             continue
-        for record in handle.registry.records:
+        cls = type(backend)
+        if cls in seen:
+            continue
+        seen.add(cls)
+        catalog = backend.get_catalog()
+        if catalog is None:
+            continue
+        found.append(catalog)
+    return tuple(found)
+
+
+def _covered_content_models():
+    """Content terminals that already have a plan record on a built catalog.
+
+    Coverage on one configured catalog is enough. Does not register,
+    does not invent union authority, and does not require every backend
+    to hold the declaration.
+    """
+    covered = set()
+    for catalog in _built_catalogs():
+        for record in catalog.records:
             covered.add(record.content_model)
-        for record in handle.registry.delegations:
+        for record in catalog.delegations:
             covered.add(record.content_model)
     return covered
 
@@ -230,15 +241,10 @@ def check_missing_declarations(app_configs, **kwargs):
     """
     from django.apps import apps as django_apps
 
-    from trusts.apps import implementation_configs
-
-    owners = implementation_configs()
-    if not owners:
+    if not _built_catalogs():
         return []
 
-    covered = set()
-    for config in owners:
-        covered.update(_covered_content_models(config))
+    covered = _covered_content_models()
     messages = []
     seen = set()
 
@@ -255,7 +261,7 @@ def check_missing_declarations(app_configs, **kwargs):
             seen.add(key)
             messages.append(django_checks.Error(
                 'Content model %s has no covering relation-plan record '
-                'on any configured Trusts handle.' % _model_label(model),
+                'on any configured Trusts catalog.' % _model_label(model),
                 hint=_E003_HINT,
                 obj=model,
                 id=CHECK_ID_MISSING_DECLARATION,
@@ -278,7 +284,7 @@ def check_missing_declarations(app_configs, **kwargs):
             seen.add(key)
             messages.append(django_checks.Error(
                 'Junction %s targets %s, which has no covering '
-                'relation-plan record on any configured Trusts handle.'
+                'relation-plan record on any configured Trusts catalog.'
                 % (_model_label(model), _model_label(content_model)),
                 hint=_E003_HINT,
                 obj=model,
@@ -292,51 +298,32 @@ def check_missing_declarations(app_configs, **kwargs):
     return messages
 
 
-def _iter_handle_permission_conditions(config):
-    """Yield condition records from one implementation owner's handles."""
-    from trusts.errors import TrustsCompilerError, TrustsConfigurationError
-
-    try:
-        paths = config._configured_trusts_paths()
-    except TrustsConfigurationError:
-        return
-    for path in paths:
-        try:
-            handle = config.configured_backend(path)
-        except (TrustsConfigurationError, TrustsCompilerError):
-            continue
-        iter_fn = getattr(handle.registry, 'iter_permission_conditions', None)
-        if callable(iter_fn):
-            yield from iter_fn()
-            continue
-        conditions = getattr(handle.registry, 'conditions', None)
-        if conditions is not None:
-            yield from conditions.iter_permission_conditions()
+def _iter_catalog_permission_conditions():
+    """Yield condition records from built catalogs."""
+    for catalog in _built_catalogs():
+        yield from catalog.iter_permission_conditions()
 
 
 def iter_live_permission_conditions(apps_registry=None):
     """Yield ``(model, cond_code, record)`` from configured registries.
 
-    Implementation-owned ``TrustsRegistry`` condition stores are the
-    source of truth. Every configured owner/registry record is
-    preserved: the same model/code on two owners is two records, and
-    both are validated. The only skip is the transitional Zero
-    ``Content`` fallback when that iterator returns a record object
-    already yielded from a handle registry (same record identity, not
-    merely the same model/code).
+    Implementation-owned catalog registries are the source of truth.
+    Every configured owner/registry record is preserved: the same
+    model/code on two owners is two records, and both are validated.
+    The only skip is the transitional Zero ``Content`` fallback when
+    that iterator returns a record object already yielded from a
+    catalog registry (same record identity, not merely the same
+    model/code).
     """
     from django.apps import apps as django_apps
 
-    from trusts.apps import implementation_configs
-
     seen_records = set()
-    for config in implementation_configs(apps_registry):
-        for model, cond_code, record in _iter_handle_permission_conditions(config):
-            marker = id(record)
-            if marker in seen_records:
-                continue
-            seen_records.add(marker)
-            yield model, cond_code, record
+    for model, cond_code, record in _iter_catalog_permission_conditions():
+        marker = id(record)
+        if marker in seen_records:
+            continue
+        seen_records.add(marker)
+        yield model, cond_code, record
 
     registry = django_apps if apps_registry is None else apps_registry
     Content = _historical_content_class(registry)
@@ -369,39 +356,12 @@ def check_obsolete_legacy_callback_setting(app_configs, **kwargs):
     return _messages_for_obsolete_callback_setting()
 
 
-def _authorization_check_handles():
-    """Relationship-family handles for E008. Isolated configs may omit helpers."""
-    from trusts.apps import (
-        _relationship_family_handles,
-        configured_implementation_handles,
-        implementation_configs,
+def _authorization_check_registries():
+    """Relationship-family catalogs for E008, via ``get_catalog()``."""
+    return tuple(
+        catalog for catalog in _built_catalogs()
+        if catalog.family == 'relationship'
     )
-    from trusts.errors import TrustsCompilerError, TrustsConfigurationError
-
-    try:
-        return _relationship_family_handles(tuple(configured_implementation_handles()))
-    except AttributeError:
-        pass
-
-    handles = []
-    for config in implementation_configs():
-        getter = getattr(config, 'configured_handles', None)
-        if callable(getter):
-            try:
-                handles.extend(getter())
-                continue
-            except (TrustsConfigurationError, TrustsCompilerError, AttributeError):
-                pass
-        try:
-            paths = config._configured_trusts_paths()
-        except (TrustsConfigurationError, AttributeError):
-            continue
-        for path in paths:
-            try:
-                handles.append(config.configured_backend(path))
-            except (TrustsConfigurationError, TrustsCompilerError, AttributeError):
-                continue
-    return _relationship_family_handles(tuple(handles))
 
 
 @django_checks.register()
@@ -423,7 +383,7 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     from trusts._permitted import _authorization_preflight_state
     from trusts.decorators import _declared_authorization_guards
 
-    handles = _authorization_check_handles()
+    registries = _authorization_check_registries()
     messages = []
     seen = set()
     for model, _permission, conditions in _declared_authorization_guards:
@@ -437,7 +397,7 @@ def check_authorization_required_conditions(app_configs, **kwargs):
             continue
         seen.add(key)
         participating, complete = _authorization_preflight_state(
-            handles, model, conditions,
+            registries, model, conditions,
         )
         if participating and complete:
             continue
@@ -496,20 +456,10 @@ _E005_HINT = (
 )
 
 
-def _live_along_records(config):
-    from trusts.errors import TrustsCompilerError, TrustsConfigurationError
-
+def _live_along_records():
     found = []
-    try:
-        paths = config._configured_trusts_paths()
-    except TrustsConfigurationError:
-        return found
-    for path in paths:
-        try:
-            handle = config.configured_backend(path)
-        except (TrustsConfigurationError, TrustsCompilerError):
-            continue
-        for record in handle.registry.records:
+    for catalog in _built_catalogs():
+        for record in catalog.records:
             if record.along is not None:
                 found.append(record)
     return found
@@ -535,16 +485,12 @@ def check_along_renderer(app_configs, **kwargs):
     from django.db import connections
     from django.db.utils import OperationalError
 
-    from trusts.apps import implementation_configs
     from trusts.compile.factory import probe_along_capabilities
     from trusts.plan.walk import along_connection_supported
 
-    owners = implementation_configs()
-    if not owners:
+    if not _built_catalogs():
         return []
-    along_records = []
-    for config in owners:
-        along_records.extend(_live_along_records(config))
+    along_records = _live_along_records()
     if not along_records:
         return []
 

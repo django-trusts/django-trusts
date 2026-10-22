@@ -24,7 +24,7 @@ from trusts.commons import (
     _require_instance,
 )
 from trusts.plan.recursions import GrantReach
-from trusts.errors import TrustsConfigurationError
+from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 from trusts.plan.standards import (
     BUILTIN_USER_CONDITIONS,
     bind_skip_flags,
@@ -44,10 +44,7 @@ class QueryCompiler(object):
         records. Construction issues no SQL. Inapplicable backends must not
         compile a grant.
         """
-        return bool(
-            getattr(plan, 'records', None)
-            or getattr(plan, 'delegations', None)
-        )
+        return bool(plan.records or plan.delegations)
 
     def complete_exists(self, plan, candidates, user, permission):
         raise NotImplementedError
@@ -70,10 +67,7 @@ class PlanQueryCompiler(object):
 
     def applies(self, plan):
         """Relationship applicability: ordinary or delegated records."""
-        return bool(
-            getattr(plan, 'records', None)
-            or getattr(plan, 'delegations', None)
-        )
+        return bool(plan.records or plan.delegations)
 
     def complete_exists(self, plan, candidates, user, permission):
         if not plan.records:
@@ -92,6 +86,16 @@ class PlanQueryCompiler(object):
             permission_model=plan.permission_model,
             content_identity=getattr(plan, 'content_identity', None),
         ).content_exists(user, permission)
+
+
+def answering_compiler(registry):
+    """Compiler bound when ``registry`` was built."""
+    compiler = registry.compiler
+    complete = getattr(compiler, 'complete_exists', None)
+    group = getattr(compiler, 'group_exists', None)
+    if not callable(complete) or not callable(group):
+        raise TrustsCompilerError('%r is not query-capable' % (compiler,))
+    return compiler
 
 
 def candidate_queryset(content):
@@ -139,7 +143,7 @@ class SkipParams(object):
         self.predicate = predicate
 
 
-def user_skip_params(user, skip_flags, *, handles=None, registry=None,
+def user_skip_params(user, skip_flags, *, registries=None, registry=None,
                      require_user=True):
     """Validate ``skip_*`` keywords and return their bound values.
 
@@ -158,12 +162,10 @@ def user_skip_params(user, skip_flags, *, handles=None, registry=None,
     )
     if denied:
         return SkipParams(True, {})
-    if callable(registry):
-        registry = registry()
     if registry is not None:
         known = registry._known_skip_names()
     else:
-        known = _known_skip_names(handles or ())
+        known = _known_skip_names(registries or ())
     unknown = next((name for name in selected if name not in known), None)
     if unknown is not None:
         raise TypeError('Unknown skip keyword %r.' % ('skip_%s' % unknown,))
@@ -172,21 +174,19 @@ def user_skip_params(user, skip_flags, *, handles=None, registry=None,
     })
 
 
-def _known_skip_names(handles):
-    """Condition and override names on the registries these handles own.
+def _known_skip_names(registries):
+    """Condition and override names on these registries.
 
     No registry yet means the built-in ``is_active`` condition only.
     """
     names = set()
     saw = False
-    for handle in handles:
-        registry = getattr(handle, 'registry', None)
+    for registry in registries:
         if registry is None:
             continue
         saw = True
         names.update(condition_names(
-            registry._stored_user_conditions(),
-            getattr(registry, '_user_override', None),
+            registry.user_conditions, registry.user_override,
         ))
     if not saw:
         names.update(rule.name for rule in BUILTIN_USER_CONDITIONS)
@@ -264,7 +264,7 @@ def _user_identity_denied(user):
 def bind_checked_user(subject, grant=None, *, rules=None, override=None,
                       identity=None, values=None, plan=None, closed=False,
                       with_override=True, skip_flags=None, require_user=True,
-                      registry=None, handles=None):
+                      registry=None, registries=None):
     """Validate ``skip_*``, deny before SQL, and bind one registration fragment.
 
     ``skip_flags`` is a public inquiry. ``values`` means that inquiry
@@ -273,7 +273,7 @@ def bind_checked_user(subject, grant=None, *, rules=None, override=None,
     """
     if skip_flags is not None:
         inquiry = user_skip_params(
-            subject, skip_flags, handles=handles, registry=registry,
+            subject, skip_flags, registries=registries, registry=registry,
             require_user=require_user,
         )
         if inquiry.denied:

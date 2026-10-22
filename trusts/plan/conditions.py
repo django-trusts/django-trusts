@@ -1,7 +1,7 @@
 """Private condition IR and compiler (issue #4 V1 / #142 Stage B).
 
 This module is not an application-facing import. Register named
-conditions as builders on ``BackendHandle.add_named_filter``.
+conditions as builders on the recorder's ``add_named_filter``.
 ``from trusts.conditions import Expr`` must fail.
 
 A callable argument to condition registration is a **builder**: Core
@@ -17,9 +17,9 @@ registration path issues zero SQL (symbolic refs plus ``_meta``).
 Prebuilt ``Expr`` trees are not accepted at register.
 
 Permission-condition records live on an instantiable
-``ConditionRegistry`` (also exposed on each ``TrustsRegistry`` and
-``BackendHandle.add_named_filter``). There is no
-process-global store: each implementation handle owns its own records
+``ConditionRegistry`` (also exposed on each built registry and the
+recorder's ``add_named_filter``). There is no
+process-global store: each implementation registry owns its own records
 so owners cannot share or overwrite each other.
 
 V1 grammar: principal/object field refs and relationship traversal
@@ -63,6 +63,7 @@ from django.db.models import (
 from django.db.models.fields import GenericIPAddressField
 
 from trusts._meta_options import _ensure_permission_conditions_option
+from trusts.apps import user_model
 from trusts.errors import (
     PermissionConditionBooleanError,
     PermissionConditionError,
@@ -531,8 +532,13 @@ TQ = Query
 
 
 def _entity_model():
-    from django.contrib.auth import get_user_model
-    return get_user_model()
+    """User model stored by ``TrustsImplementationConfig.ready``."""
+    model = user_model()
+    if model is None:
+        raise PermissionConditionError(
+            'Principal references need the user model stored at ready().'
+        )
+    return model
 
 
 def resolve_field_path(model, path, ref_kind='object'):

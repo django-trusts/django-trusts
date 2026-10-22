@@ -1,3 +1,4 @@
+from tests.apps import configured_catalog
 """#199 / #189 B1: backend principal, object, and ownership fail-closed.
 
 Public ``TrustModelBackendMixin`` methods, ``set_condition_lookup``,
@@ -20,7 +21,7 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.apps import TrustsImplementationConfig, implementation_for_path
+from trusts.apps import TrustsImplementationConfig
 from trusts.errors import TrustsConfigurationError
 
 
@@ -41,7 +42,6 @@ class _UnauthenticatedPrincipal(object):
 class NonMixinOwnerConfig(TrustsImplementationConfig):
     name = 'tests'
     label = 'trusts_impl_199_nonmixin'
-    trusts_backend_paths = (MODEL_BACKEND,)
 
 
 class _AppsView(object):
@@ -116,8 +116,8 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
         backend = MixinOnlyBackend()
         anonymous = AnonymousUser()
         unauthenticated = _UnauthenticatedPrincipal()
-        with patch('trusts.apps.implementation_configs', return_value=()):
-            with self.assertNumQueries(0):
+        self.assertIsNone(backend.get_catalog())
+        with self.assertNumQueries(0):
                 self.assertFalse(
                     backend.has_perm(None, PERM, self.document),
                 )
@@ -173,11 +173,11 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
             )
 
     def test_owned_unbound_named_condition_raises_on_instance_at_zero_sql(self):
-        registry = implementation_for_path(DOCUMENT_BACKEND).configured_backend().registry
+        registry = configured_catalog(DOCUMENT_BACKEND)._registry
         previous = registry.condition_lookup
         qs = Document.objects.filter(pk=self.document.pk)
         try:
-            registry.set_condition_lookup(None)
+            registry.condition_lookup = None
             with self.assertNumQueries(0):
                 with self.assertRaises(AttributeError) as ctx:
                     self.document_backend.has_perm(
@@ -194,7 +194,7 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
                     self.document_backend.has_perm(self.alice, FILTERED, qs),
                 )
         finally:
-            registry.set_condition_lookup(previous)
+            registry.condition_lookup = previous
         self.assertIs(registry.condition_lookup, previous)
 
         with self.assertNumQueries(1):
@@ -220,16 +220,20 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
 
 
 class ImplementationOwnershipReadyTest(TestCase):
-    def test_owned_non_mixin_path_fails_at_ready_with_zero_sql(self):
+    def test_non_mixin_path_is_skipped_at_ready_with_zero_sql(self):
+        from tests.backends import HostTrustModelBackend
+        from trusts.apps import catalogs
+
         config = _bind(NonMixinOwnerConfig, ready=False)
-        self.assertEqual(config.registries, {})
+        before = catalogs[HostTrustModelBackend]
+        self.assertFalse(hasattr(config, 'registries'))
         with override_settings(AUTHENTICATION_BACKENDS=(MODEL_BACKEND, HOST)):
             with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    config.ready()
-        self.assertIn('not a TrustModelBackendMixin', str(ctx.exception))
-        self.assertIn(MODEL_BACKEND, str(ctx.exception))
-        self.assertEqual(config.registries, {})
+                config.ready()
+        self.assertIs(catalogs[HostTrustModelBackend], before)
+        self.assertNotIn(MODEL_BACKEND, [catalog.path for catalog in catalogs.values()])
+        self.assertFalse(hasattr(config, 'registries'))
+        self.assertFalse(hasattr(config, 'trusts_backend_paths'))
 
 
 class Issue199SuiteRegistrationTest(SimpleTestCase):

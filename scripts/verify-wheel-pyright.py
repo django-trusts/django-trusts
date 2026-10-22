@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Installed-wheel Pyright proof for public ``configured_backend()`` inference.
+"""Installed-wheel Pyright proof for recorder ``register`` inference.
 
 Must run from outside the checkout after installing the built wheel.
 A valid consumer must be clean; ``t.not_a_field`` must be a diagnostic.
@@ -36,20 +36,18 @@ class AnnotatedGrant(models.Model):
 
 class DocumentsConfig(TrustsImplementationConfig):
     name = "pyright_proof"
-    trusts_backend_paths = (
-        "documents.backends.DocumentBackend",
-    )
+    label = "pyright_proof"
 
     def ready(self):
-        super().ready()
-        backend = self.configured_backend()
-        backend.register(
+        from documents.backends import DocumentBackend
+        DocumentBackend().get_registry().register(
             trust=AnnotatedGrant,
             user=lambda t: t.user,
             permission=lambda t: t.permission,
             content=lambda t: t.document,
             condition=lambda t: t.team == t.document,
         )
+        super().ready()
 '''
 
 MISSING_SOURCE = '''\
@@ -70,20 +68,18 @@ class AnnotatedGrant(models.Model):
 
 class DocumentsConfig(TrustsImplementationConfig):
     name = "pyright_proof"
-    trusts_backend_paths = (
-        "documents.backends.DocumentBackend",
-    )
+    label = "pyright_proof"
 
     def ready(self):
-        super().ready()
-        backend = self.configured_backend()
-        backend.register(
+        from documents.backends import DocumentBackend
+        DocumentBackend().get_registry().register(
             trust=AnnotatedGrant,
             user=lambda t: t.user,
             permission=lambda t: t.permission,
             content=lambda t: t.document,
             condition=lambda t: t.not_a_field == t.document,
         )
+        super().ready()
 '''
 
 CONFIG = '''\

@@ -2,27 +2,16 @@ from contextlib import contextmanager
 
 from django.apps import AppConfig
 
-from trusts.apps import TrustsImplementationConfig
-
 
 ZERO_BACKEND = 'trusts.zero.backends.TrustModelBackend'
 
 
-class IsolatedOwnerConfig(TrustsImplementationConfig):
-    """Unbound pair-test owner. Not installed; constructed in isolation.
-
-    ``ready()`` only ensures local registries. It does not validate against
-    the live ZeroConfig that already owns the canonical Zero path.
-    """
+class IsolatedOwnerConfig(AppConfig):
+    """Unbound pair-test app. Not installed; constructed in isolation."""
 
     name = 'tests'
     label = 'trusts_isolated_owner'
     default = False
-    trusts_backend_paths = (ZERO_BACKEND,)
-
-    def ready(self):
-        for path in self.owned_backend_paths():
-            self._ensure(path)
 
 
 def isolated_owner():
@@ -32,27 +21,127 @@ def isolated_owner():
     return IsolatedOwnerConfig('tests', tests_module)
 
 
-def live_config(apps_registry=None):
-    """The kernel-host or unique installed ``TrustsImplementationConfig``.
+def built_registries(items):
+    """Build factories for a direct ``granted`` / filter call.
 
-    Kernel-only tests prefer ``KernelHostConfig`` when the README
-    consumer is also installed. The supported Zero pair still has
-    exactly one owner (``ZeroConfig``).
+    A factory is built now. A catalog or a registry is returned as
+    itself. ``None`` and other objects pass through so a caller can
+    still prove a missing registry fails closed.
     """
-    from tests.kernel_host.apps import KernelHostConfig
-    from trusts.apps import implementation_configs
+    from trusts.compile.catalogs import Catalog
+    from trusts.compile.factory import RegistryFactory
+    from trusts.plan.registry import Registry
+
+    if items is None:
+        return None
+    if isinstance(items, (str, bytes)) or not isinstance(items, (list, tuple)):
+        items = (items,)
+    built = []
+    for item in items:
+        if item is None or isinstance(item, (Registry, Catalog)):
+            built.append(item)
+        elif isinstance(item, RegistryFactory):
+            built.append(item.build_registry())
+        else:
+            built.append(item)
+    return tuple(built)
+
+
+@contextmanager
+def override_catalog(backend_cls, factory, path):
+    """Publish one catalog for ``backend_cls`` and restore the previous entry."""
+    from trusts.apps import catalogs
+    from trusts.compile.catalogs import Catalog
+
+    saved = catalogs.get(backend_cls, _MISSING)
+    catalogs[backend_cls] = Catalog(
+        cls=backend_cls,
+        path=path,
+        family=getattr(factory, 'family', 'relationship'),
+        registry=factory.build_registry(),
+        family_registries=(),
+    )
+    try:
+        yield catalogs[backend_cls]
+    finally:
+        if saved is _MISSING:
+            catalogs.pop(backend_cls, None)
+        else:
+            catalogs[backend_cls] = saved
+
+
+def configured_catalog(path, explicit=None):
+    """Catalog stored for one ``AUTHENTICATION_BACKENDS`` dotted path.
+
+    The optional second argument is that path when a caller still passes
+    an app config as the first argument. The config does not own paths.
+    """
+    from django.utils.module_loading import import_string
+
+    from trusts.apps import catalogs
     from trusts.errors import TrustsConfigurationError
 
-    configs = implementation_configs(apps_registry)
-    if len(configs) == 1:
-        return configs[0]
-    hosts = [config for config in configs if type(config) is KernelHostConfig]
-    if len(hosts) == 1:
-        return hosts[0]
-    raise TrustsConfigurationError(
-        'live_config() needs exactly one implementation owner; got %r'
-        % (configs,)
+    if explicit is not None:
+        path = explicit
+    if not isinstance(path, str):
+        raise TrustsConfigurationError(
+            'configured_catalog takes the dotted AUTHENTICATION_BACKENDS '
+            'path, not %r' % (path,)
+        )
+    cls = import_string(path)
+    catalog = catalogs.get(cls) if isinstance(cls, type) else None
+    if catalog is None or catalog.path != path:
+        for stored in catalogs.values():
+            if stored.path == path:
+                return stored
+        raise TrustsConfigurationError(
+            '%r is not a configured Trusts backend' % (path,)
+        )
+    return catalog
+
+
+@contextmanager
+def empty_catalogs():
+    """Clear built catalogs for one sweep, then restore them."""
+    from trusts.apps import catalogs
+
+    saved = dict(catalogs)
+    catalogs.clear()
+    try:
+        yield
+    finally:
+        catalogs.clear()
+        catalogs.update(saved)
+
+
+def sweep_listed_backends():
+    """Run the ready-time build against the current ``AUTHENTICATION_BACKENDS``."""
+    from django.conf import settings
+    from django.contrib.auth import get_user_model
+
+    from trusts.backends import TrustModelBackendMixin
+    from trusts.compile.factory import build_configured_catalogs
+
+    build_configured_catalogs(
+        tuple(settings.AUTHENTICATION_BACKENDS),
+        get_user_model(),
+        TrustModelBackendMixin,
     )
+
+
+def live_config(apps_registry=None):
+    """The installed sweep config. It does not own a backend path."""
+    from django.apps import apps as django_apps
+
+    from trusts.errors import TrustsConfigurationError
+
+    registry = django_apps if apps_registry is None else apps_registry
+    try:
+        return registry.get_app_config('trusts_lifecycle')
+    except LookupError as exc:
+        raise TrustsConfigurationError(
+            'TrustsImplementationConfig is not installed.'
+        ) from exc
 
 
 def junction_content_field(junction_model):
@@ -92,73 +181,79 @@ class TestsConfig(AppConfig):
     def ready(self):
         # Contribute TUP→Trust←Category, TUP→Trust←Ticket, and the
         # Junction-backed Group terminal to the implementation-owned
-        # registry that belongs to *this* Apps instance. isolate_apps()
-        # constructs a second TestsConfig whose apps registry has no
-        # implementation owner; that instance must not donate onto the
-        # live registry.
+        # recorder when this Apps instance has exactly one owner.
+        # isolate_apps() constructs a second TestsConfig whose apps
+        # registry has no implementation owner; that instance must not
+        # donate or seal the live recorders.
         if getattr(self, 'apps', None) is None:
             return
 
-        from trusts.apps import implementation_configs
-        from trusts.errors import TrustsConfigurationError
+        from django.apps import apps as django_apps
+        from django.contrib.auth import get_backends
 
-        owners = implementation_configs(self.apps)
-        if len(owners) != 1:
+        from trusts.backends import TrustModelBackendMixin
+
+        if self.apps is not django_apps:
             return
-        config = owners[0]
-
+        classes = []
+        for backend in get_backends():
+            if isinstance(backend, TrustModelBackendMixin):
+                cls = type(backend)
+                if cls not in classes:
+                    classes.append(cls)
+        if len(classes) != 1:
+            return
         try:
-            TrustUserPermission = self.apps.get_model('trusts', 'TrustUserPermission')
+            TrustUserPermission = self.apps.get_model(
+                'trusts', 'TrustUserPermission',
+            )
             from tests.models import Category, TestGroupJunction, Ticket
-            from trusts.compile.nodes import Ref
         except (LookupError, ImportError):
             return
+        self._donate_tup(
+            classes[0], TrustUserPermission, Category, Ticket,
+            TestGroupJunction,
+        )
 
-        # Exact handle. With one Trusts path this is the unique registry
-        # (``config.registry is handle.registry``). With several, omission
-        # fails before writing.
-        try:
-            backend = config.configured_backend()
-        except TrustsConfigurationError:
-            return
-        registry = backend.registry
-
-        # Instance-local sentinels: one per contribution, identity
-        # comparison only, set only after register() succeeds. Never
-        # inspect registry.records for content_model is Category/Ticket/
-        # Group. Do not infer Ticket or Group completion from another
-        # contribution's sentinel.
-        donated_category = getattr(self, '_trusts_tup_category_registry_id', None)
-        if donated_category is not registry:
-            j = Ref(TrustUserPermission)
+    def _donate_tup(self, backend_cls, TrustUserPermission, Category, Ticket,
+                    TestGroupJunction):
+        recorder = backend_cls().get_registry()
+        if not getattr(self, '_trusts_tup_category_done', False):
             rev = Category._meta.get_field('trust').remote_field.get_accessor_name()
-            registry.register(
-                content=getattr(j.trust, rev),
-                user=j.entity,
-                permission=j.permission,
+            recorder.register(
+                trust=TrustUserPermission,
+                user='entity',
+                permission='permission',
+                content=lambda relationship, _rev=rev: (
+                    getattr(relationship.trust, _rev)
+                ),
             )
-            self._trusts_tup_category_registry_id = registry
-
-        donated_ticket = getattr(self, '_trusts_tup_ticket_registry_id', None)
-        if donated_ticket is not registry:
-            j = Ref(TrustUserPermission)
+            self._trusts_tup_category_done = True
+        if not getattr(self, '_trusts_tup_ticket_done', False):
             rev = Ticket._meta.get_field('trust').remote_field.get_accessor_name()
-            registry.register(
-                content=getattr(j.trust, rev),
-                user=j.entity,
-                permission=j.permission,
+            recorder.register(
+                trust=TrustUserPermission,
+                user='entity',
+                permission='permission',
+                content=lambda relationship, _rev=rev: (
+                    getattr(relationship.trust, _rev)
+                ),
             )
-            self._trusts_tup_ticket_registry_id = registry
-
-        donated_group = getattr(self, '_trusts_tup_group_registry_id', None)
-        if donated_group is not registry:
-            j = Ref(TrustUserPermission)
-            registry.register(
-                content=junction_group_content_ref(j, TestGroupJunction),
-                user=j.entity,
-                permission=j.permission,
+            self._trusts_tup_ticket_done = True
+        if not getattr(self, '_trusts_tup_group_done', False):
+            content_name = junction_content_field(TestGroupJunction).name
+            rev = TestGroupJunction._meta.get_field(
+                'trust',
+            ).remote_field.get_accessor_name()
+            recorder.register(
+                trust=TrustUserPermission,
+                user='entity',
+                permission='permission',
+                content=lambda relationship, _rev=rev, _name=content_name: (
+                    getattr(getattr(relationship.trust, _rev), _name)
+                ),
             )
-            self._trusts_tup_group_registry_id = registry
+            self._trusts_tup_group_done = True
 
 
 @contextmanager
@@ -182,34 +277,161 @@ def override_apps_ready(ready, apps_registry=None):
         target.ready = was
 
 
-def isolate_live_registry(config, registry, path=None):
-    """Swap a standalone registry into the live store directly.
+_MISSING = object()
 
-    Test isolation only. Not a host contributor route. This writes
-    the path-scoped dict directly, bypassing the one-path check in
-    the public ``registry`` setter.
-    """
-    if path is None:
-        paths = config._configured_trusts_paths()
-        path = paths[0]
-    config.registries[path] = registry
+
+def _publish_catalog(backend_cls, factory, *, path=None, peers=()):
+    """Store one catalog for ``backend_cls``. ``factory`` is the registration object."""
+    from trusts.apps import catalogs
+    from trusts.compile.catalogs import Catalog
+
+    if factory is None:
+        catalogs.pop(backend_cls, None)
+        return None
+    built = factory.build_registry()
+    catalogs[backend_cls] = Catalog(
+        cls=backend_cls,
+        path=path or factory.path or (
+            '%s.%s' % (backend_cls.__module__, backend_cls.__qualname__)
+        ),
+        family=factory.family,
+        registry=built,
+        family_registries=tuple(built_registries(tuple(peers)) or ()),
+    )
+    return built
+
+
+@contextmanager
+def bound_handle(backend, factory):
+    """Publish ``factory`` as this backend class's catalog for one block."""
+    from trusts.apps import catalogs
+
+    cls = type(backend)
+    previous = catalogs.get(cls, _MISSING)
+    peers = () if previous is _MISSING else previous.family_registries
+    _publish_catalog(cls, factory, peers=peers)
+    try:
+        yield
+    finally:
+        if previous is _MISSING:
+            catalogs.pop(cls, None)
+        else:
+            catalogs[cls] = previous
+
+
+def install_class_handle(backend_cls, factory):
+    """Publish ``factory`` as ``backend_cls``'s catalog. ``None`` removes it."""
+    _publish_catalog(backend_cls, factory)
+
+
+def isolate_live_registry(config, registry, path):
+    """Publish a standalone registry as the catalog for one listed path."""
+    from django.utils.module_loading import import_string
+
+    del config
+    cls = import_string(path)
+    _publish_catalog(cls, registry, path=path)
     return registry
 
 
 def install_writable_registry(config, path, contribute=None):
-    """Install a standalone registry on a live path for test isolation.
+    """Install a standalone factory as the catalog for one live path."""
+    from trusts.compile.factory import RegistryFactory
 
-    Callers register on the standalone instance *before* the first
-    supported handle read after ``Apps.ready``. The live store is not a
-    public contributor API.
-    """
-    from trusts.compile.factory import TrustsRegistry
-
-    registry = TrustsRegistry()
+    registry = RegistryFactory(path=path)
     if contribute is not None:
         contribute(registry)
-    config.registries[path] = registry
+    isolate_live_registry(config, registry, path)
     return registry
+
+
+@contextmanager
+def listed_relationship(factories):
+    """List inquiry backends whose catalogs are these factories.
+
+    ``authorized`` and the other consumers read ``get_backends()`` and
+    ``get_catalog()``. This publishes one catalog per factory on a
+    mixin class and sets ``AUTHENTICATION_BACKENDS`` to those classes
+    for the block.
+    """
+    from django.test import override_settings
+
+    from trusts.apps import catalogs
+
+    from trusts.compile.catalogs import Catalog
+    from trusts.compile.factory import RegistryFactory
+    from trusts.plan.registry import Registry
+
+    factories = tuple(factories)
+    classes = _inquiry_backend_classes(len(factories))
+    saved = {cls: catalogs.get(cls, _MISSING) for cls in classes}
+    paths = []
+    built = []
+    for cls, factory in zip(classes, factories):
+        path = '%s.%s' % (cls.__module__, cls.__name__)
+        paths.append(path)
+        if isinstance(factory, Catalog):
+            registry = factory._registry
+            family = factory.family
+        elif isinstance(factory, Registry):
+            registry = factory
+            family = factory.family
+        elif isinstance(factory, RegistryFactory):
+            registry = factory.build_registry()
+            family = factory.family
+        else:
+            registry = factory.build_registry()
+            family = getattr(factory, 'family', 'relationship')
+        built.append((cls, path, family, registry))
+    for cls, path, family, registry in built:
+        peers = tuple(
+            other for _cls, _path, other_family, other in built
+            if other_family == family and other is not registry
+        )
+        from trusts.compile.catalogs import Catalog
+
+        catalogs[cls] = Catalog(
+            cls=cls,
+            path=path,
+            family=family,
+            registry=registry,
+            family_registries=peers,
+        )
+    with override_settings(AUTHENTICATION_BACKENDS=tuple(paths)):
+        try:
+            yield tuple(catalogs[cls] for cls in classes)
+        finally:
+            for cls, previous in saved.items():
+                if previous is _MISSING:
+                    catalogs.pop(cls, None)
+                else:
+                    catalogs[cls] = previous
+
+
+def _inquiry_backend_classes(count):
+    import sys
+
+    from django.contrib.auth.backends import ModelBackend
+
+    from trusts.backends import TrustModelBackendMixin
+
+    module = sys.modules[__name__]
+    while len(_inquiry_backend_classes.cache) < count:
+        index = len(_inquiry_backend_classes.cache)
+
+        class Backend(TrustModelBackendMixin, ModelBackend):
+            pass
+
+        name = 'ListedInquiryBackend%d' % index
+        Backend.__name__ = name
+        Backend.__qualname__ = name
+        Backend.__module__ = __name__
+        setattr(module, name, Backend)
+        _inquiry_backend_classes.cache.append(Backend)
+    return _inquiry_backend_classes.cache[:count]
+
+
+_inquiry_backend_classes.cache = []
 
 
 def forget_models(*model_classes):
@@ -226,39 +448,11 @@ def forget_models(*model_classes):
     django_apps.clear_cache()
 
 
-def apply_zero_trust_donation(config):
-    """Donate package Trust-as-content the way Zero does on IIa.
-
-    Implementation ``ready()`` owns live donation. Tests that need the
-    historical TUP→Trust declaration on a standalone or swapped store
-    call this instead of expecting a core AppConfig to donate.
-    Mixin-only paths are skipped (C1 package donation rule).
-    """
-    from django.utils.module_loading import import_string
-
-    from trusts.zero.backends import TrustModelBackend
-    from trusts.zero.models import register_zero_relations
-
-    paths = config._configured_trusts_paths()
-    for path in paths:
-        cls = import_string(path)
-        if not issubclass(cls, TrustModelBackend):
-            continue
-        registry = config._ensure(path)
-        register_zero_relations(registry)
-        ids = dict(getattr(config, '_trusts_tup_trust_registry_ids', None) or {})
-        ids[path] = registry
-        config._trusts_tup_trust_registry_ids = ids
-        if len(paths) == 1:
-            config._trusts_tup_trust_registry_id = registry
-    return config
-
-
 def clone_writable_registry(registry):
     """Copy records onto a new writable registry for test isolation."""
-    from trusts.compile.factory import TrustsRegistry
+    from trusts.compile.factory import RegistryFactory
 
-    cloned = TrustsRegistry()
+    cloned = RegistryFactory()
     cloned._by_root = {
         root: list(rows) for root, rows in registry._by_root.items()
     }

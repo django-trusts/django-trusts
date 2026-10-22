@@ -4,7 +4,7 @@
 (plus the scope-prefix variant filter_by_permitted_content), Q3
 permitted_users, and Q4 permissions_for (complete and group kinds),
 with production delegation semantics. The builder trio on
-``TrustsRegistry`` delegates to the built registry, so both surfaces
+``RegistryFactory`` delegates to the built registry, so both surfaces
 agree. Where a production handle-based aggregate is the comparison
 (the handle is the subject there), SQL is compared literally;
 otherwise results are compared.
@@ -12,56 +12,46 @@ otherwise results are compared.
 No handle is passed to a registry question in this module: tests
 build the registry directly with ``build_registry()``.
 """
-
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
-
 from tests.core.test_issue282 import _tables
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.core import Ref
 from trusts.plan.aggregates import _compile_common_permissions, instance_match
 from trusts.plan.contents import _compile_granted
-from trusts.plan.handles import BackendHandle
 from trusts.plan.registry import Question
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.plan.rewrites import bind_once
+from tests.apps import built_registries
 
 
 def _permission(model, codename):
     content_type = ContentType.objects.get_for_model(model)
-    permission, _created = Permission.objects.get_or_create(
-        content_type=content_type, codename=codename,
-        defaults={'name': codename},
-    )
+    permission, _created = Permission.objects.get_or_create(content_type=content_type, codename=codename, defaults={'name': codename})
     return permission
-
 
 def _pks(qs):
     return set(qs.values_list('pk', flat=True))
 
-
 class RegistryQuestionsSuiteRegistrationTest(SimpleTestCase):
+
     def test_module_is_on_kernel_and_pair_suites(self):
         self.assertIn('tests.core.test_registry_questions', KERNEL_SUITE)
         self.assertIn('tests.core.test_registry_questions', PAIR_KERNEL_SUITE)
 
-
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class RegistryQuestionsTest(TransactionTestCase):
+
     def setUp(self):
         super().setUp()
         self.User = get_user_model()
-        self.Folder, self.Document, self.Grant, self.Share, self.GroupGrant = (
-            self._models()
-        )
-        self._table_cm = _tables(
-            self.Folder, self.Document, self.Grant, self.Share, self.GroupGrant,
-        )
+        self.Folder, self.Document, self.Grant, self.Share, self.GroupGrant = self._models()
+        self._table_cm = _tables(self.Folder, self.Document, self.Grant, self.Share, self.GroupGrant)
         self._table_cm.__enter__()
         self.addCleanup(self._table_cm.__exit__, None, None, None)
         self.read = _permission(self.Document, 'read_document')
@@ -71,14 +61,11 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.outsider = self.User.objects.create_user('rq-out', password='x')
         self.folder_a = self.Folder.objects.create(title='a')
         self.folder_b = self.Folder.objects.create(title='b')
-        self.doc_a = self.Document.objects.create(
-            title='a', folder=self.folder_a,
-        )
-        self.doc_b = self.Document.objects.create(
-            title='b', folder=self.folder_b,
-        )
+        self.doc_a = self.Document.objects.create(title='a', folder=self.folder_a)
+        self.doc_b = self.Document.objects.create(title='b', folder=self.folder_b)
 
     def _models(self):
+
         class Folder(models.Model):
             title = models.CharField(max_length=40)
 
@@ -88,22 +75,16 @@ class RegistryQuestionsTest(TransactionTestCase):
 
         class Document(models.Model):
             title = models.CharField(max_length=40)
-            folder = models.ForeignKey(
-                Folder, on_delete=models.CASCADE, related_name='documents',
-            )
+            folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='documents')
 
             class Meta:
                 app_label = 'trusts_tests'
                 db_table = 'rq_document'
 
         class Grant(models.Model):
-            user = models.ForeignKey(
-                get_user_model(), on_delete=models.CASCADE, related_name='+',
-            )
+            user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE, related_name='+')
             document = models.ForeignKey(Document, on_delete=models.CASCADE)
-            folder = models.ForeignKey(
-                Folder, on_delete=models.CASCADE, null=True,
-            )
+            folder = models.ForeignKey(Folder, on_delete=models.CASCADE, null=True)
             permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
 
             class Meta:
@@ -111,12 +92,8 @@ class RegistryQuestionsTest(TransactionTestCase):
                 db_table = 'rq_grant'
 
         class Share(models.Model):
-            delegate = models.ForeignKey(
-                get_user_model(), on_delete=models.CASCADE, related_name='+',
-            )
-            sponsor = models.ForeignKey(
-                get_user_model(), on_delete=models.CASCADE, related_name='+',
-            )
+            delegate = models.ForeignKey(get_user_model(), on_delete=models.CASCADE, related_name='+')
+            sponsor = models.ForeignKey(get_user_model(), on_delete=models.CASCADE, related_name='+')
             document = models.ForeignKey(Document, on_delete=models.CASCADE)
 
             class Meta:
@@ -124,182 +101,75 @@ class RegistryQuestionsTest(TransactionTestCase):
                 db_table = 'rq_share'
 
         class GroupGrant(models.Model):
-            user = models.ForeignKey(
-                get_user_model(), on_delete=models.CASCADE, related_name='+',
-            )
+            user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE, related_name='+')
             document = models.ForeignKey(Document, on_delete=models.CASCADE)
             group = models.ForeignKey(Group, on_delete=models.CASCADE)
 
             class Meta:
                 app_label = 'trusts_tests'
                 db_table = 'rq_group_grant'
-
-        return Folder, Document, Grant, Share, GroupGrant
+        return (Folder, Document, Grant, Share, GroupGrant)
 
     def _registry(self, *, delegated=False, group=False):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         grant = Ref(self.Grant)
-        registry.register(
-            content=grant.document, user=grant.user,
-            permission=grant.permission,
-        )
+        registry.register(content=grant.document, user=grant.user, permission=grant.permission)
         if delegated:
             share = Ref(self.Share)
-            registry.register_delegation(
-                content=share.document, delegate=share.delegate,
-                sponsor=share.sponsor,
-            )
+            registry.register_delegation(content=share.document, delegate=share.delegate, sponsor=share.sponsor)
         if group:
             grouped = Ref(self.GroupGrant)
-            registry.register(
-                content=grouped.document, user=grouped.user,
-                group=grouped.group,
-            )
+            registry.register(content=grouped.document, user=grouped.user, group=grouped.group)
         return registry
 
     def _production_handle(self, registry):
-        # Handle is the subject only for the production aggregates
-        # compared below; registry questions never receive it.
-        return BackendHandle(
-            path='tests.core.registry-questions', registry=registry,
-            compiler=PlanQueryCompiler(),
-        )
+        return [registry, setattr(registry, 'path', 'tests.core.registry-questions')][0]
 
     def test_q1_to_q4_ordinary_sql_matches_production(self):
         registry = self._registry()
-        self.Grant.objects.create(
-            user=self.alice, document=self.doc_a, permission=self.read,
-        )
+        self.Grant.objects.create(user=self.alice, document=self.doc_a, permission=self.read)
         built = registry.build_registry()
-
-        # Q1
         self.assertTrue(built.has_permission(self.alice, self.doc_a, self.read))
         self.assertFalse(built.has_permission(self.alice, self.doc_a, self.write))
         self.assertFalse(built.has_permission(self.bob, self.doc_a, self.read))
         handle = self._production_handle(registry)
-        self.assertEqual(
-            built.has_permission(self.alice, self.doc_a, self.read),
-            instance_match(
-                handle, self.doc_a, self.alice, self.read,
-                sponsor_handles=(handle,),
-            ),
-        )
-
-        # Q2: SQL literally equals the production granted() compile.
-        built_qs = built.filter_authorized(
-            self.Document.objects.all(), self.alice, self.read,
-        )
-        granted_q = _compile_granted(
-            (handle,), self.Document.objects.all(), self.alice, self.read,
-            sponsor_handles=(handle,),
-        )
-        production_qs = bind_once(
-            self.Document.objects.filter(granted_q).distinct()
-        )
+        self.assertEqual(built.has_permission(self.alice, self.doc_a, self.read), instance_match(handle, self.doc_a, self.alice, self.read, family_registries=built_registries((handle,))))
+        built_qs = built.filter_authorized(self.Document.objects.all(), self.alice, self.read)
+        granted_q = _compile_granted(built_registries((handle,)), self.Document.objects.all(), self.alice, self.read, family_registries=built_registries((handle,)))
+        production_qs = bind_once(self.Document.objects.filter(granted_q).distinct())
         self.assertEqual(str(built_qs.query), str(production_qs.query))
         self.assertEqual(_pks(built_qs), {self.doc_a.pk})
-
-        # Q4 (complete and builder agreement)
-        self.assertEqual(
-            _pks(built.permissions_for(self.alice, self.doc_a)), {self.read.pk},
-        )
-        self.assertEqual(
-            str(built.permissions_for(self.alice, self.doc_a).query),
-            str(registry.permissions_for(self.alice, self.doc_a).query),
-        )
-        self.assertEqual(
-            built.has_permission(self.alice, self.doc_a, self.read),
-            registry.has_permission(self.alice, self.doc_a, self.read),
-        )
-        self.assertEqual(
-            str(built.filter_authorized(
-                self.Document.objects.all(), self.alice, self.read,
-            ).query),
-            str(registry.filter_authorized(
-                self.Document.objects.all(), self.alice, self.read,
-            ).query),
-        )
-
-        # Q3 (instance and Django permission-code string)
-        self.assertEqual(
-            _pks(built.permitted_users(self.doc_a, self.read)), {self.alice.pk},
-        )
-        code = '%s.%s' % (
-            self.read.content_type.app_label, self.read.codename,
-        )
-        self.assertEqual(
-            _pks(built.permitted_users(self.doc_a, code)), {self.alice.pk},
-        )
-        # Q2 variant: folders that are a proper prefix of a granted
-        # document (content path folder -> documents).
-        prefix_registry = TrustsRegistry()
+        self.assertEqual(_pks(built.permissions_for(self.alice, self.doc_a)), {self.read.pk})
+        self.assertEqual(str(built.permissions_for(self.alice, self.doc_a).query), str(registry.permissions_for(self.alice, self.doc_a).query))
+        self.assertEqual(built.has_permission(self.alice, self.doc_a, self.read), registry.has_permission(self.alice, self.doc_a, self.read))
+        self.assertEqual(str(built.filter_authorized(self.Document.objects.all(), self.alice, self.read).query), str(registry.filter_authorized(self.Document.objects.all(), self.alice, self.read).query))
+        self.assertEqual(_pks(built.permitted_users(self.doc_a, self.read)), {self.alice.pk})
+        code = '%s.%s' % (self.read.content_type.app_label, self.read.codename)
+        self.assertEqual(_pks(built.permitted_users(self.doc_a, code)), {self.alice.pk})
+        prefix_registry = RegistryFactory()
         grant = Ref(self.Grant)
-        prefix_registry.register(
-            content=grant.folder.documents, user=grant.user,
-            permission=grant.permission,
-        )
+        prefix_registry.register(content=grant.folder.documents, user=grant.user, permission=grant.permission)
         self.Grant.objects.filter(user=self.alice).update(folder=self.folder_a)
-        folders = prefix_registry.build_registry().filter_by_permitted_content(
-            self.Folder.objects.all(), self.alice, self.read,
-            content=self.Document,
-        )
+        folders = prefix_registry.build_registry().filter_by_permitted_content(self.Folder.objects.all(), self.alice, self.read, content=self.Document)
         self.assertEqual(_pks(folders), {self.folder_a.pk})
 
     def test_delegation_uses_production_semantics_on_built_registry(self):
         registry = self._registry(delegated=True)
-        # Sponsor (alice) holds read on doc_a; bob is her delegate.
-        self.Grant.objects.create(
-            user=self.alice, document=self.doc_a, permission=self.read,
-        )
-        self.Share.objects.create(
-            delegate=self.bob, sponsor=self.alice, document=self.doc_a,
-        )
+        self.Grant.objects.create(user=self.alice, document=self.doc_a, permission=self.read)
+        self.Share.objects.create(delegate=self.bob, sponsor=self.alice, document=self.doc_a)
         built = registry.build_registry()
         handle = self._production_handle(registry)
-
-        # Q1-Q4 for the delegate (old builder trio ignored delegations).
         self.assertTrue(built.has_permission(self.bob, self.doc_a, self.read))
-        self.assertEqual(
-            built.has_permission(self.bob, self.doc_a, self.read),
-            instance_match(
-                handle, self.doc_a, self.bob, self.read,
-                sponsor_handles=(handle,),
-            ),
-        )
+        self.assertEqual(built.has_permission(self.bob, self.doc_a, self.read), instance_match(handle, self.doc_a, self.bob, self.read, family_registries=built_registries((handle,))))
         self.assertFalse(built.has_permission(self.outsider, self.doc_a, self.read))
-        self.assertEqual(
-            _pks(built.filter_authorized(
-                self.Document.objects.all(), self.bob, self.read,
-            )),
-            {self.doc_a.pk},
-        )
-        self.assertEqual(
-            _pks(built.permissions_for(self.bob, self.doc_a)), {self.read.pk},
-        )
-        production_permissions = _compile_common_permissions(
-            (handle,), self.doc_a, self.bob, kind='complete',
-            sponsor_handles=(handle,),
-        )
-        self.assertEqual(
-            str(built.permissions_for(
-                self.bob, self.doc_a, compiler=handle.compiler,
-            ).query),
-            str(production_permissions.query),
-        )
-        self.assertEqual(
-            _pks(built.permitted_users(self.doc_a, self.read)),
-            {self.alice.pk, self.bob.pk},
-        )
-        # Builder trio now matches the built registry (delegation included).
+        self.assertEqual(_pks(built.filter_authorized(self.Document.objects.all(), self.bob, self.read)), {self.doc_a.pk})
+        self.assertEqual(_pks(built.permissions_for(self.bob, self.doc_a)), {self.read.pk})
+        production_permissions = _compile_common_permissions(built_registries((handle,)), self.doc_a, self.bob, kind='complete', family_registries=built_registries((handle,)))
+        self.assertEqual(str(built.permissions_for(self.bob, self.doc_a).query), str(production_permissions.query))
+        self.assertEqual(_pks(built.permitted_users(self.doc_a, self.read)), {self.alice.pk, self.bob.pk})
         self.assertTrue(registry.has_permission(self.bob, self.doc_a, self.read))
-        self.assertEqual(
-            _pks(registry.permissions_for(self.bob, self.doc_a)), {self.read.pk},
-        )
-
-        # Sponsor without a grant on doc_b gives the delegate nothing there.
-        self.Share.objects.create(
-            delegate=self.bob, sponsor=self.alice, document=self.doc_b,
-        )
+        self.assertEqual(_pks(registry.permissions_for(self.bob, self.doc_a)), {self.read.pk})
+        self.Share.objects.create(delegate=self.bob, sponsor=self.alice, document=self.doc_b)
         built = registry.build_registry()
         self.assertFalse(built.has_permission(self.bob, self.doc_b, self.read))
 
@@ -307,140 +177,79 @@ class RegistryQuestionsTest(TransactionTestCase):
         registry = self._registry(group=True)
         group = Group.objects.create(name='rq-walkers')
         group.permissions.add(self.read)
-        self.Grant.objects.create(
-            user=self.alice, document=self.doc_a, permission=self.read,
-        )
-        self.GroupGrant.objects.create(
-            user=self.alice, document=self.doc_a, group=group,
-        )
+        self.Grant.objects.create(user=self.alice, document=self.doc_a, permission=self.read)
+        self.GroupGrant.objects.create(user=self.alice, document=self.doc_a, group=group)
         built = registry.build_registry()
         seen = []
 
         class _RecordingVisitor(object):
+
             def visit(self, question):
                 seen.append(question)
                 return question.name
-
         names = built.walk_questions(_RecordingVisitor())
-        self.assertEqual(names, (
-            'permitted', 'has_perm', 'get_all_permissions',
-            'get_group_permissions', 'get_permitted_users',
-        ))
-        self.assertTrue(all(isinstance(q, Question) for q in seen))
-        self.assertTrue(all(q.content_model is self.Document for q in seen))
+        self.assertEqual(names, ('permitted', 'has_perm', 'get_all_permissions', 'get_group_permissions', 'get_permitted_users'))
+        self.assertTrue(all((isinstance(q, Question) for q in seen)))
+        self.assertTrue(all((q.content_model is self.Document for q in seen)))
         self.assertEqual(len(seen[0].records), 2)
         self.assertEqual(seen[0].delegations, ())
         with self.assertRaises(Exception):
             seen[0].name = 'other'
         by_name = {q.name: q for q in seen}
-        self.assertEqual(
-            _pks(by_name['permitted'].question(self.alice, self.read)),
-            {self.doc_a.pk},
-        )
-        self.assertTrue(
-            by_name['has_perm'].question(self.alice, self.doc_a, self.read))
-        self.assertFalse(
-            by_name['has_perm'].question(self.bob, self.doc_a, self.read))
-        self.assertEqual(
-            _pks(by_name['get_all_permissions'].question(
-                self.alice, self.doc_a)),
-            {self.read.pk},
-        )
-        self.assertEqual(
-            _pks(by_name['get_group_permissions'].question(
-                self.alice, self.doc_a)),
-            {self.read.pk},
-        )
-        self.assertEqual(
-            _pks(by_name['get_permitted_users'].question(
-                self.doc_a, self.read)),
-            {self.alice.pk},
-        )
+        self.assertEqual(_pks(by_name['permitted'].question(self.alice, self.read)), {self.doc_a.pk})
+        self.assertTrue(by_name['has_perm'].question(self.alice, self.doc_a, self.read))
+        self.assertFalse(by_name['has_perm'].question(self.bob, self.doc_a, self.read))
+        self.assertEqual(_pks(by_name['get_all_permissions'].question(self.alice, self.doc_a)), {self.read.pk})
+        self.assertEqual(_pks(by_name['get_group_permissions'].question(self.alice, self.doc_a)), {self.read.pk})
+        self.assertEqual(_pks(by_name['get_permitted_users'].question(self.doc_a, self.read)), {self.alice.pk})
         with self.assertRaises(TypeError):
             built.walk_questions(object())
 
     def test_walk_questions_prefix_and_delegation_descriptors(self):
-        prefix_registry = TrustsRegistry()
+        prefix_registry = RegistryFactory()
         grant = Ref(self.Grant)
-        prefix_registry.register(
-            content=grant.folder.documents, user=grant.user,
-            permission=grant.permission,
-        )
-        self.Grant.objects.create(
-            user=self.alice, document=self.doc_a,
-            folder=self.folder_a, permission=self.read,
-        )
+        prefix_registry.register(content=grant.folder.documents, user=grant.user, permission=grant.permission)
+        self.Grant.objects.create(user=self.alice, document=self.doc_a, folder=self.folder_a, permission=self.read)
         built = prefix_registry.build_registry()
         seen = []
 
         class _Visitor(object):
+
             def visit(self, question):
                 seen.append(question)
                 return question
-
         built.walk_questions(_Visitor())
-        self.assertEqual(
-            [q.name for q in seen],
-            ['permitted', 'has_perm', 'get_all_permissions',
-             'get_permitted_users', 'filter_by_permitted_content'],
-        )
+        self.assertEqual([q.name for q in seen], ['permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users', 'filter_by_permitted_content'])
         prefix_q = seen[-1]
         self.assertIs(prefix_q.content_model, self.Document)
-        self.assertEqual(
-            _pks(prefix_q.question(
-                self.Folder.objects.all(), self.alice, self.read)),
-            {self.folder_a.pk},
-        )
+        self.assertEqual(_pks(prefix_q.question(self.Folder.objects.all(), self.alice, self.read)), {self.folder_a.pk})
         delegated = self._registry(delegated=True)
-        self.Grant.objects.create(
-            user=self.alice, document=self.doc_b, permission=self.read,
-        )
-        self.Share.objects.create(
-            delegate=self.bob, sponsor=self.alice, document=self.doc_b,
-        )
+        self.Grant.objects.create(user=self.alice, document=self.doc_b, permission=self.read)
+        self.Share.objects.create(delegate=self.bob, sponsor=self.alice, document=self.doc_b)
         built_delegated = delegated.build_registry()
         seen2 = []
 
         class _Visitor2(object):
+
             def visit(self, question):
                 seen2.append(question)
                 return question.name
-
-        built_delegated.walk_questions(
-            _Visitor2(), sponsors=(built_delegated,))
+        built_delegated.walk_questions(_Visitor2(), family_registries=built_registries((built_delegated,)))
         by_name = {q.name: q for q in seen2}
         self.assertEqual(len(by_name['permitted'].delegations), 1)
-        self.assertTrue(by_name['has_perm'].question(
-            self.bob, self.doc_b, self.read))
+        self.assertTrue(by_name['has_perm'].question(self.bob, self.doc_b, self.read))
 
     def test_group_kind_and_empty_registry(self):
         registry = self._registry(group=True)
         group = Group.objects.create(name='rq-readers')
         group.permissions.add(self.read)
-        self.GroupGrant.objects.create(
-            user=self.alice, document=self.doc_a, group=group,
-        )
+        self.GroupGrant.objects.create(user=self.alice, document=self.doc_a, group=group)
         built = registry.build_registry()
-        self.assertEqual(
-            _pks(built.permissions_for(self.alice, self.doc_a, kind='group')),
-            {self.read.pk},
-        )
-        self.assertEqual(
-            _pks(built.permissions_for(self.alice, self.doc_a)), {self.read.pk},
-        )
-        self.assertEqual(
-            list(built.permissions_for(self.bob, self.doc_a, kind='group')), [],
-        )
-
-        empty = TrustsRegistry().build_registry()
+        self.assertEqual(_pks(built.permissions_for(self.alice, self.doc_a, kind='group')), {self.read.pk})
+        self.assertEqual(_pks(built.permissions_for(self.alice, self.doc_a)), {self.read.pk})
+        self.assertEqual(list(built.permissions_for(self.bob, self.doc_a, kind='group')), [])
+        empty = RegistryFactory(user_model=self.User).build_registry()
         self.assertFalse(empty.has_permission(self.alice, self.doc_a, self.read))
         self.assertEqual(list(empty.permissions_for(self.alice, self.doc_a)), [])
-        self.assertEqual(
-            list(empty.filter_authorized(
-                self.Document.objects.all(), self.alice, self.read,
-            )),
-            [],
-        )
-        self.assertEqual(
-            list(empty.permitted_users(self.doc_a, self.read)), [],
-        )
+        self.assertEqual(list(empty.filter_authorized(self.Document.objects.all(), self.alice, self.read)), [])
+        self.assertEqual(list(empty.permitted_users(self.doc_a, self.read)), [])

@@ -2,7 +2,13 @@
 
 from django.db.models import Manager, Model, QuerySet
 
+from trusts.backends import configured_catalogs
+from trusts.errors import TrustsConfigurationError
+from trusts.plan.contents import granted
+from trusts.plan.relations import bind_checked_user
 from trusts.plan.rewrites import bind_once
+from trusts.plan.users import compile_permitted_users
+from trusts._permitted import permitted_queryset
 
 
 class AuthorizedQuerySet(QuerySet):
@@ -24,24 +30,19 @@ class AuthorizedQuerySet(QuerySet):
     ``PermittedQuerySet.permitted(permission, user, conditions=())``.
     ``.authorized`` stays this lower-level projection: it does not use
     that permitted-input validation. Core ``.authorized`` includes
-    relationship-family handles only; it is not Django's object-level
+    relationship-family registries only; it is not Django's object-level
     backend OR.
     """
 
     def authorized(self, user, permission, extra_q=None, **skip_flags):
-        from trusts.apps import _relationship_implementation_handles
-        from trusts.errors import TrustsConfigurationError
-        from trusts.plan.contents import granted
-        from trusts.plan.relations import bind_checked_user
-
         if not isinstance(permission, Model):
             raise TrustsConfigurationError(
                 'permission must be a model instance, not %r.' % (permission,)
             )
 
-        handles = _relationship_implementation_handles()
+        registries = _relationship_catalogs()
         inquiry = bind_checked_user(
-            user, skip_flags=skip_flags, handles=handles)
+            user, skip_flags=skip_flags, registries=registries)
         if user is None:
             raise TrustsConfigurationError(
                 'user must be a model instance, not None.'
@@ -49,7 +50,7 @@ class AuthorizedQuerySet(QuerySet):
         if inquiry.denied:
             return self.none()
         granted_q = granted(
-            handles,
+            registries,
             self, user, permission, kind='complete',
             skipped=inquiry.values,
         )
@@ -97,15 +98,12 @@ class PermittedQuerySetMixin:
         not that method's current string codec. There is no
         active-superuser shortcut.
         """
-        from trusts._permitted import permitted_queryset
-        from trusts.apps import _relationship_implementation_handles
-
         return permitted_queryset(
             self,
             permission,
             user,
             conditions,
-            handles=_relationship_implementation_handles(),
+            registries=_relationship_catalogs(),
             **skip_flags,
         )
 
@@ -126,8 +124,6 @@ class PermittedUsersMixin:
     """
 
     def get_permitted_users(self, perm, **skip_flags):
-        from trusts.plan.users import compile_permitted_users
-
         return compile_permitted_users(self, perm, **skip_flags)
 
 
@@ -144,11 +140,17 @@ class PermittedUsersManagerMixin:
     """
 
     def permitted(self, content, perm, **skip_flags):
-        from trusts.plan.users import compile_permitted_users
-
         return compile_permitted_users(
             content, perm, user_queryset=self.get_queryset(), **skip_flags,
         )
+
+
+def _relationship_catalogs():
+    """Relationship catalogs of the listed mixin backends."""
+    return tuple(
+        catalog for catalog in configured_catalogs()
+        if catalog.family == 'relationship'
+    )
 
 
 AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)

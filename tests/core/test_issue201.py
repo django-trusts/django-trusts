@@ -28,7 +28,7 @@ from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.apps import implementation_for_path
+
 from trusts.errors import TrustsConfigurationError
 from trusts.decorators import authorization_required
 
@@ -250,12 +250,11 @@ class AuthorizationRequiredReadinessPreflightTest(
         def _filtered(request, pk):
             return 'ok'
 
-        registry = implementation_for_path(
-            DOCUMENT_BACKEND,
-        ).configured_backend().registry
+        from tests.apps import configured_catalog
+        registry = configured_catalog(DOCUMENT_BACKEND)._registry
         previous = registry.condition_lookup
         try:
-            registry.set_condition_lookup(None)
+            registry.condition_lookup = None
             with self.assertNumQueries(0):
                 with self.assertRaises(TrustsConfigurationError) as ctx:
                     _filtered(_request(self.alice), pk=self.open_doc.pk)
@@ -263,7 +262,7 @@ class AuthorizationRequiredReadinessPreflightTest(
                 with self.assertRaises(TrustsConfigurationError):
                     _filtered(_request(self.superuser), pk=self.open_doc.pk)
         finally:
-            registry.set_condition_lookup(previous)
+            registry.condition_lookup = previous
         self.assertIs(registry.condition_lookup, previous)
 
         with self.assertNumQueries(1):

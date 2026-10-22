@@ -1,6 +1,6 @@
 """Spike: a registry built whole from lowered values.
 
-``TrustsRegistry`` stays the registration front end. ``Registry``
+``RegistryFactory`` stays the registration front end. ``Registry``
 takes records, delegations, the shared condition store, stored user
 conditions, and the user override as data. It does not import
 ``trusts.core``. Core re-exports it as ``_FrozenRegistry``.
@@ -20,7 +20,7 @@ from trusts.compile.nodes import Along
 from trusts.plan.recursions import GrantReach
 from trusts.core import (
     Ref,
-    TrustsRegistry,
+    RegistryFactory,
 )
 from trusts.plan.registry import Registry
 
@@ -73,14 +73,14 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
 
     def test_direct_trusts_registry_still_registers(self):
         Document, DocumentGrant = _document_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         record = _register_document(registry, DocumentGrant)
         self.assertEqual(registry.records, (record,))
         self.assertIs(registry.plan_for(Document).records[0], record)
 
     def test_injected_plan_matches_live_registry(self):
         Document, DocumentGrant = _document_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         _register_document(registry, DocumentGrant)
         built_registry = _built_from(registry)
         self.assertIs(built_registry.conditions, registry.conditions)
@@ -113,7 +113,7 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
 
     def test_injected_grant_reach_matches_along_plan(self):
         Folder, FolderGrant = _folder_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         root = Ref(FolderGrant)
         registry.register(
             content=root.folder,

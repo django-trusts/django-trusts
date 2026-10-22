@@ -18,11 +18,11 @@ from trusts.commons import (
     _concrete_model, _content_model, _require_instance, _resolved_hop,
 )
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import (
     PlanQueryCompiler,
     RelationPlan,
     _candidate_model,
+    answering_compiler,
     bind_checked_user,
 )
 from trusts.plan.standards import (
@@ -46,7 +46,7 @@ class Question(object):
     ``content_model`` is the concrete content model for the group.
     ``records`` / ``delegations`` are that group's lowered rows, split
     by kind, in registration order. ``question`` is one of the four
-    registry question families pre-bound with the walk's ``sponsors``;
+    registry question families pre-bound with the walk's ``family_registries``;
     its call signature depends on ``name``:
 
     - ``permitted``: ``question(user, permission) -> QuerySet``
@@ -83,9 +83,15 @@ class Registry(object):
         self, *, records, delegations, conditions=None,
         user_conditions=None, user_override=None,
         condition_lookup=_CONDITION_LOOKUP_UNSET,
+        compiler=None, path='', family='relationship', user_model=None,
     ):
         self.records = tuple(records)
         self.delegations = tuple(delegations)
+        self._project = compiler is None
+        self._compiler = PlanQueryCompiler() if compiler is None else compiler
+        self.path = path
+        self.family = family
+        self.user_model = user_model
         if conditions is None:
             # Stay lazy: importing this module must not load the
             # condition IR unless a store or lookup must be created.
@@ -106,6 +112,11 @@ class Registry(object):
         self.condition_lookup = condition_lookup
         self._rule_fragments = {}
         self._override_fragments = {}
+
+    @property
+    def compiler(self):
+        """Compiler bound at construction."""
+        return self._compiler
 
     def plan_for(self, content, *, user=None, permission=None):
         """Same terminal selection as ``TrustsRegistry.plan_for``.
@@ -154,10 +165,7 @@ class Registry(object):
             user_override_q=override,
         )
 
-    # -- compatibility surface used by handle-based callers -------------
-    # ``TrustsRegistry`` (the builder) exposes these names; built
-    # registries must too, because Zero and the snapshot read them off
-    # ``handle.registry`` / a built registry interchangeably.
+    # -- names the builder exposes; a built registry exposes them too --
 
     def build_registry(self):
         """Return ``self``: a built registry is already query-time data."""
@@ -188,42 +196,24 @@ class Registry(object):
 
     # -- question helpers ------------------------------------------------
 
-    def _handle(self, compiler=None):
-        return BackendHandle(
-            path='', registry=self,
-            compiler=compiler if compiler is not None else PlanQueryCompiler(),
-        )
-
-    @staticmethod
-    def _as_registry(value):
-        if value is None or isinstance(value, Registry):
-            return value
-        build = getattr(value, 'build_registry', None)
-        return build() if callable(build) else value
-
-    def _sponsor_handles(self, sponsors, compiler=None):
-        handles = []
+    def _with_family_registries(self, family_registries):
+        """This registry, then each other family registry, once."""
+        routes = []
         seen = set()
-        for sponsor in sponsors or ():
-            registry = self._as_registry(sponsor)
-            if registry is None or id(registry) in seen:
+        for other in (self,) + tuple(family_registries or ()):
+            if other is None or id(other) in seen:
                 continue
-            seen.add(id(registry))
-            if isinstance(registry, Registry):
-                handles.append(registry._handle(compiler=compiler))
-            else:
-                # Duck-typed registry (fake in tests): keep it as the
-                # handle's registry so its plan_for/records are used.
-                handles.append(BackendHandle(
-                    path='', registry=registry,
-                    compiler=compiler if compiler is not None else PlanQueryCompiler(),
-                ))
-        return tuple(handles)
+            seen.add(id(other))
+            routes.append(other)
+        return tuple(routes)
 
-    def _all_handles(self, sponsors, compiler=None):
-        return (self._handle(compiler=compiler),) + self._sponsor_handles(
-            sponsors, compiler=compiler,
-        )
+    def applies(self, plan):
+        """Whether this registry's compiler will compile ``plan``."""
+        compiler = answering_compiler(self)
+        applies = getattr(compiler, 'applies', None)
+        if callable(applies):
+            return bool(applies(plan))
+        return bool(plan.records)
 
     def _resolve_skipped(self, subject, skip_flags, skipped, *, require_user=True):
         if skip_flags:
@@ -238,26 +228,22 @@ class Registry(object):
 
     # -- the four canonical questions -----------------------------------
     # Production semantics live in plan.contents / plan.aggregates /
-    # plan.users; these methods only retarget those implementations
-    # from a handle to this registry (synthetic handle carrying the
-    # caller's compiler, PlanQueryCompiler by default). ``sponsors``
-    # is a tuple of other built registries whose ordinary records may
-    # satisfy this registry's delegations; this registry is always its
-    # own first sponsor. ``None`` is never returned: inapplicable is
-    # False / empty queryset / () as each question requires.
+    # plan.users. These methods call them on this registry. The
+    # compiler is bound here. Omission stores ``PlanQueryCompiler``
+    # and projects simple questions. ``family_registries`` are other
+    # registries whose ordinary records may satisfy this registry's
+    # delegations; this registry is always included first. ``None`` is
+    # never returned: inapplicable is False / empty queryset / () as
+    # each question requires.
 
-    def has_permission(self, user, content, permission, *, sponsors=(),
-                       compiler=None, extra_q=None, permission_model=None,
+    def has_permission(self, user, content, permission, *, family_registries=(),
+                       extra_q=None, permission_model=None,
                        skipped=None, **skip_flags):
         """Q1: does ``user`` hold ``permission`` on ``content``?
 
         ``content`` is one instance (instance check) or a QuerySet
-        (every row must hold). Delegations via sponsors are included,
-        unlike the old builder trio which ignored them. An explicit
-        ``compiler`` (the backend's) is honoured through the production
-        aggregates; with no compiler, the ordinary path is the plan's
-        own projection so non-PK permission targets correlate exactly
-        as before.
+        (every row must hold). Delegations via family_registries are included.
+        The compiler bound at construction compiles the grant.
         """
         from django.db.models import Model
 
@@ -267,37 +253,38 @@ class Registry(object):
         if isinstance(permission, Model):
             permission = _require_instance(permission, 'permission')
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
+        family_registries = self._with_family_registries(family_registries)
         if isinstance(content, QuerySet):
             if denied:
                 return False
             matched = all_match(
-                (self._handle(compiler=compiler),), content, user, permission,
+                (self,), content, user, permission,
                 kind='complete', extra_q=extra_q,
-                sponsor_handles=self._all_handles(sponsors, compiler=compiler),
+                family_registries=family_registries,
                 permission_model=permission_model, skipped=values,
             )
             return False if matched is None else bool(matched)
         content = _require_instance(content, 'content')
         if denied:
             return False
-        plan = self.plan_for(
-            content, user=user,
-            permission=permission if isinstance(permission, Model) else None,
-        )
-        if compiler is None and extra_q is None and not plan.delegations:
-            return plan.has_permission(
-                user, content, permission, skipped=values,
+        if (self._project and extra_q is None
+                and isinstance(permission, Model)):
+            plan = self.plan_for(
+                content, user=user,
+                permission=permission if isinstance(permission, Model) else None,
             )
+            if not plan.delegations:
+                return plan.has_permission(user, content, permission, skipped=values)
         matched = instance_match(
-            self._handle(compiler=compiler), content, user, permission,
+            self, content, user, permission,
             kind='complete', extra_q=extra_q,
-            sponsor_handles=self._all_handles(sponsors, compiler=compiler),
+            family_registries=family_registries,
             permission_model=permission_model, skipped=values,
         )
         return False if matched is None else bool(matched)
 
-    def filter_authorized(self, queryset, user, permission, *, sponsors=(),
-                          compiler=None, skipped=None, **skip_flags):
+    def filter_authorized(self, queryset, user, permission, *, family_registries=(),
+                          skipped=None, **skip_flags):
         """Q2: rows of ``queryset`` ``user`` may access for ``permission``."""
         from trusts.plan.contents import _compile_granted
         from trusts.plan.rewrites import bind_once
@@ -311,15 +298,14 @@ class Registry(object):
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if denied:
             return queryset.none()
-        plan = self.plan_for(queryset, user=user, permission=permission)
-        if compiler is None and not plan.delegations:
-            return plan.filter_content(
-                queryset, user, permission, skipped=values,
-            )
+        if self._project:
+            plan = self.plan_for(queryset, user=user, permission=permission)
+            if not plan.delegations:
+                return plan.filter_content(queryset, user, permission, skipped=values)
         granted_q = _compile_granted(
-            (self._handle(compiler=compiler),), queryset, user, permission,
+            (self,), queryset, user, permission,
             kind='complete',
-            sponsor_handles=self._all_handles(sponsors, compiler=compiler),
+            family_registries=self._with_family_registries(family_registries),
             skipped=values,
         )
         if granted_q is None:
@@ -327,7 +313,7 @@ class Registry(object):
         return bind_once(queryset.filter(granted_q).distinct())
 
     def filter_by_permitted_content(self, queryset, user, permission, *,
-                                    content, sponsors=(), compiler=None,
+                                    content, family_registries=(),
                                     skipped=None, **skip_flags):
         """Q2 variant: scope rows that are a proper prefix of ``content``."""
         from trusts.plan.contents import _compile_permitted_content_queryset
@@ -342,24 +328,20 @@ class Registry(object):
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if denied:
             return queryset.none()
-        own = self._handle(compiler=compiler)
+        family_registries = self._with_family_registries(family_registries)
         return _compile_permitted_content_queryset(
-            queryset, user, permission, content=content, handles=(own,),
-            sponsor_handles=(own,) + self._sponsor_handles(sponsors, compiler=compiler),
+            queryset, user, permission, content=content, registries=(self,),
+            family_registries=family_registries,
             skipped=values,
         )
 
-    def permissions_for(self, user, content, *, kind='complete', sponsors=(),
-                        compiler=None, skipped=None, **skip_flags):
+    def permissions_for(self, user, content, *, kind='complete', family_registries=(),
+                        skipped=None, **skip_flags):
         """Q4: permission rows ``user`` holds on ``content`` (QS or ()).
 
         ``kind='group'`` is the group variant used by
         ``get_group_permissions``; ``'complete'`` is ``get_all_permissions``.
-        A single instance with no delegations and no explicit compiler
-        uses the plan's own projection (exact non-PK target
-        correlation); QuerySet candidates, group kind, delegations, and
-        explicit compilers use the production common-permissions
-        aggregate, which is the backend's existing semantics.
+        The compiler bound at construction compiles the grant.
         """
         from trusts.plan.aggregates import _compile_common_permissions
 
@@ -370,15 +352,12 @@ class Registry(object):
             if not (plan.records or plan.delegations) or plan.permission_model is None:
                 return ()
             return plan.permission_model._default_manager.none()
-        if (
-            compiler is None and kind == 'complete'
-            and not isinstance(content, QuerySet)
-            and not plan.delegations
-        ):
+        if (self._project and kind == 'complete'
+                and not isinstance(content, QuerySet) and not plan.delegations):
             return plan.permissions(user, content, skipped=values)
         qs = _compile_common_permissions(
-            (self._handle(compiler=compiler),), content, user, kind=kind,
-            sponsor_handles=self._all_handles(sponsors, compiler=compiler),
+            (self,), content, user, kind=kind,
+            family_registries=self._with_family_registries(family_registries),
             skipped=values,
         )
         if qs is None:
@@ -390,26 +369,27 @@ class Registry(object):
     # Backwards-compatible alias name used in earlier discussion.
     common_permissions = permissions_for
 
-    def permitted_users_predicate(self, content, perm, *, sponsors=(),
-                                  skipped=(), backend=None):
+    def permitted_users_predicate(self, content, perm, *, family_registries=(),
+                                  skipped=(), condition_lookup=None,
+                                  accepts_permission=None, owner_name=None):
         """Q3 predicate: ``Q`` over candidate users, or ``None``.
 
-        ``backend`` is only the Django adapter that owns the
-        ``:condition`` overlay / singular-permission acceptance when
-        called from ``TrustModelBackendMixin``; standalone calls use
-        the auth.Permission default.
+        ``condition_lookup`` defaults to this registry's lookup.
+        ``accepts_permission`` is the singular-permission callable;
+        omitted means ``auth.Permission``.
         """
         from trusts.plan.users import permitted_users_predicate_for_registry
 
-        sponsor_handles = self._all_handles(sponsors)
+        family_registries = self._with_family_registries(family_registries)
         return permitted_users_predicate_for_registry(
-            self, content, perm, sponsor_handles=sponsor_handles,
-            skipped=skipped, backend=backend,
+            self, content, perm, family_registries=family_registries,
+            skipped=skipped, condition_lookup=condition_lookup,
+            accepts_permission=accepts_permission,
+            owner_name=owner_name,
         )
 
-    def permitted_users(self, content, perm, *, sponsors=(), **skip_flags):
+    def permitted_users(self, content, perm, *, family_registries=(), **skip_flags):
         """Q3: lazy user queryset permitted on ``content`` for ``perm``."""
-        from django.contrib.auth import get_user_model
         from trusts.plan.rewrites import bind_once
         from trusts.plan.users import _plan_user_model
 
@@ -418,14 +398,19 @@ class Registry(object):
         )
         # require_user=False never denies; values carry skip_<name>.
         predicate = self.permitted_users_predicate(
-            content, perm, sponsors=sponsors, skipped=values,
+            content, perm, family_registries=family_registries, skipped=values,
         )
         plan = self.plan_for(content)
         if predicate is None:
             if plan.records or plan.delegations:
                 user_model = _plan_user_model(plan, content)
+            elif self.user_model is not None:
+                user_model = self.user_model
             else:
-                user_model = get_user_model()
+                raise TrustsConfigurationError(
+                    'permitted_users has no registered user model and this '
+                    'registry was built without user_model.'
+                )
             return user_model._default_manager.none()
         user_model = _plan_user_model(plan, content)
         return bind_once(
@@ -433,18 +418,17 @@ class Registry(object):
         )
 
     # -- walking every possible question ------------------------------
-    # Thomas's phrasing: ``registry.walk_questions(visitor)``. The
-    # visitor is duck-typed: it supplies one ``visit(question)``
-    # method, called once per :class:`Question` descriptor in
-    # document order (content groups in first-registration order,
-    # questions in policy-document order within a group). The return
-    # value of each ``visit`` call is collected and returned as a
+    # ``registry.walk_questions(visitor)``. The visitor supplies one
+    # ``visit(question)`` method, called once per :class:`Question`
+    # descriptor in document order (content groups in first-registration
+    # order, questions in policy-document order within a group). The
+    # return value of each ``visit`` call is collected and returned as a
     # tuple in the same order; a visitor may return ``None`` for a
     # question it omits (for example an empty prefix statement).
-    # ``sponsors`` are other registries (or buildable builders /
-    # handles) whose ordinary records may satisfy this registry's
-    # delegations; they are pre-bound into each descriptor's question
-    # callable, never passed to the visitor separately.
+    # ``family_registries`` are other registries whose ordinary records
+    # may satisfy this registry's delegations; they are pre-bound into
+    # each descriptor's question callable, never passed to the visitor
+    # separately.
 
     def _content_groups(self):
         """``(content_model, records, delegations)`` in document order."""
@@ -494,46 +478,46 @@ class Registry(object):
         return tuple(found)
 
     def _question_permitted(self, content_model, user, permission, *,
-                            sponsors=()):
+                            family_registries=()):
         return self.filter_authorized(
             content_model._meta.concrete_model._default_manager.all(),
-            user, permission, sponsors=sponsors,
+            user, permission, family_registries=family_registries,
         )
 
     def _question_filter_by_permitted_content(
-        self, content_model, queryset, user, permission, *, sponsors=(),
+        self, content_model, queryset, user, permission, *, family_registries=(),
     ):
         return self.filter_by_permitted_content(
             queryset, user, permission, content=content_model,
-            sponsors=sponsors,
+            family_registries=family_registries,
         )
 
-    def _descriptors_for(self, content_model, records, delegations, sponsors):
+    def _descriptors_for(self, content_model, records, delegations, family_registries):
         descriptors = [
             Question(
                 'permitted', content_model, records, delegations,
                 partial(
                     self._question_permitted, content_model,
-                    sponsors=sponsors,
+                    family_registries=family_registries,
                 ),
             ),
             Question(
                 'has_perm', content_model, records, delegations,
-                partial(self.has_permission, sponsors=sponsors),
+                partial(self.has_permission, family_registries=family_registries),
             ),
             Question(
                 'get_all_permissions', content_model, records, delegations,
-                partial(self.permissions_for, sponsors=sponsors),
+                partial(self.permissions_for, family_registries=family_registries),
             ),
         ]
         if any(getattr(record, 'via_group', False) for record in records):
             descriptors.append(Question(
                 'get_group_permissions', content_model, records, delegations,
-                partial(self.permissions_for, kind='group', sponsors=sponsors),
+                partial(self.permissions_for, kind='group', family_registries=family_registries),
             ))
         descriptors.append(Question(
             'get_permitted_users', content_model, records, delegations,
-            partial(self.permitted_users, sponsors=sponsors),
+            partial(self.permitted_users, family_registries=family_registries),
         ))
         if self._permitted_content_prefix_models(content_model):
             descriptors.append(Question(
@@ -541,12 +525,12 @@ class Registry(object):
                 delegations,
                 partial(
                     self._question_filter_by_permitted_content, content_model,
-                    sponsors=sponsors,
+                    family_registries=family_registries,
                 ),
             ))
         return tuple(descriptors)
 
-    def walk_questions(self, visitor, *, sponsors=()):
+    def walk_questions(self, visitor, *, family_registries=()):
         """Walk every possible question, per content group, in order.
 
         See the section comment above for the visitor protocol.
@@ -561,11 +545,11 @@ class Registry(object):
                 'walk_questions visitor must supply a callable '
                 'visit(question), not %r.' % (visitor,)
             )
-        sponsors = tuple(sponsors or ())
+        family_registries = tuple(family_registries or ())
         results = []
         for model, records, delegations in self._content_groups():
             for descriptor in self._descriptors_for(
-                model, records, delegations, sponsors,
+                model, records, delegations, family_registries,
             ):
                 results.append(visit(descriptor))
         return tuple(results)

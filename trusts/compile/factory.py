@@ -11,10 +11,13 @@ query-time ``Registry`` from stored values. ``trusts.core`` re-exports
 __all__ = []
 
 import inspect
+from collections.abc import Callable
+from typing import TypeVar
 
 from dataclasses import dataclass, field, replace
 
 from django.core.exceptions import FieldDoesNotExist
+from django.utils.module_loading import import_string
 from django.db.models import F, Model, Q
 from django.db.models.query import QuerySet
 
@@ -62,8 +65,10 @@ from trusts.compile.resolution import (
     _resolve_permission_path,
 )
 from trusts.errors import TrustsConfigurationError
+
+T = TypeVar('T', bound=Model)
 from trusts.plan.registry import Registry
-from trusts.plan.relations import bind_checked_user
+from trusts.plan.relations import PlanQueryCompiler, bind_checked_user
 from trusts.plan.standards import (
     UserCondition,
     assert_concrete_booleans,
@@ -642,6 +647,115 @@ def _same_terminal_bindings(existing, record):
     )
 
 
+def _rules_for_model(conditions, model):
+    """Stored rules, or the built-in ``is_active`` rule for ``model``."""
+    if conditions is not None:
+        return conditions
+    return builtin_user_conditions(model)
+
+
+def _assert_registration_rules(*, user_model, sponsor_model, conditions,
+                               override):
+    """Require each applicable rule's concrete booleans on these models.
+
+    ``conditions`` is the recorded rule tuple, or ``None`` for the
+    built-in rule. ``override`` is the recorded override, or ``None``.
+    """
+    pairs = []
+    if user_model is not None:
+        pairs.append((user_model, 'user'))
+    if sponsor_model is not None:
+        pairs.append((sponsor_model, 'sponsor'))
+    for model, role in pairs:
+        concrete = model._meta.concrete_model
+        for rule in _rules_for_model(conditions, concrete):
+            if not rule_applies(rule.on, role):
+                continue
+            assert_concrete_booleans(concrete, rule.expr, rule.name)
+    if override is not None and user_model is not None:
+        assert_concrete_booleans(
+            user_model._meta.concrete_model, override.expr, override.name,
+        )
+
+
+def validate_principal(record, existing, *, conditions, override):
+    """Reject a duplicate or conflicting ordinary row. Does not store it.
+
+    ``existing`` is the ordinary rows already recorded, any root.
+    ``conditions`` and ``override`` are the recorded user rules, not
+    factory state. Same-root equality is a duplicate. The same root and
+    content terminal conflict unless the terminal bindings match and the
+    condition differs.
+    """
+    for prior in existing:
+        if prior.root is not record.root:
+            continue
+        if prior == record:
+            raise TrustsConfigurationError(
+                'Duplicate registration for %s.' % record.root._meta.label
+            )
+        if prior.content_model is not record.content_model:
+            continue
+        if (
+            _same_terminal_bindings(prior, record)
+            and prior.condition != record.condition
+        ):
+            continue
+        raise TrustsConfigurationError(
+            'Conflicting registration for %s content terminal '
+            '%s: existing %r, new %r.'
+            % (
+                record.root._meta.label,
+                record.content_model._meta.label,
+                prior,
+                record,
+            )
+        )
+    _assert_registration_rules(
+        user_model=record.user_model, sponsor_model=None,
+        conditions=conditions, override=override,
+    )
+    return record
+
+
+def validate_delegation(record, existing, *, conditions, override):
+    """Reject a duplicate or conflicting delegation. Does not store it.
+
+    ``existing`` is the delegations already recorded, any root.
+    ``conditions`` and ``override`` are the recorded user rules. The
+    returned row carries the compiled sponsor-rules fragment.
+    """
+    same_root = [row for row in existing if row.root is record.root]
+    if record in same_root:
+        raise TrustsConfigurationError(
+            'Duplicate delegated registration for %s.'
+            % record.root._meta.label
+        )
+    for prior in same_root:
+        if prior.content_model is record.content_model:
+            raise TrustsConfigurationError(
+                'Conflicting delegated registration for %s content '
+                'terminal %s: existing %r, new %r.'
+                % (
+                    record.root._meta.label,
+                    record.content_model._meta.label,
+                    prior,
+                    record,
+                )
+            )
+    _assert_registration_rules(
+        user_model=record.delegate_model,
+        sponsor_model=record.sponsor_model,
+        conditions=conditions, override=override,
+    )
+    sponsor_model = record.sponsor_model._meta.concrete_model
+    return replace(record, sponsor_rules=compile_user_rules(
+        sponsor_model, record.sponsor_field,
+        _rules_for_model(conditions, sponsor_model),
+        role='sponsor', values={},
+    ))
+
+
 def _require_condition_arity(builder):
     """Reject 0-arg, 2+-required, and keyword-only-only before invoke."""
     try:
@@ -971,7 +1085,7 @@ def _bind_public_along(root, along):
     path, bound = along
     return Along(_public_ref(root, path, 'along'), bound)
 
-class TrustsRegistry(object):
+class RegistryFactory(object):
     """Instantiable registry of permission-bearing relation declarations.
 
     Create a new instance per isolated context. There is no process-global
@@ -987,7 +1101,8 @@ class TrustsRegistry(object):
         ``TrustsRegistry()`` never inspects Django readiness.
     """
 
-    def __init__(self):
+    def __init__(self, *, compiler=None, path='', family='relationship',
+                 user_model=None):
         # Stay lazy: importing this module must not load the condition IR.
         from trusts.plan.conditions import (
             ConditionRegistry,
@@ -1005,6 +1120,16 @@ class TrustsRegistry(object):
         self._override_fragments = {}
         self.conditions = ConditionRegistry()
         self.set_condition_lookup(RegistryConditionLookup(self))
+        self._explicit_compiler = compiler is not None
+        self._compiler = compiler if self._explicit_compiler else PlanQueryCompiler()
+        self.path = path
+        self.family = family
+        self.user_model = user_model
+
+    @property
+    def compiler(self):
+        """Compiler handed to every registry this factory builds."""
+        return self._compiler
 
     @property
     def condition_lookup(self):
@@ -1074,9 +1199,12 @@ class TrustsRegistry(object):
         that model's own fields.
         """
         if self._user_conditions is None:
-            from django.contrib.auth import get_user_model
-
-            return builtin_user_conditions(get_user_model())
+            if self.user_model is None:
+                raise TrustsConfigurationError(
+                    'RegistryFactory has no user model. Pass user_model '
+                    'at construction.'
+                )
+            return builtin_user_conditions(self.user_model)
         return tuple(self._user_conditions.values())
 
     def _stored_user_conditions(self):
@@ -1148,6 +1276,13 @@ class TrustsRegistry(object):
             return models.pop()
         return None
 
+    def _require_user_model(self):
+        if self.user_model is None:
+            raise TrustsConfigurationError(
+                'RegistryFactory has no user model. Pass user_model '
+                'at construction.'
+            )
+
     def _open_for_rules(self, kind):
         if self._order or self._delegation_order:
             raise TrustsConfigurationError(
@@ -1160,10 +1295,9 @@ class TrustsRegistry(object):
 
         Call this before ``register()`` or ``register_delegation()``.
         ``None`` removes that name. ``on`` is ``*``, ``user``, or ``sponsor``.
-        The lambda is walked once and must use concrete boolean fields.
+        The lambda is walked once against this factory's ``user_model``.
         """
-        from django.contrib.auth import get_user_model
-
+        self._require_user_model()
         self._open_for_rules('condition')
         validate_user_rule_name(name, kind='condition')
         target = normalize_on(on)
@@ -1179,7 +1313,7 @@ class TrustsRegistry(object):
         if created:
             self._user_conditions = {
                 rule.name: rule
-                for rule in builtin_user_conditions(get_user_model())
+                for rule in builtin_user_conditions(self.user_model)
             }
         try:
             if expr is None:
@@ -1190,7 +1324,9 @@ class TrustsRegistry(object):
                 del self._user_conditions[name]
                 self._clear_compiled_rules()
                 return None
-            rule = UserCondition(name, concrete_rule(expr, name), target)
+            rule = UserCondition(
+                name, concrete_rule(expr, name, self.user_model), target,
+            )
         except TrustsConfigurationError:
             if created:
                 self._user_conditions = None
@@ -1199,25 +1335,6 @@ class TrustsRegistry(object):
         self._clear_compiled_rules()
         return rule
 
-    def _assert_rules_for_registration(self, *, user_model=None, sponsor_model=None):
-        """Require each applicable rule's concrete booleans on these models."""
-        pairs = []
-        if user_model is not None:
-            pairs.append((user_model, 'user'))
-        if sponsor_model is not None:
-            pairs.append((sponsor_model, 'sponsor'))
-        for model, role in pairs:
-            concrete = model._meta.concrete_model
-            for rule in self._conditions_for_model(concrete):
-                if not rule_applies(rule.on, role):
-                    continue
-                assert_concrete_booleans(concrete, rule.expr, rule.name)
-        slot = self._user_override
-        if slot is not None and user_model is not None:
-            assert_concrete_booleans(
-                user_model._meta.concrete_model, slot.expr, slot.name,
-            )
-
     def set_user_override(self, name, expr, on='user'):
         """Store the one checked-user override, or clear it with ``None``.
 
@@ -1225,6 +1342,7 @@ class TrustsRegistry(object):
         ``on="sponsor"`` and ``on="*"`` raise. The name cannot match a
         registered condition.
         """
+        self._require_user_model()
         self._open_for_rules('override')
         validate_user_rule_name(name, kind='override')
         normalize_override_on(on)
@@ -1245,7 +1363,7 @@ class TrustsRegistry(object):
             self._clear_compiled_rules()
             return None
         self._user_override = UserCondition(
-            name, concrete_rule(expr, name), 'user',
+            name, concrete_rule(expr, name, self.user_model), 'user',
         )
         self._clear_compiled_rules()
         return self._user_override
@@ -1280,7 +1398,8 @@ class TrustsRegistry(object):
                 % (getattr(root, '__name__', root),)
             )
 
-    def build_delegation(self, *, content, delegate, sponsor, condition=None,
+    @staticmethod
+    def build_delegation(*, content, delegate, sponsor, condition=None,
                          along=None):
         """Build one ``RegisteredDelegation`` without storing it.
 
@@ -1373,34 +1492,10 @@ class TrustsRegistry(object):
             condition=condition, along=along,
         )
         root = record.root
-        existing_rows = self._delegations_by_root.get(root)
-        if existing_rows:
-            if record in existing_rows:
-                raise TrustsConfigurationError(
-                    'Duplicate delegated registration for %s.'
-                    % root._meta.label
-                )
-            for existing in existing_rows:
-                if existing.content_model is record.content_model:
-                    raise TrustsConfigurationError(
-                        'Conflicting delegated registration for %s content '
-                        'terminal %s: existing %r, new %r.'
-                        % (
-                            root._meta.label,
-                            record.content_model._meta.label,
-                            existing,
-                            record,
-                        )
-                    )
-        self._assert_rules_for_registration(
-            user_model=record.delegate_model,
-            sponsor_model=record.sponsor_model,
+        record = self.validate_delegation(
+            record, self._delegations_by_root.get(root, ()),
         )
-        self._rule_fragment(record.delegate_model, role='user')
-        self._override_fragment(record.delegate_model)
-        record = replace(record, sponsor_rules=self._rule_fragment(
-            record.sponsor_model, role='sponsor', path=record.sponsor_field,
-        ))
+        existing_rows = self._delegations_by_root.get(root)
         if existing_rows:
             existing_rows.append(record)
         else:
@@ -1408,7 +1503,27 @@ class TrustsRegistry(object):
         self._delegation_order.append(record)
         return record
 
-    def build_relation(self, *, content, user, permission=None, group=None,
+    def validate_delegation(self, record, existing):
+        """Reject a duplicate or conflicting delegation. Does not store it.
+
+        ``existing`` is the delegations already held for this comparison,
+        any root. Delegates to the module function with this factory's
+        recorded user rules, then memos the compiled fragments.
+        """
+        checked = validate_delegation(
+            record, existing,
+            conditions=self._stored_user_conditions(),
+            override=self._user_override,
+        )
+        self._rule_fragment(record.delegate_model, role='user')
+        self._override_fragment(record.delegate_model)
+        self._rule_fragment(
+            record.sponsor_model, role='sponsor', path=record.sponsor_field,
+        )
+        return checked
+
+    @staticmethod
+    def build_relation(*, content, user, permission=None, group=None,
                        condition=None, along=None):
         """Build one ``RegisteredRelation`` without storing it.
 
@@ -1531,33 +1646,8 @@ class TrustsRegistry(object):
             condition=condition, along=along,
         )
         root = record.root
-
+        self.validate_principal(record, self._by_root.get(root, ()))
         existing_rows = self._by_root.get(root)
-        if existing_rows:
-            for existing in existing_rows:
-                if existing == record:
-                    raise TrustsConfigurationError(
-                        'Duplicate registration for %s.' % root._meta.label
-                    )
-                if existing.content_model is record.content_model:
-                    if (
-                        _same_terminal_bindings(existing, record)
-                        and existing.condition != record.condition
-                    ):
-                        continue
-                    raise TrustsConfigurationError(
-                        'Conflicting registration for %s content terminal '
-                        '%s: existing %r, new %r.'
-                        % (
-                            root._meta.label,
-                            record.content_model._meta.label,
-                            existing,
-                            record,
-                        )
-                    )
-        self._assert_rules_for_registration(user_model=record.user_model)
-        self._rule_fragment(record.user_model, role='user')
-        self._override_fragment(record.user_model)
         if existing_rows:
             existing_rows.append(record)
         else:
@@ -1565,8 +1655,25 @@ class TrustsRegistry(object):
         self._order.append(record)
         return record
 
+    def validate_principal(self, record, existing):
+        """Reject a duplicate or conflicting ordinary row. Does not store it.
+
+        ``existing`` is the ordinary rows already held, any root. Delegates
+        to the module function with this factory's recorded user rules,
+        then memos the compiled fragments.
+        """
+        checked = validate_principal(
+            record, existing,
+            conditions=self._stored_user_conditions(),
+            override=self._user_override,
+        )
+        self._rule_fragment(record.user_model, role='user')
+        self._override_fragment(record.user_model)
+        return checked
+
+    @staticmethod
     def build_public_registration(
-        self, *, trust, user=None, permission=None, content, group=None,
+        *, trust, user=None, permission=None, content, group=None,
         delegate=None, sponsor=None, condition=None, along=None,
     ):
         """Build a normalized ``PublicRegistration`` without storing it.
@@ -1668,15 +1775,20 @@ class TrustsRegistry(object):
             along=_bind_public_along(trust, along),
         )
 
-    def _register_public(
-        self, *, trust, user=None, permission=None, content, group=None,
-        delegate=None, sponsor=None, condition=None, along=None,
-    ):
-        """Public ``BackendHandle.register`` body, on the registry it stores.
-
-        The handle forwards here so ``trusts.plan.handles`` does not import
-        this module. Callers keep using ``BackendHandle.register``.
-        """
+    def register_public(
+        self, *,
+        trust: type[T],
+        user: str | Callable[[T], object] | None = None,
+        permission: str | Callable[[T], object] | None = None,
+        content: str | Callable[[T], object],
+        group: str | Callable[[T], object] | None = None,
+        delegate: str | Callable[[T], object] | None = None,
+        sponsor: str | Callable[[T], object] | None = None,
+        condition: (
+            Callable[[T], object] | Callable[[T, object], object] | None
+        ) = None,
+        along=None,
+    ) -> RegisteredRelation | RegisteredDelegation:
         shape = self.build_public_registration(
             trust=trust, user=user, permission=permission, content=content,
             group=group, delegate=delegate, sponsor=sponsor,
@@ -1705,6 +1817,8 @@ class TrustsRegistry(object):
             condition=shape.condition,
             along=shape.along,
         )
+
+    _register_public = register_public
 
     def _records_for(self, content_model, user_model=None, permission_model=None):
         chosen = []
@@ -1748,6 +1862,10 @@ class TrustsRegistry(object):
             user_conditions=self._stored_user_conditions(),
             user_override=self._user_override,
             condition_lookup=self._condition_lookup,
+            compiler=self._compiler if self._explicit_compiler else None,
+            path=self.path or '',
+            family=self.family,
+            user_model=self.user_model,
         )
 
     def plan_for(self, content, *, user=None, permission=None):
@@ -1764,8 +1882,7 @@ class TrustsRegistry(object):
     def permissions_for(self, user, content, **skip_flags):
         """Distinct permission rows granted to ``user`` on ``content``.
 
-        Delegates to the built registry, so delegations/sponsors use
-        production semantics rather than the old plan-only trio.
+        Delegates to the built registry.
         """
         return self.build_registry().permissions_for(
             user, content, **skip_flags,
@@ -1784,10 +1901,101 @@ class TrustsRegistry(object):
         )
 
 
-# ``BackendHandle.register`` annotates these names. ``plan.handles`` does
-# not import this module, so ``get_type_hints`` resolves them from the
-# function globals. Compile may import plan; plan does not import compile.
-from trusts.plan.handles import BackendHandle as _BackendHandle
+def validate_named_filter(model, code, predicate):
+    """Run the named-filter builder once against a fresh condition store.
 
-_BackendHandle.register.__globals__['RegisteredRelation'] = RegisteredRelation
-_BackendHandle.register.__globals__['RegisteredDelegation'] = RegisteredDelegation
+    The check is ``ConditionRegistry.register_permission_condition``
+    (``trusts/plan/conditions.py``). It lowers the builder to an ``Expr``
+    on a ``ConditionRecord``. The recorder does not keep that record or
+    the store; the sweep replays the same callable.
+    """
+    from trusts.plan.conditions import ConditionRegistry
+
+    return ConditionRegistry().register_permission_condition(
+        model, code, predicate,
+    )
+
+
+build_public_registration = RegistryFactory.build_public_registration
+build_relation = RegistryFactory.build_relation
+build_delegation = RegistryFactory.build_delegation
+
+
+def compile_recorder(recorder, *, path, family, compiler, user_model):
+    """Replay ``recorder.rows`` into one factory and return its registry.
+
+    ``user_model`` is the model the caller resolved. This is the only
+    factory constructed for those rows.
+    """
+    built = RegistryFactory(
+        compiler=compiler, path=path, family=family, user_model=user_model,
+    )
+    recorder.freeze()
+    for entry in recorder.rows:
+        kind = entry[0]
+        if kind == 'condition':
+            built.set_user_condition(entry[1], entry[2], on=entry[3])
+        elif kind == 'override':
+            built.set_user_override(entry[1], entry[2], on=entry[3])
+        elif kind == 'filter':
+            built.register_permission_condition(entry[1], entry[2], entry[3])
+        elif kind == 'principal':
+            built.register(**entry[2])
+        else:
+            built.register_delegation(**entry[2])
+    return built.build_registry()
+
+
+def build_configured_catalogs(paths, user_model, mixin):
+    """Build one catalog per listed mixin backend. A second call does nothing.
+
+    Only classes named in ``paths`` (``AUTHENTICATION_BACKENDS`` order)
+    that subclass ``mixin`` are compiled. Peers of the same family are
+    fixed on that sweep. ``mixin`` is passed by the app config so this
+    module does not import the backend module while that module is
+    still loading. The catalog and app maps are imported here so
+    importing this module does not load ``trusts.plan.conditions``.
+    """
+    from trusts.apps import catalogs, recorders
+    from trusts.compile.catalogs import Catalog
+
+    if catalogs:
+        return
+    chosen = []
+    seen = {}
+    for path in paths:
+        obj = import_string(path)
+        if not isinstance(obj, type) or not issubclass(obj, mixin):
+            continue
+        if obj in seen:
+            raise TrustsConfigurationError(
+                'Configured Trusts backend class is listed under multiple '
+                'paths: %r → %s.' % (path, [seen[obj], path])
+            )
+        seen[obj] = path
+        chosen.append((path, obj))
+    pending = []
+    for path, cls in chosen:
+        if cls not in recorders:
+            cls()
+        registry = compile_recorder(
+            recorders[cls],
+            path=path,
+            family=cls.family,
+            compiler=cls.query_compiler,
+            user_model=user_model,
+        )
+        pending.append((cls, path, cls.family, registry))
+    for cls, path, family, registry in pending:
+        peers = tuple(
+            other
+            for _cls, _path, other_family, other in pending
+            if other_family == family and other is not registry
+        )
+        catalogs[cls] = Catalog(
+            cls=cls,
+            path=path,
+            family=family,
+            registry=registry,
+            family_registries=peers,
+        )

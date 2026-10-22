@@ -15,7 +15,7 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import live_config
+from tests.apps import live_config, built_registries
 from tests.core import kernel_host_listed
 from tests.kernel_host.apps import KernelHostConfig
 from tests.myapp.models import Document, DocumentGrant
@@ -27,7 +27,7 @@ from trusts.plan.relations import (
 )
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.query import (
     AuthorizedManager,
     AuthorizedManagerMixin,
@@ -47,12 +47,6 @@ def _change_document():
         defaults={'name': 'Can change document'},
     )
     return permission
-
-
-class _Handle(object):
-    def __init__(self, registry):
-        self.registry = registry
-        self.compiler = PlanQueryCompiler()
 
 
 @contextmanager
@@ -127,8 +121,13 @@ class KernelConfigTest(SimpleTestCase):
         import trusts.apps as apps_mod
 
         config = live_config()
-        self.assertIs(type(config), KernelHostConfig)
-        self.assertIsInstance(config, TrustsImplementationConfig)
+        self.assertIs(type(config), TrustsImplementationConfig)
+        self.assertNotIsInstance(
+            __import__('django.apps', fromlist=['apps']).apps.get_app_config(
+                'trusts_kernel_host',
+            ),
+            TrustsImplementationConfig,
+        )
         self.assertFalse(hasattr(apps_mod, 'kernel_config'))
         self.assertFalse(hasattr(apps_mod, 'AppConfig'))
 
@@ -167,19 +166,19 @@ class FilterAuthorizedScopesAliasTest(SimpleTestCase):
         ) as called:
             result = filter_authorized_scopes(
                 queryset, user, permission, content=content,
-                handles=handles, skip_is_active=True,
+                registries=built_registries(handles), skip_is_active=True,
             )
         self.assertIs(result, sentinel)
         called.assert_called_once_with(
             queryset, user, permission, content=content,
-            handles=handles, skip_is_active=True,
+            registries=built_registries(handles), skip_is_active=True,
         )
 
 
 class ConditionLookupBindTest(TestCase):
     def test_construct_self_binds_and_unbind_is_zero_sql(self):
         with self.assertNumQueries(0):
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             lookup = registry.condition_lookup
         self.assertIsNotNone(lookup)
         self.assertIs(lookup.conditions, registry.conditions)
@@ -200,7 +199,7 @@ class ConditionLookupBindTest(TestCase):
         self.assertIsNone(registry.condition_lookup)
 
     def test_missing_methods_raise_and_do_not_partial_bind(self):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         default = registry.condition_lookup
         self.assertIs(default.conditions, registry.conditions)
 
@@ -415,26 +414,26 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
         self.FolderGrant.objects.create(
             folder=self.folder_a, user=self.alice, permission=self.add,
         )
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         _register_payload(registry, self.FolderGrant)
-        self.handle = _Handle(registry)
+        self.handle = registry
 
     def tearDown(self):
         self._table_cm.__exit__(None, None, None)
 
-    def _filter(self, queryset, user=None, permission=None, content=None, handles=None):
-        if handles is None:
-            handles = (self.handle,)
+    def _filter(self, queryset, user=None, permission=None, content=None, registries=None):
+        if registries is None:
+            registries = (self.handle,)
         return filter_by_permitted_content(
             queryset,
             self.alice if user is None else user,
             self.add if permission is None else permission,
             content=self.Payload if content is None else content,
-            handles=handles,
+            registries=built_registries(registries),
         )
 
     def test_prefix_folder_is_create_under_scope_without_naming_zero(self):
-        qs = self._filter(self.Folder.objects.all(), handles=(self.handle,))
+        qs = self._filter(self.Folder.objects.all(), registries=built_registries((self.handle,)))
         self.assertIsInstance(qs, QuerySet)
         self.assertIsNone(qs._result_cache)
         with self.assertNumQueries(1):
@@ -444,21 +443,21 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
 
     def test_prefix_row_correlates_and_terminal_is_none(self):
         self.assertEqual(
-            _pks(self._filter(self.Row.objects.all(), handles=(self.handle,))),
+            _pks(self._filter(self.Row.objects.all(), registries=built_registries((self.handle,)))),
             {self.row.pk},
         )
-        qs = self._filter(self.Payload.objects.all(), handles=(self.handle,))
+        qs = self._filter(self.Payload.objects.all(), registries=built_registries((self.handle,)))
         with self.assertNumQueries(0):
             self.assertFalse(qs.exists())
 
     def test_unknown_terminal_empty_handles_and_off_path_are_none(self):
         cases = (
             self._filter(
-                self.Folder.objects.all(), content=self.Other, handles=(self.handle,),
+                self.Folder.objects.all(), content=self.Other, registries=built_registries((self.handle,)),
             ),
-            self._filter(self.Folder.objects.all(), handles=()),
+            self._filter(self.Folder.objects.all(), registries=built_registries(())),
             self._filter(
-                self.Other.objects.all(), content=self.Payload, handles=(self.handle,),
+                self.Other.objects.all(), content=self.Payload, registries=built_registries((self.handle,)),
             ),
         )
         for qs in cases:
@@ -475,7 +474,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
                     self.alice,
                     'add_payload',
                     content=self.Payload,
-                    handles=(self.handle,),
+                    registries=built_registries((self.handle,)),
                 )
             with self.assertRaises(TrustsConfigurationError):
                 filter_by_permitted_content(
@@ -483,20 +482,20 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
                     self.alice,
                     None,
                     content=self.Payload,
-                    handles=(self.handle,),
+                    registries=built_registries((self.handle,)),
                 )
 
     def test_wrong_user_and_wrong_permission_deny(self):
         self.assertFalse(
             self._filter(
-                self.Folder.objects.all(), user=self.bob, handles=(self.handle,),
+                self.Folder.objects.all(), user=self.bob, registries=built_registries((self.handle,)),
             ).exists()
         )
         self.assertFalse(
             self._filter(
                 self.Folder.objects.all(),
                 permission=self.change,
-                handles=(self.handle,),
+                registries=built_registries((self.handle,)),
             ).exists()
         )
 
@@ -541,7 +540,7 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         with _tables(Scope, Payload, Row, Grant):
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             j = Ref(Grant)
             record = registry.register(
                 content=j.scope.rows.content,
@@ -568,10 +567,10 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
             Row.objects.create(scope=scope_a, content=payload)
             Grant.objects.create(scope=scope_a, user=alice, permission=add)
 
-            handle = _Handle(registry)
+            handle = registry
             qs = filter_by_permitted_content(
                 Scope.objects.order_by('pk'), alice, add,
-                content=Payload, handles=(handle,),
+                content=Payload, registries=built_registries((handle,)),
             )
             self.assertIsInstance(qs, QuerySet)
             self.assertIsNone(qs._result_cache)
@@ -585,6 +584,6 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
             self.assertFalse(
                 filter_by_permitted_content(
                     Scope.objects.all(), bob, add,
-                    content=Payload, handles=(handle,),
+                    content=Payload, registries=built_registries((handle,)),
                 ).exists()
             )

@@ -1,0 +1,254 @@
+"""Front over one built registry. Not a builder and not a second store."""
+
+from django.contrib.auth.models import Permission
+from django.db.models import Model, QuerySet, Subquery
+
+from trusts.errors import PermissionConditionError
+from trusts.plan.conditions import (
+    evaluate_registered_expression,
+    permission_has_condition,
+)
+from trusts.plan.relations import bind_checked_user
+from trusts.utils import parse_perm_code
+
+_NO_PRESET = object()
+
+
+class Catalog(object):
+    """Answers one backend class from the registry the sweep built.
+
+    ``family_registries`` are the other built registries of the same
+    family, fixed by the sweep. Callers outside the backend obtain this
+    object from ``TrustModelBackendMixin.get_catalog()``.
+    """
+
+    def __init__(self, *, cls, path, family, registry, family_registries):
+        self.cls = cls
+        self.path = path
+        self.family = family
+        self._registry = registry
+        self.family_registries = tuple(family_registries)
+
+    @property
+    def records(self):
+        return self._registry.records
+
+    @property
+    def delegations(self):
+        return self._registry.delegations
+
+    @property
+    def compiler(self):
+        return self._registry.compiler
+
+    @property
+    def user_model(self):
+        return self._registry.user_model
+
+    @property
+    def condition_lookup(self):
+        return self._registry.condition_lookup
+
+    @property
+    def user_conditions(self):
+        return self._registry.user_conditions
+
+    @property
+    def user_override(self):
+        return self._registry.user_override
+
+    def plan_for(self, content, *, user=None, permission=None):
+        return self._registry.plan_for(
+            content, user=user, permission=permission,
+        )
+
+    def applies(self, plan):
+        return self._registry.applies(plan)
+
+    def iter_permission_conditions(self):
+        return self._registry.iter_permission_conditions()
+
+    def get_permission_condition_record(self, model, cond_code):
+        return self._registry.get_permission_condition_record(model, cond_code)
+
+    def has_permission(self, user, content, permission, **skip_flags):
+        return self._registry.has_permission(
+            user, content, permission,
+            family_registries=self.family_registries,
+            **skip_flags,
+        )
+
+    def filter_authorized(self, queryset, user, permission, **skip_flags):
+        return self._registry.filter_authorized(
+            queryset, user, permission,
+            family_registries=self.family_registries,
+            **skip_flags,
+        )
+
+    def permissions_for(self, user, content, *, kind='complete', skipped=None,
+                        **skip_flags):
+        return self._registry.permissions_for(
+            user, content, kind=kind,
+            family_registries=self.family_registries,
+            skipped=skipped, **skip_flags,
+        )
+
+    def permitted_users_predicate(self, content, perm, *, skipped=(),
+                                  accepts_permission=None, owner_name=None):
+        return self._registry.permitted_users_predicate(
+            content, perm,
+            family_registries=self.family_registries,
+            skipped=skipped,
+            condition_lookup=self._registry.condition_lookup,
+            accepts_permission=accepts_permission,
+            owner_name=owner_name,
+        )
+
+    def permitted_users(self, content, perm, **skip_flags):
+        return self._registry.permitted_users(
+            content, perm,
+            family_registries=self.family_registries,
+            **skip_flags,
+        )
+
+    def has_perm(self, user_obj, permext, obj, **skip_flags):
+        inquiry = bind_checked_user(
+            user_obj, skip_flags=skip_flags, registry=self._registry,
+        )
+        if inquiry.denied:
+            return False
+        entry = self.prepare_has_perm(
+            user_obj, permext, obj, skipped=inquiry.values,
+        )
+        return entry.execute()
+
+    def get_all_permissions(self, user_obj, obj, **skip_flags):
+        return self._permission_codes(
+            user_obj, obj, skip_flags, kind='complete',
+        )
+
+    def get_group_permissions(self, user_obj, obj, **skip_flags):
+        return self._permission_codes(
+            user_obj, obj, skip_flags, kind='group',
+        )
+
+    def prepare_has_perm(self, user_obj, permext, obj, *, skipped):
+        registry = self._registry
+        model = _content_model(obj)
+        if not registry.applies(registry.plan_for(obj, user=user_obj)):
+            return PreparedInquiry(model, result=False)
+        record, extra_q = self._condition_overlay(permext, obj, user_obj)
+        applabel, modelname, action, _cond = parse_perm_code(permext)
+        perm = '%s.%s_%s' % (applabel, action, modelname)
+        if permission_has_condition(permext) and record is None:
+            return PreparedInquiry(model, result=False)
+        held = registry.has_permission(
+            user_obj, obj, _permission_binding(perm, model),
+            extra_q=extra_q, family_registries=self.family_registries,
+            permission_model=Permission,
+            skipped=dict(skipped) if isinstance(skipped, dict) else {},
+        )
+        if not held:
+            return PreparedInquiry(model, result=False)
+        if record is None or extra_q is not None:
+            return PreparedInquiry(model, result=True)
+        return self.permission_condition_met(record, user_obj, perm, obj)
+
+    def permission_condition_met(self, record, user_obj, perm, obj):
+        model = _content_model(obj)
+        if record.expr is None:
+            label = _model_label(model)
+            raise PermissionConditionError(
+                'Permission condition on %s is unbound.' % label
+            )
+        if isinstance(obj, QuerySet):
+            objs, model = obj.all(), obj.model
+        elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
+            objs, model = obj, None
+        else:
+            objs = [obj]
+        met = all(
+            evaluate_registered_expression(
+                record.expr, user_obj, perm, item,
+                model=model or item.__class__,
+            )
+            for item in objs
+        )
+        return PreparedInquiry(model, result=bool(met))
+
+    def _permission_codes(self, user_obj, obj, skip_flags, *, kind):
+        inquiry = bind_checked_user(
+            user_obj, skip_flags=skip_flags, registry=self._registry,
+        )
+        if inquiry.denied:
+            return set()
+        qs = self.permissions_for(
+            user_obj, obj, kind=kind,
+            skipped=dict(inquiry.values) if isinstance(inquiry.values, dict) else {},
+        )
+        if qs is None or qs == ():
+            return set()
+        return _perm_codes(qs)
+
+    def _condition_overlay(self, permext, obj, user_obj):
+        if not permission_has_condition(permext):
+            return None, None
+        applabel, modelname, _action, cond = parse_perm_code(permext)
+        model = _content_model(obj)
+        lookup = self._registry.condition_lookup
+        if lookup is None:
+            if isinstance(obj, QuerySet):
+                return None, None
+            raise AttributeError(
+                'Permission condition code "%s" is not associate with model "%s_%s"'
+                % (cond, applabel, modelname)
+            )
+        record = lookup.record_for(model, cond)
+        if record is None or not isinstance(obj, QuerySet):
+            return record, None
+        return record, lookup.compile_q(obj.model, permext, user_obj)
+
+
+class PreparedInquiry(object):
+    def __init__(self, model, result=_NO_PRESET, qs=None):
+        self.model = model
+        self.result = result
+        self.qs = qs
+
+    def execute(self):
+        if self.result is not _NO_PRESET:
+            return self.result
+        return bool(self.qs.exists())
+
+
+def _content_model(obj):
+    return obj.model if isinstance(obj, QuerySet) else obj.__class__
+
+
+def _model_label(model):
+    meta = model._meta if isinstance(model, type) else getattr(model, '_meta', None)
+    if meta is None:
+        return model
+    return meta.label
+
+
+def _perm_codes(permission_qs):
+    return set(
+        '%s.%s' % (app, code)
+        for app, code in permission_qs.values_list(
+            'content_type__app_label', 'codename',
+        )
+    )
+
+
+def _permission_binding(perm, model):
+    if isinstance(perm, Permission):
+        return perm
+    applabel, modelname, action, _cond = parse_perm_code(perm)
+    return Subquery(
+        Permission.objects.filter(
+            codename='%s_%s' % (action, modelname),
+            content_type__app_label=applabel.lower(),
+            content_type__model=modelname,
+        ).values('pk')[:1]
+    )

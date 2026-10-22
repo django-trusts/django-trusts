@@ -1,34 +1,36 @@
-from trusts.apps import TrustsImplementationConfig
+from django.apps import AppConfig
 
 DOCUMENT_BACKEND = 'tests.myapp.backends.DocumentBackend'
 
 
-class DocumentConfig(TrustsImplementationConfig):
+class DocumentConfig(AppConfig):
     name = 'tests.myapp'
     label = 'myapp'
     default = False
     default_auto_field = 'django.db.models.AutoField'
-    trusts_backend_paths = (DOCUMENT_BACKEND,)
 
     def ready(self):
-        super().ready()
+        from tests.myapp.backends import DocumentBackend
         from tests.myapp.models import (
             Document,
             DocumentDelegation,
             DocumentGrant,
         )
 
-        handle = self.configured_backend()
-        registry = handle.registry
-        if getattr(self, '_document_grant_registry_id', None) is registry:
+        target = DocumentBackend().get_registry()
+        register = target.register
+        add_filter = target.add_named_filter
+        if target.frozen:
+            # set_installed_apps() builds a new config against a recorder
+            # the sweep already froze.
             return
-        handle.register(
+        register(
             trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        handle.register(
+        register(
             trust=DocumentDelegation,
             delegate='delegate',
             sponsor='sponsor',
@@ -37,9 +39,8 @@ class DocumentConfig(TrustsImplementationConfig):
                 relationship.allowed_permissions.contains(permission)
             ),
         )
-        handle.add_named_filter(
+        add_filter(
             Document,
             'non_confidential',
             lambda u, p, o: o.confidential != True,
         )
-        self._document_grant_registry_id = registry

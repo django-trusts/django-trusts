@@ -35,13 +35,17 @@ import uuid
 from decimal import Decimal
 from pathlib import Path
 
+from django.contrib.auth import get_backends
 from django.core import checks as django_checks
 from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
+from trusts.apps import user_model
+from trusts.backends import TrustModelBackendMixin
 from trusts.commons import _resolved_hop
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
+from trusts.plan.contents import _relationship_registries
 from trusts.plan.delegations import _sponsor_record_matches
 from trusts.inspect.format import _format_policy_sql
 from trusts.inspect.yaml import (
@@ -170,21 +174,19 @@ def resolve_policy_database(override=None):
     return alias
 
 
-def render_policy_sql_bytes(*, alias=None, handles=None):
+def render_policy_sql_bytes(*, alias=None, registries=None):
     """Return the schema-1 policy SQL document as UTF-8 bytes.
 
     ``alias`` overrides ``TRUSTS_POLICY_DATABASE`` for this call only.
-    ``handles`` defaults to the configured implementation handles.
+    ``registries`` defaults to every catalog's built registry.
     Compilation uses ``as_sql()`` / ``sql_with_params()`` and does not
     execute the exported statements. A failure raises before a partial
     document is returned.
     """
     resolved = resolve_policy_database(alias)
-    if handles is None:
-        from trusts.apps import configured_implementation_handles
-
-        handles = configured_implementation_handles()
-    document = _build_document(tuple(handles), resolved)
+    if registries is None:
+        registries = _configured_registries()
+    document = _build_document(tuple(registries), resolved)
     return _dump_document(document)
 
 
@@ -242,120 +244,45 @@ def resolve_lockfile_path(*, override=None):
     return PolicyLockLocation(path, explicit, _classify_lockfile(path))
 
 
-_REGISTRY_MISSING = object()
-
-
-def _built_registry(value):
-    """Built registry for a handle or registry, or ``None``.
-
-    A handle builds through its own ``build_registry()`` when it has
-    one; a registry itself builds (or is returned) the same way.
-    ``None`` is preserved so the caller keeps its present-but-broken
-    error, rather than silently skipping an unconfigured backend.
-    """
-    if value is None:
-        return None
-    registry = getattr(value, 'registry', _REGISTRY_MISSING)
-    if registry is not _REGISTRY_MISSING:
-        if registry is None:
-            return None
-        # Only a handle's own build_registry() decides: BackendHandle
-        # builds a builder, returns a built registry as-is, and passes
-        # a duck registry without build_registry through untouched.
-        # A handle with no build_registry (duck views in tests) keeps
-        # its registry object exactly, including attribute overrides
-        # a delegated build_registry() on that registry would lose.
-        build_handle = getattr(value, 'build_registry', None)
-        return build_handle() if callable(build_handle) else registry
-    build = getattr(value, 'build_registry', None)
-    return build() if callable(build) else value
-
-
-def _render_handle(handle, cache=None):
-    """Handle holding the built registry, built once per ``cache``.
-
-    Reuses ``handle`` when its registry is already the built one, so
-    identity and compiler are preserved exactly; otherwise returns a
-    ``BackendHandle`` with the same path/compiler and the built
-    registry. A ``None`` registry is returned untouched so the
-    caller's missing-registry error still fires.
-    """
-    if cache is not None:
-        key = id(handle)
-        if key in cache:
-            return cache[key]
-    built = _built_registry(handle)
-    if built is None or getattr(handle, 'registry', _REGISTRY_MISSING) is built:
-        rendered = handle
-    elif getattr(handle, 'registry', _REGISTRY_MISSING) is _REGISTRY_MISSING and not hasattr(handle, 'path'):
-        rendered = handle
-    else:
-        from trusts.plan.handles import BackendHandle
-        from trusts.plan.relations import PlanQueryCompiler
-
-        compiler = getattr(handle, 'compiler', None)
-        if compiler is None:
-            compiler = PlanQueryCompiler()
-        rendered = BackendHandle(
-            path=getattr(handle, 'path', '') or '',
-            registry=built,
-            compiler=compiler,
-        )
-    if cache is not None:
-        cache[id(handle)] = rendered
-    return rendered
-
-
-def _render_handles(handle, handles):
-    cache = {}
-    return _render_handle(handle, cache), tuple(
-        _render_handle(item, cache) for item in handles
-    )
-
-
 class _PolicyVisitor(object):
     """Snapshot visitor: renders each walked question to policy SQL.
 
     Supplies the alias, the user/permission/content sentinels, and the
-    sponsor handles for one backend render. Built registries are held,
-    not re-derived: ``handle`` / ``handles`` are render handles whose
-    registry is the registry built once for this render, and
-    ``registry`` is that built registry. ``visit(question)`` is the
-    single visitor method :meth:`Registry.walk_questions`
-    calls; it accumulates the same document structure (and key order)
-    the hard-coded projection produced. The six ``_compile_*``
-    methods below are its per-question bodies; the module-level
-    ``_compile_*`` functions are one-off wrappers around them.
+    family registries for one backend render. ``registry`` is the built
+    registry for this backend. ``registries`` are the built registries
+    in this render. ``visit(question)`` is the single visitor method
+    :meth:`Registry.walk_questions` calls; it accumulates the same
+    document structure (and key order) the hard-coded projection
+    produced. The six ``_compile_*`` methods below are its
+    per-question bodies; the module-level ``_compile_*`` functions are
+    one-off wrappers around them.
     """
 
-    def __init__(self, handle, alias, handles, *, trust_ids=None):
+    def __init__(self, registry, alias, registries, *, trust_ids=None):
         self.alias = alias
-        self.registry = _built_registry(handle)
-        self.handle, self.handles = _render_handles(handle, handles)
-        if self.registry is None:
-            self.registry = getattr(self.handle, 'registry', None)
+        self.registry = registry
+        self.registries = tuple(registries)
         self._trust_ids = dict(trust_ids or {})
         self._contents = {}
         self._classifier_records = {}
         self._ordinary_records = {}
 
-    def sponsor_registries(self):
-        """Distinct built sponsor registries, excluding this registry."""
-        sponsors = []
-        for item in self.handles:
-            registry = _built_registry(item)
+    def family_registries(self):
+        """Distinct built registries in this render, excluding this one."""
+        found = []
+        for registry in self.registries:
             if registry is None or registry is self.registry:
                 continue
-            if any(registry is seen for seen in sponsors):
+            if any(registry is seen for seen in found):
                 continue
-            sponsors.append(registry)
-        return tuple(sponsors)
+            found.append(registry)
+        return tuple(found)
 
     def _all_registries(self):
-        sponsors = self.sponsor_registries()
+        peers = self.family_registries()
         if self.registry is None:
-            return sponsors
-        return (self.registry,) + sponsors
+            return peers
+        return (self.registry,) + peers
 
     def content_for(self, label):
         return self._contents[label]
@@ -487,13 +414,13 @@ class _PolicyVisitor(object):
         from trusts.plan.contents import _compile_granted
         from trusts.plan.rewrites import bind_once
 
-        handle, alias, handles = self.handle, self.alias, self.handles
+        registry, alias, registries = self.registry, self.alias, self.registries
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         queryset = _content_manager(model).all()
         granted = _compile_granted(
-            (handle,), queryset, user, permission, kind='complete',
-            sponsor_handles=handles,
+            (registry,), queryset, user, permission, kind='complete',
+            family_registries=registries,
         )
         if granted is None:
             raise TrustsConfigurationError(
@@ -508,13 +435,13 @@ class _PolicyVisitor(object):
         from trusts.plan.contents import _compile_granted
         from trusts.plan.rewrites import bound_exists_query
 
-        handle, alias, handles = self.handle, self.alias, self.handles
+        registry, alias, registries = self.registry, self.alias, self.registries
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         instance = _content_sentinel(model, alias)
         granted = _compile_granted(
-            (handle,), instance, user, permission, kind='complete',
-            sponsor_handles=handles,
+            (registry,), instance, user, permission, kind='complete',
+            family_registries=registries,
         )
         if granted is None:
             raise TrustsConfigurationError(
@@ -530,18 +457,18 @@ class _PolicyVisitor(object):
     def _compile_get_all_permissions(self, records, model):
         from trusts.plan.aggregates import _compile_common_permissions
 
-        handle, alias, handles = self.handle, self.alias, self.handles
+        registry, alias, registries = self.registry, self.alias, self.registries
         user = _role_sentinel(records[0], 'user', alias)
         instance = _content_sentinel(model, alias)
         plan = self.registry.plan_for(model)
         if plan.delegations:
             queryset = _compile_common_permissions(
-                (handle,), instance, user, kind='complete',
-                sponsor_handles=handles,
+                (registry,), instance, user, kind='complete',
+                family_registries=registries,
             )
         else:
             queryset = _compile_common_permissions(
-                (handle,), instance, user, kind='complete',
+                (registry,), instance, user, kind='complete',
             )
         if queryset is None:
             raise TrustsConfigurationError(
@@ -555,12 +482,12 @@ class _PolicyVisitor(object):
     def _compile_get_permitted_users(self, records, model):
         from trusts.plan.users import lock_permitted_users_queryset
 
-        handle, alias, handles = self.handle, self.alias, self.handles
+        registry, alias, registries = self.registry, self.alias, self.registries
         content = _content_sentinel(model, alias)
         _populate_reverse_along_identity(content, records, alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         queryset = lock_permitted_users_queryset(
-            handle, content, permission, handles=handles,
+            registry, content, permission, registries=registries,
         )
         return _compile_queryset(
             queryset, alias, record=records[0], expr=None, records=records,
@@ -569,25 +496,22 @@ class _PolicyVisitor(object):
 
     def _compile_filter_by_permitted_content(self, records, model):
         """One statement per proper prefix, the queryset that actually runs."""
-        from trusts.plan.contents import (
-            _compile_permitted_content_queryset,
-            _relationship_handles,
-        )
+        from trusts.plan.contents import _compile_permitted_content_queryset
 
-        handle, alias, handles = self.handle, self.alias, self.handles
+        registry, alias, registries = self.registry, self.alias, self.registries
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
-        listed = _relationship_handles((handle,))
-        sponsors = _relationship_handles(handles)
+        listed = _relationship_registries((registry,))
+        peers = _relationship_registries(registries)
         rows = []
-        for prefix in _permitted_content_prefix_models(handle, model):
+        for prefix in _permitted_content_prefix_models(registry, model):
             queryset = _compile_permitted_content_queryset(
                 _content_manager(prefix).all(),
                 user,
                 permission,
                 content=model,
-                handles=listed,
-                sponsor_handles=sponsors,
+                registries=listed,
+                family_registries=peers,
             )
             if queryset.query.is_empty():
                 continue
@@ -604,11 +528,11 @@ class _PolicyVisitor(object):
     def _compile_get_group_permissions(self, records, model):
         from trusts.plan.aggregates import _compile_common_permissions
 
-        handle, alias = self.handle, self.alias
+        registry, alias = self.registry, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         instance = _content_sentinel(model, alias)
         queryset = _compile_common_permissions(
-            (handle,), instance, user, kind='group',
+            (registry,), instance, user, kind='group',
         )
         if queryset is None:
             raise TrustsConfigurationError(
@@ -620,7 +544,7 @@ class _PolicyVisitor(object):
         )
 
 
-def _build_document(handles, alias):
+def _build_document(registries, alias):
     from django.conf import settings
 
     engine = (settings.DATABASES.get(alias) or {}).get('ENGINE')
@@ -628,13 +552,9 @@ def _build_document(handles, alias):
         raise TrustsConfigurationError(
             'Policy SQL render alias %r has no DATABASES ENGINE.' % (alias,)
         )
-    # Build each registry once for this render and hold the built
-    # registries on render handles; every later read goes through them.
-    cache = {}
-    render_handles = tuple(_render_handle(handle, cache) for handle in handles)
     projected = []
-    for handle in render_handles:
-        projected.append(_project_backend(handle, alias, render_handles))
+    for registry in registries:
+        projected.append(_project_backend(registry, alias, registries))
     projected.sort(key=lambda row: row['path'])
     paths = [row['path'] for row in projected]
     if len(paths) != len(set(paths)):
@@ -648,42 +568,39 @@ def _build_document(handles, alias):
     }
 
 
-def _project_backend(handle, alias, handles):
-    path = getattr(handle, 'path', None)
+def _project_backend(registry, alias, registries):
+    if registry is None:
+        raise TrustsConfigurationError(
+            'Policy SQL render requires a registry for backend path %r.'
+            % (None,)
+        )
+    path = registry.path
     if not isinstance(path, str) or path == '':
         raise TrustsConfigurationError(
-            'Policy SQL render handle is missing a configured path: %r.'
+            'Policy SQL render registry is missing a configured path: %r.'
             % (path,)
         )
-    from trusts.apps import _handle_authorization_family
-
-    family = _handle_authorization_family(handle)
+    family = registry.family
     if family != 'relationship':
         raise TrustsConfigurationError(
             'Policy SQL render only serializes family %r; backend path '
             '%r has unsupported family %r.'
             % ('relationship', path, family)
         )
-    registry = _built_registry(handle)
-    if registry is None:
-        raise TrustsConfigurationError(
-            'Policy SQL render requires a registry for backend path %r.'
-            % (path,)
-        )
-    records = tuple(getattr(registry, 'records', ()) or ())
-    delegations = tuple(getattr(registry, 'delegations', ()) or ())
+    records = tuple(registry.records)
+    delegations = tuple(registry.delegations)
     all_records = records + delegations
     ids = _assign_ids(all_records)
     named_filters = _project_named_filters(registry, alias)
     return {
         'path': path,
         'contents': _project_contents(
-            handle, alias, all_records, ids, named_filters, handles,
+            registry, alias, all_records, ids, named_filters, registries,
         ),
     }
 
 
-def _project_contents(handle, alias, records, ids, named_filters, handles):
+def _project_contents(registry, alias, records, ids, named_filters, registries):
     groups = []
     index = {}
     for record, trust_id in zip(records, ids):
@@ -710,16 +627,15 @@ def _project_contents(handle, alias, records, ids, named_filters, handles):
     contents = []
     seen = set()
     visitor = _PolicyVisitor(
-        handle, alias, handles,
+        registry, alias, registries,
         trust_ids={
             id(record): trust_id for record, trust_id in zip(records, ids)
         },
     )
-    registry = visitor.registry
-    if groups and registry is not None and hasattr(registry, 'walk_questions'):
-        # The visitor supplies sentinels/alias; the registry walks all
-        # possible questions per content group in document order.
-        registry.walk_questions(visitor, sponsors=visitor.sponsor_registries())
+    if groups:
+        registry.walk_questions(
+            visitor, family_registries=visitor.family_registries(),
+        )
         for group in groups:
             seen.add(group['label'])
             content = visitor.content_for(group['label'])
@@ -729,13 +645,6 @@ def _project_contents(handle, alias, records, ids, named_filters, handles):
                     _named_filter_row(row) for row in filters
                 ]
             contents.append(content)
-    else:
-        for group in groups:
-            seen.add(group['label'])
-            contents.append(_project_content(
-                handle, alias, group, filters_by_model.get(group['label'], ()),
-                handles,
-            ))
     for model in filter_order:
         if model in seen:
             continue
@@ -746,52 +655,6 @@ def _project_contents(handle, alias, records, ids, named_filters, handles):
             ],
         })
     return contents
-
-
-def _project_content(handle, alias, group, filters, handles):
-    """One content group, via the same visitor walk_questions drives.
-
-    Kept for the no-``walk_questions`` fallback above; the normal path
-    projects every group through one walk in ``_project_contents``.
-    """
-    from trusts.compile.factory import RegisteredDelegation
-
-    visitor = _PolicyVisitor(handle, alias, handles, trust_ids={
-        id(record): trust_id for record, trust_id in group['legs']
-    })
-    legs = [record for record, _trust_id in group['legs']]
-    records = tuple(
-        record for record in legs
-        if not isinstance(record, RegisteredDelegation)
-    )
-    delegations = tuple(
-        record for record in legs
-        if isinstance(record, RegisteredDelegation)
-    )
-    content = visitor._ensure_content(group['model'], records, delegations)
-    label = group['label']
-    classifier = visitor._classifier_records[label]
-    content.update({
-        'permitted': _sql_row(visitor._compile_permitted(
-            classifier, group['model'])),
-        'has_perm': _sql_row(visitor._compile_has_perm(
-            classifier, group['model'])),
-        'get_all_permissions': _sql_row(
-            visitor._compile_get_all_permissions(
-                classifier, group['model'])),
-    })
-    if any(getattr(record, 'via_group', False) for record in records):
-        content['get_group_permissions'] = _sql_row(
-            visitor._compile_get_group_permissions(records, group['model']))
-    content['get_permitted_users'] = _sql_row(
-        visitor._compile_get_permitted_users(classifier, group['model']))
-    permitted_content = visitor._compile_filter_by_permitted_content(
-        classifier, group['model'])
-    if permitted_content:
-        content['filter_by_permitted_content'] = permitted_content
-    if filters:
-        content['named_filters'] = [_named_filter_row(row) for row in filters]
-    return content
 
 
 _CONST_SOURCE = {
@@ -919,24 +782,19 @@ def _delegation_relation(record, role):
     }
 
 
-def _policy_classifier_records(records, delegations, handles, model):
+def _policy_classifier_records(records, delegations, registries, model):
     """Ordinary records that classify policy-lock bind placeholders.
 
     A delegation-only backend has no permission terminal of its own. Its
     requested-permission and user sentinels therefore come from compatible
-    ordinary sponsor grants across the rendered relationship handles. This
+    ordinary sponsor grants across the rendered relationship registries. This
     is also the exact ordinary-only union used by the runtime compiler, so a
     delegated row can never become a sponsor record here.
     """
     selected = list(records)
     seen = {id(record) for record in selected}
-    for candidate_handle in handles:
-        # Candidates may be built registries (the snapshot walk) or
-        # handles carrying one; either answers plan_for directly.
-        registry = getattr(candidate_handle, 'registry', None)
+    for registry in registries:
         if registry is None:
-            registry = candidate_handle
-        if not hasattr(registry, 'plan_for'):
             continue
         plan = registry.plan_for(model)
         for ordinary in plan.records:
@@ -1004,42 +862,35 @@ def _role_sentinel(record, role, alias):
     )
 
 
-def _compile_permitted(handle, alias, records, model, handles):
-    return _PolicyVisitor(handle, alias, handles)._compile_permitted(
+def _compile_permitted(registry, alias, records, model, registries):
+    return _PolicyVisitor(registry, alias, registries)._compile_permitted(
         records, model)
 
 
-def _compile_has_perm(handle, alias, records, model, handles):
-    return _PolicyVisitor(handle, alias, handles)._compile_has_perm(
+def _compile_has_perm(registry, alias, records, model, registries):
+    return _PolicyVisitor(registry, alias, registries)._compile_has_perm(
         records, model)
 
 
-def _compile_get_all_permissions(handle, alias, records, model, handles):
-    return _PolicyVisitor(handle, alias, handles)._compile_get_all_permissions(
+def _compile_get_all_permissions(registry, alias, records, model, registries):
+    return _PolicyVisitor(registry, alias, registries)._compile_get_all_permissions(
         records, model)
 
 
-def _compile_get_permitted_users(handle, alias, records, model, handles):
-    return _PolicyVisitor(handle, alias, handles)._compile_get_permitted_users(
+def _compile_get_permitted_users(registry, alias, records, model, registries):
+    return _PolicyVisitor(registry, alias, registries)._compile_get_permitted_users(
         records, model)
 
 
-def _permitted_content_prefix_models(handle, model):
+def _permitted_content_prefix_models(registry, model):
     """Concrete models that are a proper prefix of this backend's content path.
 
     Order is registration order, then path order. A model is listed once.
     The protected model is included only when an earlier hop on the same
-    path also uses it. Delegates to the built registry, which owns the
-    same computation for ``walk_questions``.
+    path also uses it.
     """
-    registry = _built_registry(handle)
-    if registry is None:
-        registry = handle
-    delegate = getattr(registry, '_permitted_content_prefix_models', None)
-    if callable(delegate):
-        return delegate(model)
     plan = registry.plan_for(model)
-    legs = tuple(plan.records) + tuple(getattr(plan, 'delegations', ()) or ())
+    legs = tuple(plan.records) + tuple(plan.delegations)
     found = []
     seen = set()
     for record in legs:
@@ -1059,16 +910,16 @@ def _permitted_content_prefix_models(handle, model):
     return tuple(found)
 
 
-def _compile_filter_by_permitted_content(handle, alias, records, model, handles):
+def _compile_filter_by_permitted_content(registry, alias, records, model, registries):
     """One statement per proper prefix, the queryset that actually runs."""
     return _PolicyVisitor(
-        handle, alias, handles,
+        registry, alias, registries,
     )._compile_filter_by_permitted_content(records, model)
 
 
-def _compile_get_group_permissions(handle, alias, records, model):
+def _compile_get_group_permissions(registry, alias, records, model):
     return _PolicyVisitor(
-        handle, alias, (handle,),
+        registry, alias, (registry,),
     )._compile_get_group_permissions(records, model)
 
 
@@ -1278,11 +1129,30 @@ def _compile_named_filter(model, expr, alias):
     return _compile_queryset(queryset, alias, record=None, expr=expr)
 
 
-def _any_sentinel_user(alias):
-    from django.contrib.auth import get_user_model
+def _configured_registries():
+    """Built registries of listed mixin backends, via ``get_catalog()``."""
+    found = []
+    seen = set()
+    for backend in get_backends():
+        if not isinstance(backend, TrustModelBackendMixin):
+            continue
+        if type(backend) in seen:
+            continue
+        seen.add(type(backend))
+        catalog = backend.get_catalog()
+        if catalog is None:
+            continue
+        found.append(catalog._registry)
+    return tuple(found)
 
-    user_model = get_user_model()
-    return _sentinel(user_model, user_model._meta.pk.attname, alias=alias)
+
+def _any_sentinel_user(alias):
+    model = user_model()
+    if model is None:
+        raise TrustsConfigurationError(
+            'Policy SQL has no user model. TrustsImplementationConfig.ready has not stored one.'
+        )
+    return _sentinel(model, model._meta.pk.attname, alias=alias)
 
 
 def _any_sentinel_permission(alias):

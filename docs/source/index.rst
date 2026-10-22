@@ -241,27 +241,27 @@ Register the model paths when the application starts:
                GroupDocumentPermission,
            )
 
-           backend = self.configured_backend()
-           backend.register(
+           registry = DocumentBackend().get_registry()
+           registry.register(
                trust=DocumentPermission,
                user=lambda t: t.user,
                permission=lambda t: t.permission,
                content=lambda t: t.document,
            )
-           backend.register(
+           registry.register(
                trust=GroupDocumentPermission,
                user=lambda t: t.group.user,
                group=lambda t: t.group,
                content=lambda t: t.document,
            )
-           backend.register(
+           registry.register(
                trust=DocumentDelegation,
                delegate=lambda d: d.delegate,
                sponsor=lambda d: d.sponsor,
                content=lambda d: d.document,
                condition=lambda d, p: d.permissions.contains(p),
            )
-           backend.add_named_filter(
+           registry.add_named_filter(
                Document,
                "non_confidential",
                predicate=lambda u, p, o: o.confidential != True,
@@ -290,7 +290,7 @@ equivalent of the first registration is:
 
 .. code-block:: python
 
-   backend.register(
+   registry.register(
        trust=DocumentPermission,
        user="user",
        permission="permission",
@@ -627,7 +627,7 @@ Named filters
 
 A named filter further constrains an existing permission; it cannot grant
 permission by itself. Register it against the protected model during
-``AppConfig.ready()`` with ``backend.add_named_filter(...)``.
+``AppConfig.ready()`` with ``registry.add_named_filter(...)``.
 
 Its condition is a three-argument lambda or function: ``u`` is the requesting
 user, ``p`` is the requested permission, and ``o`` is the protected object. It
@@ -650,7 +650,7 @@ API also supports paths through multiple relationships:
 
 .. code-block:: python
 
-   backend.register(
+   registry.register(
        trust=TeamDocumentPermission,
        user=lambda t: t.team.members,  # or "team__members"
        permission=lambda t: t.permission,  # or "permission"
@@ -696,7 +696,7 @@ Inherited relationships
 
 ``along=`` declares bounded hierarchical reachability and also works with
 delegated registrations. For example, ``along=("parent", 8)`` on
-``backend.register`` applies the same bounded walk to object checks,
+``registry.register`` applies the same bounded walk to object checks,
 permitted-content querysets, permission enumeration, users from content, and
 authorization-policy output. See the `bounded-reach security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
