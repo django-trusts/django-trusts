@@ -438,12 +438,6 @@ class Compiler(object):
         """Plan compiler stored when the config does not set one."""
         return PlanQueryCompiler()
 
-    @staticmethod
-    def listener():
-        """Checks handed each call on the app config's registration log."""
-        from trusts.compile.listener import RegistrationListener
-        return RegistrationListener()
-
     def add_named_filter(self, model, code, predicate):
         """Register a ``:code`` condition on ``model`` for this instance.
 

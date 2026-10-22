@@ -50,11 +50,9 @@ class RegistrationListener(object):
             self._saw_register = True
 
     def _compiler(self):
-        if self._inner is not None:
-            return self._inner
+        if self._inner is not None: return self._inner
         user = _loaded_user_model()
-        if user is None:
-            return None
+        if user is None: return None
         from trusts.compile.factory import Compiler
         self._inner = Compiler(
             user_model=user, path='trusts.compile.listener',

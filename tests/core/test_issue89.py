@@ -163,8 +163,9 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
         from django.contrib.auth import get_user_model
         from trusts.apps import Recorder
         from trusts.compile.factory import Compiler
+        from trusts.compile.listener import RegistrationListener
 
-        log = Recorder(Compiler.listener())
+        log = Recorder(RegistrationListener())
         _contribute_recorder(log)
         built_from = Compiler(
             user_model=get_user_model(),

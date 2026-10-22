@@ -590,16 +590,25 @@ def condition_model_label(model):
     return repr(model)
 
 
+_PARSED_NAMED_FILTERS = {}
+
+
 def parse_named_filter(builder, model, code, user_model):
     """Return the checked tree for one named-filter builder.
 
-    The builder runs once. Constants are normalized into durable
-    values. When ``model`` has ``_meta``, field paths and operand
-    types are checked against that model and ``user_model``.
+    The builder runs once. A later parse of the same builder, model,
+    code, and user model returns that tree. Constants are normalized
+    into durable values. When ``model`` has ``_meta``, field paths and
+    operand types are checked against that model and ``user_model``.
     """
+    key = (builder, condition_model_key(model), condition_model_key(user_model), code)
+    expr = _PARSED_NAMED_FILTERS.get(key)
+    if expr is not None:
+        return expr
     expr = normalize_expression(
         invoke(builder, ('user', 'permission', 'object')),
     )
     if getattr(model, '_meta', None) is not None:
         validate_expression(expr, model, user_model)
+    _PARSED_NAMED_FILTERS[key] = expr
     return expr
