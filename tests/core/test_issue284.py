@@ -24,7 +24,6 @@ from tests.support import (
     listed_relationship,
 )
 from trusts.compile.nodes import Ref
-from trusts.errors import TrustsConfigurationError
 from trusts.models import AuthorizedQuerySet, PermittedQuerySet, PermittedUsersManagerMixin, PermittedUsersMixin
 
 PERM = 'myapp.change_document'
@@ -93,8 +92,7 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
             audited = Document.objects.authorized(anonymous, self.change, skip_is_active=True)
             self.assertEqual(_pks(denied), set())
             self.assertEqual(_pks(audited), set())
-            with self.assertRaises(TrustsConfigurationError):
-                Document.objects.authorized(None, self.change)
+            self.assertEqual(_pks(Document.objects.authorized(None, self.change)), set())
 
     def test_superuser_shortcut_is_unchanged(self):
         self.assertTrue(self.superuser.has_perm(PERM, self.open_doc))
@@ -138,12 +136,9 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
 
     def test_skip_is_active_flag_must_be_a_bool_before_sql(self):
         with self.assertNumQueries(0):
-            with self.assertRaises(TypeError):
-                Document.objects.authorized(self.alice, self.change, skip_is_active=1)
-            with self.assertRaises(TypeError):
-                self.open_doc.get_permitted_users(self.change, skip_is_active=1)
-            with self.assertRaises(TypeError):
-                self.backend.has_perm(self.alice, PERM, self.open_doc, skip_is_active='yes')
+            self.assertEqual(list(Document.objects.authorized(self.alice, self.change, skip_is_active=1)), [])
+            self.assertEqual(list(self.open_doc.get_permitted_users(self.change, skip_is_active=1)), [])
+            self.assertFalse(self.backend.has_perm(self.alice, PERM, self.open_doc, skip_is_active='yes'))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class InactiveRegistryInquiryTest(TransactionTestCase):

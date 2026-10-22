@@ -112,9 +112,11 @@ def user_skip_params(user, skip_flags, *, subjects=None, catalog=None,
     """
     selected = {}
     for key, value in skip_flags.items():
-        if not key.startswith('skip_') or not key[5:].isidentifier():
-            raise TypeError('Unexpected keyword argument %r.' % (key,))
-        _require_mode_flag(value, key)
+        if (
+            not key.startswith('skip_') or not key[5:].isidentifier()
+            or not isinstance(value, bool)
+        ):
+            return SkipParams(True, {})
         selected[key[5:]] = value
     denied = require_user and (
         user is None or _user_identity_denied(user)
@@ -125,9 +127,8 @@ def user_skip_params(user, skip_flags, *, subjects=None, catalog=None,
         known = known_skip_names((catalog,))
     else:
         known = known_skip_names(subjects or ())
-    unknown = next((name for name in selected if name not in known), None)
-    if unknown is not None:
-        raise TypeError('Unknown skip keyword %r.' % ('skip_%s' % unknown,))
+    if any(name not in known for name in selected):
+        return SkipParams(True, {})
     return SkipParams(False, {
         name: selected.get(name, False) for name in known
     })
@@ -176,13 +177,6 @@ def _or_q(left, right):
     if right is None:
         return left
     return left | right
-
-
-def _require_mode_flag(value, name):
-    """A skip keyword must be a real boolean."""
-    if not isinstance(value, bool):
-        raise TypeError('%s must be a bool, not %r.' % (name, value))
-    return value
 
 
 def _user_identity_denied(user):
@@ -354,7 +348,8 @@ class RelationPlan:
         lookup (``Subquery`` / nested ``OuterRef``) so callers can bind
         permission identity in the same SQL statement.
         """
-        user = require_instance(user, 'user')
+        if not isinstance(user, Model):
+            return None
         permission = bind_terminal(permission, 'permission')
         if not self.records:
             return None
@@ -372,12 +367,8 @@ class RelationPlan:
         without the outer user. Eligible grants and candidate users join
         outside the recursive CTE.
         """
-        content = require_instance(content, 'content')
-        if content.pk is None:
-            raise TrustsConfigurationError(
-                'content must be a saved %s instance.'
-                % content._meta.label
-            )
+        if not isinstance(content, Model) or content.pk is None:
+            return None
         permission = bind_terminal(permission, 'permission')
         if not self.records:
             return None
@@ -445,6 +436,12 @@ class RelationPlan:
     def filter_content(self, queryset, user, permission, *,
                        skipped=()):
         """Lazy queryset of candidate rows correlated to the same plan."""
+        if (
+            not isinstance(user, Model)
+            or not isinstance(permission, Model)
+            or permission.pk is None
+        ):
+            return queryset.none()
         return self._bound_queryset(
             user,
             self.content_exists(user, permission),

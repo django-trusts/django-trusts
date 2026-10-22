@@ -17,12 +17,9 @@ from trusts.compile.catalogs import (
     assert_same_database,
     catalog_models,
     database_alias,
-    reject_permission_shape,
-    require_saved_content,
 )
 from trusts.errors import TrustsConfigurationError, TrustsMixinRequired
 from trusts.plan.contents import permitted_content_q
-from trusts.plan.hops import require_instance
 from trusts.plan.relations import bind_checked_user
 from trusts.plan.rewrites import bind_once
 from trusts.plan.users import assert_persisted_principal
@@ -100,9 +97,15 @@ class TrustModelBackendMixin(object):
                          **skip_flags):
         """Rows this backend permits. Other backends are not consulted.
 
-        No applicable plan, or a selected name this catalog does not
-        own, returns an empty queryset and does not raise.
+        No applicable plan, a selected name this catalog does not own,
+        or a permission string this catalog cannot read, returns an
+        empty queryset and does not raise.
         """
+        if (
+            not isinstance(permission, str) or permission.count('.') != 1
+            or ':' in permission
+        ):
+            return queryset.none()
         has_plan, owns = self._catalog().authorization_preflight(
             queryset.model, conditions)
         if not has_plan or not owns:
@@ -122,11 +125,15 @@ class TrustModelBackendMixin(object):
                                     content, **skip_flags):
         """Scope rows this backend permits as a prefix of ``content``.
 
-        No applicable plan returns an empty queryset and does not raise.
-        ``user`` and ``permission`` must be model instances.
+        No applicable plan, or a user or permission that is not a saved
+        model instance, returns an empty queryset and does not raise.
         """
-        user = require_instance(user, 'user')
-        permission = require_instance(permission, 'permission')
+        if (
+            not isinstance(user, Model)
+            or not isinstance(permission, Model)
+            or permission.pk is None
+        ):
+            return queryset.none()
         return filter_listed(
             queryset, user,
             ask=lambda item, skipped: permitted_content_q(
@@ -231,42 +238,54 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     registered the content contributes its own user predicate, including
     that catalog's override. ``skip_<name>`` is checked against that
     catalog. Predicates are OR'd and bound with ``AUTH_USER_MODEL``.
-    No contribution yields an empty queryset and does not raise. A
-    passed ``user_queryset`` stays the candidate. A contributor whose
-    registered user model is not that candidate raises
-    ``TrustsConfigurationError``. ``backend`` is one dotted path.
+    Unsaved content, a permission this inquiry cannot read, a
+    ``user_queryset`` that is not a ``QuerySet`` or whose model is not
+    ``AUTH_USER_MODEL``, and a catalog whose registered user model is
+    not that candidate all yield an empty queryset and do not raise.
+    ``backend`` is one dotted path.
     """
-    require_saved_content(content)
-    reject_permission_shape(perm)
     if user_queryset is not None and not isinstance(user_queryset, QuerySet):
-        raise TrustsConfigurationError(
-            'user queryset must be a QuerySet, not %r.' % (user_queryset,))
-    listed = _catalogs(backend)
-    principal = None if user_queryset is None else user_queryset.model
-    if principal is not None:
-        assert_persisted_principal(principal)
+        return get_user_model()._default_manager.none()
+    if user_queryset is not None and (
+        user_queryset.model is None
+        or user_queryset.model._meta.concrete_model
+        is not get_user_model()._meta.concrete_model
+    ):
+        return (
+            get_user_model()._default_manager.none()
+            if user_queryset.model is None else user_queryset.none()
+        )
+    if (
+        not isinstance(content, Model) or content.pk is None
+        or isinstance(perm, QuerySet)
+        or not isinstance(perm, (str, Model))
+        or (isinstance(perm, Model) and perm.pk is None)
+    ):
+        return _empty_users(user_queryset)
+    if user_queryset is None:
+        user_queryset = get_user_model()._default_manager.get_queryset()
+    principal = user_queryset.model
+    assert_persisted_principal(principal)
     combined = None
-    used = []
-    for item, catalog in listed:
+    involved = [principal, type(content)]
+    if isinstance(perm, (str, Permission)):
+        involved.append(Permission)
+    for item, catalog in _catalogs(backend):
         inquiry = bind_checked_user(
             None, skip_flags=skip_flags, require_user=False, catalog=catalog)
+        if inquiry.denied:
+            return _empty_users(user_queryset)
         predicate = item.permitted_users_predicate(
             content, perm, skipped=inquiry.values)
         if predicate is None:
             continue
+        models = catalog_models(catalog, content, principal)
+        if models is None:
+            continue
         combined = predicate if combined is None else combined | predicate
-        used.append(catalog)
+        involved.extend(models)
     if combined is None:
         return _empty_users(user_queryset)
-    if user_queryset is None:
-        user_queryset = get_user_model()._default_manager.get_queryset()
-        principal = user_queryset.model
-        assert_persisted_principal(principal)
-    involved = [principal, type(content)]
-    if isinstance(perm, (str, Permission)):
-        involved.append(Permission)
-    for catalog in used:
-        involved.extend(catalog_models(catalog, content, principal))
     alias = database_alias(content, user_queryset)
     assert_same_database(alias, involved)
     if user_queryset.db != alias:

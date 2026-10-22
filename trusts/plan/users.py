@@ -132,42 +132,33 @@ def _permission_binding_for_plan(accepts_permission, content, perm, plan):
     """
     permission_model = plan.permission_model
     if isinstance(perm, str):
-        applabel, modelname, action, code = parse_perm_code(perm)
+        try:
+            applabel, modelname, action, code = parse_perm_code(perm)
+        except (ValueError, AttributeError):
+            return None
         if (
             permission_model is not None
             and permission_model is not Permission
         ):
-            raise TrustsConfigurationError(
-                'Permission string %r resolves through auth.Permission, '
-                'but %s registrations use %s.'
-                % (perm, content._meta.label, permission_model._meta.label)
-            )
+            return None
         binding = permission_binding(perm, content.__class__)
         if not code:
             return binding, None
         singular = '%s.%s_%s' % (applabel, action, modelname)
         return binding, (singular, code)
+    if isinstance(perm, Model) and perm.pk is None:
+        return None
     if accepts_permission is None:
         accepted = isinstance(perm, Permission)
     else:
         accepted = bool(accepts_permission(perm))
     if not accepted:
-        raise TrustsConfigurationError(
-            '%s is not accepted as a singular object permission.'
-            % type(perm).__name__
-        )
+        return None
     if (
         permission_model is not None
         and perm._meta.concrete_model is not permission_model
     ):
-        raise TrustsConfigurationError(
-            'Permission instance is %s; registrations for %s use %s.'
-            % (
-                perm._meta.label,
-                content._meta.label,
-                permission_model._meta.label,
-            )
-        )
+        return None
     return perm, None
 
 

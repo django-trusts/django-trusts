@@ -1,7 +1,8 @@
 """#333: get_permitted_users reads object fields from the saved row.
 
 ``u == o.project.owner`` and a two-hop path agree with ``has_perm`` and
-with a Python oracle. A never-saved object raises before SQL.
+with a Python oracle. A never-saved object is an empty queryset
+before SQL.
 """
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
@@ -12,7 +13,6 @@ from django.test import TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
 
 from trusts.backends import TrustModelBackendMixin
-from trusts.errors import PermissionConditionError
 from trusts.models import PermittedQuerySet, PermittedUsersMixin
 from tests.support import compiler, published_class_catalog
 
@@ -208,9 +208,10 @@ class SavedRowPermittedUsersTest(TransactionTestCase):
                 unsaved = SavedNote(project=owned)
                 with self.subTest(check='unsaved'):
                     with self.assertNumQueries(0):
-                        with self.assertRaises(PermissionConditionError) as caught:
-                            unsaved.get_permitted_users('%s:owner' % PERM)
-                    self.assertEqual(str(caught.exception), 'Save the object first.')
+                        self.assertEqual(
+                            list(unsaved.get_permitted_users('%s:owner' % PERM)),
+                            [],
+                        )
         finally:
             with connection.schema_editor() as editor:
                 for model in (SavedGrant, SavedNote, SavedProject, SavedTeam):

@@ -116,14 +116,11 @@ class Issue300BooleanFieldTest(KernelHostRequiredMixin, TestCase):
         content_type = ContentType.objects.get_for_model(Document)
         permission, _created = Permission.objects.get_or_create(content_type=content_type, codename='change_document', defaults={'name': 'Can change document'})
         with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError):
-                Document.objects.authorized(Authenticated(), permission)
+            self.assertEqual(list(Document.objects.authorized(Authenticated(), permission)), [])
         handle = _document_handle()
         content = GuideDocument(title='note-300', pk=1)
-        with self.assertRaises(TrustsConfigurationError):
-            granted(built_catalog(handle), content, None, permission)
-        with self.assertRaises(TrustsConfigurationError):
-            granted(built_catalog(handle), content, object(), permission)
+        self.assertIsNone(granted(built_catalog(handle), content, None, permission))
+        self.assertIsNone(granted(built_catalog(handle), content, object(), permission))
 
 class Issue300BindOnceTest(SimpleTestCase):
 

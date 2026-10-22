@@ -102,15 +102,16 @@ def granted(catalog, candidates, user, permission, *, kind='complete',
             permission_model=None, skipped=()):
     """This relationship-family catalog's complete (or group) predicate.
 
-    A valid compiler returning ``None`` is inapplicable. Compiler
-    exceptions propagate. An empty result is ``None``. A catalog whose
+    A valid compiler returning ``None`` is inapplicable. A user that is
+    not a model instance returns ``None``. Compiler exceptions for a
+    real inquiry propagate. An empty result is ``None``. A catalog whose
     family is not relationship returns ``None``.
 
     ``permission`` may be a permission instance or an unevaluated lookup
     (``Subquery`` / ``OuterRef``). Expressions are not passed to
     ``plan_for``; the plan is selected by content and user terminals.
     """
-    if catalog.family != 'relationship':
+    if catalog.family != 'relationship' or not isinstance(user, Model):
         return None
     return _compile_granted(
         catalog, candidates, user, permission, kind=kind,
