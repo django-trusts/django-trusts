@@ -5,8 +5,11 @@ Proves Zero RECORD does not own trusts/__init__.py or trusts/apps.py,
 and that both companion layouts work:
 
 1. Kernel wheel then Zero overlay (site-packages merge).
-2. Isolated site with Core's wheel and Zero's wheel. Zero imports
-   ``TrustsConfigMixin`` from ``trusts.apps``.
+2. Isolated site with Django, Core's wheel, and Zero's wheel. Zero
+   imports ``TrustsConfigMixin`` from ``trusts.apps`` and reads
+   Django settings at import. The probe drops every other ``trusts``
+   package, including a site-packages that already holds both Django
+   and an installed Core wheel.
 """
 
 from __future__ import annotations
@@ -77,7 +80,7 @@ ISOLATED_ZERO_PROBE = r'''
 import sys
 from pathlib import Path
 
-site = Path(%r)
+site = Path(%r).resolve()
 kept = []
 for p in sys.path:
     if Path(p, "trusts", "__init__.py").is_file():
@@ -88,11 +91,17 @@ sys.path.insert(0, str(site))
 for name in list(sys.modules):
     if name == "trusts" or name.startswith("trusts."):
         del sys.modules[name]
+import django
 from django.conf import settings
 if not settings.configured:
     settings.configure(SECRET_KEY="companion-zero-isolated")
+import trusts.apps as trusts_apps
+import trusts.zero.apps as zero_apps
 from trusts.apps import TrustsConfigMixin
 from trusts.zero.apps import ZeroConfig
+assert Path(django.__file__).resolve().is_relative_to(site)
+assert Path(trusts_apps.__file__).resolve().is_relative_to(site)
+assert Path(zero_apps.__file__).resolve().is_relative_to(site)
 assert issubclass(ZeroConfig, TrustsConfigMixin)
 assert ZeroConfig.name == "trusts.zero"
 assert ZeroConfig.label == "trusts"
@@ -200,10 +209,19 @@ def main() -> int:
         subprocess.check_call(
             [
                 sys.executable, '-m', 'pip', 'install', '-q',
+                '--target', str(isolated),
+                'Django>=6.1,<6.2',
+            ],
+        )
+        subprocess.check_call(
+            [
+                sys.executable, '-m', 'pip', 'install', '-q',
                 '--target', str(isolated), '--no-deps',
                 str(kernel_wheel), str(zero_wheel),
             ],
         )
+        if not (isolated / 'django' / 'conf' / '__init__.py').is_file():
+            raise SystemExit('isolated site missing Django')
         if not (isolated / 'trusts' / 'apps.py').is_file():
             raise SystemExit('isolated site lost kernel trusts/apps.py')
         if not (isolated / 'trusts' / 'zero' / 'apps.py').is_file():
