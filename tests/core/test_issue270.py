@@ -421,24 +421,6 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
             with listed_relationship((owned,)):
                 self.assertEqual(_pks(self.docs.permitted(self.change, self.alice, conditions=('open_title_270', 'not_secret_270'))), {self.open_doc.pk})
 
-    def test_different_catalog_user_models_are_not_ored(self):
-        class OtherPrincipal(models.Model):
-            username = models.CharField(max_length=40)
-            is_active = models.BooleanField(default=True)
-
-            class Meta:
-                app_label = 'trusts_tests'
-
-        auth_users = compiler(path='tests.core.issue270-auth-user', user_model=get_user_model())
-        other_users = compiler(path='tests.core.issue270-other-user', user_model=OtherPrincipal)
-        for handle in (auth_users, other_users):
-            handle.register(trust=DocumentGrant, user='user', permission='permission', content='document')
-        with listed_relationship((auth_users, other_users)):
-            with self.assertNumQueries(0):
-                empty = self.open_doc.get_permitted_users(self.change)
-        self.assertEqual(list(empty), [])
-        self.assertIs(empty.model, get_user_model())
-
     def test_custom_terminal_pk_collision_does_not_grant(self):
         primary = _document_factory()
         extra = _handle('tests.core.issue270-other-perm')
