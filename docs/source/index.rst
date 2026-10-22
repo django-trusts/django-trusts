@@ -75,7 +75,7 @@ The application owns its protected content and trust models.
    from django.contrib.auth.models import Group, Permission
    from django.db import models
 
-   from trusts.query import PermittedQuerySetMixin, PermittedUsersMixin
+   from trusts.models import PermittedQuerySetMixin, PermittedUsersMixin
 
 
    class DocumentQuerySet(PermittedQuerySetMixin, models.QuerySet):
@@ -232,9 +232,6 @@ Register the model paths when the application starts:
 
    class DocumentsConfig(TrustsConfigMixin, AppConfig):
        name = "documents"
-       trusts_backend_paths = (
-           "documents.backends.DocumentBackend",
-       )
 
        def ready(self):
            super().ready()
@@ -478,15 +475,15 @@ permitted content sits under those rows. The result is a lazy queryset of
 the same model.
 
 ``permission`` is a saved permission row. ``content`` is the protected
-model. ``handles`` is optional and defaults to the installed relationship
-backends.
+model. Each Trusts backend answers from its own catalog; pass ``backend=``
+when more than one registers the model.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
 the user may read:
 
 .. code-block:: python
 
-   from trusts.core import filter_by_permitted_content
+   from trusts.decorators import filter_by_permitted_content
 
    cabinets = filter_by_permitted_content(
        Cabinet.objects.all(),
@@ -520,7 +517,7 @@ existing user manager:
 
 .. code-block:: python
 
-   from trusts.query import PermittedUsersManagerMixin
+   from trusts.models import PermittedUsersManagerMixin
 
 
    class UserManager(PermittedUsersManagerMixin, ExistingUserManager):
@@ -670,8 +667,8 @@ permission. django-trusts invokes either builder once during registration and
 stores no callable. The condition grammar is path equality
 (``==``), collection-rooted membership (``.contains(member)``), and
 conjunction (``&``). Parenthesize ``==`` when combining it with ``&``.
-Python ``in``, ``and`` / ``or`` / ``not``, and prebuilt ``All`` /
-``Equal`` / ``permission_in`` values are not accepted. ``.contains`` is a
+Python ``in``, ``and`` / ``or`` / ``not``, and a prebuilt condition
+are not accepted. ``.contains`` is a
 reserved method on the condition proxy; a model field actually named
 ``contains`` cannot be walked there. ``predicate=`` is reserved and
 unsupported in 1.0.

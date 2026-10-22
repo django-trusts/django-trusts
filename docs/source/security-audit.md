@@ -114,10 +114,9 @@ performed by application code are outside that behavior.
 It is invoked once after the freeze check. Supported operations are path equality
 (`==`), collection-rooted `.contains(member)`, and conjunction (`&`). Literal
 Python `in` is unsupported and is not recovered through AST, bytecode, `dis`,
-or a `__contains__` side channel. The stored overlay is private `Equal` /
-`PermissionIn` / `All` and contains no callable. Public
-`register(condition=...)` rejects prebuilt `All` / `Equal` / `permission_in`
-values. `.contains` is a reserved condition-proxy method; a model field of
+or a `__contains__` side channel. The stored overlay is private and
+contains no callable. Public
+`register(condition=...)` rejects a prebuilt condition. `.contains` is a reserved condition-proxy method; a model field of
 that name cannot be walked there. The `predicate=` keyword is reserved and
 unsupported. Invalid arity, foreign roots, empty or non-expression
 returns, unsupported operations, and condition exceptions fail closed.
@@ -202,8 +201,8 @@ Audit the following boundaries:
 
 - the exact delegation row must bind its delegate, sponsor, content, and
   condition state; rows must not borrow fields from one another;
-- the sponsor-grant query is the live OR-union of applicable ordinary grants,
-  including other configured Trusts handles;
+- the sponsor-grant query is the live OR-union of applicable ordinary grants
+  on that catalog;
 - the current compiler excludes delegated registrations from the sponsor
   ordinary-grant union, preventing an unbounded chain or cycle;
 - relationship scope can narrow the sponsor ceiling but cannot manufacture a
@@ -263,7 +262,7 @@ The supported projections consume the same normalized registration:
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
 | Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Registered user conditions and overrides and relationship-family SQL before pagination |
-| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query combining backend contributions, including registered user conditions and overrides within each Trusts branch |
+| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | Each Trusts backend answers from its own catalog, including its user conditions and overrides. Pass `backend=` when more than one registers the model. |
 | View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
 `.permitted(permission, user)` is the public content-list inquiry.
