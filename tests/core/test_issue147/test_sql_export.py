@@ -628,6 +628,15 @@ class PolicySqlCheckTest(SimpleTestCase):
         with self.assertRaises(TypeError):
             policy_document(backend=DocumentBackend)
 
+    def test_policy_document_rejects_a_non_trusts_backend(self):
+        path = 'django.contrib.auth.backends.ModelBackend'
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            policy_document(backend=path)
+        self.assertEqual(
+            str(ctx.exception),
+            'backend %r is not a Trusts backend.' % path,
+        )
+
     def test_e009_is_a_model_check(self):
         self.assertEqual(check_policy_sql_lockfile.tags, (django_checks.Tags.models,))
 
