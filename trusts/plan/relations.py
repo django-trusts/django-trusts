@@ -24,7 +24,6 @@ from trusts.plan.predicates import (
 from trusts.plan.recursions import GrantReach
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.standards import (
-    BUILTIN_USER_CONDITIONS,
     bind_skip_flags,
     condition_names,
 )
@@ -92,26 +91,19 @@ class SkipParams(object):
 
 
 def known_skip_names(subjects):
-    """Condition and override names on these catalogs or registries.
-
-    No subject yet means the built-in ``is_active`` condition only.
-    """
+    """Condition and override names on these catalogs or registries."""
     names = set()
-    saw = False
     for subject in subjects:
         if subject is None:
             continue
-        saw = True
         names.update(condition_names(
             subject.user_conditions, subject.user_override,
         ))
-    if not saw:
-        names.update(rule.name for rule in BUILTIN_USER_CONDITIONS)
     return frozenset(names)
 
 
 def user_skip_params(user, skip_flags, *, subjects=None, catalog=None,
-                     require_user=True, skip_names=None):
+                     require_user=True):
     """Validate ``skip_*`` keywords and return their bound values.
 
     Anonymous, unauthenticated, and ``None`` are denied before SQL.
@@ -129,9 +121,7 @@ def user_skip_params(user, skip_flags, *, subjects=None, catalog=None,
     )
     if denied:
         return SkipParams(True, {})
-    if skip_names is not None:
-        known = frozenset(skip_names)
-    elif catalog is not None:
+    if catalog is not None:
         known = known_skip_names((catalog,))
     else:
         known = known_skip_names(subjects or ())
@@ -213,7 +203,7 @@ def _user_identity_denied(user):
 def bind_checked_user(subject, grant=None, *, rules=None, override=None,
                       identity=None, values=None, plan=None, closed=False,
                       with_override=True, skip_flags=None, require_user=True,
-                      catalog=None, subjects=None, skip_names=None):
+                      catalog=None, subjects=None):
     """Validate ``skip_*``, deny before SQL, and bind one registration fragment.
 
     ``skip_flags`` is a public inquiry. ``values`` means that inquiry
@@ -223,7 +213,7 @@ def bind_checked_user(subject, grant=None, *, rules=None, override=None,
     if skip_flags is not None:
         inquiry = user_skip_params(
             subject, skip_flags, subjects=subjects, catalog=catalog,
-            require_user=require_user, skip_names=skip_names,
+            require_user=require_user,
         )
         if inquiry.denied:
             return SkipParams(True, {}, None)
