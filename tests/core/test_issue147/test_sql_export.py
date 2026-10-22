@@ -528,7 +528,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertIn("'other'", str(ctx.exception))
         self.assertIn('tests.unsupported_backend', str(ctx.exception))
 
-    def test_nested_all_condition_is_parenthesized(self):
+    def test_chained_and_prints_flat(self):
         handle = _handle('documents.backends.NestedAllBackend')
         handle.register(
             trust=DocumentPermission,
@@ -540,11 +540,28 @@ class PolicySqlGoldenTest(SimpleTestCase):
                 & (t.document == t.document)
             ),
         )
+        handle.register(
+            trust=OtherPermission,
+            user='user',
+            permission='permission',
+            content='other',
+            condition=lambda t: (
+                ((t.user == t.user) & (t.other == t.other))
+                | (t.permission == t.permission)
+            ),
+        )
         document = yaml.safe_load(render_configured_policy(handle))
-        condition = document['backends'][0]['contents'][0]['trusts'][0]['condition']
+        conditions = {}
+        for content in document['backends'][0]['contents']:
+            for trust in content['trusts']:
+                conditions[trust['id']] = trust['condition']
         self.assertEqual(
-            condition,
-            '(user == user and permission == permission) and document == document',
+            conditions['documents__DocumentPermission__document__cond'],
+            'user == user and permission == permission and document == document',
+        )
+        self.assertEqual(
+            conditions['documents__OtherPermission__other__cond'],
+            '(user == user and other == other) or permission == permission',
         )
 
 class PolicySqlCommandTest(SimpleTestCase):

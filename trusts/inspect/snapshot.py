@@ -775,8 +775,9 @@ def _permission_token(target):
 class _PolicyConditionText(object):
     """Render one stored predicate as a policy-lock condition line.
 
-    Text stays here. ``grouped`` is restored around each child so a
-    nested conjunction does not change its parent's parentheses.
+    Text stays here. Nested ``and`` inside ``and``, and ``or`` inside
+    ``or``, print as one flat chain. Parentheses stay for mixed
+    ``and``/``or`` and for the operand of ``not``.
     """
 
     def __init__(self, permission_token):
@@ -817,9 +818,9 @@ class _PolicyConditionText(object):
 
     def _join(self, node, word):
         text = '%s %s %s' % (
-            self.render(node.left, grouped=True),
+            self.render(node.left, grouped=node.left.kind != word),
             word,
-            self.render(node.right, grouped=True),
+            self.render(node.right, grouped=node.right.kind != word),
         )
         if self._grouped:
             return '(%s)' % text
