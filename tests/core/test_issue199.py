@@ -222,7 +222,12 @@ class ImplementationOwnershipReadyTest(TestCase):
                 config.ready()
         self.assertIs(configured_catalog(HOST), before)
         paths = [catalog.path for catalog in installed_catalogs()]
-        self.assertIsNone(config.catalog)
+        self.assertEqual(config.catalog.records, ())
+        self.assertEqual(config.catalog.delegations, ())
+        self.assertEqual(
+            config.catalog.path,
+            'tests.core.test_issue199.NonMixinOwnerConfig',
+        )
         self.assertNotIn(MODEL_BACKEND, paths)
         self.assertFalse(hasattr(config, 'registries'))
         self.assertFalse(hasattr(config, 'trusts_backend_paths'))

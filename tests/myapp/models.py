@@ -1,3 +1,4 @@
+from django.apps import apps
 from django.contrib.auth.models import Permission
 from django.db import models
 
@@ -83,3 +84,4 @@ def register_document_app(registry):
 
 
 register_document_app(DocumentBackend().get_registry())
+apps.get_app_config('myapp')._registered_from_models = True

@@ -164,7 +164,7 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
         from trusts.apps import Recorder
         from trusts.compile.factory import Compiler
 
-        log = Recorder()
+        log = Recorder(Compiler.listener())
         _contribute_recorder(log)
         built_from = Compiler(
             user_model=get_user_model(),

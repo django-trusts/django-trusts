@@ -20,8 +20,7 @@ import tests as tests_module
 
 class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_package_registry_is_created_in_init_not_replaced_by_ready(self):
-        # The catalog is built on the first question, not in ready().
-        # A second ready() leaves that catalog in place.
+        # ready() builds the catalog. A second ready() leaves it in place.
         live = apps.get_app_config('trusts_kernel_host')
         self.assertIsInstance(live, TrustsConfigMixin)
         self.assertIs(type(live), KernelHostConfig)

@@ -308,7 +308,12 @@ def register_installed_document_app():
     from django.apps import apps
     from tests.myapp.models import register_document_app
 
-    register_document_app(apps.get_app_config('myapp').recorder)
+    config = apps.get_app_config('myapp')
+    if config.catalog is not None or getattr(
+        config, '_registered_from_models', False,
+    ):
+        return
+    register_document_app(config.recorder)
 
 
 @contextmanager
