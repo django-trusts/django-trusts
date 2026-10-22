@@ -234,9 +234,10 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     that catalog's override. ``skip_<name>`` is checked against that
     catalog. Predicates are OR'd when the contributing catalogs share
     one user model. Differing user models, or no contribution, yield an
-    empty queryset and do not raise. A passed ``user_queryset`` keeps
-    its model: a catalog for a different user model contributes nothing.
-    ``backend`` is one dotted path.
+    empty queryset and do not raise. A passed ``user_queryset`` stays
+    the candidate. A contributor whose registered user model is not that
+    candidate raises ``TrustsConfigurationError``. ``backend`` is one
+    dotted path.
     """
     require_saved_content(content)
     reject_permission_shape(perm)
@@ -253,9 +254,6 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     for item, catalog in listed:
         inquiry = bind_checked_user(
             None, skip_flags=skip_flags, require_user=False, catalog=catalog)
-        concrete = catalog.user_model._meta.concrete_model
-        if expected is not None and concrete is not expected:
-            continue
         predicate = item.permitted_users_predicate(
             content, perm, skipped=inquiry.values)
         if predicate is None:

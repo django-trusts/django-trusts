@@ -124,11 +124,11 @@ class PermittedUsersManagerMixin:
     """Optional adapter on an application's existing user manager.
 
     ``permitted`` and ``with_perm`` both call the one reverse inquiry.
-    Each listed backend contributes a predicate only when its user model
-    is this queryset's model. ``backend`` is one dotted path. Stock
-    ``auth.User`` does not acquire either method. The content adapter
-    ``get_permitted_users`` remains the path that does not require a
-    user-manager change.
+    Each listed backend contributes its own predicate. The candidate
+    model is this queryset's model. ``backend`` is one dotted path.
+    Stock ``auth.User`` does not acquire either method. The content
+    adapter ``get_permitted_users`` remains the path that does not
+    require a user-manager change.
     """
 
     def permitted(self, content, perm, backend=None, **skip_flags):
