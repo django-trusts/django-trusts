@@ -1,10 +1,7 @@
 """Near-final registration nodes.
 
 Root-relative ``Ref``, ``Along``, and the closed predicates ``Equal``,
-``PermissionIn``, ``_InquiryPermissionMatch``, and ``All``. ``trusts.core``
-re-exports ``Ref``, ``Equal``, ``PermissionIn``, ``All``, and
-``permission_in``. The condition-IR ``Ref`` in
-``trusts.plan.conditions`` is a different type and is not imported here.
+``PermissionIn``, ``_InquiryPermissionMatch``, and ``All``.
 """
 
 __all__ = []

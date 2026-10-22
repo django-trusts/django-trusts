@@ -21,6 +21,8 @@ from trusts.plan.conditions import ConditionLookup, ConditionRecord, ConditionRe
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 
+from tests.support import override_catalog
+
 def _store_expr(registry, model, code, expr):
     store = getattr(registry, 'conditions', registry)
     store._records[model._meta.label, code] = ConditionRecord(expr=expr, model=model)
@@ -86,9 +88,9 @@ class ConditionRegistryIsolationTest(SimpleTestCase):
         right = RegistryFactory()
         self.assertIsInstance(left.conditions, ConditionRegistry)
         self.assertIsNot(left.conditions, right.conditions)
-        self.assertIs(left.condition_lookup.conditions, left.conditions)
-        self.assertIs(right.condition_lookup.conditions, right.conditions)
-        self.assertIsNot(left.condition_lookup, right.condition_lookup)
+        self.assertIs(left.filter_lookup.conditions, left.conditions)
+        self.assertIs(right.filter_lookup.conditions, right.conditions)
+        self.assertIsNot(left.filter_lookup, right.filter_lookup)
         self.assertEqual(list(left.iter_permission_conditions()), [])
         self.assertEqual(list(right.iter_permission_conditions()), [])
 
@@ -156,7 +158,6 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         Note, _Memo = _note_models()
         log = _BuilderLog()
         registry = RegistryFactory()
-        registry.build_registry()
         record = registry.register_permission_condition(Note, 'own', log)
         self.assertEqual(len(log.calls), 1)
         self.assertIs(registry.get_permission_condition_record(Note, 'own'), record)
@@ -165,26 +166,31 @@ class ConditionRegistryShapeTest(SimpleTestCase):
     def test_handle_add_named_filter_after_build_still_registers(self):
         Note, _Memo = _note_models()
         registry = RegistryFactory()
-        handle = [registry, setattr(registry, 'path', 'tests.backends.HostTrustModelBackend')][0]
+        registry.path = 'tests.backends.HostTrustModelBackend'
+        handle = registry
         log = _BuilderLog()
         record = handle.register_permission_condition(Note, 'own', log)
         self.assertIs(registry.get_permission_condition_record(Note, 'own'), record)
         self.assertEqual(len(log.calls), 1)
         registry.build_registry()
+        late_factory = RegistryFactory()
+        late_factory.path = handle.path
+        late_handle = late_factory
         late = _BuilderLog()
-        late_record = handle.register_permission_condition(Note, 'late', late)
+        late_record = late_handle.register_permission_condition(Note, 'late', late)
         self.assertEqual(len(late.calls), 1)
-        self.assertIs(registry.get_permission_condition_record(Note, 'late'), late_record)
+        self.assertIs(late_factory.get_permission_condition_record(Note, 'late'), late_record)
+        self.assertIsNone(registry.get_permission_condition_record(Note, 'late'))
 
     def test_generic_lookup_binds_without_reinvoking_builder(self):
         Note, _Memo = _note_models()
         registry = RegistryFactory()
         log = _BuilderLog()
         registry.register_permission_condition(Note, 'spy', log)
-        lookup = RegistryConditionLookup(registry)
+        lookup = RegistryConditionLookup(registry.conditions)
         self.assertIsInstance(lookup, ConditionLookup)
-        registry.set_condition_lookup(lookup)
-        self.assertIs(registry.condition_lookup, lookup)
+        registry.set_filter_lookup(lookup)
+        self.assertIs(registry.filter_lookup, lookup)
         self.assertIsNotNone(lookup.record_for(Note, 'spy').expr)
         self.assertEqual(len(log.calls), 1)
         q = lookup.compile_q(Note, 'trusts_tests.change_note:spy', None)
@@ -384,7 +390,6 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         self.assertIn('does not enable', messages[0].msg)
 
     def test_check_permission_conditions_reads_catalog_registry(self):
-        from tests.apps import override_catalog
         from tests.backends import HostTrustModelBackend
 
         Note, _Memo = _note_models()
@@ -401,7 +406,6 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         self.assertTrue(any(("'typo'" in m.msg for m in errors)))
 
     def test_two_owners_same_model_code_both_validated(self):
-        from tests.apps import override_catalog
         from tests.backends import HostTrustModelBackend, MixinOnlyBackend
 
         Note, _Memo = _note_models()

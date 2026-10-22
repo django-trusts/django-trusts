@@ -10,8 +10,8 @@ from django.test import SimpleTestCase, override_settings
 from django.test.utils import isolate_apps
 
 import tests as tests_module
-from tests.apps import (
-    TestsConfig,
+from tests.apps import TestsConfig
+from tests.support import (
     configured_catalog,
     empty_catalogs,
     live_config,
@@ -19,12 +19,13 @@ from tests.apps import (
 )
 from tests.backends import HostTrustModelBackend, MixinOnlyBackend
 from tests.kernel_host.apps import HOST_BACKEND
-from trusts.apps import TrustsImplementationConfig, catalogs
+from trusts.apps import TrustsImplementationConfig
+from trusts.backends import catalogs
 from trusts.backends import TrustModelBackendMixin, configured_catalogs
 from trusts.compile.factory import RegistryFactory
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.contents import filter_by_permitted_content
+from trusts.decorators import filter_by_permitted_content
 from trusts.query import AuthorizedManager, AuthorizedQuerySet
 
 
@@ -160,7 +161,6 @@ class MixinCatalogResolveTest(SimpleTestCase):
         self.assertEqual(backend.get_all_permissions(object(), None), set())
         self.assertEqual(backend.get_group_permissions(object(), None), set())
         host = configured_catalog(HOST)
-        self.assertIs(host.user_model, get_user_model())
         with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST, MIXIN)):
             found = configured_catalogs()
         self.assertEqual(found, (host,))

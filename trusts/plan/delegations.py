@@ -3,8 +3,7 @@
 One home for whether an ordinary sponsor record can satisfy a
 delegation, and for the sponsor-rule eligibility and row condition
 every delegation query shape ANDs on. Callers keep their own reach
-and sponsor SQL. This module does not import ``trusts.core`` or
-``trusts.compile``.
+and sponsor SQL.
 """
 
 __all__ = []
@@ -12,7 +11,7 @@ __all__ = []
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Q
 
-from trusts.commons import _compile_predicate
+from trusts.plan.predicates import compile_predicate
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.relations import bind_checked_user
 
@@ -95,7 +94,7 @@ def _matched_delegation_q(record, sponsor_q, permission, skipped, bound):
     if eligibility is None:
         return None
     combined = bound()
-    condition = _compile_predicate(
+    condition = compile_predicate(
         record.condition, record, permission=permission,
     )
     if condition is not None:

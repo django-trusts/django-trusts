@@ -2,16 +2,15 @@
 
 Neighbor SQL, reach rendering, and the grant and content seeds. The
 five reach expressions stay in ``trusts.plan.recursions``. ``AlongWalk``
-stays in ``trusts.compile.paths``. Record binding and the predicate
-visitor stay in ``trusts.commons``. This module imports ``commons`` and
-does not import ``trusts.core`` or ``trusts.compile``.
+stays in ``trusts.compile.paths``. Record binding lives in
+``trusts.plan.predicates``.
 """
 
 __all__ = []
 
 from django.db.models import F, Q
 
-from trusts.commons import _bind_record_qs, _bind_terminal
+from trusts.plan.predicates import bind_record_qs, bind_terminal
 from trusts.errors import TrustsConfigurationError
 
 
@@ -335,7 +334,7 @@ def _sponsor_walk_seed(ordinary, permission, content_identity):
     CTE does not reference the delegation row.
     """
     walk = ordinary.along
-    qs = _bind_record_qs(
+    qs = bind_record_qs(
         ordinary,
         permission=permission,
         correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
@@ -358,7 +357,7 @@ def _delegation_walk_seed(record, user):
     """
     walk = record.along
     qs = record.root._default_manager.filter(**{
-        record.delegate_field: _bind_terminal(user, 'delegate'),
+        record.delegate_field: bind_terminal(user, 'delegate'),
         '%s__isnull' % walk.walk_field: False,
     })
     seed = qs.values(

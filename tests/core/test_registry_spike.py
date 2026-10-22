@@ -2,8 +2,7 @@
 
 ``RegistryFactory`` stays the registration front end. ``Registry``
 takes records, delegations, the shared condition store, stored user
-conditions, and the user override as data. It does not import
-``trusts.core``. Core re-exports it as ``_FrozenRegistry``.
+conditions, and the user override as data.
 """
 
 import ast
@@ -16,13 +15,11 @@ from django.db import connection, models
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
-from trusts.compile.nodes import Along
+from trusts.compile.factory import RegistryFactory
+from trusts.compile.nodes import Along, Ref
 from trusts.plan.recursions import GrantReach
-from trusts.core import (
-    Ref,
-    RegistryFactory,
-)
 from trusts.plan.registry import Registry
+from tests.support import built_catalog
 
 
 def _sql(expr, model):
@@ -38,37 +35,27 @@ def _built_from(registry):
         conditions=registry.conditions,
         user_conditions=registry._stored_user_conditions(),
         user_override=registry._user_override,
-        condition_lookup=registry.condition_lookup,
+        filter_lookup=registry.filter_lookup,
     )
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class RegistryInjectionSpikeTest(SimpleTestCase):
-    def test_module_does_not_import_core_or_compile(self):
-        import trusts.compile.factory as factory_module
-        import trusts.core as core
+    def test_registry_module_does_not_import_compile(self):
         import trusts.plan.registry as registry_module
 
-        for module in (registry_module, factory_module):
-            tree = ast.parse(Path(module.__file__).read_text())
-            imported = []
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    imported.extend(alias.name for alias in node.names)
-                elif isinstance(node, ast.ImportFrom) and node.module:
-                    imported.append(node.module)
-            for name in imported:
-                self.assertFalse(
-                    name == 'trusts.core' or name.startswith('trusts.core.'),
-                    '%s imports %s' % (module.__name__, name),
-                )
-                if module is registry_module:
-                    self.assertFalse(
-                        name == 'trusts.compile'
-                        or name.startswith('trusts.compile.'),
-                        name,
-                    )
-        self.assertIs(core._FrozenRegistry, Registry)
+        tree = ast.parse(Path(registry_module.__file__).read_text())
+        imported = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.append(node.module)
+        for name in imported:
+            self.assertFalse(
+                name == 'trusts.compile' or name.startswith('trusts.compile.'),
+                name,
+            )
         self.assertTrue(registry_module.__file__.endswith('registry.py'))
 
     def test_direct_trusts_registry_still_registers(self):
@@ -76,7 +63,7 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
         registry = RegistryFactory()
         record = _register_document(registry, DocumentGrant)
         self.assertEqual(registry.records, (record,))
-        self.assertIs(registry.plan_for(Document).records[0], record)
+        self.assertIs(built_catalog(registry).plan_for(Document).records[0], record)
 
     def test_injected_plan_matches_live_registry(self):
         Document, DocumentGrant = _document_models()
@@ -84,12 +71,12 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
         _register_document(registry, DocumentGrant)
         built_registry = _built_from(registry)
         self.assertIs(built_registry.conditions, registry.conditions)
-        self.assertIs(built_registry.condition_lookup, registry.condition_lookup)
+        self.assertIs(built_registry.filter_lookup, registry.filter_lookup)
         self.assertEqual(built_registry.records, registry.records)
         self.assertEqual(built_registry.delegations, registry.delegations)
 
-        live = registry.plan_for(Document)
-        built = built_registry.plan_for(Document)
+        live = built_catalog(registry).plan_for(Document)
+        built = built_catalog(built_registry).plan_for(Document)
         self.assertEqual(built.records, live.records)
         self.assertIs(built.records[0], live.records[0])
         self.assertEqual(built.delegations, live.delegations)
@@ -122,8 +109,8 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
             along=Along(root.folder.parent, 2),
         )
         built_registry = _built_from(registry)
-        live = registry.plan_for(Folder)
-        built = built_registry.plan_for(Folder)
+        live = built_catalog(registry).plan_for(Folder)
+        built = built_catalog(built_registry).plan_for(Folder)
         self.assertIsNotNone(built.records[0].along)
         User = get_user_model()
         user = User(pk=1)

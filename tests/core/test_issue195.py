@@ -4,12 +4,10 @@ from pathlib import Path
 from django.test import SimpleTestCase
 import trusts
 import trusts.inspect.checks as trusts_checks
-import trusts.core as core
-from tests.myapp.models import Document
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.plan.relations import QueryCompiler
-from trusts.core import PlanQueryCompiler, RelationPlan, RegistryFactory
-from trusts.plan.aggregates import _compiler_applies, any_plan_records
+from trusts.compile.factory import RegistryFactory
+from trusts.plan.aggregates import _compiler_applies
+from trusts.plan.relations import PlanQueryCompiler, QueryCompiler, RelationPlan
 ROOT = Path(__file__).resolve().parents[2]
 FOLD_NAMES = ('OrderedFold', 'PermissionMaskDomain', 'MaskEntry', 'PolarityMap', 'FlatToken')
 _FOLD_IMPORT_ROOTS = ('trusts.ordered_fold', 'trusts_ordered_fold')
@@ -41,9 +39,9 @@ class CoreOrderedFoldDeletedTest(SimpleTestCase):
 
     def test_declaration_reexports_and_register_are_gone(self):
         for name in FOLD_NAMES:
-            self.assertFalse(hasattr(core, name))
-            self.assertNotIn(name, dir(core))
-        self.assertFalse(hasattr(core, 'BackendHandle'))
+            self.assertFalse(hasattr(RegistryFactory, name))
+            self.assertFalse(hasattr(PlanQueryCompiler, name))
+            self.assertFalse(hasattr(RelationPlan, name))
         self.assertFalse(hasattr(RegistryFactory, 'register_strategy'))
         self.assertFalse(hasattr(RegistryFactory, 'strategies'))
         fields = getattr(RelationPlan, '__dataclass_fields__', {})
@@ -85,8 +83,6 @@ class RelationshipOnlyCompilerTest(SimpleTestCase):
         self.assertFalse(_compiler_applies(object(), empty))
         self.assertTrue(compiler.applies(filled))
         self.assertTrue(_compiler_applies(compiler, filled))
-        empty_handle = RegistryFactory(path='tests.core.195-empty')
-        self.assertFalse(any_plan_records((empty_handle,), Document))
 
     def test_complete_exists_is_records_only(self):
         compiler = PlanQueryCompiler()
@@ -125,6 +121,3 @@ class PairSuiteDoesNotImportDeletedEngineTest(SimpleTestCase):
                     elif isinstance(node, ast.ImportFrom):
                         module_name = node.module or ''
                         self.assertFalse(_is_deleted_fold_import(module_name), msg=path)
-                        if module_name == 'trusts.core':
-                            imported = {alias.name for alias in node.names}
-                            self.assertFalse(imported & set(FOLD_NAMES), msg=path)

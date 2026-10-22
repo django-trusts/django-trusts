@@ -19,6 +19,8 @@ from django.db.models.expressions import RawSQL
 
 from trusts.errors import TrustsConfigurationError
 
+user_model = None
+
 _MSG = 'User conditions only support concrete boolean fields, &, and ~.'
 
 # ``skip_<name>`` must not reuse an inquiry parameter. ``skip_is_active``
@@ -26,7 +28,7 @@ _MSG = 'User conditions only support concrete boolean fields, &, and ~.'
 _RESERVED = frozenset({
     'user', 'user_obj', 'permission', 'perm', 'permext', 'content', 'obj',
     'extra_q', 'conditions', 'queryset', 'handles', 'kind', 'candidates',
-    'plan', 'family_registries', 'permission_model', 'skipped', 'skip_flags',
+    'plan', 'permission_model', 'skipped', 'skip_flags',
 })
 
 Node = namedtuple('Node', 'kind name left right')

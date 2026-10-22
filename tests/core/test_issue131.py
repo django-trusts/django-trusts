@@ -21,18 +21,18 @@ from trusts.compile.nodes import All, Equal, Ref
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
+from tests.support import built_catalog
 
 def _handle(registry=None, path='tests.core.handle-a'):
     if registry is None:
         registry = RegistryFactory()
-    return [registry, setattr(registry, 'path', path)][0]
+    registry.path = path
+    return registry
 
 class HandleRegisterSurfaceTest(SimpleTestCase):
 
     def test_register_is_the_public_donation_verb(self):
         handle = _handle()
-        import trusts.core as core
-        self.assertFalse(hasattr(core, 'BackendHandle'))
         self.assertTrue(callable(handle.register))
         self.assertTrue(callable(handle.register_public))
         self.assertTrue(callable(handle.register_permission_condition))
@@ -70,7 +70,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
             handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document', condition=Equal(j.user, j.permission))
         with self.assertRaises(TypeError):
             handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document', along=Along(j.document, 8))
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(built_catalog(handle).records, ())
 
     def test_invalid_public_path_grammar_is_rejected(self):
         handle = _handle()
@@ -78,7 +78,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
             with self.subTest(path=path):
                 with self.assertRaises(TrustsConfigurationError):
                     handle.register_public(trust=DocumentGrant, user=path, permission='permission', content='document')
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(built_catalog(handle).records, ())
 
     def test_string_condition_is_not_legal_on_bare_registry(self):
         registry = RegistryFactory()
@@ -92,17 +92,17 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
         first = handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
         with self.assertRaisesRegex(TrustsConfigurationError, 'Duplicate'):
             handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-        self.assertEqual(handle.build_registry().records, (first,))
+        self.assertEqual(handle.records, (first,))
         with self.assertRaisesRegex(TrustsConfigurationError, 'Conflicting'):
             handle.register_public(trust=DocumentGrant, user='permission', permission='user', content='document')
-        self.assertEqual(handle.build_registry().records, (first,))
+        self.assertEqual(built_catalog(handle).records, (first,))
 
 class HandleAfterBuildOrderTest(SimpleTestCase):
 
     def test_register_after_build_resolves_paths(self):
         registry = RegistryFactory()
         handle = _handle(registry)
-        self.assertEqual(registry.build_registry().records, ())
+        self.assertEqual(registry.records, ())
         with patch('trusts.compile.factory._public_path_segments', wraps=_public_path_segments) as segments:
             with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
                 with patch('trusts.compile.factory._validate_condition', wraps=_validate_condition) as validate:
@@ -111,12 +111,11 @@ class HandleAfterBuildOrderTest(SimpleTestCase):
         resolve.assert_called()
         validate.assert_called()
         self.assertEqual(registry.records, (record,))
-        self.assertEqual(registry.build_registry().records, (record,))
+        self.assertEqual(built_catalog(registry).records, (record,))
 
     def test_invalid_grammar_after_build_raises_its_own_error(self):
         registry = RegistryFactory()
         handle = _handle(registry)
-        registry.build_registry()
         with self.assertRaises(TrustsConfigurationError) as ctx:
             handle.register_public(trust=DocumentGrant, user='', permission='permission', content='document')
         self.assertNotIn('frozen', str(ctx.exception).lower())
@@ -128,13 +127,13 @@ class HandleIsolationTest(SimpleTestCase):
         left = _handle(path='tests.core.handle-left')
         right = _handle(path='tests.core.handle-right')
         left.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-        self.assertEqual(len(left.build_registry().records), 1)
-        self.assertEqual(right.build_registry().records, ())
+        self.assertEqual(len(built_catalog(left).records), 1)
+        self.assertEqual(right.records, ())
         right.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-        self.assertEqual(len(left.build_registry().records), 1)
-        self.assertEqual(len(right.build_registry().records), 1)
-        self.assertIsNot(left.build_registry().records[0], right.build_registry().records[0])
-        self.assertEqual(left.build_registry().records[0], right.build_registry().records[0])
+        self.assertEqual(len(built_catalog(left).records), 1)
+        self.assertEqual(len(built_catalog(right).records), 1)
+        self.assertIsNot(built_catalog(left).records[0], built_catalog(right).records[0])
+        self.assertEqual(built_catalog(left).records[0], built_catalog(right).records[0])
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class HandleConditionAndAlongTest(SimpleTestCase):
@@ -182,8 +181,6 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
         self.assertFalse(hasattr(backend, 'register_relationship'))
         self.assertFalse(hasattr(backend, 'register_ordered_fold'))
         self.assertFalse(hasattr(backend, 'register_strategy'))
-        import trusts.core as core
-        self.assertFalse(hasattr(core, 'BackendHandle'))
 
     def test_register_matches_internal_ref_record(self):
         via_ref = RegistryFactory()
@@ -200,7 +197,7 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
         backend = _handle()
         with self.assertRaises(TypeError):
             backend.register_public(trust=DocumentGrant, user='user', permission='permission', content='document', strategy=object())
-        self.assertEqual(backend.build_registry().records, ())
+        self.assertEqual(built_catalog(backend).records, ())
 
     def test_incomplete_signatures_are_type_error(self):
         backend = _handle()
@@ -208,21 +205,21 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
             backend.register_public(trust=DocumentGrant, user='user')
         with self.assertRaises(TypeError):
             backend.register_permission_condition(Document, 'non_confidential')
-        self.assertEqual(backend.build_registry().records, ())
+        self.assertEqual(built_catalog(backend).records, ())
 
     def test_register_ref_is_type_error(self):
         backend = _handle()
         j = Ref(DocumentGrant)
         with self.assertRaises(TypeError):
             backend.register_public(trust=j, user='user', permission='permission', content='document')
-        self.assertEqual(backend.build_registry().records, ())
+        self.assertEqual(built_catalog(backend).records, ())
 
     def test_duplicate_relationship_leaves_store_unchanged(self):
         backend = _handle()
         first = backend.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
         with self.assertRaisesRegex(TrustsConfigurationError, 'Duplicate'):
             backend.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-        self.assertEqual(backend.build_registry().records, (first,))
+        self.assertEqual(built_catalog(backend).records, (first,))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class CMethodsRelationshipLongPathTest(SimpleTestCase):
@@ -272,7 +269,6 @@ class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
     def test_relationship_and_filter_register_after_build(self):
         registry = RegistryFactory()
         backend = _handle(registry)
-        registry.build_registry()
         log = _PredicateLog()
         with patch('trusts.compile.factory._public_path_segments', wraps=_public_path_segments) as segments:
             with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
@@ -284,15 +280,15 @@ class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
         validate.assert_called()
         self.assertEqual(len(log.calls), 1)
         self.assertEqual(registry.records, (record,))
-        self.assertEqual(registry.build_registry().records, (record,))
+        self.assertEqual(built_catalog(registry).records, (record,))
         self.assertIs(registry.get_permission_condition_record(Document, 'non_confidential'), named_record)
 
     def test_dual_backend_relationship_does_not_leak(self):
         left = _handle(path='tests.core.cmethods-left')
         right = _handle(path='tests.core.cmethods-right')
         left.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-        self.assertEqual(len(left.build_registry().records), 1)
-        self.assertEqual(right.build_registry().records, ())
+        self.assertEqual(len(built_catalog(left).records), 1)
+        self.assertEqual(right.records, ())
         right.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-        self.assertEqual(len(left.build_registry().records), 1)
-        self.assertEqual(len(right.build_registry().records), 1)
+        self.assertEqual(len(built_catalog(left).records), 1)
+        self.assertEqual(len(built_catalog(right).records), 1)

@@ -26,22 +26,26 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.apps import listed_relationship, built_registries
+from tests.support import (
+    render_configured_policy,
+    listed_relationship,
+    built_catalog,
+    install_class_handle,
+)
+from trusts.compile.catalogs import Catalog
 
 
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
     """Settings-listed probe. The test installs a registry for one block."""
 
 def _seal_factory(backend_cls, factory):
-    from trusts.apps import catalogs
-    from trusts.compile.catalogs import Catalog
+    from trusts.backends import catalogs
     built = factory.build_registry()
-    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built, family_registries=built_registries(()))
+    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built)
 
 @contextmanager
 def _listed(handle):
-    from tests.apps import install_class_handle
-    from trusts.apps import catalogs
+    from trusts.backends import catalogs
     install_class_handle(_ListedBackend, handle)
     _seal_factory(_ListedBackend, handle)
     with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue263._ListedBackend',)):
@@ -78,7 +82,8 @@ def _code(permission):
 def _handle(registry=None, path='tests.core.issue263'):
     if registry is None:
         registry = RegistryFactory()
-    return [registry, setattr(registry, 'path', path)][0]
+    registry.path = path
+    return registry
 
 def _collection_models():
 
@@ -386,7 +391,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         return self.TeamPermission.objects.create(team=team, permission=permission, note=note)
 
     def _authorized(self, handle, user, permission, *, skip_is_active=False):
-        with listed_relationship(built_registries((handle,))):
+        with listed_relationship((handle,)):
             return list(self.Repository.objects.authorized(user, permission, skip_is_active=skip_is_active).order_by('pk'))
 
     def _assert_unique(self, rows, expected):
@@ -413,10 +418,11 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
                 self.assertIs(user.has_perm(self.read_code, both), self.read_code in codes)
                 self.assertFalse(user.has_perm(self.read_code, mixed))
                 self.assertFalse(user.has_perm(self.read_code, self.secret))
-            self.assertTrue(handle.build_registry().has_permission(self.alice, self.spec, self.read))
-            self.assertTrue(handle.build_registry().has_permission(self.alice, self.notes, self.change))
-            self.assertFalse(handle.build_registry().has_permission(self.alice, self.spec, self.delete))
-            self.assertFalse(handle.build_registry().has_permission(self.bob, self.spec, self.read))
+            catalog = built_catalog(handle)
+            self.assertTrue(catalog.has_perm(self.alice, self.read_code, self.spec))
+            self.assertTrue(catalog.has_perm(self.alice, self.change_code, self.notes))
+            self.assertFalse(catalog.has_perm(self.alice, self.delete_code, self.spec))
+            self.assertFalse(catalog.has_perm(self.bob, self.read_code, self.spec))
             read_users = self.spec.get_permitted_users(self.read)
             read_by_code = self.spec.get_permitted_users(self.read_code)
             self.assertIsNone(read_users._result_cache)
@@ -439,7 +445,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         self.assertIn(self.Team._meta.get_field('members').m2m_db_table(), granted_sql)
 
     def _authorized_qs(self, handle, user, permission):
-        with listed_relationship(built_registries((handle,))):
+        with listed_relationship((handle,)):
             return self.Repository.objects.authorized(user, permission)
 
     def test_prefixed_access_does_not_cross_members_or_permissions(self):
@@ -461,7 +467,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         self._assert_unique(rows, [self.spec])
         self._assert_unique(self._authorized(handle, self.alice, self.change), [self.spec])
         self._assert_unique(self._authorized(handle, self.bob, self.delete), [])
-        enumerated = list(handle.build_registry().permissions_for(self.alice, self.spec))
+        enumerated = list(built_catalog(handle).permissions_for(self.alice, self.spec))
         self.assertEqual({_code(row) for row in enumerated}, {self.read_code, self.change_code})
         self.assertEqual(len(enumerated), 2)
 
@@ -487,16 +493,16 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
             self.assertEqual(self.alice.get_all_permissions(self.spec), {self.add_code})
             self.assertTrue(self.alice.has_perm(self.add_code, self.spec))
             self.assertFalse(self.bob.has_perm(self.add_code, self.spec))
-            self.assertTrue(handle.build_registry().has_permission(self.alice, self.secret, self.read))
+            self.assertTrue(built_catalog(handle).has_perm(self.alice, self.read_code, self.secret))
             self.assertEqual(set(self.secret.get_permitted_users(self.read).values_list('pk', flat=True)), {self.alice.pk})
             self.assertEqual(set(self.spec.get_permitted_users(self.add).values_list('pk', flat=True)), {self.alice.pk})
         self._assert_unique(self._authorized(handle, self.alice, self.read), [self.secret])
         self._assert_unique(self._authorized(handle, self.alice, self.add), [self.spec])
 
     def test_policy_sql_describes_the_collection_without_a_group_leg(self):
-        org = _load_policy_sql_document(render_policy_sql_bytes(registries=[(self.org_handle).build_registry()]))
-        access = _load_policy_sql_document(render_policy_sql_bytes(registries=[(self.access_handle).build_registry()]))
-        classic = _load_policy_sql_document(render_policy_sql_bytes(registries=[(self.classic).build_registry()]))
+        org = _load_policy_sql_document(render_configured_policy(self.org_handle))
+        access = _load_policy_sql_document(render_configured_policy(self.access_handle))
+        classic = _load_policy_sql_document(render_configured_policy(self.classic))
         org_content = org['backends'][0]['contents'][0]
         access_content = access['backends'][0]['contents'][0]
         classic_content = classic['backends'][0]['contents'][0]

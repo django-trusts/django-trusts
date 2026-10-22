@@ -28,11 +28,13 @@ from trusts.compile.nodes import All, Equal, PermissionIn, Ref
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
+from tests.support import built_catalog
 
 def _handle(registry=None, path='tests.core.issue210'):
     if registry is None:
         registry = RegistryFactory()
-    return [registry, setattr(registry, 'path', path)][0]
+    registry.path = path
+    return registry
 
 def _team_condition(t):
     return t.team.permission_bundles.operations.contains(t.operation) & (t.team.organization == t.repository.organization)
@@ -58,7 +60,7 @@ class RegisterConditionSurfaceTest(SimpleTestCase):
         handle = _handle()
         with self.assertRaises(TypeError):
             handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document', predicate=lambda u, p, o: u == o.user)
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(built_catalog(handle).records, ())
 
     def test_condition_is_contextually_typed_as_trust(self):
         hints = get_type_hints(RegistryFactory.register_public)
@@ -130,9 +132,9 @@ class RegisterConditionOnceTest(TransactionTestCase):
             self.assertEqual(builder.calls, 1)
             self.assertNotIn(builder, (record, record.condition))
             self.assertFalse(callable(record.condition))
-            self.assertTrue(registry.has_permission(member, repo, read))
-            list(registry.permissions_for(member, repo))
-            list(registry.filter_authorized(Repository.objects.all(), member, read))
+            self.assertTrue(registry.build_registry().has_permission(member, repo, read))
+            list(built_catalog(registry).permissions_for(member, repo))
+            list(registry.build_registry().filter_authorized(Repository.objects.all(), member, read))
             self.assertEqual(builder.calls, 1)
 
 class RegisterConditionRejectPublicIRTest(TestCase):
@@ -176,7 +178,7 @@ class RegisterConditionRejectPublicIRTest(TestCase):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TypeError):
                         handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document', condition=value)
-                self.assertEqual(handle.build_registry().records, ())
+                self.assertEqual(built_catalog(handle).records, ())
 
 class RegisterConditionFailClosedTest(TestCase):
 
@@ -206,19 +208,18 @@ class RegisterConditionFailClosedTest(TestCase):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
                         handle.register_public(trust=TeamRepoGrant, user=lambda t: t.team.members, permission=lambda t: t.operation, content=lambda t: t.repository, condition=builder)
-                self.assertEqual(handle.build_registry().records, ())
+                self.assertEqual(handle.records, ())
 
     def test_failed_condition_does_not_partially_mutate(self):
         handle = _handle()
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError):
                 handle.register_public(trust=DocumentGrant, user=lambda t: t.user, permission=lambda t: t.permission, content=lambda t: t.document, condition=lambda t: t.user == t.not_a_field)
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(built_catalog(handle).records, ())
 
     def test_condition_invoked_on_register_after_build(self):
         registry = RegistryFactory()
         handle = _handle(registry)
-        registry.build_registry()
         calls = []
 
         def condition(trust):
@@ -257,7 +258,7 @@ class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
         self.assertEqual(record, expected)
         self.assertEqual(record.along.shape, 'S')
         right = _handle(path='tests.core.issue210-right')
-        self.assertEqual(right.build_registry().records, ())
+        self.assertEqual(built_catalog(right).records, ())
         left.register_permission_condition(Document, 'non_confidential', lambda u, p, o: o.confidential != True)
         self.assertIsNotNone(left.build_registry().get_permission_condition_record(Document, 'non_confidential'))
         self.assertIsNone(right.build_registry().get_permission_condition_record(Document, 'non_confidential'))
@@ -291,12 +292,12 @@ class RegisterConditionAuthorizationTest(TransactionTestCase):
 
     def test_conjunction_allows_aligned_ceiling_and_denies_the_rest(self):
         with self.assertNumQueries(1):
-            self.assertTrue(self.registry.has_permission(self.member, self.repo_a, self.read))
+            self.assertTrue(self.registry.build_registry().has_permission(self.member, self.repo_a, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(self.registry.has_permission(self.member, self.repo_a, self.write))
+            self.assertFalse(self.registry.build_registry().has_permission(self.member, self.repo_a, self.write))
         self.TeamRepoGrant.objects.create(team=self.writers, repository=self.repo_other, operation=self.read)
         with self.assertNumQueries(1):
-            self.assertFalse(self.registry.has_permission(self.member, self.repo_other, self.read))
+            self.assertFalse(self.registry.build_registry().has_permission(self.member, self.repo_other, self.read))
         self.bundle.operations.remove(self.read)
         with self.assertNumQueries(1):
-            self.assertFalse(self.registry.has_permission(self.member, self.repo_a, self.read))
+            self.assertFalse(self.registry.build_registry().has_permission(self.member, self.repo_a, self.read))

@@ -1,12 +1,4 @@
-"""Registration marshaling and the builder-half registry.
-
-``TrustsRegistry`` collects ``register`` and ``set_*`` calls and stores
-lowered rows. Its ``build_*`` methods return the lowered shapes without
-storing them; the ``register*`` methods own duplicate and
-rule checks and append those shapes. ``build_registry`` builds the
-query-time ``Registry`` from stored values. ``trusts.core`` re-exports
-``TrustsRegistry``. This module does not import ``trusts.core``.
-"""
+"""Registration marshaling and the ready-time sweep."""
 
 __all__ = []
 
@@ -21,14 +13,13 @@ from django.utils.module_loading import import_string
 from django.db.models import F, Model, Q
 from django.db.models.query import QuerySet
 
-from trusts.commons import (
-    _auth_group_and_permission,
-    _concrete_model,
-    _content_model,
-    _lookup_text,
-    _path_text,
-    _require_instance,
-    _resolved_hop,
+from trusts.plan.hops import (
+    concrete_model,
+    content_model,
+    lookup_text,
+    path_text,
+    require_instance,
+    resolved_hop,
 )
 from trusts.compile.nodes import (
     All,
@@ -67,6 +58,13 @@ from trusts.compile.resolution import (
 from trusts.errors import TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
+from trusts.compile.catalogs import Catalog
+from trusts.backends import TrustModelBackendMixin, catalogs, recorders
+from trusts.plan.conditions import (
+    ConditionRegistry,
+    Expr,
+    RegistryConditionLookup,
+)
 from trusts.plan.registry import Registry
 from trusts.plan.relations import PlanQueryCompiler, bind_checked_user
 from trusts.plan.standards import (
@@ -76,134 +74,11 @@ from trusts.plan.standards import (
     compile_override_q,
     compile_user_rules,
     concrete_rule,
-    condition_names,
     normalize_on,
     normalize_override_on,
     rule_applies,
     validate_user_rule_name,
 )
-
-
-def _validate_equal(predicate, root):
-    left = _require_same_root(predicate.left, root, 'Equal left')
-    right = _require_same_root(predicate.right, root, 'Equal right')
-    _left_path, left_model, _left_field, left_target = _resolve_forward_singles(
-        root, left._path, 'Equal left',
-    )
-    _right_path, right_model, _right_field, right_target = (
-        _resolve_forward_singles(root, right._path, 'Equal right')
-    )
-    if left_model is not right_model:
-        raise TrustsConfigurationError(
-            'Equal paths must terminate on the same model; got %s and %s.'
-            % (left_model._meta.label, right_model._meta.label)
-        )
-    # Compiler compares stored FK columns via F(). Distinct unique
-    # fields (``to_field``) on the same model can collide across
-    # objects and fail open if only the terminal model is checked.
-    if left_target != right_target:
-        raise TrustsConfigurationError(
-            'Equal paths must share one resolved comparison field; '
-            'got %s.%s and %s.%s.'
-            % (
-                left_model._meta.label, left_target,
-                right_model._meta.label, right_target,
-            )
-        )
-
-
-def _validate_permission_in(predicate, root, permission_model,
-                            permission_target=None):
-    if not predicate.refs:
-        raise TrustsConfigurationError(
-            'permission_in requires one or more refs.'
-        )
-    for ref in predicate.refs:
-        bound = _require_same_root(ref, root, 'permission_in')
-        _resolve_permission_in_path(
-            root, bound._path, 'permission_in', permission_model,
-            permission_target=permission_target,
-        )
-
-
-def _validate_condition(condition, root, permission_model,
-                        permission_target=None):
-    """Registration-time ``_meta`` validation. Zero SQL. None is a no-op."""
-    if condition is None:
-        return None
-    if isinstance(condition, All):
-        if not condition.predicates:
-            raise TrustsConfigurationError(
-                'All requires one or more predicates.'
-            )
-        for predicate in condition.predicates:
-            _validate_condition(
-                predicate, root, permission_model,
-                permission_target=permission_target,
-            )
-        return condition
-    if isinstance(condition, Equal):
-        _validate_equal(condition, root)
-        return condition
-    if isinstance(condition, PermissionIn):
-        _validate_permission_in(
-            condition, root, permission_model,
-            permission_target=permission_target,
-        )
-        return condition
-    raise TrustsConfigurationError(
-        'condition is not supported; omit it or pass None.'
-    )
-
-
-def _validate_delegated_condition(condition, root):
-    """Validate delegated row predicates and return inquiry terminal metadata.
-
-    Row-only equality has no permission terminal. Every inquiry-permission
-    match must resolve to the same model and comparison target. Validation is
-    metadata-only and therefore remains zero SQL.
-    """
-    if condition is None:
-        return condition, None, None
-    matches = []
-
-    def visit(node):
-        if isinstance(node, All):
-            if not node.predicates:
-                raise TrustsConfigurationError(
-                    'All requires one or more predicates.'
-                )
-            for predicate in node.predicates:
-                visit(predicate)
-            return
-        if isinstance(node, Equal):
-            _validate_equal(node, root)
-            return
-        if isinstance(node, _InquiryPermissionMatch):
-            ref = _require_same_root(
-                node.ref, root, 'delegated inquiry permission',
-            )
-            _path, model, _field, target = _resolve_permission_path(
-                root, ref._path,
-            )
-            matches.append((model, target))
-            return
-        raise TrustsConfigurationError(
-            'delegated condition is not supported; omit it or use '
-            'row equality and inquiry-permission matches.'
-        )
-
-    visit(condition)
-    if not matches:
-        return condition, None, None
-    first_model, first_target = matches[0]
-    for model, target in matches[1:]:
-        if model is not first_model or target != first_target:
-            raise TrustsConfigurationError(
-                'Delegated inquiry-permission paths must share one model '
-                'and comparison target.'
-            )
-    return condition, first_model, first_target
 
 
 _ALONG_BOUND_MIN = 1
@@ -233,317 +108,6 @@ _TEXT_IDENTITY_TYPES = frozenset((
 
 
 _UUID_IDENTITY_TYPES = frozenset(('UUIDField',))
-
-
-def _common_prefix(left, right):
-    n = 0
-    for a, b in zip(left, right):
-        if a != b:
-            break
-        n += 1
-    return left[:n]
-
-
-def _target_field(field, role, path):
-    """Return ``(related_model, target_field)`` for one hop."""
-    related, attname = _resolved_hop(field, role, path)
-    target = related._meta.get_field(attname)
-    if getattr(target, 'attname', None) != attname:
-        for candidate in related._meta.concrete_fields:
-            if candidate.attname == attname:
-                target = candidate
-                break
-    return related, target
-
-
-def _ident_family(field):
-    kind = field.get_internal_type()
-    if kind in _INTEGER_IDENTITY_TYPES:
-        return 'integer'
-    if kind in _TEXT_IDENTITY_TYPES:
-        return 'text'
-    if kind in _UUID_IDENTITY_TYPES:
-        return 'uuid'
-    raise TrustsConfigurationError(
-        'Along identity field %s (%s) is not a V1 integer, text, or UUID '
-        'identity.' % (field.attname, kind)
-    )
-
-
-def _concrete_fk(field):
-    fk = getattr(field, 'field', None)
-    if (
-        fk is not None
-        and getattr(fk, 'is_relation', False)
-        and getattr(fk, 'concrete', False)
-    ):
-        return fk
-    return field
-
-
-def _resolve_along_edge(walk_model, edge_path):
-    """Return S/C/E metadata for hops from ``walk_model`` along ``edge_path``."""
-    n = len(edge_path)
-    if n == 1:
-        try:
-            field = walk_model._meta.get_field(edge_path[0])
-        except FieldDoesNotExist:
-            raise TrustsConfigurationError(
-                'along path %r refers to missing field %r on %s.'
-                % (_path_text(edge_path), edge_path[0], walk_model._meta.label)
-            )
-        kind = _classify_field(field)
-        related, target = _target_field(field, 'along', edge_path)
-        if related is not walk_model:
-            raise TrustsConfigurationError(
-                'along edge %r must terminate on walk-site model %s, not %s.'
-                % (
-                    _path_text(edge_path),
-                    walk_model._meta.label,
-                    related._meta.label,
-                )
-            )
-        if kind == 'single':
-            return 'S', field.attname, None, None, None, target
-        if kind == 'reverse_o2m':
-            # Reverse PathInfo.target_fields is the related model's PK, not
-            # the concrete self-FK's remote to_field. Identity comes from
-            # the forward FK metadata; the reverse hop still proves the
-            # edge is a self-relation on the walk-site.
-            fk = _concrete_fk(field)
-            dest, edge_target = _target_field(fk, 'along', edge_path)
-            if dest is not walk_model:
-                raise TrustsConfigurationError(
-                    'along edge %r must terminate on walk-site model %s, not %s.'
-                    % (
-                        _path_text(edge_path),
-                        walk_model._meta.label,
-                        dest._meta.label,
-                    )
-                )
-            return 'C', fk.attname, None, None, None, edge_target
-        raise TrustsConfigurationError(
-            'along edge %r is not a supported S/C/E hop.'
-            % (_path_text(edge_path),)
-        )
-    if n == 2:
-        try:
-            reverse = walk_model._meta.get_field(edge_path[0])
-        except FieldDoesNotExist:
-            raise TrustsConfigurationError(
-                'along path %r refers to missing field %r on %s.'
-                % (_path_text(edge_path), edge_path[0], walk_model._meta.label)
-            )
-        if _classify_field(reverse) != 'reverse_o2m':
-            raise TrustsConfigurationError(
-                'along edge %r is not a supported S/C/E hop.'
-                % (_path_text(edge_path),)
-            )
-        edge_model, _edge_pk = _target_field(
-            reverse, 'along', edge_path[:1],
-        )
-        try:
-            forward = edge_model._meta.get_field(edge_path[1])
-        except FieldDoesNotExist:
-            raise TrustsConfigurationError(
-                'along path %r refers to missing field %r on %s.'
-                % (
-                    _path_text(edge_path), edge_path[1],
-                    edge_model._meta.label,
-                )
-            )
-        if _classify_field(forward) != 'single':
-            raise TrustsConfigurationError(
-                'along edge %r is not a supported S/C/E hop.'
-                % (_path_text(edge_path),)
-            )
-        dest, parent_target = _target_field(forward, 'along', edge_path)
-        if dest is not walk_model:
-            raise TrustsConfigurationError(
-                'along edge %r must terminate on walk-site model %s, not %s.'
-                % (
-                    _path_text(edge_path),
-                    walk_model._meta.label,
-                    dest._meta.label,
-                )
-            )
-        child_fk = _concrete_fk(reverse)
-        _child_related, child_target = _target_field(
-            child_fk, 'along', edge_path[:1],
-        )
-        if child_target.attname != parent_target.attname:
-            raise TrustsConfigurationError(
-                'along edge %r mixes identity fields %r and %r.'
-                % (
-                    _path_text(edge_path),
-                    child_target.attname,
-                    parent_target.attname,
-                )
-            )
-        return (
-            'E',
-            None,
-            edge_model,
-            forward.attname,
-            child_fk.attname,
-            parent_target,
-        )
-    raise TrustsConfigurationError(
-        'along edge %r is not a supported S/C/E hop.'
-        % (_path_text(edge_path),)
-    )
-
-
-def _re_resolve_suffix(walk_model, suffix_path, content_model):
-    """Confirm stored suffix names compile from the walk-site model."""
-    if not suffix_path:
-        if walk_model is not content_model:
-            raise TrustsConfigurationError(
-                'along suffix path is empty but the content terminal %s '
-                'is not the walk-site %s.'
-                % (content_model._meta.label, walk_model._meta.label)
-            )
-        return
-    current = walk_model
-    for index, name in enumerate(suffix_path):
-        try:
-            field = current._meta.get_field(name)
-        except FieldDoesNotExist:
-            raise TrustsConfigurationError(
-                'along suffix path %r cannot be resolved from %s; '
-                'missing field %r.'
-                % (_path_text(suffix_path), walk_model._meta.label, name)
-            )
-        kind = _classify_field(field)
-        if kind not in _SUFFIX_KINDS:
-            raise TrustsConfigurationError(
-                'along suffix path %r uses unsupported field %r on %s.'
-                % (_path_text(suffix_path), name, current._meta.label)
-            )
-        related, _attname = _resolved_hop(field, 'along suffix', suffix_path)
-        current = related
-    if current is not content_model:
-        raise TrustsConfigurationError(
-            'along suffix path %r from %s terminates on %s, not %s.'
-            % (
-                _path_text(suffix_path),
-                walk_model._meta.label,
-                current._meta.label,
-                content_model._meta.label,
-            )
-        )
-
-
-def _suffix_rewrite_attname(walk_model, suffix_path, content_model, walk_ident):
-    if len(suffix_path) != 1:
-        return None
-    try:
-        field = walk_model._meta.get_field(suffix_path[0])
-    except FieldDoesNotExist:
-        return None
-    if _classify_field(field) not in ('reverse_o2m', 'reverse_o2o'):
-        return None
-    fk = _concrete_fk(field)
-    if fk.model._meta.concrete_model is not content_model:
-        return None
-    _related, target = _target_field(fk, 'along suffix', suffix_path)
-    if target.attname != walk_ident:
-        return None
-    return fk.name
-
-
-def _build_along_walk(root, content_path, content_model, along):
-    along_ref = _require_ref(along.ref, 'along')
-    if along_ref._root is not root:
-        raise TrustsConfigurationError(
-            'along ref must share the registration root %s; got %s.'
-            % (root._meta.label, along_ref._root._meta.label)
-        )
-    bound = along.bound
-    if isinstance(bound, bool) or not isinstance(bound, int):
-        raise TrustsConfigurationError(
-            'Along bound must be an integer in %s..%s.'
-            % (_ALONG_BOUND_MIN, _ALONG_BOUND_MAX)
-        )
-    if bound < _ALONG_BOUND_MIN or bound > _ALONG_BOUND_MAX:
-        raise TrustsConfigurationError(
-            'Along bound must be an integer in %s..%s.'
-            % (_ALONG_BOUND_MIN, _ALONG_BOUND_MAX)
-        )
-    walk_path = _common_prefix(tuple(along_ref._path), tuple(content_path))
-    edge_path = tuple(along_ref._path[len(walk_path):])
-    suffix_path = tuple(content_path[len(walk_path):])
-    if not walk_path:
-        raise TrustsConfigurationError(
-            'along ref %r and content path %r do not share a walk-site prefix.'
-            % (_path_text(along_ref._path), _path_text(content_path))
-        )
-    if not edge_path:
-        raise TrustsConfigurationError(
-            'along ref %r has no edge hop beyond the walk-site.'
-            % (_path_text(along_ref._path),)
-        )
-    _walk_path, walk_model, walk_field, walk_ident = _resolve_path(
-        root, walk_path, 'along', trailing_reverse=True,
-    )
-    last_walk_name = walk_path[-1]
-    current = root
-    for name in walk_path[:-1]:
-        field = current._meta.get_field(name)
-        current, _att = _resolved_hop(field, 'along', walk_path)
-    grant_hop = current._meta.get_field(last_walk_name)
-    _grant_related, grant_target = _target_field(grant_hop, 'along', walk_path)
-    (
-        shape, parent_attname, edge_model, edge_parent_attname,
-        edge_child_attname, edge_target,
-    ) = _resolve_along_edge(walk_model, edge_path)
-    ident_fields = (grant_target, edge_target)
-    attnames = {field.attname for field in ident_fields}
-    if attnames != {walk_ident}:
-        raise TrustsConfigurationError(
-            'along identity fields must match across the grant walk hop '
-            'and both edge ends; got %s.'
-            % ', '.join(sorted(field.attname for field in ident_fields))
-        )
-    families = {_ident_family(field) for field in ident_fields}
-    if len(families) != 1:
-        raise TrustsConfigurationError(
-            'along identity fields mix identity families %s.'
-            % ', '.join(sorted(families))
-        )
-    ident_family = families.pop()
-    _re_resolve_suffix(walk_model, suffix_path, content_model)
-    rewrite_attname = _suffix_rewrite_attname(
-        walk_model, suffix_path, content_model, walk_ident,
-    )
-    return AlongWalk(
-        path=tuple(along_ref._path),
-        bound=bound,
-        shape=shape,
-        walk_path=tuple(walk_path),
-        walk_model=walk_model,
-        walk_ident=walk_ident,
-        walk_field=walk_field,
-        suffix_path=suffix_path,
-        suffix_field=_lookup_text(suffix_path) if suffix_path else '',
-        ident_family=ident_family,
-        parent_attname=parent_attname,
-        edge_model=edge_model,
-        edge_parent_attname=edge_parent_attname,
-        edge_child_attname=edge_child_attname,
-        rewrite_attname=rewrite_attname,
-    )
-
-
-def probe_along_capabilities(connection):
-    """Execute a plain recursive CTE. Raises on failure."""
-    with connection.cursor() as cursor:
-        cursor.execute(
-            'WITH RECURSIVE t(n) AS ('
-            'SELECT 0 UNION ALL SELECT n + 1 FROM t WHERE n < 0'
-            ') SELECT n FROM t'
-        )
-        cursor.fetchone()
 
 
 @dataclass(frozen=True, slots=True)
@@ -629,462 +193,6 @@ class PublicRegistration:
     along: object | None = None
 
 
-def _same_terminal_bindings(existing, record):
-    """True when two records share content/user/permission/along bindings."""
-    return (
-        existing.content_path == record.content_path
-        and existing.content_model is record.content_model
-        and existing.content_target == record.content_target
-        and existing.user_path == record.user_path
-        and existing.user_model is record.user_model
-        and existing.user_target == record.user_target
-        and existing.permission_path == record.permission_path
-        and existing.permission_model is record.permission_model
-        and existing.permission_target == record.permission_target
-        and existing.along == record.along
-        and existing.via_group == record.via_group
-        and existing.group_path == record.group_path
-    )
-
-
-def _rules_for_model(conditions, model):
-    """Stored rules, or the built-in ``is_active`` rule for ``model``."""
-    if conditions is not None:
-        return conditions
-    return builtin_user_conditions(model)
-
-
-def _assert_registration_rules(*, user_model, sponsor_model, conditions,
-                               override):
-    """Require each applicable rule's concrete booleans on these models.
-
-    ``conditions`` is the recorded rule tuple, or ``None`` for the
-    built-in rule. ``override`` is the recorded override, or ``None``.
-    """
-    pairs = []
-    if user_model is not None:
-        pairs.append((user_model, 'user'))
-    if sponsor_model is not None:
-        pairs.append((sponsor_model, 'sponsor'))
-    for model, role in pairs:
-        concrete = model._meta.concrete_model
-        for rule in _rules_for_model(conditions, concrete):
-            if not rule_applies(rule.on, role):
-                continue
-            assert_concrete_booleans(concrete, rule.expr, rule.name)
-    if override is not None and user_model is not None:
-        assert_concrete_booleans(
-            user_model._meta.concrete_model, override.expr, override.name,
-        )
-
-
-def validate_principal(record, existing, *, conditions, override):
-    """Reject a duplicate or conflicting ordinary row. Does not store it.
-
-    ``existing`` is the ordinary rows already recorded, any root.
-    ``conditions`` and ``override`` are the recorded user rules, not
-    factory state. Same-root equality is a duplicate. The same root and
-    content terminal conflict unless the terminal bindings match and the
-    condition differs.
-    """
-    for prior in existing:
-        if prior.root is not record.root:
-            continue
-        if prior == record:
-            raise TrustsConfigurationError(
-                'Duplicate registration for %s.' % record.root._meta.label
-            )
-        if prior.content_model is not record.content_model:
-            continue
-        if (
-            _same_terminal_bindings(prior, record)
-            and prior.condition != record.condition
-        ):
-            continue
-        raise TrustsConfigurationError(
-            'Conflicting registration for %s content terminal '
-            '%s: existing %r, new %r.'
-            % (
-                record.root._meta.label,
-                record.content_model._meta.label,
-                prior,
-                record,
-            )
-        )
-    _assert_registration_rules(
-        user_model=record.user_model, sponsor_model=None,
-        conditions=conditions, override=override,
-    )
-    return record
-
-
-def validate_delegation(record, existing, *, conditions, override):
-    """Reject a duplicate or conflicting delegation. Does not store it.
-
-    ``existing`` is the delegations already recorded, any root.
-    ``conditions`` and ``override`` are the recorded user rules. The
-    returned row carries the compiled sponsor-rules fragment.
-    """
-    same_root = [row for row in existing if row.root is record.root]
-    if record in same_root:
-        raise TrustsConfigurationError(
-            'Duplicate delegated registration for %s.'
-            % record.root._meta.label
-        )
-    for prior in same_root:
-        if prior.content_model is record.content_model:
-            raise TrustsConfigurationError(
-                'Conflicting delegated registration for %s content '
-                'terminal %s: existing %r, new %r.'
-                % (
-                    record.root._meta.label,
-                    record.content_model._meta.label,
-                    prior,
-                    record,
-                )
-            )
-    _assert_registration_rules(
-        user_model=record.delegate_model,
-        sponsor_model=record.sponsor_model,
-        conditions=conditions, override=override,
-    )
-    sponsor_model = record.sponsor_model._meta.concrete_model
-    return replace(record, sponsor_rules=compile_user_rules(
-        sponsor_model, record.sponsor_field,
-        _rules_for_model(conditions, sponsor_model),
-        role='sponsor', values={},
-    ))
-
-
-def _require_condition_arity(builder):
-    """Reject 0-arg, 2+-required, and keyword-only-only before invoke."""
-    try:
-        signature = inspect.signature(builder)
-    except (TypeError, ValueError):
-        return
-    try:
-        signature.bind(_CONDITION_ARITY_PROBE)
-    except TypeError as exc:
-        raise TrustsConfigurationError(
-            'condition builder must accept exactly one positional '
-            'argument (the trust value): %s' % exc
-        ) from exc
-
-
-def _delegated_condition_arity(builder):
-    """Return 1 or 2 without invoking a delegated condition builder."""
-    try:
-        signature = inspect.signature(builder)
-    except (TypeError, ValueError):
-        return 1
-    if any(
-        parameter.kind is inspect.Parameter.VAR_POSITIONAL
-        for parameter in signature.parameters.values()
-    ):
-        raise TrustsConfigurationError(
-            'delegated condition builder must accept one or two positional '
-            'arguments, not *args.'
-        )
-    accepted = []
-    for count in (1, 2, 3):
-        try:
-            signature.bind(*((_CONDITION_ARITY_PROBE,) * count))
-        except TypeError:
-            continue
-        accepted.append(count)
-    if 3 in accepted or not any(count in accepted for count in (1, 2)):
-        raise TrustsConfigurationError(
-            'delegated condition builder must accept one or two positional '
-            'arguments (the relationship and optional requested permission).'
-        )
-    return 2 if 2 in accepted else 1
-
-
-def _public_condition_path(proxy, token, role):
-    if not isinstance(proxy, _ConditionProxy):
-        raise TrustsConfigurationError(
-            '%s must be a path rooted at the supplied trust value, '
-            'not %r.' % (role, proxy)
-        )
-    if proxy._token is not token:
-        raise TrustsConfigurationError(
-            '%s used a path from another symbolic root.' % (role,)
-        )
-    if not proxy._path:
-        raise TrustsConfigurationError(
-            '%s returned an empty path.' % (role,)
-        )
-    return '__'.join(proxy._path)
-
-
-def _flatten_public_all(*predicates):
-    parts = []
-    for predicate in predicates:
-        if isinstance(predicate, All):
-            parts.extend(predicate.predicates)
-        else:
-            parts.append(predicate)
-    return All(*parts)
-
-
-def _lower_public_condition(node, trust, token, permission_path):
-    if isinstance(node, _ConditionAnd):
-        return _flatten_public_all(
-            _lower_public_condition(node.left, trust, token, permission_path),
-            _lower_public_condition(node.right, trust, token, permission_path),
-        )
-    if isinstance(node, _ConditionEq):
-        return Equal(
-            _public_ref(
-                trust,
-                _public_condition_path(node.left, token, 'Equal left'),
-                'Equal left',
-            ),
-            _public_ref(
-                trust,
-                _public_condition_path(node.right, token, 'Equal right'),
-                'Equal right',
-            ),
-        )
-    if isinstance(node, _ConditionIn):
-        if permission_path is None:
-            raise TrustsConfigurationError(
-                'row-only delegated condition .contains() cannot bind the '
-                'requested permission; accept a second argument and pass it '
-                'as the member.'
-            )
-        member_path = _public_condition_path(
-            node.member, token, 'condition .contains member',
-        )
-        permission_segments = _public_path_segments(
-            permission_path, 'permission',
-        )
-        if tuple(member_path.split('__')) != permission_segments:
-            raise TrustsConfigurationError(
-                'condition .contains member must be the registered '
-                'permission path %r, not %r.'
-                % (permission_path, member_path)
-            )
-        return PermissionIn(
-            _public_ref(
-                trust,
-                _public_condition_path(
-                    node.collection, token, 'condition .contains collection',
-                ),
-                'permission_in',
-            ),
-        )
-    if isinstance(node, _ConditionInquiryMatch):
-        return _InquiryPermissionMatch(
-            _public_ref(
-                trust,
-                _public_condition_path(
-                    node.path, token, 'delegated inquiry permission path',
-                ),
-                'delegated inquiry permission',
-            )
-        )
-    raise TrustsConfigurationError(
-        'condition builder must return a boolean expression of path '
-        'equality, collection.contains(member), or their conjunction, '
-        'not %r.' % (node,)
-    )
-
-
-def _reject_public_condition_value(condition):
-    """Public ``condition=`` is a callable, not a prebuilt IR node."""
-    from trusts.plan.conditions import Expr
-
-    if (
-        condition is All
-        or condition is Equal
-        or condition is PermissionIn
-        or condition is permission_in
-    ):
-        raise TypeError(
-            'condition must be a symbolic callable, '
-            'not a prebuilt All / Equal / permission_in value or other '
-            'non-callable %r.' % (condition,)
-        )
-    if isinstance(condition, (All, Equal, PermissionIn, Expr, Ref, Q, str, bool)):
-        raise TypeError(
-            'condition must be a symbolic callable, '
-            'not a prebuilt All / Equal / permission_in value or other '
-            'non-callable %r.' % (condition,)
-        )
-    if not callable(condition):
-        raise TypeError(
-            'condition must be a symbolic callable, '
-            'not %r.' % (condition,)
-        )
-
-
-def _normalize_public_condition(trust, condition, permission_path, *, token):
-    """Invoke a public condition builder once and lower to private IR."""
-    if condition is None:
-        return None
-    _reject_public_condition_value(condition)
-    if inspect.iscoroutinefunction(condition) or inspect.isasyncgenfunction(
-        condition,
-    ):
-        raise TrustsConfigurationError(
-            'condition builder must return a boolean expression, not a '
-            'coroutine or async generator.'
-        )
-    _require_condition_arity(condition)
-    proxy = _ConditionProxy(trust, token=token)
-    try:
-        result = condition(proxy)
-    except TrustsConfigurationError:
-        raise
-    except Exception as exc:
-        raise TrustsConfigurationError(
-            'condition builder failed: %s' % exc
-        ) from exc
-    if not isinstance(result, _CONDITION_EXPR_TYPES):
-        raise TrustsConfigurationError(
-            'condition builder must return a boolean expression of path '
-            'equality, collection.contains(member), or their conjunction, '
-            'not %r.' % (result,)
-        )
-    return _lower_public_condition(result, trust, token, permission_path)
-
-
-def _normalize_delegated_condition(trust, condition, *, token):
-    """Invoke a delegated condition builder once and lower to private IR."""
-    if condition is None:
-        return None
-    _reject_public_condition_value(condition)
-    if inspect.iscoroutinefunction(condition) or inspect.isasyncgenfunction(
-        condition,
-    ):
-        raise TrustsConfigurationError(
-            'condition builder must return a boolean expression, not a '
-            'coroutine or async generator.'
-        )
-    arity = _delegated_condition_arity(condition)
-    relationship = _ConditionProxy(trust, token=token)
-    inquiry_permission = _InquiryPermissionProxy(token)
-    try:
-        if arity == 2:
-            result = condition(relationship, inquiry_permission)
-        else:
-            result = condition(relationship)
-    except TrustsConfigurationError:
-        raise
-    except Exception as exc:
-        raise TrustsConfigurationError(
-            'condition builder failed: %s' % exc
-        ) from exc
-    if not isinstance(result, _CONDITION_EXPR_TYPES):
-        raise TrustsConfigurationError(
-            'condition builder must return a boolean expression of path '
-            'equality, collection.contains(permission), or their '
-            'conjunction, not %r.' % (result,)
-        )
-    return _lower_public_condition(result, trust, token, None)
-
-
-def _normalize_public_role(trust, value, role, *, token):
-    """Normalize a public string or path builder to a Django ``__`` path."""
-    if isinstance(value, Ref):
-        raise TypeError(
-            '%s must be a Django path string or a one-argument path '
-            'builder, not a Ref.' % (role,)
-        )
-    if isinstance(value, str):
-        return value
-    if not callable(value):
-        raise TrustsConfigurationError(
-            '%s must be a Django path string or a one-argument path '
-            'builder, not %r.' % (role, value)
-        )
-    builder = _PathBuilder(trust, token=token)
-    try:
-        result = value(builder)
-    except TrustsConfigurationError:
-        raise
-    except Exception as exc:
-        raise TrustsConfigurationError(
-            '%s path builder failed: %s' % (role, exc)
-        ) from exc
-    if not isinstance(result, _PathBuilder):
-        raise TrustsConfigurationError(
-            '%s path builder must return a path rooted at the supplied '
-            'trust value, not %r.' % (role, result)
-        )
-    if result._token is not token:
-        raise TrustsConfigurationError(
-            '%s path builder used a path from another symbolic root.'
-            % (role,)
-        )
-    if not result._path:
-        raise TrustsConfigurationError(
-            '%s path builder returned an empty path.' % (role,)
-        )
-    return '__'.join(result._path)
-
-
-def _public_path_segments(value, role, *, allow_empty=False):
-    """Split a public Django ``__`` path. Reject before ``Ref`` / resolve."""
-    if isinstance(value, Ref):
-        raise TypeError(
-            '%s must be a Django path string, not a Ref.' % (role,)
-        )
-    if not isinstance(value, str):
-        raise TrustsConfigurationError(
-            '%s must be a Django path string, not %r.' % (role, value)
-        )
-    if not value:
-        if allow_empty:
-            return ()
-        raise TrustsConfigurationError(
-            '%s path %r is not a valid Django __ relationship path.'
-            % (role, value)
-        )
-    if (
-        value.startswith('__')
-        or value.endswith('__')
-        or '.' in value
-    ):
-        raise TrustsConfigurationError(
-            '%s path %r is not a valid Django __ relationship path.'
-            % (role, value)
-        )
-    segments = value.split('__')
-    if any(segment == '' for segment in segments):
-        raise TrustsConfigurationError(
-            '%s path %r is not a valid Django __ relationship path.'
-            % (role, value)
-        )
-    return tuple(segments)
-
-
-def _public_ref(root, value, role, *, allow_empty=False):
-    return Ref(root, _public_path_segments(
-        value, role, allow_empty=allow_empty,
-    ))
-
-
-def _bind_public_along(root, along):
-    """Normalize ``(path, bound)`` to an internal ``Along``."""
-    if along is None:
-        return None
-    if isinstance(along, Along):
-        raise TypeError(
-            'along must be a (path, bound) pair, not an Along instance.'
-        )
-    if isinstance(along, Ref):
-        raise TypeError(
-            'along must be a (path, bound) pair, not a Ref.'
-        )
-    if not isinstance(along, tuple) or len(along) != 2:
-        raise TrustsConfigurationError(
-            'along must be a (path, bound) pair, not %r.' % (along,)
-        )
-    path, bound = along
-    return Along(_public_ref(root, path, 'along'), bound)
-
 class RegistryFactory(object):
     """Instantiable registry of permission-bearing relation declarations.
 
@@ -1094,32 +202,28 @@ class RegistryFactory(object):
     store several records when they terminate on different content
     models, or when the same bindings use a different closed condition.
 
-        Registration stays open for the life of the instance:
-        ``build_registry()`` builds a fresh ``Registry`` from the
-        current records on each call, so registering after a build
-        takes effect on the next build. A standalone
-        ``TrustsRegistry()`` never inspects Django readiness.
+        ``build_registry()`` freezes this factory and returns a fresh
+        ``Registry`` from the records already stored. A later build
+        returns another registry from those same records. ``register``,
+        ``register_delegation``, ``register_permission_condition``,
+        ``set_user_condition``, ``set_user_override``, and
+        ``set_filter_lookup`` raise ``TrustsConfigurationError``.
     """
 
     def __init__(self, *, compiler=None, path='', family='relationship',
                  user_model=None):
-        # Stay lazy: importing this module must not load the condition IR.
-        from trusts.plan.conditions import (
-            ConditionRegistry,
-            RegistryConditionLookup,
-        )
-
         self._by_root = {}
         self._order = []
         self._delegations_by_root = {}
         self._delegation_order = []
-        self._condition_lookup = None
+        self._filter_lookup = None
+        self.frozen = False
         self._user_conditions = None
         self._user_override = None
         self._rule_fragments = {}
         self._override_fragments = {}
         self.conditions = ConditionRegistry()
-        self.set_condition_lookup(RegistryConditionLookup(self))
+        self.set_filter_lookup(RegistryConditionLookup(self.conditions))
         self._explicit_compiler = compiler is not None
         self._compiler = compiler if self._explicit_compiler else PlanQueryCompiler()
         self.path = path
@@ -1132,21 +236,22 @@ class RegistryFactory(object):
         return self._compiler
 
     @property
-    def condition_lookup(self):
+    def filter_lookup(self):
         """Bound ``ConditionLookup``, or ``None`` after explicit unbind."""
-        return self._condition_lookup
+        return self._filter_lookup
 
-    def set_condition_lookup(self, lookup):
+    def set_filter_lookup(self, lookup):
         """Bind a ``ConditionLookup`` on this instance (zero SQL).
 
         Construction already self-binds the private store adapter.
         Both ``record_for`` and ``compile_q`` must be callable. A missing
         method raises ``TrustsConfigurationError`` and does not bind
         (no partial bind). ``lookup is None`` clears the binding.
-        Methods are not invoked at bind time.
+        Methods are not invoked at bind time. A built factory is frozen.
         """
+        self._open('set_filter_lookup')
         if lookup is None:
-            self._condition_lookup = None
+            self._filter_lookup = None
             return
         record_for = getattr(lookup, 'record_for', None)
         compile_q = getattr(lookup, 'compile_q', None)
@@ -1155,7 +260,7 @@ class RegistryFactory(object):
                 'ConditionLookup must provide record_for and compile_q; '
                 'no partial bind.'
             )
-        self._condition_lookup = lookup
+        self._filter_lookup = lookup
 
     def register_permission_condition(self, model, cond_code, condition):
         """Register a ``:cond_code`` condition on ``model`` for this instance.
@@ -1164,6 +269,7 @@ class RegistryFactory(object):
         here. A prebuilt ``Expr`` is rejected by the condition
         store with ``TypeError`` before mutation.
         """
+        self._open('register_permission_condition')
         return self.conditions.register_permission_condition(
             model, cond_code, condition,
         )
@@ -1207,96 +313,15 @@ class RegistryFactory(object):
             return builtin_user_conditions(self.user_model)
         return tuple(self._user_conditions.values())
 
-    def _stored_user_conditions(self):
-        """``None`` when the registry still uses the built-in rule."""
-        if self._user_conditions is None:
-            return None
-        return tuple(self._user_conditions.values())
-
-    def _known_skip_names(self):
-        return condition_names(
-            self._stored_user_conditions(), self._user_override,
-        )
-
-    def _conditions_for_model(self, model):
-        """Conditions compiled for ``model``.
-
-        With no caller-set rules, the built-in ``is_active`` condition is
-        included only when ``model`` has that concrete boolean field.
-        A caller-set list is used as stored, including a replacement
-        ``is_active`` condition. Every inquiry uses this same list.
-        """
-        stored = self._stored_user_conditions()
-        if stored is not None:
-            return stored
-        return builtin_user_conditions(model)
-
-    def _rule_fragment(self, model, *, role, path=''):
-        """Registration-time ``(skip OR condition)`` for one model and role."""
-        model = model._meta.concrete_model
-        key = (model, role, path)
-        try:
-            return self._rule_fragments[key]
-        except KeyError:
-            compiled = compile_user_rules(
-                model, path, self._conditions_for_model(model),
-                role=role, values={},
-            )
-            self._rule_fragments[key] = compiled
-            return compiled
-
-    def _override_fragment(self, model):
-        """Registration-time ``(NOT skip AND override)`` for the checked user."""
-        model = model._meta.concrete_model
-        try:
-            return self._override_fragments[model]
-        except KeyError:
-            compiled = compile_override_q(
-                model, '', self._user_override, {},
-            )
-            self._override_fragments[model] = compiled
-            return compiled
-
-    def _clear_compiled_rules(self):
-        """Drop registration-time fragments after a successful rule edit."""
-        self._rule_fragments.clear()
-        self._override_fragments.clear()
-
-    def _compiled_subject(self, records, delegations, user_model):
-        if user_model is not None:
-            return user_model
-        models = {
-            record.user_model._meta.concrete_model for record in records
-        }
-        models.update(
-            record.delegate_model._meta.concrete_model
-            for record in delegations
-        )
-        if len(models) == 1:
-            return models.pop()
-        return None
-
-    def _require_user_model(self):
-        if self.user_model is None:
-            raise TrustsConfigurationError(
-                'RegistryFactory has no user model. Pass user_model '
-                'at construction.'
-            )
-
-    def _open_for_rules(self, kind):
-        if self._order or self._delegation_order:
-            raise TrustsConfigurationError(
-                'Set user conditions and the user override before '
-                'register() or register_delegation().'
-            )
-
     def set_user_condition(self, name, expr, on='*'):
         """Set, replace, or remove one named user condition.
 
-        Call this before ``register()`` or ``register_delegation()``.
-        ``None`` removes that name. ``on`` is ``*``, ``user``, or ``sponsor``.
+        Record this before ``register()``. The catalog sweep checks the
+        order at ready. ``None`` removes that name. ``on`` is ``*``,
+        ``user``, or ``sponsor``.
         The lambda is walked once against this factory's ``user_model``.
         """
+        self._open('set_user_condition')
         self._require_user_model()
         self._open_for_rules('condition')
         validate_user_rule_name(name, kind='condition')
@@ -1338,10 +363,11 @@ class RegistryFactory(object):
     def set_user_override(self, name, expr, on='user'):
         """Store the one checked-user override, or clear it with ``None``.
 
-        Call this before ``register()`` or ``register_delegation()``.
-        ``on="sponsor"`` and ``on="*"`` raise. The name cannot match a
+        Record this before ``register()``. The catalog sweep checks the
+        order at ready. ``on="sponsor"`` and ``on="*"`` raise. The name cannot match a
         registered condition.
         """
+        self._open('set_user_override')
         self._require_user_model()
         self._open_for_rules('override')
         validate_user_rule_name(name, kind='override')
@@ -1487,13 +513,48 @@ class RegistryFactory(object):
         walk as an ordinary registration: the delegation anchor reaches
         objects within that walk. Registration validates metadata only.
         """
+        self._open('register_delegation')
         record = self.build_delegation(
             content=content, delegate=delegate, sponsor=sponsor,
             condition=condition, along=along,
         )
         root = record.root
-        record = self.validate_delegation(
-            record, self._delegations_by_root.get(root, ()),
+        existing = self._delegations_by_root.get(root, ())
+        conditions = self._stored_user_conditions()
+        override = self._user_override
+        same_root = [row for row in existing if row.root is record.root]
+        if record in same_root:
+            raise TrustsConfigurationError(
+                'Duplicate delegated registration for %s.'
+                % record.root._meta.label
+            )
+        for prior in same_root:
+            if prior.content_model is record.content_model:
+                raise TrustsConfigurationError(
+                    'Conflicting delegated registration for %s content '
+                    'terminal %s: existing %r, new %r.'
+                    % (
+                        record.root._meta.label,
+                        record.content_model._meta.label,
+                        prior,
+                        record,
+                    )
+                )
+        _assert_registration_rules(
+            user_model=record.delegate_model,
+            sponsor_model=record.sponsor_model,
+            conditions=conditions, override=override,
+        )
+        sponsor_model = record.sponsor_model._meta.concrete_model
+        record = replace(record, sponsor_rules=compile_user_rules(
+            sponsor_model, record.sponsor_field,
+            _rules_for_model(conditions, sponsor_model),
+            role='sponsor', values={},
+        ))
+        self._rule_fragment(record.delegate_model, role='user')
+        self._override_fragment(record.delegate_model)
+        self._rule_fragment(
+            record.sponsor_model, role='sponsor', path=record.sponsor_field,
         )
         existing_rows = self._delegations_by_root.get(root)
         if existing_rows:
@@ -1502,25 +563,6 @@ class RegistryFactory(object):
             self._delegations_by_root[root] = [record]
         self._delegation_order.append(record)
         return record
-
-    def validate_delegation(self, record, existing):
-        """Reject a duplicate or conflicting delegation. Does not store it.
-
-        ``existing`` is the delegations already held for this comparison,
-        any root. Delegates to the module function with this factory's
-        recorded user rules, then memos the compiled fragments.
-        """
-        checked = validate_delegation(
-            record, existing,
-            conditions=self._stored_user_conditions(),
-            override=self._user_override,
-        )
-        self._rule_fragment(record.delegate_model, role='user')
-        self._override_fragment(record.delegate_model)
-        self._rule_fragment(
-            record.sponsor_model, role='sponsor', path=record.sponsor_field,
-        )
-        return checked
 
     @staticmethod
     def build_relation(*, content, user, permission=None, group=None,
@@ -1641,12 +683,45 @@ class RegistryFactory(object):
 
         This method does not inspect Django's global ``apps.ready``.
         """
+        self._open('register')
         record = self.build_relation(
             content=content, user=user, permission=permission, group=group,
             condition=condition, along=along,
         )
         root = record.root
-        self.validate_principal(record, self._by_root.get(root, ()))
+        existing = self._by_root.get(root, ())
+        conditions = self._stored_user_conditions()
+        override = self._user_override
+        for prior in existing:
+            if prior.root is not record.root:
+                continue
+            if prior == record:
+                raise TrustsConfigurationError(
+                    'Duplicate registration for %s.' % record.root._meta.label
+                )
+            if prior.content_model is not record.content_model:
+                continue
+            if (
+                _same_terminal_bindings(prior, record)
+                and prior.condition != record.condition
+            ):
+                continue
+            raise TrustsConfigurationError(
+                'Conflicting registration for %s content terminal '
+                '%s: existing %r, new %r.'
+                % (
+                    record.root._meta.label,
+                    record.content_model._meta.label,
+                    prior,
+                    record,
+                )
+            )
+        _assert_registration_rules(
+            user_model=record.user_model, sponsor_model=None,
+            conditions=conditions, override=override,
+        )
+        self._rule_fragment(record.user_model, role='user')
+        self._override_fragment(record.user_model)
         existing_rows = self._by_root.get(root)
         if existing_rows:
             existing_rows.append(record)
@@ -1654,22 +729,6 @@ class RegistryFactory(object):
             self._by_root[root] = [record]
         self._order.append(record)
         return record
-
-    def validate_principal(self, record, existing):
-        """Reject a duplicate or conflicting ordinary row. Does not store it.
-
-        ``existing`` is the ordinary rows already held, any root. Delegates
-        to the module function with this factory's recorded user rules,
-        then memos the compiled fragments.
-        """
-        checked = validate_principal(
-            record, existing,
-            conditions=self._stored_user_conditions(),
-            override=self._user_override,
-        )
-        self._rule_fragment(record.user_model, role='user')
-        self._override_fragment(record.user_model)
-        return checked
 
     @staticmethod
     def build_public_registration(
@@ -1820,6 +879,112 @@ class RegistryFactory(object):
 
     _register_public = register_public
 
+    def build_registry(self):
+        """Build a query-time ``Registry`` from stored values.
+
+        Records, delegations, the shared condition store, stored user
+        conditions, the user override, and the bound condition lookup
+        are passed as data, all at once. No builders are injected.
+        """
+        registry = Registry(
+            records=self.records,
+            delegations=self.delegations,
+            conditions=self.conditions,
+            user_conditions=self._stored_user_conditions(),
+            user_override=self._user_override,
+            filter_lookup=self._filter_lookup,
+            compiler=self._compiler if self._explicit_compiler else None,
+            path=self.path or '',
+            family=self.family,
+            user_model=self.user_model,
+        )
+        self.frozen = True
+        return registry
+
+    def _stored_user_conditions(self):
+        """``None`` when the registry still uses the built-in rule."""
+        if self._user_conditions is None:
+            return None
+        return tuple(self._user_conditions.values())
+
+    def _conditions_for_model(self, model):
+        """Conditions compiled for ``model``.
+
+        With no caller-set rules, the built-in ``is_active`` condition is
+        included only when ``model`` has that concrete boolean field.
+        A caller-set list is used as stored, including a replacement
+        ``is_active`` condition. Every inquiry uses this same list.
+        """
+        stored = self._stored_user_conditions()
+        if stored is not None:
+            return stored
+        return builtin_user_conditions(model)
+
+    def _rule_fragment(self, model, *, role, path=''):
+        """Registration-time ``(skip OR condition)`` for one model and role."""
+        model = model._meta.concrete_model
+        key = (model, role, path)
+        try:
+            return self._rule_fragments[key]
+        except KeyError:
+            compiled = compile_user_rules(
+                model, path, self._conditions_for_model(model),
+                role=role, values={},
+            )
+            self._rule_fragments[key] = compiled
+            return compiled
+
+    def _override_fragment(self, model):
+        """Registration-time ``(NOT skip AND override)`` for the checked user."""
+        model = model._meta.concrete_model
+        try:
+            return self._override_fragments[model]
+        except KeyError:
+            compiled = compile_override_q(
+                model, '', self._user_override, {},
+            )
+            self._override_fragments[model] = compiled
+            return compiled
+
+    def _clear_compiled_rules(self):
+        """Drop registration-time fragments after a successful rule edit."""
+        self._rule_fragments.clear()
+        self._override_fragments.clear()
+
+    def _compiled_subject(self, records, delegations, user_model):
+        if user_model is not None:
+            return user_model
+        models = {
+            record.user_model._meta.concrete_model for record in records
+        }
+        models.update(
+            record.delegate_model._meta.concrete_model
+            for record in delegations
+        )
+        if len(models) == 1:
+            return models.pop()
+        return None
+
+    def _require_user_model(self):
+        if self.user_model is None:
+            raise TrustsConfigurationError(
+                'RegistryFactory has no user model. Pass user_model '
+                'at construction.'
+            )
+
+    def _open(self, method):
+        if self.frozen:
+            raise TrustsConfigurationError(
+                '%s refused: this factory is frozen.' % method
+            )
+
+    def _open_for_rules(self, kind):
+        if self._order or self._delegation_order:
+            raise TrustsConfigurationError(
+                'Record user conditions and the override before '
+                'register(). The catalog sweep checks this at ready().'
+            )
+
     def _records_for(self, content_model, user_model=None, permission_model=None):
         chosen = []
         for record in self._order:
@@ -1848,78 +1013,6 @@ class RegistryFactory(object):
             chosen.append(record)
         return tuple(chosen)
 
-    def build_registry(self):
-        """Build a query-time ``Registry`` from stored values.
-
-        Records, delegations, the shared condition store, stored user
-        conditions, the user override, and the bound condition lookup
-        are passed as data, all at once. No builders are injected.
-        """
-        return Registry(
-            records=self.records,
-            delegations=self.delegations,
-            conditions=self.conditions,
-            user_conditions=self._stored_user_conditions(),
-            user_override=self._user_override,
-            condition_lookup=self._condition_lookup,
-            compiler=self._compiler if self._explicit_compiler else None,
-            path=self.path or '',
-            family=self.family,
-            user_model=self.user_model,
-        )
-
-    def plan_for(self, content, *, user=None, permission=None):
-        """Build the common relation plan for these terminals.
-
-        ``content`` may be a model class, instance, or ``QuerySet``.
-        Optional ``user`` / ``permission`` instances keep only registrations
-        whose inferred terminals match those models. Construction is lazy.
-        """
-        return self.build_registry().plan_for(
-            content, user=user, permission=permission,
-        )
-
-    def permissions_for(self, user, content, **skip_flags):
-        """Distinct permission rows granted to ``user`` on ``content``.
-
-        Delegates to the built registry.
-        """
-        return self.build_registry().permissions_for(
-            user, content, **skip_flags,
-        )
-
-    def has_permission(self, user, content, permission, **skip_flags):
-        """Whether ``permission`` is granted to ``user`` on ``content``."""
-        return self.build_registry().has_permission(
-            user, content, permission, **skip_flags,
-        )
-
-    def filter_authorized(self, queryset, user, permission, **skip_flags):
-        """Lazy queryset of rows ``user`` holds ``permission`` on."""
-        return self.build_registry().filter_authorized(
-            queryset, user, permission, **skip_flags,
-        )
-
-
-def validate_named_filter(model, code, predicate):
-    """Run the named-filter builder once against a fresh condition store.
-
-    The check is ``ConditionRegistry.register_permission_condition``
-    (``trusts/plan/conditions.py``). It lowers the builder to an ``Expr``
-    on a ``ConditionRecord``. The recorder does not keep that record or
-    the store; the sweep replays the same callable.
-    """
-    from trusts.plan.conditions import ConditionRegistry
-
-    return ConditionRegistry().register_permission_condition(
-        model, code, predicate,
-    )
-
-
-build_public_registration = RegistryFactory.build_public_registration
-build_relation = RegistryFactory.build_relation
-build_delegation = RegistryFactory.build_delegation
-
 
 def compile_recorder(recorder, *, path, family, compiler, user_model):
     """Replay ``recorder.rows`` into one factory and return its registry.
@@ -1939,33 +1032,28 @@ def compile_recorder(recorder, *, path, family, compiler, user_model):
             built.set_user_override(entry[1], entry[2], on=entry[3])
         elif kind == 'filter':
             built.register_permission_condition(entry[1], entry[2], entry[3])
-        elif kind == 'principal':
-            built.register(**entry[2])
+        elif kind == 'register':
+            built.register_public(**entry[1])
         else:
-            built.register_delegation(**entry[2])
+            raise TrustsConfigurationError(
+                'Unknown recorder row %r.' % (kind,)
+            )
     return built.build_registry()
 
 
-def build_configured_catalogs(paths, user_model, mixin):
+def build_configured_catalogs(paths, user_model):
     """Build one catalog per listed mixin backend. A second call does nothing.
 
     Only classes named in ``paths`` (``AUTHENTICATION_BACKENDS`` order)
-    that subclass ``mixin`` are compiled. Peers of the same family are
-    fixed on that sweep. ``mixin`` is passed by the app config so this
-    module does not import the backend module while that module is
-    still loading. The catalog and app maps are imported here so
-    importing this module does not load ``trusts.plan.conditions``.
+    that subclass ``TrustModelBackendMixin`` are compiled.
     """
-    from trusts.apps import catalogs, recorders
-    from trusts.compile.catalogs import Catalog
-
     if catalogs:
         return
     chosen = []
     seen = {}
     for path in paths:
         obj = import_string(path)
-        if not isinstance(obj, type) or not issubclass(obj, mixin):
+        if not isinstance(obj, type) or not issubclass(obj, TrustModelBackendMixin):
             continue
         if obj in seen:
             raise TrustsConfigurationError(
@@ -1987,15 +1075,793 @@ def build_configured_catalogs(paths, user_model, mixin):
         )
         pending.append((cls, path, cls.family, registry))
     for cls, path, family, registry in pending:
-        peers = tuple(
-            other
-            for _cls, _path, other_family, other in pending
-            if other_family == family and other is not registry
-        )
         catalogs[cls] = Catalog(
             cls=cls,
             path=path,
             family=family,
             registry=registry,
-            family_registries=peers,
         )
+
+
+def probe_along_capabilities(connection):
+    """Execute a plain recursive CTE. Raises on failure."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            'WITH RECURSIVE t(n) AS ('
+            'SELECT 0 UNION ALL SELECT n + 1 FROM t WHERE n < 0'
+            ') SELECT n FROM t'
+        )
+        cursor.fetchone()
+
+
+def _validate_equal(predicate, root):
+    left = _require_same_root(predicate.left, root, 'Equal left')
+    right = _require_same_root(predicate.right, root, 'Equal right')
+    _left_path, left_model, _left_field, left_target = _resolve_forward_singles(
+        root, left._path, 'Equal left',
+    )
+    _right_path, right_model, _right_field, right_target = (
+        _resolve_forward_singles(root, right._path, 'Equal right')
+    )
+    if left_model is not right_model:
+        raise TrustsConfigurationError(
+            'Equal paths must terminate on the same model; got %s and %s.'
+            % (left_model._meta.label, right_model._meta.label)
+        )
+    # Compiler compares stored FK columns via F(). Distinct unique
+    # fields (``to_field``) on the same model can collide across
+    # objects and fail open if only the terminal model is checked.
+    if left_target != right_target:
+        raise TrustsConfigurationError(
+            'Equal paths must share one resolved comparison field; '
+            'got %s.%s and %s.%s.'
+            % (
+                left_model._meta.label, left_target,
+                right_model._meta.label, right_target,
+            )
+        )
+
+def _validate_permission_in(predicate, root, permission_model,
+                            permission_target=None):
+    if not predicate.refs:
+        raise TrustsConfigurationError(
+            'permission_in requires one or more refs.'
+        )
+    for ref in predicate.refs:
+        bound = _require_same_root(ref, root, 'permission_in')
+        _resolve_permission_in_path(
+            root, bound._path, 'permission_in', permission_model,
+            permission_target=permission_target,
+        )
+
+def _validate_condition(condition, root, permission_model,
+                        permission_target=None):
+    """Registration-time ``_meta`` validation. Zero SQL. None is a no-op."""
+    if condition is None:
+        return None
+    if isinstance(condition, All):
+        if not condition.predicates:
+            raise TrustsConfigurationError(
+                'All requires one or more predicates.'
+            )
+        for predicate in condition.predicates:
+            _validate_condition(
+                predicate, root, permission_model,
+                permission_target=permission_target,
+            )
+        return condition
+    if isinstance(condition, Equal):
+        _validate_equal(condition, root)
+        return condition
+    if isinstance(condition, PermissionIn):
+        _validate_permission_in(
+            condition, root, permission_model,
+            permission_target=permission_target,
+        )
+        return condition
+    raise TrustsConfigurationError(
+        'condition is not supported; omit it or pass None.'
+    )
+
+def _validate_delegated_condition(condition, root):
+    """Validate delegated row predicates and return inquiry terminal metadata.
+
+    Row-only equality has no permission terminal. Every inquiry-permission
+    match must resolve to the same model and comparison target. Validation is
+    metadata-only and therefore remains zero SQL.
+    """
+    if condition is None:
+        return condition, None, None
+    matches = []
+
+    def visit(node):
+        if isinstance(node, All):
+            if not node.predicates:
+                raise TrustsConfigurationError(
+                    'All requires one or more predicates.'
+                )
+            for predicate in node.predicates:
+                visit(predicate)
+            return
+        if isinstance(node, Equal):
+            _validate_equal(node, root)
+            return
+        if isinstance(node, _InquiryPermissionMatch):
+            ref = _require_same_root(
+                node.ref, root, 'delegated inquiry permission',
+            )
+            _path, model, _field, target = _resolve_permission_path(
+                root, ref._path,
+            )
+            matches.append((model, target))
+            return
+        raise TrustsConfigurationError(
+            'delegated condition is not supported; omit it or use '
+            'row equality and inquiry-permission matches.'
+        )
+
+    visit(condition)
+    if not matches:
+        return condition, None, None
+    first_model, first_target = matches[0]
+    for model, target in matches[1:]:
+        if model is not first_model or target != first_target:
+            raise TrustsConfigurationError(
+                'Delegated inquiry-permission paths must share one model '
+                'and comparison target.'
+            )
+    return condition, first_model, first_target
+
+def _common_prefix(left, right):
+    n = 0
+    for a, b in zip(left, right):
+        if a != b:
+            break
+        n += 1
+    return left[:n]
+
+def _target_field(field, role, path):
+    """Return ``(related_model, target_field)`` for one hop."""
+    related, attname = resolved_hop(field, role, path)
+    target = related._meta.get_field(attname)
+    if getattr(target, 'attname', None) != attname:
+        for candidate in related._meta.concrete_fields:
+            if candidate.attname == attname:
+                target = candidate
+                break
+    return related, target
+
+def _ident_family(field):
+    kind = field.get_internal_type()
+    if kind in _INTEGER_IDENTITY_TYPES:
+        return 'integer'
+    if kind in _TEXT_IDENTITY_TYPES:
+        return 'text'
+    if kind in _UUID_IDENTITY_TYPES:
+        return 'uuid'
+    raise TrustsConfigurationError(
+        'Along identity field %s (%s) is not a V1 integer, text, or UUID '
+        'identity.' % (field.attname, kind)
+    )
+
+def _concrete_fk(field):
+    fk = getattr(field, 'field', None)
+    if (
+        fk is not None
+        and getattr(fk, 'is_relation', False)
+        and getattr(fk, 'concrete', False)
+    ):
+        return fk
+    return field
+
+def _resolve_along_edge(walk_model, edge_path):
+    """Return S/C/E metadata for hops from ``walk_model`` along ``edge_path``."""
+    n = len(edge_path)
+    if n == 1:
+        try:
+            field = walk_model._meta.get_field(edge_path[0])
+        except FieldDoesNotExist:
+            raise TrustsConfigurationError(
+                'along path %r refers to missing field %r on %s.'
+                % (path_text(edge_path), edge_path[0], walk_model._meta.label)
+            )
+        kind = _classify_field(field)
+        related, target = _target_field(field, 'along', edge_path)
+        if related is not walk_model:
+            raise TrustsConfigurationError(
+                'along edge %r must terminate on walk-site model %s, not %s.'
+                % (
+                    path_text(edge_path),
+                    walk_model._meta.label,
+                    related._meta.label,
+                )
+            )
+        if kind == 'single':
+            return 'S', field.attname, None, None, None, target
+        if kind == 'reverse_o2m':
+            # Reverse PathInfo.target_fields is the related model's PK, not
+            # the concrete self-FK's remote to_field. Identity comes from
+            # the forward FK metadata; the reverse hop still proves the
+            # edge is a self-relation on the walk-site.
+            fk = _concrete_fk(field)
+            dest, edge_target = _target_field(fk, 'along', edge_path)
+            if dest is not walk_model:
+                raise TrustsConfigurationError(
+                    'along edge %r must terminate on walk-site model %s, not %s.'
+                    % (
+                        path_text(edge_path),
+                        walk_model._meta.label,
+                        dest._meta.label,
+                    )
+                )
+            return 'C', fk.attname, None, None, None, edge_target
+        raise TrustsConfigurationError(
+            'along edge %r is not a supported S/C/E hop.'
+            % (path_text(edge_path),)
+        )
+    if n == 2:
+        try:
+            reverse = walk_model._meta.get_field(edge_path[0])
+        except FieldDoesNotExist:
+            raise TrustsConfigurationError(
+                'along path %r refers to missing field %r on %s.'
+                % (path_text(edge_path), edge_path[0], walk_model._meta.label)
+            )
+        if _classify_field(reverse) != 'reverse_o2m':
+            raise TrustsConfigurationError(
+                'along edge %r is not a supported S/C/E hop.'
+                % (path_text(edge_path),)
+            )
+        edge_model, _edge_pk = _target_field(
+            reverse, 'along', edge_path[:1],
+        )
+        try:
+            forward = edge_model._meta.get_field(edge_path[1])
+        except FieldDoesNotExist:
+            raise TrustsConfigurationError(
+                'along path %r refers to missing field %r on %s.'
+                % (
+                    path_text(edge_path), edge_path[1],
+                    edge_model._meta.label,
+                )
+            )
+        if _classify_field(forward) != 'single':
+            raise TrustsConfigurationError(
+                'along edge %r is not a supported S/C/E hop.'
+                % (path_text(edge_path),)
+            )
+        dest, parent_target = _target_field(forward, 'along', edge_path)
+        if dest is not walk_model:
+            raise TrustsConfigurationError(
+                'along edge %r must terminate on walk-site model %s, not %s.'
+                % (
+                    path_text(edge_path),
+                    walk_model._meta.label,
+                    dest._meta.label,
+                )
+            )
+        child_fk = _concrete_fk(reverse)
+        _child_related, child_target = _target_field(
+            child_fk, 'along', edge_path[:1],
+        )
+        if child_target.attname != parent_target.attname:
+            raise TrustsConfigurationError(
+                'along edge %r mixes identity fields %r and %r.'
+                % (
+                    path_text(edge_path),
+                    child_target.attname,
+                    parent_target.attname,
+                )
+            )
+        return (
+            'E',
+            None,
+            edge_model,
+            forward.attname,
+            child_fk.attname,
+            parent_target,
+        )
+    raise TrustsConfigurationError(
+        'along edge %r is not a supported S/C/E hop.'
+        % (path_text(edge_path),)
+    )
+
+def _re_resolve_suffix(walk_model, suffix_path, content_model):
+    """Confirm stored suffix names compile from the walk-site model."""
+    if not suffix_path:
+        if walk_model is not content_model:
+            raise TrustsConfigurationError(
+                'along suffix path is empty but the content terminal %s '
+                'is not the walk-site %s.'
+                % (content_model._meta.label, walk_model._meta.label)
+            )
+        return
+    current = walk_model
+    for index, name in enumerate(suffix_path):
+        try:
+            field = current._meta.get_field(name)
+        except FieldDoesNotExist:
+            raise TrustsConfigurationError(
+                'along suffix path %r cannot be resolved from %s; '
+                'missing field %r.'
+                % (path_text(suffix_path), walk_model._meta.label, name)
+            )
+        kind = _classify_field(field)
+        if kind not in _SUFFIX_KINDS:
+            raise TrustsConfigurationError(
+                'along suffix path %r uses unsupported field %r on %s.'
+                % (path_text(suffix_path), name, current._meta.label)
+            )
+        related, _attname = resolved_hop(field, 'along suffix', suffix_path)
+        current = related
+    if current is not content_model:
+        raise TrustsConfigurationError(
+            'along suffix path %r from %s terminates on %s, not %s.'
+            % (
+                path_text(suffix_path),
+                walk_model._meta.label,
+                current._meta.label,
+                content_model._meta.label,
+            )
+        )
+
+def _suffix_rewrite_attname(walk_model, suffix_path, content_model, walk_ident):
+    if len(suffix_path) != 1:
+        return None
+    try:
+        field = walk_model._meta.get_field(suffix_path[0])
+    except FieldDoesNotExist:
+        return None
+    if _classify_field(field) not in ('reverse_o2m', 'reverse_o2o'):
+        return None
+    fk = _concrete_fk(field)
+    if fk.model._meta.concrete_model is not content_model:
+        return None
+    _related, target = _target_field(fk, 'along suffix', suffix_path)
+    if target.attname != walk_ident:
+        return None
+    return fk.name
+
+def _build_along_walk(root, content_path, content_model, along):
+    along_ref = _require_ref(along.ref, 'along')
+    if along_ref._root is not root:
+        raise TrustsConfigurationError(
+            'along ref must share the registration root %s; got %s.'
+            % (root._meta.label, along_ref._root._meta.label)
+        )
+    bound = along.bound
+    if isinstance(bound, bool) or not isinstance(bound, int):
+        raise TrustsConfigurationError(
+            'Along bound must be an integer in %s..%s.'
+            % (_ALONG_BOUND_MIN, _ALONG_BOUND_MAX)
+        )
+    if bound < _ALONG_BOUND_MIN or bound > _ALONG_BOUND_MAX:
+        raise TrustsConfigurationError(
+            'Along bound must be an integer in %s..%s.'
+            % (_ALONG_BOUND_MIN, _ALONG_BOUND_MAX)
+        )
+    walk_path = _common_prefix(tuple(along_ref._path), tuple(content_path))
+    edge_path = tuple(along_ref._path[len(walk_path):])
+    suffix_path = tuple(content_path[len(walk_path):])
+    if not walk_path:
+        raise TrustsConfigurationError(
+            'along ref %r and content path %r do not share a walk-site prefix.'
+            % (path_text(along_ref._path), path_text(content_path))
+        )
+    if not edge_path:
+        raise TrustsConfigurationError(
+            'along ref %r has no edge hop beyond the walk-site.'
+            % (path_text(along_ref._path),)
+        )
+    _walk_path, walk_model, walk_field, walk_ident = _resolve_path(
+        root, walk_path, 'along', trailing_reverse=True,
+    )
+    last_walk_name = walk_path[-1]
+    current = root
+    for name in walk_path[:-1]:
+        field = current._meta.get_field(name)
+        current, _att = resolved_hop(field, 'along', walk_path)
+    grant_hop = current._meta.get_field(last_walk_name)
+    _grant_related, grant_target = _target_field(grant_hop, 'along', walk_path)
+    (
+        shape, parent_attname, edge_model, edge_parent_attname,
+        edge_child_attname, edge_target,
+    ) = _resolve_along_edge(walk_model, edge_path)
+    ident_fields = (grant_target, edge_target)
+    attnames = {field.attname for field in ident_fields}
+    if attnames != {walk_ident}:
+        raise TrustsConfigurationError(
+            'along identity fields must match across the grant walk hop '
+            'and both edge ends; got %s.'
+            % ', '.join(sorted(field.attname for field in ident_fields))
+        )
+    families = {_ident_family(field) for field in ident_fields}
+    if len(families) != 1:
+        raise TrustsConfigurationError(
+            'along identity fields mix identity families %s.'
+            % ', '.join(sorted(families))
+        )
+    ident_family = families.pop()
+    _re_resolve_suffix(walk_model, suffix_path, content_model)
+    rewrite_attname = _suffix_rewrite_attname(
+        walk_model, suffix_path, content_model, walk_ident,
+    )
+    return AlongWalk(
+        path=tuple(along_ref._path),
+        bound=bound,
+        shape=shape,
+        walk_path=tuple(walk_path),
+        walk_model=walk_model,
+        walk_ident=walk_ident,
+        walk_field=walk_field,
+        suffix_path=suffix_path,
+        suffix_field=lookup_text(suffix_path) if suffix_path else '',
+        ident_family=ident_family,
+        parent_attname=parent_attname,
+        edge_model=edge_model,
+        edge_parent_attname=edge_parent_attname,
+        edge_child_attname=edge_child_attname,
+        rewrite_attname=rewrite_attname,
+    )
+
+def _same_terminal_bindings(existing, record):
+    """True when two records share content/user/permission/along bindings."""
+    return (
+        existing.content_path == record.content_path
+        and existing.content_model is record.content_model
+        and existing.content_target == record.content_target
+        and existing.user_path == record.user_path
+        and existing.user_model is record.user_model
+        and existing.user_target == record.user_target
+        and existing.permission_path == record.permission_path
+        and existing.permission_model is record.permission_model
+        and existing.permission_target == record.permission_target
+        and existing.along == record.along
+        and existing.via_group == record.via_group
+        and existing.group_path == record.group_path
+    )
+
+def _rules_for_model(conditions, model):
+    """Stored rules, or the built-in ``is_active`` rule for ``model``."""
+    if conditions is not None:
+        return conditions
+    return builtin_user_conditions(model)
+
+def _assert_registration_rules(*, user_model, sponsor_model, conditions,
+                               override):
+    """Require each applicable rule's concrete booleans on these models.
+
+    ``conditions`` is the recorded rule tuple, or ``None`` for the
+    built-in rule. ``override`` is the recorded override, or ``None``.
+    """
+    pairs = []
+    if user_model is not None:
+        pairs.append((user_model, 'user'))
+    if sponsor_model is not None:
+        pairs.append((sponsor_model, 'sponsor'))
+    for model, role in pairs:
+        concrete = model._meta.concrete_model
+        for rule in _rules_for_model(conditions, concrete):
+            if not rule_applies(rule.on, role):
+                continue
+            assert_concrete_booleans(concrete, rule.expr, rule.name)
+    if override is not None and user_model is not None:
+        assert_concrete_booleans(
+            user_model._meta.concrete_model, override.expr, override.name,
+        )
+
+def _require_condition_arity(builder):
+    """Reject 0-arg, 2+-required, and keyword-only-only before invoke."""
+    try:
+        signature = inspect.signature(builder)
+    except (TypeError, ValueError):
+        return
+    try:
+        signature.bind(_CONDITION_ARITY_PROBE)
+    except TypeError as exc:
+        raise TrustsConfigurationError(
+            'condition builder must accept exactly one positional '
+            'argument (the trust value): %s' % exc
+        ) from exc
+
+def _delegated_condition_arity(builder):
+    """Return 1 or 2 without invoking a delegated condition builder."""
+    try:
+        signature = inspect.signature(builder)
+    except (TypeError, ValueError):
+        return 1
+    if any(
+        parameter.kind is inspect.Parameter.VAR_POSITIONAL
+        for parameter in signature.parameters.values()
+    ):
+        raise TrustsConfigurationError(
+            'delegated condition builder must accept one or two positional '
+            'arguments, not *args.'
+        )
+    accepted = []
+    for count in (1, 2, 3):
+        try:
+            signature.bind(*((_CONDITION_ARITY_PROBE,) * count))
+        except TypeError:
+            continue
+        accepted.append(count)
+    if 3 in accepted or not any(count in accepted for count in (1, 2)):
+        raise TrustsConfigurationError(
+            'delegated condition builder must accept one or two positional '
+            'arguments (the relationship and optional requested permission).'
+        )
+    return 2 if 2 in accepted else 1
+
+def _public_condition_path(proxy, token, role):
+    if not isinstance(proxy, _ConditionProxy):
+        raise TrustsConfigurationError(
+            '%s must be a path rooted at the supplied trust value, '
+            'not %r.' % (role, proxy)
+        )
+    if proxy._token is not token:
+        raise TrustsConfigurationError(
+            '%s used a path from another symbolic root.' % (role,)
+        )
+    if not proxy._path:
+        raise TrustsConfigurationError(
+            '%s returned an empty path.' % (role,)
+        )
+    return '__'.join(proxy._path)
+
+def _flatten_public_all(*predicates):
+    parts = []
+    for predicate in predicates:
+        if isinstance(predicate, All):
+            parts.extend(predicate.predicates)
+        else:
+            parts.append(predicate)
+    return All(*parts)
+
+def _lower_public_condition(node, trust, token, permission_path):
+    if isinstance(node, _ConditionAnd):
+        return _flatten_public_all(
+            _lower_public_condition(node.left, trust, token, permission_path),
+            _lower_public_condition(node.right, trust, token, permission_path),
+        )
+    if isinstance(node, _ConditionEq):
+        return Equal(
+            _public_ref(
+                trust,
+                _public_condition_path(node.left, token, 'Equal left'),
+                'Equal left',
+            ),
+            _public_ref(
+                trust,
+                _public_condition_path(node.right, token, 'Equal right'),
+                'Equal right',
+            ),
+        )
+    if isinstance(node, _ConditionIn):
+        if permission_path is None:
+            raise TrustsConfigurationError(
+                'row-only delegated condition .contains() cannot bind the '
+                'requested permission; accept a second argument and pass it '
+                'as the member.'
+            )
+        member_path = _public_condition_path(
+            node.member, token, 'condition .contains member',
+        )
+        permission_segments = _public_path_segments(
+            permission_path, 'permission',
+        )
+        if tuple(member_path.split('__')) != permission_segments:
+            raise TrustsConfigurationError(
+                'condition .contains member must be the registered '
+                'permission path %r, not %r.'
+                % (permission_path, member_path)
+            )
+        return PermissionIn(
+            _public_ref(
+                trust,
+                _public_condition_path(
+                    node.collection, token, 'condition .contains collection',
+                ),
+                'permission_in',
+            ),
+        )
+    if isinstance(node, _ConditionInquiryMatch):
+        return _InquiryPermissionMatch(
+            _public_ref(
+                trust,
+                _public_condition_path(
+                    node.path, token, 'delegated inquiry permission path',
+                ),
+                'delegated inquiry permission',
+            )
+        )
+    raise TrustsConfigurationError(
+        'condition builder must return a boolean expression of path '
+        'equality, collection.contains(member), or their conjunction, '
+        'not %r.' % (node,)
+    )
+
+def _reject_public_condition_value(condition):
+    """Public ``condition=`` is a callable, not a prebuilt IR node."""
+    if (
+        condition is All
+        or condition is Equal
+        or condition is PermissionIn
+        or condition is permission_in
+    ):
+        raise TypeError(
+            'condition must be a symbolic callable, '
+            'not a prebuilt All / Equal / permission_in value or other '
+            'non-callable %r.' % (condition,)
+        )
+    if isinstance(condition, (All, Equal, PermissionIn, Expr, Ref, Q, str, bool)):
+        raise TypeError(
+            'condition must be a symbolic callable, '
+            'not a prebuilt All / Equal / permission_in value or other '
+            'non-callable %r.' % (condition,)
+        )
+    if not callable(condition):
+        raise TypeError(
+            'condition must be a symbolic callable, '
+            'not %r.' % (condition,)
+        )
+
+def _normalize_public_condition(trust, condition, permission_path, *, token):
+    """Invoke a public condition builder once and lower to private IR."""
+    if condition is None:
+        return None
+    _reject_public_condition_value(condition)
+    if inspect.iscoroutinefunction(condition) or inspect.isasyncgenfunction(
+        condition,
+    ):
+        raise TrustsConfigurationError(
+            'condition builder must return a boolean expression, not a '
+            'coroutine or async generator.'
+        )
+    _require_condition_arity(condition)
+    proxy = _ConditionProxy(trust, token=token)
+    try:
+        result = condition(proxy)
+    except TrustsConfigurationError:
+        raise
+    except Exception as exc:
+        raise TrustsConfigurationError(
+            'condition builder failed: %s' % exc
+        ) from exc
+    if not isinstance(result, _CONDITION_EXPR_TYPES):
+        raise TrustsConfigurationError(
+            'condition builder must return a boolean expression of path '
+            'equality, collection.contains(member), or their conjunction, '
+            'not %r.' % (result,)
+        )
+    return _lower_public_condition(result, trust, token, permission_path)
+
+def _normalize_delegated_condition(trust, condition, *, token):
+    """Invoke a delegated condition builder once and lower to private IR."""
+    if condition is None:
+        return None
+    _reject_public_condition_value(condition)
+    if inspect.iscoroutinefunction(condition) or inspect.isasyncgenfunction(
+        condition,
+    ):
+        raise TrustsConfigurationError(
+            'condition builder must return a boolean expression, not a '
+            'coroutine or async generator.'
+        )
+    arity = _delegated_condition_arity(condition)
+    relationship = _ConditionProxy(trust, token=token)
+    inquiry_permission = _InquiryPermissionProxy(token)
+    try:
+        if arity == 2:
+            result = condition(relationship, inquiry_permission)
+        else:
+            result = condition(relationship)
+    except TrustsConfigurationError:
+        raise
+    except Exception as exc:
+        raise TrustsConfigurationError(
+            'condition builder failed: %s' % exc
+        ) from exc
+    if not isinstance(result, _CONDITION_EXPR_TYPES):
+        raise TrustsConfigurationError(
+            'condition builder must return a boolean expression of path '
+            'equality, collection.contains(permission), or their '
+            'conjunction, not %r.' % (result,)
+        )
+    return _lower_public_condition(result, trust, token, None)
+
+def _normalize_public_role(trust, value, role, *, token):
+    """Normalize a public string or path builder to a Django ``__`` path."""
+    if isinstance(value, Ref):
+        raise TypeError(
+            '%s must be a Django path string or a one-argument path '
+            'builder, not a Ref.' % (role,)
+        )
+    if isinstance(value, str):
+        return value
+    if not callable(value):
+        raise TrustsConfigurationError(
+            '%s must be a Django path string or a one-argument path '
+            'builder, not %r.' % (role, value)
+        )
+    builder = _PathBuilder(trust, token=token)
+    try:
+        result = value(builder)
+    except TrustsConfigurationError:
+        raise
+    except Exception as exc:
+        raise TrustsConfigurationError(
+            '%s path builder failed: %s' % (role, exc)
+        ) from exc
+    if not isinstance(result, _PathBuilder):
+        raise TrustsConfigurationError(
+            '%s path builder must return a path rooted at the supplied '
+            'trust value, not %r.' % (role, result)
+        )
+    if result._token is not token:
+        raise TrustsConfigurationError(
+            '%s path builder used a path from another symbolic root.'
+            % (role,)
+        )
+    if not result._path:
+        raise TrustsConfigurationError(
+            '%s path builder returned an empty path.' % (role,)
+        )
+    return '__'.join(result._path)
+
+def _public_path_segments(value, role, *, allow_empty=False):
+    """Split a public Django ``__`` path. Reject before ``Ref`` / resolve."""
+    if isinstance(value, Ref):
+        raise TypeError(
+            '%s must be a Django path string, not a Ref.' % (role,)
+        )
+    if not isinstance(value, str):
+        raise TrustsConfigurationError(
+            '%s must be a Django path string, not %r.' % (role, value)
+        )
+    if not value:
+        if allow_empty:
+            return ()
+        raise TrustsConfigurationError(
+            '%s path %r is not a valid Django __ relationship path.'
+            % (role, value)
+        )
+    if (
+        value.startswith('__')
+        or value.endswith('__')
+        or '.' in value
+    ):
+        raise TrustsConfigurationError(
+            '%s path %r is not a valid Django __ relationship path.'
+            % (role, value)
+        )
+    segments = value.split('__')
+    if any(segment == '' for segment in segments):
+        raise TrustsConfigurationError(
+            '%s path %r is not a valid Django __ relationship path.'
+            % (role, value)
+        )
+    return tuple(segments)
+
+def _public_ref(root, value, role, *, allow_empty=False):
+    return Ref(root, _public_path_segments(
+        value, role, allow_empty=allow_empty,
+    ))
+
+def _bind_public_along(root, along):
+    """Normalize ``(path, bound)`` to an internal ``Along``."""
+    if along is None:
+        return None
+    if isinstance(along, Along):
+        raise TypeError(
+            'along must be a (path, bound) pair, not an Along instance.'
+        )
+    if isinstance(along, Ref):
+        raise TypeError(
+            'along must be a (path, bound) pair, not a Ref.'
+        )
+    if not isinstance(along, tuple) or len(along) != 2:
+        raise TrustsConfigurationError(
+            'along must be a (path, bound) pair, not %r.' % (along,)
+        )
+    path, bound = along
+    return Along(_public_ref(root, path, 'along'), bound)

@@ -13,18 +13,15 @@ from tests.core import kernel_host_listed
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from trusts.plan.aggregates import _compile_common_permissions
 from trusts.compile.factory import RegisteredDelegation
-from trusts.plan.contents import _compile_granted
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
-from trusts._permitted import permitted_queryset
 from trusts.query import PermittedManager, PermittedQuerySet, PermittedUsersMixin
-from trusts.plan.users import lock_permitted_users_queryset
-from tests.apps import built_registries
+from tests.support import render_configured_policy, built_catalog, install_class_handle
+from trusts.compile.catalogs import Catalog
 
 
 def _handle(path='tests.core.issue266'):
@@ -38,15 +35,11 @@ def _permission(model, codename):
 class _PairDocumentBackend(TrustModelBackendMixin, ModelBackend):
     """Stand-in for ``DocumentBackend`` when pair settings omit myapp."""
 
-class _GrantBackend(TrustModelBackendMixin, ModelBackend):
-    """Grant rows for a second class. Sponsors are that class's catalog."""
-
-def _seal_factory(backend_cls, factory, family_registries=()):
+def _seal_factory(backend_cls, factory):
     """Construct this class's catalog from a factory this test filled."""
-    from trusts.apps import catalogs
-    from trusts.compile.catalogs import Catalog
+    from trusts.backends import catalogs
     built = factory.build_registry()
-    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built, family_registries=built_registries(tuple(family_registries)))
+    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built)
     return built
 
 def _document_host_handle():
@@ -59,8 +52,7 @@ def _document_host_handle():
 
 @contextmanager
 def _listed(handle):
-    from tests.apps import install_class_handle
-    from trusts.apps import catalogs
+    from trusts.backends import catalogs
     install_class_handle(_PairDocumentBackend, handle)
     _seal_factory(_PairDocumentBackend, handle)
     with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue266._PairDocumentBackend',)):
@@ -105,7 +97,7 @@ def _indirect_content_models():
         objects = PermittedManager()
 
         def get_permitted_users(self, perm):
-            from trusts.plan.users import compile_permitted_users
+            from trusts.query import compile_permitted_users
             return compile_permitted_users(self, perm, user_queryset=Principal.objects.all())
 
         class Meta:
@@ -158,8 +150,8 @@ class DelegationRegistrationTest(TestCase):
         self.assertEqual(record.sponsor_field, 'sponsor')
         self.assertEqual(record.content_field, 'document')
         self.assertIs(record.condition_permission_model, Permission)
-        self.assertEqual(handle.build_registry().records, ())
-        self.assertEqual(handle.build_registry().delegations, (record,))
+        self.assertEqual(built_catalog(handle).records, ())
+        self.assertEqual(built_catalog(handle).delegations, (record,))
 
     def test_one_argument_condition_is_row_only(self):
         handle = _handle()
@@ -211,8 +203,8 @@ class DelegationRegistrationTest(TestCase):
                     with self.assertRaises(TrustsConfigurationError):
                         handle.register_public(trust=DocumentDelegation, content='document', condition=lambda *args: calls.append(args), **extra)
                 self.assertEqual(calls, [])
-                self.assertEqual(handle.build_registry().records, ())
-                self.assertEqual(handle.build_registry().delegations, ())
+                self.assertEqual(built_catalog(handle).records, ())
+                self.assertEqual(built_catalog(handle).delegations, ())
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ReverseOneToOneDelegationQueryTest(TransactionTestCase):
@@ -282,7 +274,7 @@ class ReverseOneToOneDelegationQueryTest(TransactionTestCase):
         with _listed(self.handle):
             self.assertIn(self.code, self.delegate.get_all_permissions(self.repository))
             self.assertNotIn(self.code, self.delegate_without_personal_org.get_all_permissions(self.repository))
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(self.handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(self.handle))
         content = document['backends'][0]['contents'][0]
         delegation = content['delegations'][0]
         self.assertEqual(delegation['content']['path'], 'sponsor__personal_organization_issue266_query__repositories')
@@ -330,7 +322,7 @@ def _two_prefix_models():
         objects = PermittedManager()
 
         def get_permitted_users(self, perm):
-            from trusts.plan.users import compile_permitted_users
+            from trusts.query import compile_permitted_users
             return compile_permitted_users(self, perm, user_queryset=Principal.objects.all())
 
         class Meta:
@@ -431,7 +423,7 @@ class TwoRootDelegationTest(TransactionTestCase):
         self.assertEqual(self.personal.content_path, ('sponsor', 'personal_profile_two', 'personal_organization_two', 'repositories'))
         self.assertIs(self.personal.content_model, self.Repository)
         self.assertIsNone(self.personal.condition)
-        roots = [record.root for record in self.handle.build_registry().delegations]
+        roots = [record.root for record in built_catalog(self.handle).delegations]
         self.assertEqual(roots, [self.PersonalDelegation, self.ApprovedDelegation])
         with _listed(self.handle):
             self.assertTrue(self.delegate.has_perm(self.code, self.own))
@@ -505,7 +497,7 @@ class TwoRootDelegationTest(TransactionTestCase):
             self.assertNotIn(self.code, self.delegate.get_all_permissions(self.sibling))
             self.assertEqual(set(self.own.get_permitted_users(self.read)), {self.sponsor, self.delegate})
             self.assertIn(self.delegate, set(self.foreign.get_permitted_users(self.read)))
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(self.handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(self.handle))
         by_model = {row['model']: row for row in document['backends'][0]['contents']}
         content = by_model[self.Repository._meta.label]
         delegations = content['delegations']
@@ -554,7 +546,7 @@ def _ordinary_prefix_models():
         objects = PermittedManager()
 
         def get_permitted_users(self, perm):
-            from trusts.plan.users import compile_permitted_users
+            from trusts.query import compile_permitted_users
             return compile_permitted_users(self, perm, user_queryset=Principal.objects.all())
 
         class Meta:
@@ -604,7 +596,7 @@ class OrdinaryReverseOneToOneGrantTest(TransactionTestCase):
     def test_prefix_registers_and_covers_that_organization_only(self):
         self.assertEqual(self.record.content_path, ('profile', 'personal_organization_ord', 'repositories'))
         self.assertIs(self.record.content_model, self.Repository)
-        self.assertEqual(self.handle.build_registry().delegations, ())
+        self.assertEqual(built_catalog(self.handle).delegations, ())
         with _listed(self.handle):
             self.assertTrue(self.user.has_perm(self.code, self.own))
             self.assertEqual(set(self.Repository.objects.permitted(self.read, self.user)), {self.own, self.sibling})
@@ -622,7 +614,7 @@ class OrdinaryReverseOneToOneGrantTest(TransactionTestCase):
             self.assertEqual(list(self.Repository.objects.permitted(self.read, bare)), [])
 
     def test_policy_lock_uses_the_prefix_and_has_no_delegation(self):
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(self.handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(self.handle))
         content = document['backends'][0]['contents'][0]
         trust = content['trusts'][0]
         self.assertEqual(trust['root'], self.ProfileGrant._meta.label)
@@ -690,8 +682,8 @@ class ReverseOneToOneGrammarTest(TestCase):
                 with self.assertNumQueries(0):
                     with self.assertRaisesRegex(TrustsConfigurationError, 'not a valid content terminal or gateway'):
                         handle.register_public(trust=trust, content=content, **extra)
-                self.assertEqual(handle.build_registry().records, ())
-                self.assertEqual(handle.build_registry().delegations, ())
+                self.assertEqual(built_catalog(handle).records, ())
+                self.assertEqual(built_catalog(handle).delegations, ())
 
     def test_two_prefix_chain_registers(self):
         _principal, _profile, _organization, repository, delegation, _grant = self._models()
@@ -714,22 +706,22 @@ class DelegationRootGuardTest(TestCase):
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'No delegated registration'):
                 handle.delegations_for_root(DocumentDelegation)
-        self.assertEqual(handle.build_registry().delegations, ())
+        self.assertEqual(built_catalog(handle).delegations, ())
 
     def test_registry_after_build_accepts_delegation(self):
         handle = _handle()
-        self.assertEqual(handle.build_registry().delegations, ())
+        self.assertEqual(handle.delegations, ())
         with self.assertNumQueries(0):
             record = self._register(handle)
         self.assertEqual(handle.delegations, (record,))
-        self.assertEqual(handle.build_registry().delegations, (record,))
+        self.assertEqual(built_catalog(handle).delegations, (record,))
 
     def test_delegate_and_sponsor_must_share_a_principal_model(self):
         handle = _handle()
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'same principal model'):
                 self._register(handle, sponsor='document')
-        self.assertEqual(handle.build_registry().delegations, ())
+        self.assertEqual(built_catalog(handle).delegations, ())
 
     def test_refs_from_two_roots_are_rejected(self):
         registry = RegistryFactory()
@@ -746,7 +738,7 @@ class DelegationRootGuardTest(TestCase):
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'Duplicate delegated registration'):
                 self._register(handle)
-        self.assertEqual(len(handle.build_registry().delegations), 1)
+        self.assertEqual(len(built_catalog(handle).delegations), 1)
 
     def test_same_root_same_content_terminal_remains_a_conflict(self):
         handle = _handle()
@@ -754,14 +746,14 @@ class DelegationRootGuardTest(TestCase):
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'Conflicting delegated registration'):
                 self._register(handle, condition=lambda relationship: relationship.delegate == relationship.sponsor)
-        self.assertEqual(len(handle.build_registry().delegations), 1)
+        self.assertEqual(len(built_catalog(handle).delegations), 1)
 
     def test_same_root_different_content_terminal_is_stored(self):
         handle = _handle()
         self._register(handle)
         second = self._register(handle, content='delegate')
         rows = handle.delegations_for_root(DocumentDelegation)
-        self.assertEqual(rows, handle.build_registry().delegations)
+        self.assertEqual(rows, built_catalog(handle).delegations)
         self.assertEqual(len(rows), 2)
         self.assertIs(second.content_model, get_user_model())
         self.assertEqual(second.content_path, ('delegate',))
@@ -792,8 +784,7 @@ class DelegatedAuthorityLiveTest(TestCase):
         ContentType.objects.clear_cache()
         if not kernel_host_listed():
             handle = _document_host_handle()
-            from tests.apps import install_class_handle
-            from trusts.apps import catalogs
+            from trusts.backends import catalogs
             install_class_handle(_PairDocumentBackend, handle)
             _seal_factory(_PairDocumentBackend, handle)
             self.addCleanup(lambda: install_class_handle(_PairDocumentBackend, None))
@@ -855,55 +846,16 @@ class DelegatedAuthorityLiveTest(TestCase):
         relationship.allowed_permissions.add(self.change)
         self.assertFalse(self.second_delegate.has_perm('myapp.change_document', self.document))
 
-    def test_sponsor_grant_may_come_from_another_relationship_handle(self):
-        grant_handle = _handle('tests.core.issue266.grants')
-        grant_handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-        delegation_handle = _handle('tests.core.issue266.delegations')
-        delegation_handle.register_public(trust=DocumentDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
-        handles = (grant_handle, delegation_handle)
-        granted = _compile_granted(built_registries((delegation_handle,)), Document.objects.all(), self.delegate, self.change, family_registries=built_registries(handles))
-        self.assertIsNotNone(granted)
-        self.assertTrue(Document.objects.filter(granted).exists())
-        permitted = permitted_queryset(Document.objects.all(), self.change, self.delegate, registries=built_registries(handles))
-        self.assertEqual(list(permitted), [self.document])
-        permissions = _compile_common_permissions(built_registries((delegation_handle,)), self.document, self.delegate, family_registries=built_registries(handles))
-        self.assertEqual(list(permissions), [self.change])
-        users = lock_permitted_users_queryset(built_registries((delegation_handle,))[0], self.document, self.change, registries=built_registries(handles))
-        self.assertEqual(list(users), [self.delegate])
-
     def test_policy_lock_exports_delegation_and_correlated_sql(self):
         handle = _handle('tests.core.issue266.policy')
         handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
         handle.register_public(trust=DocumentDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
         delegation = content['delegations'][0]
         self.assertEqual(delegation['delegate']['path'], 'delegate')
         self.assertEqual(delegation['sponsor']['path'], 'sponsor')
         self.assertEqual(delegation['content']['path'], 'document')
-        for operation in ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'):
-            sql = content[operation]['sql']
-            self.assertIn('myapp_documentdelegation', sql)
-            self.assertIn('myapp_documentgrant', sql)
-
-    def test_policy_lock_uses_a_sponsor_grant_from_another_handle(self):
-        grant_handle = _handle('tests.core.issue266.split-grants')
-        grant_handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-        delegation_handle = _handle('tests.core.issue266.split-delegations')
-        delegation_handle.register_public(trust=DocumentDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
-        from trusts.apps import catalogs
-        grant_built = _seal_factory(_GrantBackend, grant_handle)
-        _seal_factory(_PairDocumentBackend, delegation_handle, family_registries=built_registries((grant_built,)))
-        self.addCleanup(lambda: catalogs.pop(_PairDocumentBackend, None))
-        self.addCleanup(lambda: catalogs.pop(_GrantBackend, None))
-        with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue266._GrantBackend', 'tests.core.test_issue266._PairDocumentBackend')):
-            self.assertTrue(self.delegate.has_perm('myapp.change_document', self.document))
-            self.assertFalse(self.second_delegate.has_perm('myapp.change_document', self.document))
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(grant_handle).build_registry(), (delegation_handle).build_registry()]))
-        by_path = {row['path']: row for row in document['backends']}
-        content = by_path['tests.core.issue266.split-delegations']['contents'][0]
-        self.assertNotIn('trusts', content)
-        self.assertEqual(content['delegations'][0]['sponsor']['path'], 'sponsor')
         for operation in ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'):
             sql = content[operation]['sql']
             self.assertIn('myapp_documentdelegation', sql)

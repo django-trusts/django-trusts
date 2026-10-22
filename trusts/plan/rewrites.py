@@ -27,8 +27,18 @@ from django.db.models.query_utils import Q
 from django.db.models.sql.query import Query
 from django.db.models.sql.where import ExtraWhere, NothingNode, WhereNode
 
-from trusts.apps import user_model
+import trusts.plan.standards as standards
+from trusts.plan.recursions import (
+    GrantReach,
+    _AnchorInInverseReach,
+    _KeyedReach,
+    _PrefixInForwardWalk,
+)
 from trusts.errors import TrustsConfigurationError
+from django.conf import settings
+import django
+from django.db import connections
+from django.contrib.auth.models import Permission
 
 
 BIND_ALIAS = 'trusts_bind'
@@ -58,7 +68,6 @@ def trusts_bind_once():
     Missing ``TRUSTS_SQL_BIND_ONCE`` means on. ``False`` leaves the queryset
     exactly as policy code built it.
     """
-    from django.conf import settings
 
     return bool(getattr(settings, 'TRUSTS_SQL_BIND_ONCE', True))
 
@@ -129,7 +138,6 @@ def _warn_once(detail):
     if _warned:
         return
     _warned = True
-    import django
 
     logging.getLogger('trusts').warning(
         'bind_once left the queryset unchanged: %s (Django %s).',
@@ -490,7 +498,6 @@ def _prepare(queryset, also):
 
 
 def _connection_for(queryset):
-    from django.db import connections
 
     alias = getattr(queryset, 'db', None) or 'default'
     return connections[alias]
@@ -826,14 +833,13 @@ def _user_concrete():
     model means ready has not stored one; user and content labels would
     not match a ready process.
     """
-    model = user_model()
+    model = standards.user_model
     if model is None:
         return None
     return model._meta.concrete_model
 
 
 def _permission_concrete():
-    from django.contrib.auth.models import Permission
 
     return Permission._meta.concrete_model
 
@@ -929,22 +935,20 @@ def _plain_value(value):
     return value
 
 
-# Along expression classes are identified by name so this pass does not
-# import the module that defines them.
-_ALONG_NODES = frozenset((
-    'GrantReach',
-    '_AnchorInInverseReach',
-    '_KeyedReach',
-    '_PrefixInForwardWalk',
-))
+_ALONG_NODES = (
+    GrantReach,
+    _AnchorInInverseReach,
+    _KeyedReach,
+    _PrefixInForwardWalk,
+)
 
 
 def _is_along(node):
-    return type(node).__name__ in _ALONG_NODES
+    return isinstance(node, _ALONG_NODES)
 
 
 def _along_bound(node):
-    if type(node).__name__ == '_KeyedReach':
+    if isinstance(node, _KeyedReach):
         return int(node.walk.bound)
     return int(node.record.along.bound)
 
@@ -1120,7 +1124,7 @@ class BindTable(object):
     """``CROSS JOIN (SELECT %s AS col, ...) trusts_bind``.
 
     ``join_type`` stays unset so ``Query.promote_joins`` leaves the row
-    alone. ``as_sql`` still emits ``CROSS JOIN``. The row is installed
+    alone. ``as_sql`` still emits ``CROSS JOIN``. The row is placed
     after the statement's real base table.
     """
 

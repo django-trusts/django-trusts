@@ -28,12 +28,14 @@ from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
+from tests.support import built_catalog
 ROOT = Path(__file__).resolve().parents[2]
 
 def _handle(registry=None, path='tests.core.issue207'):
     if registry is None:
         registry = RegistryFactory()
-    return [registry, setattr(registry, 'path', path)][0]
+    registry.path = path
+    return registry
 
 class _Count:
 
@@ -53,8 +55,6 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
 
     def test_register_relationship_is_absent(self):
         handle = _handle()
-        import trusts.core as core
-        self.assertFalse(hasattr(core, 'BackendHandle'))
         self.assertFalse(hasattr(handle, 'register_relationship'))
         self.assertTrue(callable(handle.register_public))
         self.assertFalse(hasattr(handle, 'register_ordered_fold'))
@@ -63,7 +63,7 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         handle = _handle()
         with self.assertRaises(TypeError):
             handle.register_public(DocumentGrant, user='user', permission='permission', content='document')
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(built_catalog(handle).records, ())
 
     def test_honest_contextual_typing_does_not_prove_attributes(self):
         hints = get_type_hints(RegistryFactory.register_public)
@@ -111,7 +111,7 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         self.assertIn('get_registry().register', pyright)
         self.assertIn('condition=', pyright)
         self.assertIn('t.team == t.document', pyright)
-        self.assertNotIn('from trusts.core import BackendHandle', pyright)
+        self.assertNotIn('import BackendHandle', pyright)
 
     def test_keyword_only_signature(self):
         signature = inspect.signature(RegistryFactory.register_public)
@@ -222,7 +222,7 @@ class RegisterNormalizeTest(SimpleTestCase):
         handle = _handle()
         with self.assertRaises(TrustsConfigurationError):
             handle.register_public(trust=TeamRepoGrant, user=lambda t: t.team.organization, permission=lambda t: t.operation, content=lambda t: t.repository)
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(built_catalog(handle).records, ())
 
 class RegisterOnceAtRegistrationTest(TestCase):
 
@@ -242,9 +242,9 @@ class RegisterOnceAtRegistrationTest(TestCase):
         ct = ContentType.objects.get_for_model(Document)
         perm, _created = Permission.objects.get_or_create(content_type=ct, codename='change_document', defaults={'name': 'Can change document'})
         DocumentGrant.objects.create(document=document, user=alice, permission=perm)
-        self.assertTrue(registry.has_permission(alice, document, perm))
-        list(registry.permissions_for(alice, document))
-        list(registry.filter_authorized(Document.objects.all(), alice, perm))
+        self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (perm.content_type.app_label, perm.codename), document))
+        list(built_catalog(registry).permissions_for(alice, document))
+        list(registry.build_registry().filter_authorized(Document.objects.all(), alice, perm))
         self.assertEqual((user.calls, permission.calls, content.calls), (1, 1, 1))
         self.assertEqual(registry.records[0].user_path, ('user',))
         self.assertIsInstance(registry.records[0].user_field, str)
@@ -269,19 +269,18 @@ class RegisterFailClosedTest(TestCase):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
                         handle.register_public(trust=DocumentGrant, user=builder, permission=lambda t: t.permission, content=lambda t: t.document)
-                self.assertEqual(handle.build_registry().records, ())
+                self.assertEqual(handle.records, ())
 
     def test_failed_third_role_does_not_partially_mutate(self):
         handle = _handle()
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError):
                 handle.register_public(trust=DocumentGrant, user=lambda t: t.user, permission=lambda t: t.permission, content=lambda t: t.not_a_field)
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(built_catalog(handle).records, ())
 
     def test_register_after_build_invokes_builder(self):
         registry = RegistryFactory()
         handle = _handle(registry)
-        registry.build_registry()
         calls = []
 
         def user(trust):
@@ -296,4 +295,4 @@ class RegisterFailClosedTest(TestCase):
         resolve.assert_called()
         validate.assert_called()
         self.assertEqual(registry.records, (record,))
-        self.assertEqual(registry.build_registry().records, (record,))
+        self.assertEqual(built_catalog(registry).records, (record,))

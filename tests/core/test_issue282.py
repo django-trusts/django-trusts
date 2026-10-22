@@ -21,7 +21,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
-from tests.apps import built_registries
+from tests.support import render_configured_policy, install_class_handle
 
 
 def _handle(path='tests.core.issue282'):
@@ -40,15 +40,14 @@ class _PairBackend(TrustModelBackendMixin, ModelBackend):
     pass
 
 def _seal_factory(backend_cls, factory):
-    from trusts.apps import catalogs
+    from trusts.backends import catalogs
     from trusts.compile.catalogs import Catalog
     built = factory.build_registry()
-    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built, family_registries=built_registries(()))
+    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built)
 
 @contextmanager
 def _listed(handle):
-    from tests.apps import install_class_handle
-    from trusts.apps import catalogs
+    from trusts.backends import catalogs
     install_class_handle(_PairBackend, handle)
     _seal_factory(_PairBackend, handle)
     with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue282._PairBackend',)):
@@ -330,7 +329,7 @@ class DelegatedAlongTest(TransactionTestCase):
 
     def test_lockfile_records_the_walk_that_runs(self):
         handle = self._register(sponsor_along=('issue__parent', 2), delegation_along=('issue__parent', 1))
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(handle))
         self.assertEqual(document['schema_version'], 1)
         content = document['backends'][0]['contents'][0]
         trust = content['trusts'][0]
@@ -349,7 +348,7 @@ class DelegatedAlongTest(TransactionTestCase):
             self.assertNotIn('json_', row['sql'].lower())
 
     def _assert_content_walk_sql(self, handle, bounds, table=None):
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(handle))
         self.assertEqual(document['schema_version'], 1)
         content = document['backends'][0]['contents'][0]
         for operation in ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'):
@@ -527,6 +526,6 @@ class DelegatedAlongTest(TransactionTestCase):
                 self.assertIn('notes.attachment', str(raised.exception))
                 with self.assertRaises(TrustsConfigurationError):
                     self.sponsor.has_perm(code, attachment)
-                for call in (lambda: set(Attachment.objects.permitted(code, self.delegate)), lambda: set(Attachment.objects.authorized(self.delegate, change)), lambda: self.delegate.get_all_permissions(attachment), lambda: set(attachment.get_permitted_users(change)), lambda: render_policy_sql_bytes(registries=[(handle).build_registry()])):
+                for call in (lambda: set(Attachment.objects.permitted(code, self.delegate)), lambda: set(Attachment.objects.authorized(self.delegate, change)), lambda: self.delegate.get_all_permissions(attachment), lambda: set(attachment.get_permitted_users(change)), lambda: render_configured_policy(handle)):
                     with self.assertRaises(TrustsConfigurationError):
                         call()

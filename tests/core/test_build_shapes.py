@@ -19,9 +19,11 @@ from trusts.compile.factory import (
     PublicRegistration,
     RegisteredDelegation,
     RegisteredRelation,
+    RegistryFactory,
 )
-from trusts.core import Ref, RegistryFactory
+from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
+from tests.support import built_catalog
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -112,8 +114,6 @@ class BuildRelationTest(SimpleTestCase):
         _Document, DocumentGrant = _document_models()
         registry = RegistryFactory()
         root = Ref(DocumentGrant)
-        registry.build_registry()
-
         built = registry.build_relation(
             content=root.document, user=root.user,
             permission=root.permission,
@@ -126,7 +126,7 @@ class BuildRelationTest(SimpleTestCase):
         )
         self.assertEqual(record, built)
         self.assertEqual(registry.records, (record,))
-        self.assertEqual(registry.build_registry().records, (record,))
+        self.assertEqual(built_catalog(registry).records, (record,))
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')

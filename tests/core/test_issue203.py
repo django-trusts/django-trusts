@@ -30,7 +30,6 @@ from trusts.backends import TrustModelBackendMixin
 from trusts.conditions import PermissionConditionError
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.factory import RegistryFactory
-from tests.apps import built_registries
 
 PERM = 'trusts_tests.change_note'
 OPEN = '%s:open' % PERM
@@ -47,12 +46,12 @@ class _BoundBackend(TrustModelBackendMixin, ModelBackend):
         self._factory = handle
 
     def has_perm(self, user_obj, perm, obj=None, **skip_flags):
-        from trusts.apps import catalogs
+        from trusts.backends import catalogs
         from trusts.compile.catalogs import Catalog
         cls = type(self)
         if cls not in catalogs:
             factory = self._factory
-            catalogs[cls] = Catalog(cls=cls, path='tests.core.issue203', family=self.family, registry=factory.build_registry(), family_registries=built_registries(()))
+            catalogs[cls] = Catalog(cls=cls, path='tests.core.issue203', family=self.family, registry=factory.build_registry())
         return super().has_perm(user_obj, perm, obj, **skip_flags)
 
 class _BuilderLog(object):
@@ -185,10 +184,13 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
             with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, PERM, secret))
             with self.assertNumQueries(0):
+                fresh = RegistryFactory(path='tests.core.issue203-reject')
                 with self.assertRaises(PermissionConditionError):
-                    self.handle.register_permission_condition(self.Note, 'open', lambda u, p, o: o.title == Decimal('1.5'))
+                    fresh.register_permission_condition(self.Note, 'open', lambda u, p, o: o.title == Decimal('1.5'))
                 with self.assertRaises(PermissionConditionError):
-                    self.handle.register_permission_condition(self.Note, 'partial_203', lambda u, p, o: o.owner == self.Note.objects)
+                    fresh.register_permission_condition(self.Note, 'partial_203', lambda u, p, o: o.owner == self.Note.objects)
+                self.assertIsNone(fresh.get_permission_condition_record(self.Note, 'open'))
+                self.assertIsNone(fresh.get_permission_condition_record(self.Note, 'partial_203'))
             self.assertEqual(len(log.calls), 1)
             with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, OPEN, opened))

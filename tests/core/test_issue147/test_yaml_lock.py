@@ -37,7 +37,7 @@ from trusts.inspect.yaml import (
     dump_policy_yaml,
     _load_policy_yaml,
 )
-from tests.apps import built_registries
+from tests.support import render_configured_policy
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -297,7 +297,7 @@ class PolicyCompositionTest(SimpleTestCase):
         watcher = threading.Thread(target=watch)
         watcher.start()
         try:
-            payload = render_policy_sql_bytes(registries=built_registries(self._handles()))
+            payload = render_configured_policy(*self._handles())
         finally:
             stop.set()
             watcher.join()
@@ -322,9 +322,9 @@ class PolicyCompositionTest(SimpleTestCase):
         return [_document_handle(), or_handle]
 
     def test_lockfile_composition_matches_golden(self):
-        payload = render_policy_sql_bytes(registries=built_registries(self._handles()))
+        payload = render_configured_policy(*self._handles())
         self.assertEqual(payload, GOLDEN_COMPOSITION)
-        self.assertEqual(payload, render_policy_sql_bytes(registries=built_registries(self._handles())))
+        self.assertEqual(payload, render_configured_policy(*self._handles()))
         document = _load_policy_sql_document(payload)
         self.assertEqual(document['schema_version'], 1)
         self.assertNotIn('lockfile', document)
@@ -369,7 +369,7 @@ class PolicyCompositionTest(SimpleTestCase):
         self.assertNotIn('named_filters', combined)
 
     def test_document_lockfile_includes_content_sql(self):
-        payload = render_policy_sql_bytes(registries=[(_document_handle()).build_registry()])
+        payload = render_configured_policy(_document_handle())
         self.assertEqual(payload, GOLDEN_DOCUMENT)
         text = payload.decode('utf-8')
         self.assertNotIn('composition-evidence', text)
@@ -402,7 +402,7 @@ class PolicyCompositionTest(SimpleTestCase):
             content='document',
         )
         document = _load_policy_sql_document(
-            render_policy_sql_bytes(registries=[(handle).build_registry()]),
+            render_configured_policy(handle),
         )
         content = document['backends'][0]['contents'][0]
         trust = content['trusts'][0]
@@ -426,5 +426,5 @@ class PolicyCompositionTest(SimpleTestCase):
             content='document',
         )
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            render_policy_sql_bytes(registries=[(handle).build_registry()])
+            render_configured_policy(handle)
         self.assertIn('one user model', str(ctx.exception))

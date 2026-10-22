@@ -11,7 +11,13 @@ from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
 from django.test import TestCase, override_settings
-from tests.apps import listed_relationship, configured_catalog, live_config, built_registries
+from tests.support import (
+    listed_relationship,
+    configured_catalog,
+    live_config,
+    replay_recorder,
+    bound_handle,
+)
 from tests.backends import HostTrustModelBackend
 from tests.core import KernelHostRequiredMixin
 from tests.gh_permissions.models import Repository
@@ -29,6 +35,19 @@ def _change_document():
     ct = ContentType.objects.get_for_model(Document)
     permission, _created = Permission.objects.get_or_create(content_type=ct, codename='change_document', defaults={'name': 'Can change document'})
     return permission
+
+def _replay_listed(path):
+    """Factory replay of one listed backend. Not the live catalog."""
+    from django.utils.module_loading import import_string
+
+    cls = import_string(path)
+    factory = RegistryFactory(
+        path=path,
+        family=cls.family,
+        compiler=cls.query_compiler,
+        user_model=get_user_model(),
+    )
+    return replay_recorder(factory, cls)
 
 def _extra_handle():
     """Second complete Document path plus an always-true filter on B."""
@@ -78,13 +97,12 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
         extra = _extra_handle()
         with self.assertNumQueries(0):
             self._assert_public_deny()
-            from tests.apps import bound_handle
-            from trusts.apps import catalogs
+            from trusts.backends import catalogs
             from trusts.compile.catalogs import Catalog
             cls = type(self.document_backend)
             saved = catalogs.get(cls)
             factory = extra
-            catalogs[cls] = Catalog(cls=cls, path=extra.path, family=cls.family if saved is None else saved.family, registry=factory.build_registry(), family_registries=built_registries(() if saved is None else saved.family_registries))
+            catalogs[cls] = Catalog(cls=cls, path=extra.path, family=cls.family if saved is None else saved.family, registry=factory.build_registry())
             try:
                 with bound_handle(self.document_backend, extra):
                     self.assertFalse(self.document_backend.has_perm(self.alice, '%s:always' % PERM, self.report))
@@ -93,8 +111,10 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
                     catalogs.pop(cls, None)
                 else:
                     catalogs[cls] = saved
-            for bundled in ((self.host_handle, self.document_handle, extra), (extra, self.host_handle, self.document_handle)):
-                with listed_relationship(built_registries(bundled)):
+            host_factory = _replay_listed(HOST_BACKEND)
+            document_factory = _replay_listed(DOCUMENT_BACKEND)
+            for bundled in ((host_factory, document_factory, extra), (extra, host_factory, document_factory)):
+                with listed_relationship(bundled):
                     qs = Repository.objects.authorized(self.alice, self.change)
                     self.assertIsInstance(qs, AuthorizedQuerySet)
                     self.assertIsNone(qs._result_cache)

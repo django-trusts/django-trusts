@@ -1,7 +1,6 @@
 """Executing proxies for public ``condition=`` builders.
 
-These nodes are not stored policy records. ``trusts.core`` does not
-re-export them. The stored
+These nodes are not stored policy records. The stored
 ``_InquiryPermissionMatch`` stays in ``trusts.compile.nodes`` with ``All``.
 """
 

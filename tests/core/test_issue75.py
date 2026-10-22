@@ -12,14 +12,23 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.test.utils import isolate_apps
 from tests.core import KernelHostRequiredMixin
-from tests.apps import configured_catalog, TestsConfig, install_writable_registry, isolate_live_registry, live_config, override_apps_ready, built_registries
+from tests.apps import TestsConfig
+from tests.support import (
+    configured_catalog,
+    install_writable_registry,
+    isolate_live_registry,
+    live_config,
+    override_apps_ready,
+    empty_catalogs,
+    sweep_listed_backends,
+)
 from tests.backends import HostTrustModelBackend, MalformedCompilerBackend, MixinOnlyBackend, MissingCompilerBackend, RaisingCompilerBackend
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 
 from trusts.plan.aggregates import compiler_for_class
-from trusts.apps import catalogs
+from trusts.backends import catalogs
 from trusts.backends import TrustModelBackendMixin
 from trusts.inspect.checks import CHECK_ID_MISSING_COMPILER, check_query_compilers
 from trusts.plan.relations import PlanQueryCompiler
@@ -49,9 +58,8 @@ def _contribute_document(registry):
     registry.register(content=j.document, user=j.user, permission=j.permission)
 
 def _evaluate(handle, queryset, user, permission):
-    built = handle.build_registry()
-    plan = built.plan_for(queryset, user=user, permission=permission)
-    compiler = built.compiler if built.compiler is not None else PlanQueryCompiler()
+    plan = handle.plan_for(queryset, user=user, permission=permission)
+    compiler = handle.compiler if handle.compiler is not None else PlanQueryCompiler()
     return compiler.complete_exists(plan, queryset, user, permission)
 
 class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
@@ -64,7 +72,6 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
 
     def test_duplicate_identical_paths_dedupe(self):
-        from tests.apps import empty_catalogs, sweep_listed_backends
         with empty_catalogs():
             with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
                 with self.assertRaises(TrustsConfigurationError) as ctx:
@@ -73,7 +80,6 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertEqual(configured_catalog(HOST).path, HOST)
 
     def test_same_class_alias_is_ambiguity_error(self):
-        from tests.apps import empty_catalogs, sweep_listed_backends
         with empty_catalogs():
             with override_settings(AUTHENTICATION_BACKENDS=(HOST, ALIASED)):
                 with self.assertRaises(TrustsConfigurationError) as ctx:
@@ -99,7 +105,6 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         first = catalogs[HostTrustModelBackend]
         live.ready()
         self.assertIs(catalogs[HostTrustModelBackend], first)
-        self.assertIs(catalogs[HostTrustModelBackend]._registry, first._registry)
 
     def test_compiler_is_class_owned_not_instance_state(self):
         first = HostTrustModelBackend()
@@ -181,10 +186,11 @@ class CompilerProtocolTest(KernelHostRequiredMixin, _LiveRegistryRestoreMixin, S
     def test_raising_compiler_propagates(self):
         User = get_user_model()
         registry = RegistryFactory(compiler=RaisingCompilerBackend.query_compiler)
-        handle = [registry, setattr(registry, 'path', RAISING)][0]
+        registry.path = RAISING
+        handle = registry
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
-            granted(built_registries((handle,)), Document, User(), Permission(), kind='complete')
+            granted(handle.build_registry(), Document, User(), Permission(), kind='complete')
         self.assertIn('compiler exploded', str(ctx.exception))
 
 class CompilerCheckQueryCountTest(TestCase):
@@ -205,12 +211,12 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
         self.doc_a = Document.objects.create(title='a')
         self.doc_b = Document.objects.create(title='b')
         DocumentGrant.objects.create(document=self.doc_a, user=self.alice, permission=self.change)
-        self.host = configured_catalog(HOST)._registry
-        self.document = configured_catalog(DOCUMENT)._registry
+        self.host = configured_catalog(HOST)
+        self.document = configured_catalog(DOCUMENT)
 
     def test_grant_only_through_document_path(self):
-        self.assertFalse(self.host.build_registry().plan_for(Document).records)
-        self.assertTrue(self.document.build_registry().plan_for(Document).records)
+        self.assertFalse(self.host.plan_for(Document).records)
+        self.assertTrue(self.document.plan_for(Document).records)
         qs = Document.objects.all()
         pred_host = _evaluate(self.host, qs, self.alice, self.change)
         pred_doc = _evaluate(self.document, qs, self.alice, self.change)
@@ -229,9 +235,18 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
     def test_aggregate_ors_both_complete_proofs_in_one_statement(self):
         isolated = RegistryFactory()
         _contribute_document(isolated)
-        extra = [isolated, setattr(isolated, 'path', MIXIN)][0]
+        isolated.path = MIXIN
+        extra = isolated
         qs = Document.objects.all()
-        pred = granted(built_registries((self.host, self.document, extra)), qs, self.alice, self.change, kind='complete')
+        parts = [
+            granted(registry, qs, self.alice, self.change, kind='complete')
+            for registry in (self.host, self.document, extra.build_registry())
+        ]
+        pred = None
+        for part in parts:
+            if part is None:
+                continue
+            pred = part if pred is None else pred | part
         self.assertIsNotNone(pred)
         with self.assertNumQueries(1):
             self.assertEqual(_pks(qs.filter(pred).distinct()), {self.doc_a.pk})
@@ -245,9 +260,9 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
 
     def test_different_terminals_route_only_through_applicable_handles(self):
         from tests.models import Organization
-        self.assertTrue(self.document.build_registry().plan_for(Document).records)
-        self.assertFalse(self.document.build_registry().plan_for(Organization).records)
-        self.assertFalse(self.host.build_registry().plan_for(Document).records)
+        self.assertTrue(self.document.plan_for(Document).records)
+        self.assertFalse(self.document.plan_for(Organization).records)
+        self.assertFalse(self.host.plan_for(Document).records)
         self.assertEqual(_pks(Document.objects.authorized(self.alice, self.change)), {self.doc_a.pk})
         self.assertFalse(Organization.objects.all().none().exists())
 
@@ -257,10 +272,12 @@ class CompilerIsolationTest(KernelHostRequiredMixin, TestCase):
         User = get_user_model()
         live = live_config()
         registry = RegistryFactory(compiler=RaisingCompilerBackend.query_compiler)
-        handle = [registry, setattr(registry, 'path', RAISING)][0]
+        registry.path = RAISING
+        handle = registry
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
-            granted(built_registries((configured_catalog(HOST)._registry, handle)), Document, User(), Permission(), kind='complete')
+            granted(configured_catalog(HOST), Document, User(), Permission(), kind='complete')
+            granted(handle.build_registry(), Document, User(), Permission(), kind='complete')
         self.assertIn('compiler exploded', str(ctx.exception))
 
     def test_mixin_only_alone_does_not_inherit_document_plan(self):

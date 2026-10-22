@@ -16,9 +16,13 @@ from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.backends import ModelBackend
 from django.test import SimpleTestCase, TestCase, override_settings
-from tests.apps import (
-    configured_catalog, empty_catalogs, live_config, override_apps_ready,
+from tests.support import (
+    configured_catalog,
+    empty_catalogs,
+    live_config,
+    override_apps_ready,
     sweep_listed_backends,
+    built_catalog,
 )
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
@@ -50,12 +54,12 @@ class StandaloneIndependenceTest(SimpleTestCase):
         self.assertTrue(apps.ready)
         first = RegistryFactory()
         second = RegistryFactory()
-        self.assertEqual(first.build_registry().records, ())
+        self.assertEqual(first.records, ())
         _contribute_document(second)
-        self.assertEqual(len(second.plan_for(Document).records), 1)
+        self.assertEqual(len(built_catalog(second).plan_for(Document).records), 1)
         _contribute_document(first)
         self.assertEqual(len(first.records), 1)
-        self.assertEqual(first.build_registry().records, first.records)
+        self.assertEqual(built_catalog(first).records, first.records)
         self.assertIsNot(first.records[0], second.records[0])
 
     def test_build_is_repeatable_and_register_does_not_inspect_apps_ready(self):
@@ -72,7 +76,7 @@ class StandaloneIndependenceTest(SimpleTestCase):
             with self.assertRaises(TrustsConfigurationError):
                 registry.register(content=Ref(DocumentGrant).document, user=Ref(DocumentGrant).user, permission=Ref(DocumentGrant).permission)
         self.assertEqual(registry.records, before)
-        self.assertIs(registry.plan_for(Document).records[0], before[0])
+        self.assertIs(built_catalog(registry).plan_for(Document).records[0], before[0])
 
 class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
 
@@ -81,41 +85,40 @@ class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
         j = Ref(DocumentGrant)
         registry.register(content=j.document, user=j.user, permission=j.permission)
         before = registry.records
-        registry.build_registry()
         attempts = (dict(content=j.document, user=j.user, permission=j.permission), dict(content=j.document, user=j.permission, permission=j.user), dict(content='not-a-ref', user=j.user, permission=j.permission))
         for kwargs in attempts:
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 registry.register(**kwargs)
             self.assertNotIn('frozen', str(ctx.exception).lower())
         self.assertEqual(registry.records, before)
-        self.assertEqual(len(registry.plan_for(Document).records), 1)
+        self.assertEqual(len(built_catalog(registry).plan_for(Document).records), 1)
 
 class BuiltPlanProjectionsTest(KernelHostRequiredMixin, TestCase):
 
     def test_built_plan_still_projects(self):
         registry = RegistryFactory()
         _contribute_document(registry)
-        before = registry.plan_for(Document)
+        before = built_catalog(registry).plan_for(Document)
         registry.build_registry()
-        plan = registry.plan_for(Document)
+        plan = built_catalog(registry).plan_for(Document)
         self.assertEqual(plan.records, before.records)
         user = get_user_model()(pk=1)
         permission = Permission(pk=1)
         exists = plan.content_exists(user, permission)
         self.assertIsNotNone(exists)
         qs = Document.objects.all()
-        filtered = registry.filter_authorized(qs, user, permission)
+        filtered = registry.build_registry().filter_authorized(qs, user, permission)
         self.assertIs(filtered.model, Document)
 
 class _CatalogRestoreMixin(object):
 
     def setUp(self):
         super().setUp()
-        from trusts.apps import catalogs
+        from trusts.backends import catalogs
         self._saved_catalogs = dict(catalogs)
 
     def tearDown(self):
-        from trusts.apps import catalogs
+        from trusts.backends import catalogs
         catalogs.clear()
         catalogs.update(self._saved_catalogs)
         super().tearDown()
@@ -137,8 +140,8 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
         document = configured_catalog(DOCUMENT)
         host = configured_catalog(HOST)
         self.assertEqual([document.path, host.path], [DOCUMENT, HOST])
-        self.assertIs(document._registry.build_registry(), document._registry)
-        self.assertIs(host._registry.build_registry(), host._registry)
+        self.assertIsInstance(document.records, tuple)
+        self.assertIsInstance(host.records, tuple)
         with empty_catalogs():
             with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
                 with self.assertRaises(TrustsConfigurationError):
@@ -146,7 +149,7 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
 
     def test_ready_does_not_replace_stored_objects(self):
         from tests.backends import HostTrustModelBackend
-        from trusts.apps import catalogs
+        from trusts.backends import catalogs
         live = live_config()
         first = catalogs[HostTrustModelBackend]
         live.ready()
@@ -163,7 +166,7 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
         _contribute_recorder(recorder)
         self.assertEqual(len([
             entry for entry in recorder.rows
-            if entry[0] == 'principal' and entry[1].content_model is Document
+            if entry[0] == 'register' and entry[1]['trust'] is DocumentGrant
         ]), 1)
         self.assertIsNone(backend.get_catalog())
         self.assertFalse(recorder.frozen)
@@ -181,12 +184,12 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
         self.assertFalse(recorder.frozen)
         self.assertEqual(len([
             entry for entry in recorder.rows
-            if entry[0] == 'principal' and entry[1].content_model is Document
+            if entry[0] == 'register' and entry[1]['trust'] is DocumentGrant
         ]), 1)
 
     def test_standalone_appconfig_remains_writable_after_ready(self):
         from tests.backends import HostTrustModelBackend
-        from trusts.apps import catalogs
+        from trusts.backends import catalogs
         first = catalogs[HostTrustModelBackend]
         private = RegistryFactory()
         live_config().ready()
@@ -206,7 +209,7 @@ class SentinelAfterFirstReadTest(KernelHostRequiredMixin, _CatalogRestoreMixin, 
 
     def test_second_ready_leaves_the_built_catalog_in_place(self):
         from tests.backends import HostTrustModelBackend
-        from trusts.apps import catalogs
+        from trusts.backends import catalogs
         live = live_config()
         catalog = catalogs[HostTrustModelBackend]
         recorder = HostTrustModelBackend().get_registry()
@@ -249,6 +252,7 @@ class HandleBuildRegistrySignalTest(SimpleTestCase):
         second = handle.build_registry()
         self.assertIsNot(first, second)
         self.assertEqual(first.records, ())
-        _contribute_document(registry)
-        self.assertEqual(handle.build_registry().records, registry.records)
+        fresh = RegistryFactory(path='tests.core.builder')
+        _contribute_document(fresh)
+        self.assertEqual(built_catalog(fresh).records, fresh.records)
         self.assertEqual(first.records, ())

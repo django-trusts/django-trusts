@@ -15,10 +15,16 @@ from django.db.models.query import QuerySet
 from django.db.utils import OperationalError
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
-from tests.apps import forget_models, isolate_live_registry, live_config, built_registries
+from tests.support import (
+    forget_models,
+    isolate_live_registry,
+    live_config,
+    built_registries,
+    built_catalog,
+)
 from trusts.inspect.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
 from trusts.inspect.format import _format_policy_sql, _tokenize_policy_sql
-from trusts.plan.aggregates import all_match, common_permissions
+from trusts.plan.aggregates import _compile_common_permissions, all_match
 from trusts.plan.users import lock_permitted_users_queryset
 from trusts.plan.walk import _render_reach_sql
 from trusts.compile.nodes import Along
@@ -54,7 +60,8 @@ def _pks(rows):
     return {row.pk for row in rows}
 
 def _direct_handle(registry, path='tests.along.direct'):
-    return [registry, setattr(registry, 'path', path)][0]
+    registry.path = path
+    return registry
 
 def _plan_text(qs):
     sql, params = qs.query.sql_with_params()
@@ -196,16 +203,15 @@ class AlongRegistrationTest(SimpleTestCase):
     def test_along_validation_runs_after_build(self):
         _n, _p, _r, _i, _im, _m, _po, _l, Grant, _np = _node_graph_models()
         registry = RegistryFactory()
-        registry.build_registry()
         j = Ref(Grant)
         record = registry.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=16))
         self.assertEqual(registry.records, (record,))
-        self.assertEqual(registry.build_registry().records, (record,))
         for kwargs in (dict(content=j.node, user=j.user, permission=j.permission, along='bad'), dict(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=0))):
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 registry.register(**kwargs)
             self.assertNotIn('frozen', str(ctx.exception).lower())
         self.assertEqual(registry.records, (record,))
+        self.assertEqual(built_catalog(registry).records, (record,))
 
     def test_zero_mutation_on_every_rejection(self):
         Node, _p, _r, _i, _im, _m, _po, Link, Grant, Permit = _node_graph_models()
@@ -327,27 +333,27 @@ class AlongIdentityRejectionTest(SimpleTestCase):
 
 class _AlongProjectionMixin(object):
 
-    def _users(self, suffix):
+    def _users(self, suffix, read_codename, write_codename):
         User = get_user_model()
         self.alice = User.objects.create_user(username='alice-%s' % suffix, password='x')
         self.bob = User.objects.create_user(username='bob-%s' % suffix, password='x')
-        self.read = _perm('read_%s' % suffix)
-        self.write = _perm('write_%s' % suffix)
+        self.read = _perm(read_codename)
+        self.write = _perm(write_codename)
 
     def _assert_projections(self, registry, Model, granted_rows, denied_rows):
         handle = _direct_handle(registry)
         with self.assertNumQueries(1):
-            self.assertTrue(registry.has_permission(self.alice, granted_rows[0], self.read))
+            self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), granted_rows[0]))
         for obj in granted_rows:
-            self.assertTrue(registry.has_permission(self.alice, obj, self.read))
-            self.assertFalse(registry.has_permission(self.alice, obj, self.write))
-            self.assertFalse(registry.has_permission(self.bob, obj, self.read))
+            self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), obj))
+            self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), obj))
+            self.assertFalse(built_catalog(registry).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), obj))
             with self.assertNumQueries(1):
-                self.assertEqual(_pks(registry.permissions_for(self.alice, obj)), {self.read.pk})
+                self.assertEqual(_pks(built_catalog(registry).permissions_for(self.alice, obj)), {self.read.pk})
         for obj in denied_rows:
-            self.assertFalse(registry.has_permission(self.alice, obj, self.read))
+            self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), obj))
         expected = list(granted_rows)
-        qs = registry.filter_authorized(Model.objects.order_by('pk'), self.alice, self.read)
+        qs = registry.build_registry().filter_authorized(Model.objects.order_by('pk'), self.alice, self.read)
         self.assertIsInstance(qs, QuerySet)
         with self.assertNumQueries(0):
             sliced = qs[:max(1, len(expected))]
@@ -358,13 +364,13 @@ class _AlongProjectionMixin(object):
         granted_qs = Model.objects.filter(pk__in=[row.pk for row in granted_rows])
         mixed_qs = Model.objects.order_by('pk')
         with self.assertNumQueries(1):
-            self.assertTrue(all_match((handle,), granted_qs, self.alice, self.read))
+            self.assertTrue(all_match(handle.build_registry(), granted_qs, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(all_match((handle,), mixed_qs, self.alice, self.read))
+            self.assertFalse(all_match(handle.build_registry(), mixed_qs, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(common_permissions(built_registries((handle,)), granted_qs, self.alice)), {self.read.pk})
+            self.assertEqual(_pks(_compile_common_permissions(handle.build_registry(), granted_qs, self.alice)), {self.read.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(list(common_permissions(built_registries((handle,)), mixed_qs, self.alice)), [])
+            self.assertEqual(list(_compile_common_permissions(handle.build_registry(), mixed_qs, self.alice)), [])
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
@@ -373,7 +379,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.Node, self.Payload, self.Row, self.Item, self.Image, self.ImageMeta, self.Portrait, self.Link, self.Grant, self.Permit = _node_graph_models()
         self._cm = _tables(self.Node, self.Payload, self.Row, self.Item, self.Image, self.ImageMeta, self.Portrait, self.Link, self.Grant, self.Permit)
         self._cm.__enter__()
-        self._users('along')
+        self._users('along', 'read_along_node', 'write_along_node')
 
     def tearDown(self):
         self._cm.__exit__(None, None, None)
@@ -391,8 +397,8 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         granted_qs = self.Node.objects.filter(pk__in=[root.pk, child.pk, leaf.pk])
         with patch.object(connections[granted_qs.db], 'vendor', 'mysql'):
             handle = _direct_handle(registry)
-            common = common_permissions(built_registries((handle,)), granted_qs, self.alice)
-            on_root = common_permissions(built_registries((handle,)), root, self.alice)
+            common = _compile_common_permissions(handle.build_registry(), granted_qs, self.alice)
+            on_root = _compile_common_permissions(handle.build_registry(), root, self.alice)
         self.assertEqual(_pks(common), {self.read.pk})
         self.assertEqual(_pks(on_root), {self.read.pk})
         nested_sql, nested_params = common.query.sql_with_params()
@@ -401,7 +407,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.assertIn('%s < %s.%s' % (connection.ops.quote_name('depth'), quoted_alias, connection.ops.quote_name('along_bound')), nested_sql)
         self.assertIn('%s.%s' % (quoted_alias, connection.ops.quote_name('user_id')), nested_sql)
         self.assertEqual(nested_params.count(16), 1)
-        qs = registry.filter_authorized(self.Node.objects.order_by('pk'), self.alice, self.read)
+        qs = registry.build_registry().filter_authorized(self.Node.objects.order_by('pk'), self.alice, self.read)
         sql = str(qs.query)
         self.assertIn('WITH RECURSIVE', sql.upper())
         self.assertIn('UNION ALL', sql.upper())
@@ -422,10 +428,10 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.children, bound=16))
-        self.assertTrue(registry.has_permission(self.alice, leaf, self.read))
-        self.assertTrue(registry.has_permission(self.alice, mid, self.read))
-        self.assertTrue(registry.has_permission(self.alice, root, self.read))
-        self.assertFalse(registry.has_permission(self.alice, other, self.read))
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), leaf))
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), mid))
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), root))
+        self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), other))
 
     def test_shape_e_membership_edge(self):
         a = self.Node.objects.create(title='a')
@@ -438,10 +444,10 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent_links.parent, bound=16))
-        self.assertTrue(registry.has_permission(self.alice, a, self.read))
-        self.assertTrue(registry.has_permission(self.alice, b, self.read))
-        self.assertTrue(registry.has_permission(self.alice, c, self.read))
-        self.assertFalse(registry.has_permission(self.alice, other, self.read))
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), a))
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), b))
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), c))
+        self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), other))
 
     def test_two_node_cycle_returns_the_same_nodes_on_every_backend(self):
         a = self.Node.objects.create(title='cycle-a')
@@ -453,7 +459,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=16))
-        qs = registry.filter_authorized(self.Node.objects.order_by('pk'), self.alice, self.read)
+        qs = registry.build_registry().filter_authorized(self.Node.objects.order_by('pk'), self.alice, self.read)
         self.assertEqual(_pks(qs), {a.pk, b.pk})
         self.assertNotIn(other.pk, _pks(qs))
         sql = str(qs.query)
@@ -488,7 +494,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent_links.parent, bound=4))
-        rows = list(registry.filter_authorized(self.Node.objects.order_by('pk'), self.alice, self.read))
+        rows = list(registry.build_registry().filter_authorized(self.Node.objects.order_by('pk'), self.alice, self.read))
         pks = [row.pk for row in rows]
         self.assertEqual(pks.count(d.pk), 1)
         self.assertEqual(pks, sorted((a.pk, b.pk, c.pk, d.pk)))
@@ -527,7 +533,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
 
     def _locked_user_pks(self, registry, content):
         handle = _direct_handle(registry)
-        queryset = lock_permitted_users_queryset(built_registries((handle,))[0], content, self.read)
+        queryset = lock_permitted_users_queryset(handle.build_registry(), content, self.read)
         return (queryset, list(queryset.order_by('pk').values_list('pk', flat=True)))
 
     def test_formatted_sql_matches_unformatted_results_on_every_backend(self):
@@ -539,7 +545,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=16))
-        forward = registry.filter_authorized(self.Node.objects.order_by('pk'), self.alice, self.read)
+        forward = registry.build_registry().filter_authorized(self.Node.objects.order_by('pk'), self.alice, self.read)
         reverse, reverse_pks = self._locked_user_pks(registry, b)
         self.assertEqual(reverse_pks, [self.alice.pk])
         for queryset in (forward, reverse.order_by('pk')):
@@ -597,11 +603,11 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
             self.assertEqual(pks.count(self.alice.pk), 1)
             self.assertNotIn(inactive.pk, pks)
             self.assertNotIn(self.bob.pk, pks)
-            self.assertTrue(registry.has_permission(self.alice, node, self.read))
+            self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), node))
             self._assert_uncorrelated_reverse(queryset, 16)
         other_qs, other_pks = self._locked_user_pks(registry, other)
         self.assertEqual(other_pks, [])
-        self.assertFalse(registry.has_permission(self.alice, other, self.read))
+        self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), other))
         self._assert_uncorrelated_reverse(other_qs, 16)
 
     def test_reverse_diamond_returns_the_user_once_on_every_backend(self):
@@ -623,8 +629,8 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.assertEqual(pks.count(self.alice.pk), 1)
         self.assertEqual(pks.count(self.bob.pk), 1)
         self.assertEqual(pks, sorted((self.alice.pk, self.bob.pk)))
-        self.assertTrue(registry.has_permission(self.alice, d, self.read))
-        self.assertTrue(registry.has_permission(self.bob, d, self.read))
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), d))
+        self.assertTrue(built_catalog(registry).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), d))
         self._assert_uncorrelated_reverse(queryset, 4)
         _queryset, on_b = self._locked_user_pks(registry, b)
         self.assertEqual(on_b, [self.alice.pk])
@@ -657,27 +663,27 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=16))
-        self.assertTrue(registry.has_permission(self.alice, self_node, self.read))
-        self.assertTrue(registry.has_permission(self.alice, a, self.read))
-        self.assertTrue(registry.has_permission(self.alice, b, self.read))
-        self.assertTrue(registry.has_permission(self.alice, left, self.read))
-        self.assertTrue(registry.has_permission(self.alice, deeper, self.read))
-        self.assertFalse(registry.has_permission(self.alice, dangling, self.read))
-        authorized = _pks(registry.filter_authorized(self.Node.objects.all(), self.alice, self.read))
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self_node))
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), a))
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), b))
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), left))
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), deeper))
+        self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), dangling))
+        authorized = _pks(registry.build_registry().filter_authorized(self.Node.objects.all(), self.alice, self.read))
         self.assertEqual(len(authorized), len(authorized))
         self.assertIn(self_node.pk, authorized)
         edge_reg = RegistryFactory()
         edge_reg.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent_links.parent, bound=16))
-        self.assertTrue(edge_reg.has_permission(self.alice, diamond, self.read))
-        self.assertEqual(list(edge_reg.filter_authorized(self.Node.objects.filter(title='diamond'), self.alice, self.read)), [diamond])
+        self.assertTrue(built_catalog(edge_reg).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), diamond))
+        self.assertEqual(list(edge_reg.build_registry().filter_authorized(self.Node.objects.filter(title='diamond'), self.alice, self.read)), [diamond])
         cut = RegistryFactory()
         cut.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=1))
-        self.assertTrue(cut.has_permission(self.alice, left, self.read))
-        self.assertFalse(cut.has_permission(self.alice, deeper, self.read))
+        self.assertTrue(built_catalog(cut).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), left))
+        self.assertFalse(built_catalog(cut).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), deeper))
         empty = RegistryFactory()
         empty.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=16))
-        self.assertFalse(empty.has_permission(self.bob, top, self.read))
-        self.assertEqual(list(empty.filter_authorized(self.Node.objects.all(), self.bob, self.read)), [])
+        self.assertFalse(built_catalog(empty).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), top))
+        self.assertEqual(list(empty.build_registry().filter_authorized(self.Node.objects.all(), self.bob, self.read)), [])
 
     def test_suffix_shapes_and_shared_row(self):
         folder_a = self.Node.objects.create(title='fa')
@@ -700,7 +706,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.Row.objects.create(node=folder_b, content=pay_shared)
         read_image = _perm('read_suffix_image', self.Image)
         write_image = _perm('write_suffix_image', self.Image)
-        read_meta = _perm('read_suffix_meta', self.ImageMeta)
+        read_meta = _perm('read_suffix_meta_imagemeta', self.ImageMeta)
         read_port = _perm('read_suffix_portrait', self.Portrait)
         read_pay = _perm('read_suffix_payload', self.Payload)
         write_pay = _perm('write_suffix_payload', self.Payload)
@@ -714,22 +720,22 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self._assert_projections(d1, self.Image, [img_a], [img_b])
         d2 = RegistryFactory()
         d2.register(content=j.node.items.image.image, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=16))
-        self.assertTrue(d2.has_permission(self.alice, meta_a, read_meta))
-        self.assertFalse(d2.has_permission(self.alice, meta_b, read_meta))
+        self.assertTrue(built_catalog(d2).has_perm(self.alice, '%s.%s' % (read_meta.content_type.app_label, read_meta.codename), meta_a))
+        self.assertFalse(built_catalog(d2).has_perm(self.alice, '%s.%s' % (read_meta.content_type.app_label, read_meta.codename), meta_b))
         o2o = RegistryFactory()
         o2o.register(content=j.node.items.portrait, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=16))
-        self.assertTrue(o2o.has_permission(self.alice, port_a, read_port))
-        self.assertFalse(o2o.has_permission(self.alice, port_b, read_port))
+        self.assertTrue(built_catalog(o2o).has_perm(self.alice, '%s.%s' % (read_port.content_type.app_label, read_port.codename), port_a))
+        self.assertFalse(built_catalog(o2o).has_perm(self.alice, '%s.%s' % (read_port.content_type.app_label, read_port.codename), port_b))
         j1 = RegistryFactory()
         j1.register(content=j.node.rows.content, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=16))
-        self.assertTrue(j1.has_permission(self.alice, pay_a, read_pay))
-        self.assertTrue(j1.has_permission(self.alice, pay_shared, read_pay))
-        self.assertFalse(j1.has_permission(self.alice, pay_b, read_pay))
-        self.assertFalse(j1.has_permission(self.alice, pay_a, write_pay))
+        self.assertTrue(built_catalog(j1).has_perm(self.alice, '%s.%s' % (read_pay.content_type.app_label, read_pay.codename), pay_a))
+        self.assertTrue(built_catalog(j1).has_perm(self.alice, '%s.%s' % (read_pay.content_type.app_label, read_pay.codename), pay_shared))
+        self.assertFalse(built_catalog(j1).has_perm(self.alice, '%s.%s' % (read_pay.content_type.app_label, read_pay.codename), pay_b))
+        self.assertFalse(built_catalog(j1).has_perm(self.alice, '%s.%s' % (write_pay.content_type.app_label, write_pay.codename), pay_a))
         rev = RegistryFactory()
         rev.register(content=j.node.items, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=16))
-        self.assertTrue(rev.has_permission(self.alice, item_a, read_item))
-        self.assertFalse(rev.has_permission(self.alice, item_b, read_item))
+        self.assertTrue(built_catalog(rev).has_perm(self.alice, '%s.%s' % (read_item.content_type.app_label, read_item.codename), item_a))
+        self.assertFalse(built_catalog(rev).has_perm(self.alice, '%s.%s' % (read_item.content_type.app_label, read_item.codename), item_b))
 
     def test_direct_recursive_or_and_multiple_handles(self):
         granted_node = self.Node.objects.create(title='g')
@@ -743,10 +749,10 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         k = Ref(self.Permit)
         registry.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=16))
         registry.register(content=k.node, user=k.user, permission=k.permission)
-        self.assertTrue(registry.has_permission(self.alice, child, self.read))
-        self.assertTrue(registry.has_permission(self.alice, direct, self.read))
-        self.assertFalse(registry.has_permission(self.alice, other, self.read))
-        sql = str(registry.filter_authorized(self.Node.objects.all(), self.alice, self.read).query).upper()
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), child))
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), direct))
+        self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), other))
+        sql = str(registry.build_registry().filter_authorized(self.Node.objects.all(), self.alice, self.read).query).upper()
         self.assertIn(' OR ', sql)
         self.assertIn('WITH RECURSIVE', sql)
         self.assertIn('EXISTS', sql)
@@ -756,7 +762,9 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         dir_reg.register(content=k.node, user=k.user, permission=k.permission)
         handles = (_direct_handle(rec_reg, 'tests.along.a'), _direct_handle(dir_reg, 'tests.along.b'))
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(self.Node.objects.filter(granted(built_registries(handles), self.Node.objects.all(), self.alice, self.read)).distinct()), {granted_node.pk, child.pk, direct.pk})
+            left, right = built_registries(handles)
+            combined = granted(left, self.Node.objects.all(), self.alice, self.read) | granted(right, self.Node.objects.all(), self.alice, self.read)
+            self.assertEqual(_pks(self.Node.objects.filter(combined).distinct()), {granted_node.pk, child.pk, direct.pk})
 
     def test_non_recursive_sql_and_results_unchanged(self):
         node = self.Node.objects.create(title='n')
@@ -765,12 +773,12 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(content=j.node, user=j.user, permission=j.permission)
-        sql = str(registry.filter_authorized(self.Node.objects.all(), self.alice, self.read).query).upper()
+        sql = str(registry.build_registry().filter_authorized(self.Node.objects.all(), self.alice, self.read).query).upper()
         self.assertIn('EXISTS', sql)
         self.assertNotIn('WITH RECURSIVE', sql)
-        self.assertTrue(registry.has_permission(self.alice, node, self.read))
-        self.assertFalse(registry.has_permission(self.alice, other, self.read))
-        self.assertEqual(list(registry.filter_authorized(self.Node.objects.order_by('pk'), self.alice, self.read)), [node])
+        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), node))
+        self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), other))
+        self.assertEqual(list(registry.build_registry().filter_authorized(self.Node.objects.order_by('pk'), self.alice, self.read)), [node])
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
@@ -816,9 +824,9 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
                 app_label = 'trusts_tests'
         with _tables(CodedNode, CodedItem, CodedGrant, UuidNode, UuidGrant):
             alice = User.objects.create_user(username='alice-id', password='x')
-            read = _perm('read_id92', CodedNode)
-            read_item = _perm('read_id92_item', CodedItem)
-            read_uuid = _perm('read_id92_uuid', UuidNode)
+            read = _perm('read_id92_codednode', CodedNode)
+            read_item = _perm('read_id92_item_codeditem', CodedItem)
+            read_uuid = _perm('read_id92_uuid_uuidnode', UuidNode)
             a = CodedNode.objects.create(code='alpha')
             b = CodedNode.objects.create(code='beta', parent=a)
             other = CodedNode.objects.create(code='omega')
@@ -831,15 +839,15 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
             rec = registry.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=8))
             self.assertEqual(rec.along.walk_ident, 'code')
             self.assertEqual(rec.along.ident_family, 'text')
-            self.assertTrue(registry.has_permission(alice, a, read))
-            self.assertTrue(registry.has_permission(alice, b, read))
-            self.assertFalse(registry.has_permission(alice, other, read))
+            self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), a))
+            self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), b))
+            self.assertFalse(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), other))
             suf = RegistryFactory()
             suf_rec = suf.register(content=j.node.items, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=8))
             self.assertEqual(suf_rec.content_target, CodedItem._meta.pk.attname)
-            self.assertTrue(suf.has_permission(alice, item_a, read_item))
-            self.assertFalse(suf.has_permission(alice, item_a, read))
-            self.assertFalse(suf.has_permission(alice, item_o, read_item))
+            self.assertTrue(built_catalog(suf).has_perm(alice, '%s.%s' % (read_item.content_type.app_label, read_item.codename), item_a))
+            self.assertFalse(built_catalog(suf).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), item_a))
+            self.assertFalse(built_catalog(suf).has_perm(alice, '%s.%s' % (read_item.content_type.app_label, read_item.codename), item_o))
             ua = UuidNode.objects.create(ident=uuid4())
             ub = UuidNode.objects.create(ident=uuid4(), parent=ua)
             uo = UuidNode.objects.create(ident=uuid4())
@@ -848,9 +856,9 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
             uj = Ref(UuidGrant)
             urec = ureg.register(content=uj.node, user=uj.user, permission=uj.permission, along=Along(uj.node.parent, bound=8))
             self.assertEqual(urec.along.ident_family, 'uuid')
-            self.assertTrue(ureg.has_permission(alice, ua, read_uuid))
-            self.assertTrue(ureg.has_permission(alice, ub, read_uuid))
-            self.assertFalse(ureg.has_permission(alice, uo, read_uuid))
+            self.assertTrue(built_catalog(ureg).has_perm(alice, '%s.%s' % (read_uuid.content_type.app_label, read_uuid.codename), ua))
+            self.assertTrue(built_catalog(ureg).has_perm(alice, '%s.%s' % (read_uuid.content_type.app_label, read_uuid.codename), ub))
+            self.assertFalse(built_catalog(ureg).has_perm(alice, '%s.%s' % (read_uuid.content_type.app_label, read_uuid.codename), uo))
 
     def test_shape_c_non_pk_to_field(self):
         User = get_user_model()
@@ -871,7 +879,7 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
                 app_label = 'trusts_tests'
         with _tables(CodedNode, CodedGrant):
             alice = User.objects.create_user(username='alice-c92', password='x')
-            read = _perm('read_c92', CodedNode)
+            read = _perm('read_c92_codednode', CodedNode)
             root = CodedNode.objects.create(code='root')
             mid = CodedNode.objects.create(code='mid', parent=root)
             leaf = CodedNode.objects.create(code='leaf', parent=mid)
@@ -884,10 +892,10 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
             self.assertEqual(rec.along.walk_ident, 'code')
             self.assertEqual(rec.along.ident_family, 'text')
             self.assertEqual(rec.along.parent_attname, CodedNode._meta.get_field('parent').attname)
-            self.assertTrue(registry.has_permission(alice, leaf, read))
-            self.assertTrue(registry.has_permission(alice, mid, read))
-            self.assertTrue(registry.has_permission(alice, root, read))
-            self.assertFalse(registry.has_permission(alice, other, read))
+            self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), leaf))
+            self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), mid))
+            self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), root))
+            self.assertFalse(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), other))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class AlongRuntimeGateTest(TransactionTestCase):
@@ -910,7 +918,7 @@ class AlongRuntimeGateTest(TransactionTestCase):
                 app_label = 'trusts_tests'
         with _tables(Node, NodeGrant):
             alice = User.objects.create_user(username='alice-gate', password='x')
-            read = _perm('read_gate')
+            read = _perm('read_gate_node')
             node = Node.objects.create()
             NodeGrant.objects.create(node=node, user=alice, permission=read)
             registry = RegistryFactory()
@@ -940,7 +948,7 @@ class AlongRuntimeGateTest(TransactionTestCase):
                 expr.as_sql(compiler, maria)
             self.assertNotIsInstance(ctx.exception, TrustsCompilerError)
             self.assertEqual(str(ctx.exception), 'Along reachability requires a recursive CTE on Django sqlite3, postgresql, or mysql; got ENGINE=%r vendor=%r alias=%r.' % ('django.db.backends.mysql', 'mysql', 'maria'))
-            rendered_qs = registry.filter_authorized(Node.objects.all(), alice, read)
+            rendered_qs = registry.build_registry().filter_authorized(Node.objects.all(), alice, read)
             rendered = str(rendered_qs.query)
             self.assertIn('WITH RECURSIVE', rendered.upper())
             self.assertIn('UNION ALL', rendered.upper())
@@ -981,12 +989,12 @@ class _LiveRegistryRestoreMixin(object):
 
     def setUp(self):
         super().setUp()
-        from trusts.apps import catalogs
+        from trusts.backends import catalogs
         self.live = live_config()
         self._saved_catalogs = dict(catalogs)
 
     def tearDown(self):
-        from trusts.apps import catalogs
+        from trusts.backends import catalogs
         catalogs.clear()
         catalogs.update(self._saved_catalogs)
         super().tearDown()
@@ -1042,7 +1050,7 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
 
             def __getitem__(self, alias):
                 return mapping[alias]
-        with patch('django.db.connections', _Conns()):
+        with patch('trusts.inspect.checks.connections', _Conns()):
             messages = check_along_renderer(None, databases=['default', 'other', 'also'])
         errors = [m for m in messages if m.id == CHECK_ID_ALONG_RENDERER]
         self.assertEqual(len(errors), 2)
@@ -1068,7 +1076,7 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
 
             def __getitem__(self, alias):
                 return Maria()
-        with patch('django.db.connections', _Conns()):
+        with patch('trusts.inspect.checks.connections', _Conns()):
             messages = check_along_renderer(None, databases=['maria'])
         errors = [m for m in messages if m.id == CHECK_ID_ALONG_RENDERER]
         self.assertEqual(len(errors), 1)

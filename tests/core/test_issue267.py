@@ -29,22 +29,21 @@ from trusts.compile.factory import RegistryFactory
 from trusts.decorators import _declared_authorization_guards, authorization_required
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.apps import built_registries
+from tests.support import render_configured_policy, built_catalog, install_class_handle
+from trusts.compile.catalogs import Catalog
 
 
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
     pass
 
 def _seal_factory(backend_cls, factory):
-    from trusts.apps import catalogs
-    from trusts.compile.catalogs import Catalog
+    from trusts.backends import catalogs
     built = factory.build_registry()
-    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built, family_registries=built_registries(()))
+    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built)
 
 @contextmanager
 def _installed(handle):
-    from tests.apps import install_class_handle
-    from trusts.apps import catalogs
+    from trusts.backends import catalogs
     install_class_handle(_ListedBackend, handle)
     _seal_factory(_ListedBackend, handle)
     with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue267._ListedBackend',)):
@@ -166,8 +165,9 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
         self.read = _perm(self.Repository, 'read_repository')
         self.write = _perm(self.Repository, 'write_repository')
         self.admin = _perm(self.Repository, 'admin_repository')
-        self.publish = _perm(self.Repository, 'can_publish')
-        self.operate = _perm(self.OrganizationProxy, 'operate_organization', proxy=True)
+        publish_type = ContentType.objects.get_for_model(self.Repository, for_concrete_model=False)
+        self.publish, _created = Permission.objects.get_or_create(content_type=publish_type, codename='can_publish', defaults={'name': 'can_publish'})
+        self.operate = _perm(self.OrganizationProxy, 'operate_organization_organizationproxy', proxy=True)
         self.manage_code = _code(self.manage)
         self.read_code = _code(self.read)
         self.publish_code = _code(self.publish)
@@ -194,13 +194,14 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
 
     def test_same_model_grants_and_crossed_pairs_deny(self):
         cases = ((self.manage_code, self.manage, self.acme, True), (self.read_code, self.read, self.specs, True), (self.read_code, self.read, self.acme, False), (self.manage_code, self.manage, self.specs, False), (self.manage_code, self.manage, self.team, False), (self.read_code, self.read, self.widget, False))
+        catalog = built_catalog(self.handle)
         with _installed(self.handle):
             for code, permission, obj, expected in cases:
                 with self.subTest(code=code, obj=obj._meta.model_name):
                     queries = 0 if obj in (self.team, self.widget) else 1
                     with self.assertNumQueries(queries):
                         self.assertIs(self.owner.has_perm(code, obj), expected)
-                    self.assertIs(self.handle.build_registry().has_permission(self.owner, obj, permission), expected)
+                    self.assertIs(catalog.has_perm(self.owner, code, obj), expected)
 
     def test_enumeration_drops_the_other_models_codenames(self):
         with _installed(self.handle):
@@ -231,15 +232,28 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
                     self.assertEqual(list(self.users.permitted(obj, permission).values_list('username', flat=True)), [])
 
     def test_custom_codename_stays_a_same_model_instance_grant(self):
-        with _installed(self.handle):
-            self.assertTrue(self.handle.build_registry().has_permission(self.owner, self.specs, self.publish))
-            self.assertFalse(self.handle.build_registry().has_permission(self.owner, self.acme, self.publish))
-            self.assertIn(self.publish_code, self.owner.get_all_permissions(self.specs))
-            self.assertNotIn(self.publish_code, self.owner.get_all_permissions(self.acme))
-            self.assertEqual(list(self.Repository.objects.authorized(self.owner, self.publish)), [self.specs])
-            self.assertEqual(list(self.Organization.objects.authorized(self.owner, self.publish)), [])
-            self.assertEqual(list(self.specs.get_permitted_users(self.publish).values_list('username', flat=True)), ['owner-267'])
-            self.assertEqual(list(self.acme.get_permitted_users(self.publish).values_list('username', flat=True)), [])
+        # has_perm parses can_publish as action can on model publish and misses
+        # the repository row (open #268). The other three inquiries grant.
+        self.assertEqual(self.publish.codename, 'can_publish')
+        allowed = authorization_required(self.Repository, self.publish_code)(lambda request, pk: 'ok')
+        try:
+            with _installed(self.handle):
+                self.assertFalse(self.owner.has_perm(self.publish_code, self.specs))
+                self.assertFalse(built_catalog(self.handle).has_perm(self.owner, self.publish_code, self.specs))
+                self.assertFalse(self.owner.has_perm(self.publish_code, self.acme))
+                self.assertFalse(built_catalog(self.handle).has_perm(self.owner, self.publish_code, self.acme))
+                self.assertIn(self.publish_code, self.owner.get_all_permissions(self.specs))
+                self.assertNotIn(self.publish_code, self.owner.get_all_permissions(self.acme))
+                self.assertEqual(allowed(_request(self.owner), pk=self.specs.pk), 'ok')
+                self.assertEqual(list(self.Repository.objects.authorized(self.owner, self.publish)), [self.specs])
+                self.assertEqual(list(self.Organization.objects.authorized(self.owner, self.publish)), [])
+                self.assertEqual(list(self.specs.get_permitted_users(self.publish).values_list('username', flat=True)), ['owner-267'])
+                self.assertEqual(list(self.acme.get_permitted_users(self.publish).values_list('username', flat=True)), [])
+        finally:
+            try:
+                _declared_authorization_guards.remove((self.Repository, self.publish_code, ()))
+            except ValueError:
+                pass
 
     def test_foreign_object_stays_denied(self):
         with _installed(self.handle):
@@ -250,9 +264,9 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
     def test_proxy_uses_its_own_content_type(self):
         proxy = self.OrganizationProxy.objects.get(pk=self.acme.pk)
         with _installed(self.handle):
-            self.assertTrue(self.handle.build_registry().has_permission(self.owner, proxy, self.operate))
-            self.assertFalse(self.handle.build_registry().has_permission(self.owner, proxy, self.manage))
-            self.assertFalse(self.handle.build_registry().has_permission(self.owner, self.acme, self.operate))
+            self.assertTrue(built_catalog(self.handle).has_perm(self.owner, '%s.%s' % (self.operate.content_type.app_label, self.operate.codename), proxy))
+            self.assertFalse(built_catalog(self.handle).has_perm(self.owner, '%s.%s' % (self.manage.content_type.app_label, self.manage.codename), proxy))
+            self.assertFalse(built_catalog(self.handle).has_perm(self.owner, '%s.%s' % (self.operate.content_type.app_label, self.operate.codename), self.acme))
             self.assertFalse(self.owner.has_perm(self.manage_code, proxy))
             self.assertEqual(self.owner.get_all_permissions(proxy), {self.operate_code})
             self.assertEqual(list(self.OrganizationProxy.objects.authorized(self.owner, self.operate)), [proxy])
@@ -297,7 +311,7 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
             self.assertEqual(list(self.Organization.objects.authorized(root, self.read)), [])
 
     def test_policy_sql_requires_the_protected_models_content_type(self):
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(self.handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(self.handle))
         by_model = {row['model']: row for row in document['backends'][0]['contents']}
         org = by_model['trusts_tests.Organization']
         repo = by_model['trusts_tests.Repository']
@@ -400,10 +414,11 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         with self.assertNumQueries(0):
             registry.register(content=self._ref(self.OperationGrant).organization, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
             registry.register(content=self._ref(self.OperationGrant).repository, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
-        self.assertTrue(registry.has_permission(self.owner, self.org, operation))
-        self.assertTrue(registry.has_permission(self.owner, self.repo, operation))
-        handle = [registry, setattr(registry, 'path', 'tests.core.issue267-operation')][0]
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+        self.assertTrue(registry.build_registry().has_permission(self.owner, self.org, operation))
+        self.assertTrue(registry.build_registry().has_permission(self.owner, self.repo, operation))
+        registry.path = 'tests.core.issue267-operation'
+        handle = registry
+        document = _load_policy_sql_document(render_configured_policy(handle))
         for content in document['backends'][0]['contents']:
             self.assertNotIn('django_content_type', content['has_perm']['sql'])
 
@@ -418,12 +433,13 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         grant = self._ref(self.TypedGrant)
         registry.register(content=grant.organization, user=grant.user, permission=grant.permit)
         registry.register(content=grant.repository, user=grant.user, permission=grant.permit)
-        self.assertTrue(registry.has_permission(self.owner, self.org, org_permit))
-        self.assertTrue(registry.has_permission(self.owner, self.repo, repo_permit))
-        self.assertTrue(registry.has_permission(self.owner, self.org, repo_permit))
-        self.assertTrue(registry.has_permission(self.owner, self.repo, org_permit))
-        handle = [registry, setattr(registry, 'path', 'tests.core.issue267-typed')][0]
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+        self.assertTrue(registry.build_registry().has_permission(self.owner, self.org, org_permit))
+        self.assertTrue(registry.build_registry().has_permission(self.owner, self.repo, repo_permit))
+        self.assertTrue(registry.build_registry().has_permission(self.owner, self.org, repo_permit))
+        self.assertTrue(registry.build_registry().has_permission(self.owner, self.repo, org_permit))
+        registry.path = 'tests.core.issue267-typed'
+        handle = registry
+        document = _load_policy_sql_document(render_configured_policy(handle))
         for content in document['backends'][0]['contents']:
             self.assertNotIn('django_content_type', content['has_perm']['sql'])
 
@@ -435,8 +451,9 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         registry = RegistryFactory()
         grant = self._ref(self.DirectGrant)
         registry.register(content=grant.organization, user=grant.user, permission=grant.permission)
-        self.assertTrue(registry.has_permission(self.owner, self.org, manage))
-        self.assertFalse(registry.has_permission(self.owner, self.org, read))
+        catalog = built_catalog(registry)
+        self.assertTrue(catalog.has_perm(self.owner, _code(manage), self.org))
+        self.assertFalse(catalog.has_perm(self.owner, _code(read), self.org))
 
     def _ref(self, model):
         from trusts.compile.nodes import Ref

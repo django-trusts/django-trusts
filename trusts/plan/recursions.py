@@ -1,8 +1,7 @@
 """Recursive reach expressions.
 
 ``GrantReach``, ``_IdentInReach``, ``_KeyedReach``,
-``_AnchorInInverseReach``, and ``_PrefixInForwardWalk``. Not a public
-import surface. ``trusts.core`` does not re-export them.
+``_AnchorInInverseReach``, and ``_PrefixInForwardWalk``.
 """
 
 __all__ = []
@@ -10,7 +9,7 @@ __all__ = []
 from django.db.models import BooleanField, Exists, F, OuterRef, Q
 from django.db.models.expressions import Expression
 
-from trusts.commons import _bind_record_qs
+from trusts.plan.predicates import bind_record_qs
 from trusts.plan.walk import (
     _content_walk_seed,
     _grant_walk_attname,
@@ -68,7 +67,7 @@ class GrantReach(Expression):
         self.grant_query = None
         if content is not None:
             self.seed_query = _content_walk_seed(walk, content)
-            grant = _bind_record_qs(
+            grant = bind_record_qs(
                 record,
                 user=user,
                 permission=permission,
@@ -77,7 +76,7 @@ class GrantReach(Expression):
             self.grant_query = grant.query.clone()
             self.grant_query.subquery = True
             return
-        seed = _bind_record_qs(
+        seed = bind_record_qs(
             record,
             user=user,
             permission=permission,
@@ -266,7 +265,7 @@ class _PrefixInForwardWalk(Expression):
                  content_identity=None, suffix_lookup=None):
         super().__init__(output_field=BooleanField())
         walk = record.along
-        seed = _bind_record_qs(
+        seed = bind_record_qs(
             record,
             user=user,
             permission=permission,

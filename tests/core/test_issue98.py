@@ -11,10 +11,12 @@ from django.db import connection, models
 from django.db.models.query import QuerySet
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
-from trusts.compile.nodes import permission_in
-from trusts.core import All, Equal, PermissionIn, PlanQueryCompiler, Ref, TrustsConfigurationError, RegistryFactory
+from trusts.compile.factory import RegistryFactory
+from trusts.compile.nodes import All, Equal, PermissionIn, Ref, permission_in
+from trusts.errors import TrustsConfigurationError
+from trusts.plan.relations import PlanQueryCompiler
 from trusts.query import AuthorizedManager
-from tests.apps import listed_relationship, built_registries
+from tests.support import listed_relationship, built_catalog
 
 
 def _gh_models():
@@ -95,8 +97,7 @@ def _tables(*model_classes):
 
 def _register_team(registry, grant):
     """Accepted GH team spelling. Do not change this registration."""
-    from trusts.compile.nodes import permission_in
-    from trusts.core import All, Equal, Ref
+    from trusts.compile.nodes import All, Equal, Ref, permission_in
     t = Ref(grant)
     return registry.register(content=t.repository, user=t.team.members, permission=t.operation, condition=All(permission_in(t.team.permission_bundles.operations), Equal(t.team.organization, t.repository.organization)))
 
@@ -154,13 +155,6 @@ def _register_site_grant(registry, grant):
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ClosedPredicateRegistrationTest(TestCase):
-
-    def test_core_exports_closed_predicate_nodes(self):
-        import trusts.core as core
-        self.assertTrue(hasattr(core, 'All'))
-        self.assertTrue(hasattr(core, 'Equal'))
-        self.assertTrue(hasattr(core, 'permission_in'))
-        self.assertIs(permission_in, PermissionIn)
 
     def test_accepted_gh_team_mapping_registers_with_zero_sql(self):
         _Account, _Organization, _Team, _Operation, _Bundle, Repository, TeamRepoGrant, _Direct = _gh_models()
@@ -343,19 +337,20 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
         self._table_cm.__exit__(None, None, None)
 
     def _handles(self):
-        return ([self.registry, setattr(self.registry, 'path', 'issue98')][0],)
+        self.registry.path = 'issue98'
+        return (self.registry,)
 
     def _object_list_agree(self, principal, operation, obj, expected):
         with self.assertNumQueries(1):
-            via_obj = self.registry.has_permission(principal, obj, operation)
+            via_obj = self.registry.build_registry().has_permission(principal, obj, operation)
         with self.assertNumQueries(1):
-            via_list = obj in list(self.registry.filter_authorized(self.Repository.objects.filter(pk=obj.pk), principal, operation))
-        with listed_relationship(built_registries(self._handles())):
+            via_list = obj in list(self.registry.build_registry().filter_authorized(self.Repository.objects.filter(pk=obj.pk), principal, operation))
+        with listed_relationship(self._handles()):
             with self.assertNumQueries(1):
                 via_manager = obj in list(self.Repository.objects.filter(pk=obj.pk).authorized(principal, operation))
             with self.assertNumQueries(1):
                 via_exists = self.Repository.objects.filter(pk=obj.pk).authorized(principal, operation).exists()
-        enumerated = {row.pk for row in self.registry.permissions_for(principal, obj)}
+        enumerated = {row.pk for row in built_catalog(self.registry).permissions_for(principal, obj)}
         self.assertEqual(via_obj, expected)
         self.assertEqual(via_list, expected)
         self.assertEqual(via_manager, expected)
@@ -411,26 +406,26 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
 
     def test_query_construction_is_lazy_and_fixed_count(self):
         with self.assertNumQueries(0):
-            qs = self.registry.filter_authorized(self.Repository.objects.all(), self.member, self.read)
-            enumerated = self.registry.permissions_for(self.member, self.repo_a)
+            qs = self.registry.build_registry().filter_authorized(self.Repository.objects.all(), self.member, self.read)
+            enumerated = built_catalog(self.registry).permissions_for(self.member, self.repo_a)
         self.assertIsInstance(qs, QuerySet)
         self.assertIsInstance(enumerated, QuerySet)
         self.assertIsNone(qs._result_cache)
         with self.assertNumQueries(1):
             self.assertEqual(_pks(qs), {self.repo_a.pk})
-        page = self.registry.filter_authorized(self.Repository.objects.order_by('pk'), self.member, self.read)[:1]
+        page = self.registry.build_registry().filter_authorized(self.Repository.objects.order_by('pk'), self.member, self.read)[:1]
         with self.assertNumQueries(1):
             self.assertEqual(list(page), [self.repo_a])
-        sql = str(self.registry.filter_authorized(self.Repository.objects.all(), self.member, self.read).query).lower().replace('_', '').replace('"', '')
+        sql = str(self.registry.build_registry().filter_authorized(self.Repository.objects.all(), self.member, self.read).query).lower().replace('_', '').replace('"', '')
         self.assertIn('exists', sql)
         self.assertIn('teamrepogrant', sql)
 
     def test_unregistered_content_fails_closed(self):
         empty = RegistryFactory()
-        self.assertFalse(empty.has_permission(self.member, self.repo_a, self.read))
-        missing = empty.filter_authorized(self.Repository.objects.all(), self.member, self.read)
+        self.assertFalse(empty.build_registry().has_permission(self.member, self.repo_a, self.read))
+        missing = empty.build_registry().filter_authorized(self.Repository.objects.all(), self.member, self.read)
         self.assertEqual(list(missing), [])
-        self.assertEqual(list(empty.permissions_for(self.member, self.repo_a)), [])
+        self.assertEqual(list(built_catalog(empty).permissions_for(self.member, self.repo_a)), [])
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ClosedPredicateEqualToFieldAuthorizationTest(TransactionTestCase):
@@ -455,8 +450,8 @@ class ClosedPredicateEqualToFieldAuthorizationTest(TransactionTestCase):
 
     def test_matching_to_field_same_object_allows_and_split_denies(self):
         with self.assertNumQueries(1):
-            self.assertTrue(self.registry.has_permission(self.holder, self.doc_same, self.read))
+            self.assertTrue(self.registry.build_registry().has_permission(self.holder, self.doc_same, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(self.registry.has_permission(self.holder, self.doc_other, self.read))
+            self.assertFalse(self.registry.build_registry().has_permission(self.holder, self.doc_other, self.read))
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(self.registry.filter_authorized(self.Document.objects.all(), self.holder, self.read)), {self.doc_same.pk})
+            self.assertEqual(_pks(self.registry.build_registry().filter_authorized(self.Document.objects.all(), self.holder, self.read)), {self.doc_same.pk})

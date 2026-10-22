@@ -1,7 +1,7 @@
-from tests.apps import configured_catalog
+from tests.support import configured_catalog, unbound_named_filters
 """#199 / #189 B1: backend principal, object, and ownership fail-closed.
 
-Public ``TrustModelBackendMixin`` methods, ``set_condition_lookup``,
+Public ``TrustModelBackendMixin`` methods, ``set_filter_lookup``,
 and ``TrustsImplementationConfig.ready()`` only. Does not invent a
 ``Permission``-instance ``has_perm`` contract, assert
 ``_trust_perm_cache`` shape, or patch private match/compiler helpers.
@@ -173,11 +173,10 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
             )
 
     def test_owned_unbound_named_condition_raises_on_instance_at_zero_sql(self):
-        registry = configured_catalog(DOCUMENT_BACKEND)._registry
-        previous = registry.condition_lookup
+        from tests.myapp.backends import DocumentBackend
+
         qs = Document.objects.filter(pk=self.document.pk)
-        try:
-            registry.condition_lookup = None
+        with unbound_named_filters(DocumentBackend):
             with self.assertNumQueries(0):
                 with self.assertRaises(AttributeError) as ctx:
                     self.document_backend.has_perm(
@@ -193,9 +192,6 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
                 self.assertFalse(
                     self.document_backend.has_perm(self.alice, FILTERED, qs),
                 )
-        finally:
-            registry.condition_lookup = previous
-        self.assertIs(registry.condition_lookup, previous)
 
         with self.assertNumQueries(1):
             self.assertTrue(
@@ -222,7 +218,7 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
 class ImplementationOwnershipReadyTest(TestCase):
     def test_non_mixin_path_is_skipped_at_ready_with_zero_sql(self):
         from tests.backends import HostTrustModelBackend
-        from trusts.apps import catalogs
+        from trusts.backends import catalogs
 
         config = _bind(NonMixinOwnerConfig, ready=False)
         before = catalogs[HostTrustModelBackend]

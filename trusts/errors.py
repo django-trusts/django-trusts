@@ -1,16 +1,8 @@
-"""Configuration and permission-condition errors.
-
-``TrustsConfigurationError`` and ``TrustsCompilerError`` are re-exported
-from ``trusts.core``. ``trusts.conditions`` re-exports the
-permission-condition errors as Core's own public surface. That package
-is not a compatibility shim for django-trusts-zero: Zero imports
-``PermissionConditionNotQueryable`` from here and carries its own
-``permission_has_condition``.
-"""
+"""Configuration and permission-condition errors."""
 
 
 class TrustsConfigurationError(Exception):
-    """Malformed or unsupported ``TrustsRegistry`` registration."""
+    """Malformed or unsupported registration."""
 
 
 class TrustsCompilerError(TrustsConfigurationError):

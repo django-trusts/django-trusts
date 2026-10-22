@@ -1,47 +1,30 @@
 """Registration path and hop resolution.
 
-Metadata only: Django ``_meta`` and path info, no SQL. The shared
-``_meta`` helpers used by both compile and plan live in
-``trusts.commons``; the registration resolvers that need registry-shaped
-validation stay here. This module does not import ``trusts.core``,
-``trusts.compile.factory``, or ``trusts.plan``.
+Metadata only: Django ``_meta`` and path info, no SQL. Shared hop math
+lives in ``trusts.plan.hops``. The registration resolvers that need
+registry-shaped validation stay here.
 """
 
-__all__ = []
-
+from django.contrib.contenttypes.fields import (
+    GenericForeignKey,
+    GenericRelation,
+)
 from django.core.exceptions import FieldDoesNotExist
 
-from trusts.commons import (
-    _auth_group_and_permission,
-    _lookup_text,
-    _materialize_related_model,
-    _path_text,
-    _resolved_hop,
+from django.contrib.auth.models import Group, Permission
+
+from trusts.plan.hops import (
+    lookup_text,
+    materialize_related_model,
+    path_text,
+    resolved_hop,
 )
 from trusts.compile.nodes import _is_model_class
 from trusts.errors import TrustsConfigurationError
 
 
-def _generic_relation_types():
-    """Load GFK types lazily so ``AppConfig.__init__`` can import this module.
-
-    ``contenttypes.fields`` imports ``ContentType`` models and cannot run
-    during ``Apps.populate`` phase 1.
-    """
-    try:
-        from django.contrib.contenttypes.fields import (
-            GenericForeignKey,
-            GenericRelation,
-        )
-    except ImportError:  # pragma: no cover - contenttypes is a Django contrib app
-        GenericForeignKey = type('GenericForeignKey', (), {})
-        GenericRelation = type('GenericRelation', (), {})
-    return GenericForeignKey, GenericRelation
-
-
 def _classify_field(field):
-    generic_foreign_key, generic_relation = _generic_relation_types()
-    if isinstance(field, (generic_foreign_key, generic_relation)):
+    if isinstance(field, (GenericForeignKey, GenericRelation)):
         return 'gfk'
     if not getattr(field, 'is_relation', False):
         return 'scalar'
@@ -61,7 +44,6 @@ def _classify_field(field):
 
 def _group_permissions_field():
     """The ``auth.Group`` relation the compiler walks to ``Permission``."""
-    Group, _Permission = _auth_group_and_permission()
     try:
         field = Group._meta.get_field('permissions')
     except FieldDoesNotExist:
@@ -78,7 +60,6 @@ def _resolve_group_path(root, path):
     Applications stop at the group. ``Group.permissions`` is not part
     of this path; ``_append_group_permissions`` owns that hop. Zero SQL.
     """
-    Group, _Permission = _auth_group_and_permission()
     if not path:
         raise TrustsConfigurationError(
             'group must be a non-empty root-relative path from %s '
@@ -97,7 +78,7 @@ def _resolve_group_path(root, path):
             raise TrustsConfigurationError(
                 'group path %r refers to missing field %r on %s. '
                 'The path must end at auth.Group.'
-                % (_path_text(path), name, current._meta.label)
+                % (path_text(path), name, current._meta.label)
             )
         kind = _classify_field(field)
         on_group = (
@@ -111,33 +92,32 @@ def _resolve_group_path(root, path):
             raise TrustsConfigurationError(
                 'group path %r must end at auth.Group. The compiler '
                 'follows Group.permissions; do not append permissions.'
-                % (_path_text(path),)
+                % (path_text(path),)
             )
         if kind != 'single':
             raise TrustsConfigurationError(
                 'group path %r must be forward single-valued hops '
                 'ending at auth.Group; %r on %s is not allowed.'
-                % (_path_text(path), name, current._meta.label)
+                % (path_text(path), name, current._meta.label)
             )
-        related, target_attname = _resolved_hop(field, 'group', path)
+        related, target_attname = resolved_hop(field, 'group', path)
         if not is_last:
             current = related
     if related._meta.concrete_model is not Group._meta.concrete_model:
         raise TrustsConfigurationError(
             'group path %r must end at auth.Group; got %s.'
-            % (_path_text(path), related._meta.label)
+            % (path_text(path), related._meta.label)
         )
     return (
         tuple(path),
         related._meta.concrete_model,
-        _lookup_text(path),
+        lookup_text(path),
         target_attname,
     )
 
 
 def _append_group_permissions(group_path, group_field):
     """Compiler-owned ``Group.permissions`` hop onto ``auth.Permission``."""
-    _Group, Permission = _auth_group_and_permission()
     field = _group_permissions_field()
     if _classify_field(field) != 'm2m':
         raise TrustsConfigurationError(
@@ -179,7 +159,7 @@ _SUFFIX_MAX = 2
 
 def _m2m_related_model(field):
     """Related model of a many-to-many field. Metadata only (zero SQL)."""
-    _materialize_related_model(field)
+    materialize_related_model(field)
     related = getattr(field, 'related_model', None)
     if not _is_model_class(related):
         remote = getattr(field, 'remote_field', None)
@@ -225,14 +205,14 @@ def _resolve_m2m_terminal(field, role, path):
     if related is None:
         raise TrustsConfigurationError(
             '%s path %r does not terminate on a model.'
-            % (role, _path_text(path))
+            % (role, path_text(path))
         )
     pk = related._meta.pk
     attname = getattr(pk, 'attname', None)
     if not attname:
         raise TrustsConfigurationError(
             '%s path %r does not expose one supported target field.'
-            % (role, _path_text(path))
+            % (role, path_text(path))
         )
     return related, attname
 
@@ -247,13 +227,13 @@ def _resolve_permission_in_m2m(field, role, path, *, require_pk=False):
     if related is None:
         raise TrustsConfigurationError(
             '%s path %r does not terminate on a model.'
-            % (role, _path_text(path))
+            % (role, path_text(path))
         )
     attname = _m2m_related_target_attname(field, related)
     if not attname:
         raise TrustsConfigurationError(
             '%s path %r does not expose one supported target field.'
-            % (role, _path_text(path))
+            % (role, path_text(path))
         )
     pk_attname = getattr(related._meta.pk, 'attname', None)
     if require_pk and attname != pk_attname:
@@ -261,7 +241,7 @@ def _resolve_permission_in_m2m(field, role, path, *, require_pk=False):
             '%s path %r must share one resolved comparison field; '
             'got %s.%s and %s.%s.'
             % (
-                role, _path_text(path),
+                role, path_text(path),
                 related._meta.label, attname,
                 related._meta.label, pk_attname,
             )
@@ -300,34 +280,34 @@ def _resolve_permission_path(root, path):
         except FieldDoesNotExist:
             raise TrustsConfigurationError(
                 '%s path %r refers to missing field %r on %s.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
         kind = _classify_field(field)
         if kind == 'scalar':
             raise TrustsConfigurationError(
                 '%s path %r traverses scalar field %r on %s; only '
                 'single-valued relations are supported.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
         if kind == 'gfk':
             raise TrustsConfigurationError(
                 '%s path %r uses a generic foreign key %r on %s; generic '
                 'foreign keys are not supported.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
         if kind == 'm2m':
             if getattr(field, 'auto_created', False):
                 raise TrustsConfigurationError(
                     '%s path %r uses reverse relation %r on %s; '
                     'multi-valued and reverse traversals are not supported.'
-                    % (role, _path_text(path), name, current._meta.label)
+                    % (role, path_text(path), name, current._meta.label)
                 )
             if not is_last:
                 raise TrustsConfigurationError(
                     '%s path %r uses intermediate multi-valued field %r '
                     'on %s; an intermediate many-to-many is not accepted '
                     'on this permission path.'
-                    % (role, _path_text(path), name, current._meta.label)
+                    % (role, path_text(path), name, current._meta.label)
                 )
             return _permission_m2m_result(field, path)
         if kind in ('reverse_o2o', 'reverse_o2m', 'reverse'):
@@ -335,34 +315,34 @@ def _resolve_permission_path(root, path):
                 raise TrustsConfigurationError(
                     '%s path %r uses reverse one-to-one relation %r on %s; '
                     'reverse one-to-one traversals are not supported.'
-                    % (role, _path_text(path), name, current._meta.label)
+                    % (role, path_text(path), name, current._meta.label)
                 )
             if not is_last:
                 raise TrustsConfigurationError(
                     '%s path %r uses reverse relation %r on %s before '
                     'the final hop; reverse relations are only '
                     'supported as the final content hop.'
-                    % (role, _path_text(path), name, current._meta.label)
+                    % (role, path_text(path), name, current._meta.label)
                 )
             raise TrustsConfigurationError(
                 '%s path %r uses reverse relation %r on %s; multi-valued '
                 'and reverse traversals are not supported.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
         if kind != 'single':
             raise TrustsConfigurationError(
                 '%s path %r uses unsupported field %r on %s.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
-        related, _target_attname = _resolved_hop(field, role, path)
+        related, _target_attname = resolved_hop(field, role, path)
         if is_last:
             if index != 0:
                 raise TrustsConfigurationError(
                     '%s path %r is not a direct single-valued relation; '
                     'only direct paths are supported.'
-                    % (role, _path_text(path))
+                    % (role, path_text(path))
                 )
-            return tuple(path), related, _lookup_text(path), _target_attname
+            return tuple(path), related, lookup_text(path), _target_attname
         current = related
 
 
@@ -371,13 +351,12 @@ def _permission_m2m_result(field, path):
     related, target_attname = _resolve_permission_in_m2m(
         field, 'permission', path, require_pk=True,
     )
-    _group, permission_model = _auth_group_and_permission()
-    if related._meta.concrete_model is not permission_model._meta.concrete_model:
+    if related._meta.concrete_model is not Permission._meta.concrete_model:
         raise TrustsConfigurationError(
             'permission path %r terminates on %s, not auth.Permission.'
-            % (_path_text(path), related._meta.label)
+            % (path_text(path), related._meta.label)
         )
-    return tuple(path), related, _lookup_text(path), target_attname
+    return tuple(path), related, lookup_text(path), target_attname
 
 
 def _resolve_path(root, path, role, *, trailing_reverse=False,
@@ -416,7 +395,7 @@ def _resolve_path(root, path, role, *, trailing_reverse=False,
         except FieldDoesNotExist:
             raise TrustsConfigurationError(
                 '%s path %r refers to missing field %r on %s.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
 
         kind = _classify_field(field)
@@ -428,19 +407,19 @@ def _resolve_path(root, path, role, *, trailing_reverse=False,
             raise TrustsConfigurationError(
                 '%s path %r traverses scalar field %r on %s; only '
                 'single-valued relations are supported.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
         if kind == 'm2m':
             raise TrustsConfigurationError(
                 '%s path %r uses multi-valued field %r on %s; many-to-many '
                 'and other multi-valued traversals are not supported.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
         if kind == 'gfk':
             raise TrustsConfigurationError(
                 '%s path %r uses a generic foreign key %r on %s; generic '
                 'foreign keys are not supported.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
         if trailing_reverse:
             if gateway_index is None:
@@ -458,7 +437,7 @@ def _resolve_path(root, path, role, *, trailing_reverse=False,
                         '%s path %r uses reverse one-to-one relation %r on '
                         '%s; reverse one-to-one is not a valid content '
                         'terminal or gateway.'
-                        % (role, _path_text(path), name, current._meta.label)
+                        % (role, path_text(path), name, current._meta.label)
                     )
                 elif kind in ('reverse_o2m', 'reverse'):
                     if not is_last:
@@ -467,7 +446,7 @@ def _resolve_path(root, path, role, *, trailing_reverse=False,
                             'before the gateway; reverse relations require '
                             'a preceding forward hop.'
                             % (
-                                role, _path_text(path), name,
+                                role, path_text(path), name,
                                 current._meta.label,
                             )
                         )
@@ -475,12 +454,12 @@ def _resolve_path(root, path, role, *, trailing_reverse=False,
                         '%s path %r uses reverse relation %r on %s; '
                         'multi-valued and reverse traversals are not '
                         'supported.'
-                        % (role, _path_text(path), name, current._meta.label)
+                        % (role, path_text(path), name, current._meta.label)
                     )
                 else:
                     raise TrustsConfigurationError(
                         '%s path %r uses unsupported field %r on %s.'
-                        % (role, _path_text(path), name, current._meta.label)
+                        % (role, path_text(path), name, current._meta.label)
                     )
             else:
                 suffix_depth = index - gateway_index
@@ -488,7 +467,7 @@ def _resolve_path(root, path, role, *, trailing_reverse=False,
                     raise TrustsConfigurationError(
                         '%s path %r has more than two hops after the '
                         'reverse one-to-many gateway.'
-                        % (role, _path_text(path))
+                        % (role, path_text(path))
                     )
                 if kind not in _SUFFIX_KINDS:
                     raise TrustsConfigurationError(
@@ -496,34 +475,34 @@ def _resolve_path(root, path, role, *, trailing_reverse=False,
                         'the gateway; suffix hops must be forward '
                         'single-valued, reverse one-to-one, or reverse '
                         'one-to-many.'
-                        % (role, _path_text(path), name, current._meta.label)
+                        % (role, path_text(path), name, current._meta.label)
                     )
         elif kind in ('reverse_o2o', 'reverse_o2m', 'reverse'):
             if kind == 'reverse_o2o':
                 raise TrustsConfigurationError(
                     '%s path %r uses reverse one-to-one relation %r on %s; '
                     'reverse one-to-one traversals are not supported.'
-                    % (role, _path_text(path), name, current._meta.label)
+                    % (role, path_text(path), name, current._meta.label)
                 )
             if not is_last:
                 raise TrustsConfigurationError(
                     '%s path %r uses reverse relation %r on %s before '
                     'the final hop; reverse relations are only '
                     'supported as the final content hop.'
-                    % (role, _path_text(path), name, current._meta.label)
+                    % (role, path_text(path), name, current._meta.label)
                 )
             raise TrustsConfigurationError(
                 '%s path %r uses reverse relation %r on %s; multi-valued '
                 'and reverse traversals are not supported.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
         elif kind != 'single':
             raise TrustsConfigurationError(
                 '%s path %r uses unsupported field %r on %s.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
 
-        related, target_attname = _resolved_hop(field, role, path)
+        related, target_attname = resolved_hop(field, role, path)
         if not is_last:
             current = related
 
@@ -536,15 +515,15 @@ def _resolve_path(root, path, role, *, trailing_reverse=False,
                 'forward path ending in one reverse one-to-many; a reverse '
                 'one-to-one may appear only as a single-valued hop before '
                 'that gateway.'
-                % (role, _path_text(path))
+                % (role, path_text(path))
             )
         else:
             raise TrustsConfigurationError(
                 '%s path %r is not a direct single-valued relation; only '
                 'direct paths are supported.'
-                % (role, _path_text(path))
+                % (role, path_text(path))
             )
-    return tuple(path), related, _lookup_text(path), target_attname
+    return tuple(path), related, lookup_text(path), target_attname
 
 
 def _resolve_forward_singles(root, path, role):
@@ -565,36 +544,36 @@ def _resolve_forward_singles(root, path, role):
         except FieldDoesNotExist:
             raise TrustsConfigurationError(
                 '%s path %r refers to missing field %r on %s.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
         kind = _classify_field(field)
         if kind == 'scalar':
             raise TrustsConfigurationError(
                 '%s path %r traverses scalar field %r on %s; only '
                 'single-valued relations are supported.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
         if kind in ('m2m', 'reverse_o2m', 'reverse', 'reverse_o2o'):
             raise TrustsConfigurationError(
                 '%s path %r uses extra or intermediate multi-valued '
                 'field %r on %s.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
         if kind == 'gfk':
             raise TrustsConfigurationError(
                 '%s path %r uses a generic foreign key %r on %s; generic '
                 'foreign keys are not supported.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
         if kind != 'single':
             raise TrustsConfigurationError(
                 '%s path %r uses unsupported field %r on %s.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
-        related, target_attname = _resolved_hop(field, role, path)
+        related, target_attname = resolved_hop(field, role, path)
         if not is_last:
             current = related
-    return tuple(path), related, _lookup_text(path), target_attname
+    return tuple(path), related, lookup_text(path), target_attname
 
 
 def _resolve_permission_in_path(root, path, role, permission_model,
@@ -628,34 +607,34 @@ def _resolve_permission_in_path(root, path, role, permission_model,
         except FieldDoesNotExist:
             raise TrustsConfigurationError(
                 '%s path %r refers to missing field %r on %s.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
         kind = _classify_field(field)
         if kind == 'scalar':
             raise TrustsConfigurationError(
                 '%s path %r traverses scalar field %r on %s.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
         if kind == 'gfk':
             raise TrustsConfigurationError(
                 '%s path %r uses a generic foreign key %r on %s; generic '
                 'foreign keys are not supported.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
         if kind == 'single':
             if intermediate_kind is not None:
                 raise TrustsConfigurationError(
                     '%s path %r uses extra or intermediate multi-valued '
                     'walks; single-valued hops cannot follow a collection.'
-                    % (role, _path_text(path))
+                    % (role, path_text(path))
                 )
             if is_last:
                 raise TrustsConfigurationError(
                     '%s path %r must terminate on a multi-valued '
                     'membership hop.'
-                    % (role, _path_text(path))
+                    % (role, path_text(path))
                 )
-            related, target_attname = _resolved_hop(field, role, path)
+            related, target_attname = resolved_hop(field, role, path)
             current = related
             continue
         if kind == 'm2m' and not is_last:
@@ -663,7 +642,7 @@ def _resolve_permission_in_path(root, path, role, permission_model,
                 raise TrustsConfigurationError(
                     '%s path %r uses extra or intermediate multi-valued '
                     'field %r on %s.'
-                    % (role, _path_text(path), name, current._meta.label)
+                    % (role, path_text(path), name, current._meta.label)
                 )
             intermediate_kind = 'm2m'
             related, target_attname = _resolve_permission_in_m2m(
@@ -676,10 +655,10 @@ def _resolve_permission_in_path(root, path, role, permission_model,
                 raise TrustsConfigurationError(
                     '%s path %r uses extra or intermediate multi-valued '
                     'field %r on %s.'
-                    % (role, _path_text(path), name, current._meta.label)
+                    % (role, path_text(path), name, current._meta.label)
                 )
             intermediate_kind = 'reverse_o2m'
-            related, target_attname = _resolved_hop(field, role, path)
+            related, target_attname = resolved_hop(field, role, path)
             current = related
             continue
         if kind in ('m2m', 'reverse_o2m') and is_last:
@@ -687,20 +666,20 @@ def _resolve_permission_in_path(root, path, role, permission_model,
                 raise TrustsConfigurationError(
                     '%s path %r uses extra or intermediate multi-valued '
                     'field %r on %s.'
-                    % (role, _path_text(path), name, current._meta.label)
+                    % (role, path_text(path), name, current._meta.label)
                 )
             if kind == 'm2m':
                 related, target_attname = _resolve_permission_in_m2m(
                     field, role, path, require_pk=True,
                 )
             else:
-                related, target_attname = _resolved_hop(field, role, path)
+                related, target_attname = resolved_hop(field, role, path)
             if related is not permission_model:
                 raise TrustsConfigurationError(
                     '%s path %r terminates on %s, not the registered '
                     'permission model %s.'
                     % (
-                        role, _path_text(path), related._meta.label,
+                        role, path_text(path), related._meta.label,
                         permission_model._meta.label,
                     )
                 )
@@ -712,23 +691,23 @@ def _resolve_permission_in_path(root, path, role, permission_model,
                     '%s path %r must share one resolved comparison field; '
                     'got %s.%s and %s.%s.'
                     % (
-                        role, _path_text(path),
+                        role, path_text(path),
                         related._meta.label, target_attname,
                         permission_model._meta.label, permission_target,
                     )
                 )
-            return tuple(path), related, _lookup_text(path), target_attname
+            return tuple(path), related, lookup_text(path), target_attname
         if kind in ('m2m', 'reverse_o2m', 'reverse', 'reverse_o2o'):
             raise TrustsConfigurationError(
                 '%s path %r uses extra or intermediate multi-valued '
                 'field %r on %s.'
-                % (role, _path_text(path), name, current._meta.label)
+                % (role, path_text(path), name, current._meta.label)
             )
         raise TrustsConfigurationError(
             '%s path %r uses unsupported field %r on %s.'
-            % (role, _path_text(path), name, current._meta.label)
+            % (role, path_text(path), name, current._meta.label)
         )
     raise TrustsConfigurationError(
         '%s path %r must terminate on a multi-valued membership hop.'
-        % (role, _path_text(path))
+        % (role, path_text(path))
     )

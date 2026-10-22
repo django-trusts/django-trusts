@@ -24,11 +24,11 @@ from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.plan.users import _trusts_eligibility_q
-from tests.apps import built_registries
+from tests.support import render_configured_policy, built_catalog
 
 
 def _document_rows():
-    document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(_document_handle()).build_registry()]))
+    document = _load_policy_sql_document(render_configured_policy(_document_handle()))
     return document['backends'][0]['contents'][0]
 
 def _repeat_count(params):
@@ -109,9 +109,9 @@ class Issue300BooleanFieldTest(KernelHostRequiredMixin, TestCase):
         handle = _document_handle()
         content = GuideDocument(title='note-300', pk=1)
         with self.assertRaises(TrustsConfigurationError):
-            granted(built_registries((handle,)), content, None, permission)
+            granted(handle.build_registry(), content, None, permission)
         with self.assertRaises(TrustsConfigurationError):
-            granted(built_registries((handle,)), content, object(), permission)
+            granted(handle.build_registry(), content, object(), permission)
 
 class Issue300BindOnceTest(SimpleTestCase):
 
@@ -398,7 +398,8 @@ class Issue300UserAnnotationTest(TransactionTestCase):
             note = Note.objects.create(title='kept')
             NoteGrant.objects.create(note=note, user=user, permission=permission)
             registry = RegistryFactory()
-            handle = [registry, setattr(registry, 'path', 'tests.annotation.a')][0]
+            registry.path = 'tests.annotation.a'
+            handle = registry
             handle.register_public(trust=NoteGrant, user='user', permission='permission', content='note')
             candidates = Note.objects.annotate(a=Value(1, output_field=CharField()))
             with override_settings(TRUSTS_SQL_BIND_ONCE=False):
@@ -446,11 +447,12 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
         with _model_tables(RetargetNode, RetargetGrant):
             user = User.objects.create_user(username='along-cap-300', password='x')
             content_type, _created = ContentType.objects.get_or_create(app_label='trusts_tests', model='retargetnode')
-            permission, _created = Permission.objects.get_or_create(content_type=content_type, codename='read_retarget', defaults={'name': 'read_retarget'})
+            permission, _created = Permission.objects.get_or_create(content_type=content_type, codename='read_retarget_retargetnode', defaults={'name': 'read_retarget_retargetnode'})
             node = RetargetNode.objects.create()
             RetargetGrant.objects.create(node=node, user=user, permission=permission)
             registry = RegistryFactory()
-            handle = [registry, setattr(registry, 'path', 'tests.along.retarget')][0]
+            registry.path = 'tests.along.retarget'
+            handle = registry
             handle.register_public(trust=RetargetGrant, user='user', permission='permission', content='node', along=('node__parent', 4))
             candidates = RetargetNode.objects.order_by('pk')
             with patch('trusts.plan.recursions._render_reach_sql', _render_parenthesized_depth):
@@ -458,17 +460,17 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
                     plain = handle.build_registry().filter_authorized(candidates, user, permission)
                     plain_rows = list(plain)
                     plain_sql = plain.query.sql_with_params()
-                    plain_has = handle.build_registry().has_permission(user, node, permission)
-                    plain_doc = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+                    plain_has = built_catalog(handle).has_perm(user, '%s.%s' % (permission.content_type.app_label, permission.codename), node)
+                    plain_doc = _load_policy_sql_document(render_configured_policy(handle))
                 bind_once_module._warned = False
                 with self.assertLogs('trusts', level='WARNING') as logs:
                     bound = handle.build_registry().filter_authorized(candidates, user, permission)
                     bound_rows = list(bound)
                     bound_sql = bound.query.sql_with_params()
-                    bound_has = handle.build_registry().has_permission(user, node, permission)
-                    bound_doc = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+                    bound_has = built_catalog(handle).has_perm(user, '%s.%s' % (permission.content_type.app_label, permission.codename), node)
+                    bound_doc = _load_policy_sql_document(render_configured_policy(handle))
                     list(handle.build_registry().filter_authorized(candidates, user, permission))
-                    render_policy_sql_bytes(registries=[(handle).build_registry()])
+                    render_configured_policy(handle)
             self.assertEqual(len(logs.records), 1)
             message = logs.records[0].getMessage()
             self.assertIn('TrustsConfigurationError', message)
@@ -523,15 +525,15 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
                     handle = RegistryFactory(path='documents.backends.ReviewBackend')
                     handle.register_public(trust=ReviewGrant, user='user', permission='permission', content='document')
                     handle.register_permission_condition(ReviewDocument, 'published', _published)
-                    document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+                    document = _load_policy_sql_document(render_configured_policy(handle))
                     content = document['backends'][0]['contents'][0]
                     permitted = content['permitted']
                     named = content['named_filters'][0]
-                    records = handle.build_registry().plan_for(ReviewDocument).records
+                    records = built_catalog(handle).plan_for(ReviewDocument).records
                     user = _role_sentinel(records[0], 'user', 'default')
                     permission = _role_sentinel(records[0], 'permission', 'default')
                     queryset = _content_manager(ReviewDocument).all()
-                    granted = _compile_granted(built_registries((handle,)), queryset, user, permission, kind='complete', family_registries=built_registries((handle,)))
+                    granted = _compile_granted(handle.build_registry(), queryset, user, permission, kind='complete')
                     raw_sql, raw_params = bind_once(queryset.filter(granted).distinct()).query.sql_with_params()
                     self._assert_cardinality_and_order(permitted, raw_params)
                     self.assertEqual(raw_sql.count('%s'), len(raw_params))

@@ -12,7 +12,7 @@ from django.apps import apps
 from django.test import SimpleTestCase, override_settings
 
 import tests as tests_module
-from tests.apps import configured_catalog, live_config
+from tests.support import configured_catalog, live_config
 from tests.backends import HostTrustModelBackend, MixinOnlyBackend
 from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
 from trusts.apps import (
@@ -133,7 +133,7 @@ class OwnerResolutionTest(SimpleTestCase):
 
     def test_authorized_and_filter_scopes_use_owners(self):
         from trusts.backends import configured_catalogs
-        from trusts.plan.contents import filter_by_permitted_content
+        from trusts.decorators import filter_by_permitted_content
         from trusts.query import AuthorizedQuerySet
 
         registries = configured_catalogs()

@@ -1,103 +1,24 @@
 """Object-to-users compiler: one content object and one permission to users.
 
-Private compiler for ``content.get_permitted_users(perm)`` and
-``User.objects.permitted(content, perm)``. Both adapters call
-``compile_permitted_users``. The permission row is canonical. A string is
-resolved inside the eventual SQL. Construction does not query.
+The permission row is canonical. A string is resolved inside the eventual
+SQL. Construction does not query.
 """
 
 __all__ = []
 
-from django.contrib.auth import get_backends
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import Permission
 from django.core.exceptions import FieldDoesNotExist
-from django.db import router
 from django.db.models import F, Model, Q, QuerySet
 
-from trusts.utils import parse_perm_code
+from trusts.plan.conditions import parse_perm_code, permission_binding
 from trusts.plan.rewrites import bind_once
-from trusts.apps import installed_object_blind_backends, user_model
-from trusts.backends import TrustModelBackendMixin, configured_catalogs
-from trusts.compile.catalogs import _permission_binding
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import _as_q, _ordinary_records
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
-from trusts.commons import _object_memory_value, _user_lookup
 from trusts.plan.aggregates import _delegated_user_exists
 from trusts.plan import conditions as _ir
 
-
-def compile_permitted_users(content, perm, *, user_queryset=None, **skip_flags):
-    """Lazy user queryset for one saved content object and one permission.
-
-    The candidate rows are ``user_queryset`` when given (the optional
-    manager adapter) and otherwise the user model stored at ready.
-    Each configured backend that can contribute an exact reverse predicate
-    is OR-ed. A registered user override is part of the Trusts-owned
-    predicate, not a separate superuser grant. The ``is_active`` check
-    applies inside the Trusts-owned branch only. A custom predicate is
-    not wrapped. ``skip_<name>=True`` sets that bound parameter. The
-    values are forwarded only to the Trusts-owned mixin method.
-    Django's ``PermissionsMixin.has_perm`` early return is
-    not copied here. An unsupported object-permission backend raises
-    before SQL.
-    """
-    _require_saved_content(content)
-    _reject_permission_shape(perm)
-    registries = _relationship_catalogs()
-    inquiry = bind_checked_user(
-        None, skip_flags=skip_flags,
-        registries=registries,
-        require_user=False,
-    )
-    skipped = inquiry.values
-    if user_queryset is None:
-        model = user_model()
-        if model is None:
-            raise TrustsConfigurationError(
-                'get_permitted_users has no user model. '
-                'TrustsImplementationConfig.ready has not stored one.'
-            )
-        user_queryset = model._default_manager.get_queryset()
-    elif not isinstance(user_queryset, QuerySet):
-        raise TrustsConfigurationError(
-            'user queryset must be a QuerySet, not %r.' % (user_queryset,)
-        )
-    backends = tuple(get_backends())
-    _reject_unaccepted_permission_instance(perm, backends)
-    principal_model = user_queryset.model
-    _assert_persisted_principal(principal_model)
-    parts = []
-    involved = [principal_model, content.__class__]
-    if isinstance(perm, (str, Permission)):
-        involved.append(Permission)
-    for backend in backends:
-        predicate = _backend_predicate(
-            backend, content, perm,
-            skipped=skipped,
-        )
-        if predicate is None:
-            continue
-        if not isinstance(predicate, Q):
-            raise TrustsConfigurationError(
-                '%s permitted_users_predicate returned %s, not a Q or None.'
-                % (type(backend).__name__, type(predicate).__name__)
-            )
-        _assert_registration_user_model(backend, content, principal_model)
-        involved.extend(_registration_models(backend, content))
-        parts.append(predicate)
-    alias = _database_alias(content, user_queryset)
-    _assert_same_database(alias, involved)
-    if user_queryset.db != alias:
-        user_queryset = user_queryset.using(alias)
-    if not parts:
-        combined = Q(pk__isnull=True)
-    else:
-        combined = parts[0]
-        for part in parts[1:]:
-            combined |= part
-    return bind_once(user_queryset.filter(combined).distinct())
 
 
 def _reverse_checked(plan, exists, user_model, permission, content, values,
@@ -119,25 +40,23 @@ def _reverse_checked(plan, exists, user_model, permission, content, values,
 
 
 def permitted_users_predicate_for_registry(registry, content, perm, *,
-                                           family_registries=(),
                                            skipped=(),
-                                           condition_lookup=None,
-                                           accepts_permission=None,
-                                           owner_name=None):
+                                           filter_lookup=None,
+                                           accepts_permission=None):
     """Reverse predicate for one built registry.
 
-    ``condition_lookup`` is that registry's named-filter lookup.
+    ``filter_lookup`` is that registry's named-filter lookup.
     ``accepts_permission`` is the backend's singular-permission
     callable; omitted means the mixin default (``auth.Permission``).
-    Ordinary rows come from each family registry.
+    Ordinary rows come from this registry.
     """
     plan = registry.plan_for(content)
     if not plan.records and not plan.delegations:
         return None
-    if condition_lookup is None:
-        condition_lookup = registry.condition_lookup
+    if filter_lookup is None:
+        filter_lookup = registry.filter_lookup
     binding, condition = _permission_binding_for_plan(
-        accepts_permission, content, perm, plan, owner_name=owner_name,
+        accepts_permission, content, perm, plan,
     )
     exists = plan.user_exists(content, binding) if plan.records else None
     if plan.delegations:
@@ -146,7 +65,7 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
             if isinstance(binding, Model) else Permission
         )
         sponsor_records = _ordinary_records(
-            tuple(family_registries), content, permission_model,
+            registry, content, permission_model,
         )
         delegated = _delegated_user_exists(
             plan.delegations, sponsor_records, content, binding,
@@ -166,7 +85,7 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
         return None
     if condition:
         overlay = _named_filter_q(
-            condition_lookup, content, condition[1], condition[0], user_model,
+            filter_lookup, content, condition[1], condition[0], user_model,
         )
         if overlay is None:
             return None
@@ -175,16 +94,8 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
     return predicate
 
 
-def trusts_mixin_predicate(backend, content, perm, *,
-                           skipped=()):
-    """Complete-path reverse predicate for one ``TrustModelBackendMixin``."""
-    return backend.permitted_users_predicate(
-        content, perm, skipped=skipped,
-    )
 
-
-def lock_permitted_users_queryset(registry, content, permission, *,
-                                  registries=None):
+def lock_permitted_users_queryset(registry, content, permission):
     """Backend-local reverse queryset compiled into the policy lock.
 
     This is the backend branch (eligibility and complete grants), not
@@ -201,7 +112,6 @@ def lock_permitted_users_queryset(registry, content, permission, *,
     user_model = _plan_user_model(plan, content)
     exists = plan.user_exists(content, permission) if plan.records else None
     if plan.delegations:
-        family_registries = (registry,) if registries is None else tuple(registries)
         permission_model = (
             permission._meta.concrete_model
             if isinstance(permission, Model) else None
@@ -209,7 +119,7 @@ def lock_permitted_users_queryset(registry, content, permission, *,
         delegated = _delegated_user_exists(
             plan.delegations,
             _ordinary_records(
-                family_registries, content, permission_model,
+                registry, content, permission_model,
             ),
             content,
             permission,
@@ -252,109 +162,15 @@ def _plan_user_model(plan, content):
     return models.pop()
 
 
-def _relationship_catalogs():
-    """Relationship catalogs of the listed mixin backends."""
-    return tuple(
-        catalog for catalog in configured_catalogs()
-        if catalog.family == 'relationship'
-    )
 
 
-def _require_saved_content(content):
-    if isinstance(content, QuerySet):
-        raise TrustsConfigurationError(
-            'get_permitted_users accepts one saved content object, '
-            'not a queryset.'
-        )
-    if not isinstance(content, Model):
-        raise TrustsConfigurationError(
-            'content must be a saved model instance, not %r.' % (content,)
-        )
-    if content.pk is None:
-        raise TrustsConfigurationError(
-            'content must be a saved %s instance.' % content._meta.label
-        )
 
 
-def _reject_permission_shape(perm):
-    if isinstance(perm, QuerySet):
-        raise TrustsConfigurationError(
-            'get_permitted_users accepts one permission, not a queryset.'
-        )
-    if isinstance(perm, (str, Model)):
-        if isinstance(perm, Model) and perm.pk is None:
-            raise TrustsConfigurationError(
-                'permission must be a saved %s instance.' % perm._meta.label
-            )
-        return
-    raise TrustsConfigurationError(
-        'permission must be a permission string or model instance, not %r.'
-        % (perm,)
-    )
 
 
-def _object_blind_backends():
-    """Django's stock object-blind backends, stored at ready."""
-    return installed_object_blind_backends()
 
 
-def _trusts_owned_reverse_hook(backend):
-    """True when the reverse hook is the mixin method, not an override.
-
-    The skipped condition names are passed only through that Trusts-owned
-    method. Other hooks are called as
-    ``permitted_users_predicate(content, perm)``. Trusts does not require
-    them to accept ``skip_<name>`` and does not raise when they do not.
-    """
-    if not isinstance(backend, TrustModelBackendMixin):
-        return False
-    return (
-        type(backend).permitted_users_predicate
-        is TrustModelBackendMixin.permitted_users_predicate
-    )
-
-
-def _backend_predicate(backend, content, perm, *,
-                       skipped=()):
-    if getattr(backend, 'trusts_object_permissions', None) is False:
-        return None
-    if _declares_reverse_hook(backend):
-        if _trusts_owned_reverse_hook(backend):
-            return backend.permitted_users_predicate(
-                content, perm, skipped=skipped,
-            )
-        return backend.permitted_users_predicate(content, perm)
-    if type(backend) in _object_blind_backends():
-        return None
-    raise TrustsConfigurationError(
-        '%s may grant an object permission but cannot express an exact '
-        'reverse user predicate. get_permitted_users will not return a '
-        'partial result.' % type(backend).__name__
-    )
-
-
-def _reject_unaccepted_permission_instance(perm, backends):
-    if not isinstance(perm, Model) or isinstance(perm, Permission):
-        return
-    for backend in backends:
-        checker = getattr(backend, 'singular_permission_accepted', None)
-        if callable(checker) and checker(perm):
-            return
-    raise TrustsConfigurationError(
-        '%s is not a permission identity accepted by a configured '
-        'object-permission backend.' % type(perm).__name__
-    )
-
-
-def _declares_reverse_hook(backend):
-    for cls in type(backend).__mro__:
-        if 'permitted_users_predicate' in cls.__dict__:
-            return True
-    return False
-
-
-def _permission_binding_for_plan(accepts_permission, content, perm, plan,
-                                 owner_name=None):
+def _permission_binding_for_plan(accepts_permission, content, perm, plan):
     """Return ``(binding, condition)``.
 
     ``accepts_permission`` is the singular-permission callable, or
@@ -375,23 +191,19 @@ def _permission_binding_for_plan(accepts_permission, content, perm, plan,
                 'but %s registrations use %s.'
                 % (perm, content._meta.label, permission_model._meta.label)
             )
-        binding = _permission_binding(perm, content.__class__)
+        binding = permission_binding(perm, content.__class__)
         if not code:
             return binding, None
         singular = '%s.%s_%s' % (applabel, action, modelname)
         return binding, (singular, code)
     if accepts_permission is None:
         accepted = isinstance(perm, Permission)
-        if owner_name is None:
-            owner_name = 'Registry'
     else:
         accepted = bool(accepts_permission(perm))
-        if owner_name is None:
-            owner_name = 'Registry'
     if not accepted:
         raise TrustsConfigurationError(
-            '%s does not accept %s as a singular object permission.'
-            % (owner_name, type(perm).__name__)
+            '%s is not accepted as a singular object permission.'
+            % type(perm).__name__
         )
     if (
         permission_model is not None
@@ -408,16 +220,16 @@ def _permission_binding_for_plan(accepts_permission, content, perm, plan,
     return perm, None
 
 
-def _named_filter_q(condition_lookup, content, code, singular, user_model):
+def _named_filter_q(filter_lookup, content, code, singular, user_model):
     """User-queryset ``Q``, ``True``, or ``None`` (fail closed).
 
     ``None`` means this lookup grants nobody for this condition, matching
     a singular object check that returns false. Construction reads only
     values already loaded on ``content``.
     """
-    if condition_lookup is None:
+    if filter_lookup is None:
         return None
-    record = condition_lookup.record_for(content.__class__, code)
+    record = filter_lookup.record_for(content.__class__, code)
     if record is None:
         return None
     expr = record.expr
@@ -550,7 +362,9 @@ def _concrete_field(model, name):
     return field
 
 
-def _assert_persisted_principal(model):
+
+def assert_persisted_principal(model):
+    """Require the reverse-user boolean columns this inquiry compiles."""
     for name in ('is_anonymous', 'is_authenticated', 'is_active'):
         _principal_presence(model, name)
 
@@ -605,89 +419,68 @@ def _trusts_eligibility_q(model):
     return predicate
 
 
-def _assert_registration_user_model(backend, content, candidate_model):
-    if not isinstance(backend, TrustModelBackendMixin):
-        return
-    catalog = backend.get_catalog()
-    if catalog is None:
-        return
-    plan = catalog.plan_for(content)
-    expected = candidate_model._meta.concrete_model
-    for record in plan.records:
-        registered = record.user_model._meta.concrete_model
-        if registered is not expected:
+
+
+
+
+def _object_memory_value(instance, path):
+    """Field value already present on ``instance``. Does not query."""
+    if not path:
+        return instance
+    current = instance
+    model = instance.__class__
+    for index, name in enumerate(path):
+        try:
+            field = model._meta.get_field(name)
+        except FieldDoesNotExist as exc:
             raise TrustsConfigurationError(
-                'Reverse permission inquiry candidate user model is %s, '
-                'but %s registers %s.'
-                % (
-                    expected._meta.label,
-                    record.root._meta.label,
-                    registered._meta.label,
-                )
-            )
-    for record in plan.delegations:
-        registered = record.delegate_model._meta.concrete_model
-        if registered is not expected:
+                'Permission condition field %r is not on %s.'
+                % (name, model._meta.label)
+            ) from exc
+        last = index == len(path) - 1
+        if field.many_to_many or field.one_to_many:
             raise TrustsConfigurationError(
-                'Reverse permission inquiry candidate user model is %s, '
-                'but %s registers delegate %s.'
-                % (
-                    expected._meta.label,
-                    record.root._meta.label,
-                    registered._meta.label,
-                )
+                'Reverse permission inquiry cannot compile multi-valued '
+                'condition field %s.%s.' % (model._meta.label, name)
             )
-
-
-def _registration_models(backend, content):
-    if not isinstance(backend, TrustModelBackendMixin):
-        return []
-    catalog = backend.get_catalog()
-    if catalog is None:
-        return []
-    plan = catalog.plan_for(content)
-    models = []
-    for record in plan.records:
-        models.extend((
-            record.root,
-            record.user_model,
-            record.permission_model,
-            record.content_model,
-        ))
-    for record in plan.delegations:
-        models.extend((
-            record.root,
-            record.delegate_model,
-            record.sponsor_model,
-            record.content_model,
-        ))
-        if record.condition_permission_model is not None:
-            models.append(record.condition_permission_model)
-    return models
-
-
-def _database_alias(content, user_queryset):
-    state_db = getattr(getattr(content, '_state', None), 'db', None) or None
-    if state_db:
-        return state_db
-    routed = router.db_for_read(user_queryset.model)
-    if routed:
-        return routed
-    return user_queryset.db or 'default'
-
-
-def _assert_same_database(alias, models):
-    seen = set()
-    for model in models:
-        concrete = model._meta.concrete_model
-        if concrete in seen:
-            continue
-        seen.add(concrete)
-        chosen = router.db_for_read(concrete)
-        if chosen is not None and chosen != alias:
+        if not last and getattr(field, 'is_relation', False):
             raise TrustsConfigurationError(
-                'Reverse permission inquiry cannot join %s on database %r; '
-                'the router selected %r. Cross-database authorization is '
-                'not one SQL statement.'
-                % (concrete._meta.label, alias, chosen)
+                'Reverse permission inquiry cannot traverse %s.%s without '
+                'a construction query.' % (model._meta.label, name)
             )
+        attname = field.attname
+        if attname not in current.__dict__:
+            raise TrustsConfigurationError(
+                'Reverse permission inquiry needs %s.%s loaded on the '
+                'content instance to compile a named filter without SQL.'
+                % (model._meta.label, attname)
+            )
+        current = current.__dict__[attname]
+        if not last:
+            raise TrustsConfigurationError(
+                'Reverse permission inquiry cannot traverse %s.%s.'
+                % (model._meta.label, name)
+            )
+    return current
+
+
+def _user_lookup(user_model, path):
+    if not path:
+        return 'pk'
+    current = user_model
+    for name in path:
+        try:
+            field = current._meta.get_field(name)
+        except FieldDoesNotExist as exc:
+            raise TrustsConfigurationError(
+                'Permission condition field %r is not on %s.'
+                % (name, current._meta.label)
+            ) from exc
+        if field.many_to_many or field.one_to_many:
+            raise TrustsConfigurationError(
+                'Reverse permission inquiry cannot compile multi-valued '
+                'principal field %s.%s.' % (current._meta.label, name)
+            )
+        if getattr(field, 'is_relation', False) and field.related_model is not None:
+            current = field.related_model
+    return '__'.join(path)

@@ -7,14 +7,14 @@ from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db.models.query import QuerySet
 from django.test import TestCase
-from tests.apps import configured_catalog, live_config, built_registries
+from tests.support import configured_catalog, live_config, built_catalog
 from tests.core import KernelHostRequiredMixin
 from tests.backends import RaisingCompilerBackend
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 
-from trusts.plan.aggregates import common_permissions, compiler_for_class
+from trusts.plan.aggregates import _compile_common_permissions, compiler_for_class
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsCompilerError
 from trusts.compile.factory import RegistryFactory
@@ -39,10 +39,11 @@ class CompilerFailureTest(KernelHostRequiredMixin, TestCase):
     def test_raising_compiler_propagates_on_granted(self):
         User = get_user_model()
         registry = RegistryFactory(compiler=RaisingCompilerBackend.query_compiler)
-        handle = [registry, setattr(registry, 'path', 'tests.backends.RaisingCompilerBackend')][0]
+        registry.path = 'tests.backends.RaisingCompilerBackend'
+        handle = registry
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
-            granted(built_registries((handle,)), Document, User(), Permission(), kind='complete')
+            granted(handle.build_registry(), Document, User(), Permission(), kind='complete')
         self.assertIn('compiler exploded', str(ctx.exception))
 
     def test_missing_compiler_fails_loud(self):
@@ -63,7 +64,7 @@ class CompilerIsolationBackendTest(KernelHostRequiredMixin, TestCase):
 
     def test_mixin_only_alone_does_not_see_document_plan(self):
         mixin = RegistryFactory(path='tests.backends.MixinOnlyBackend')
-        self.assertFalse(mixin.build_registry().plan_for(Document).records)
+        self.assertFalse(built_catalog(mixin).plan_for(Document).records)
 
 class CoordinatorQueryCountTest(KernelHostRequiredMixin, TestCase):
 
@@ -79,12 +80,13 @@ class CoordinatorQueryCountTest(KernelHostRequiredMixin, TestCase):
 
     def test_coordinator_one_sql_noncoordinator_zero(self):
         qs = Document.objects.all()
-        pred = granted(built_registries((self.host, self.document)), qs, self.alice, self.change, kind='complete')
+        host_q = granted(self.host, qs, self.alice, self.change, kind='complete')
+        document_q = granted(self.document, qs, self.alice, self.change, kind='complete')
+        pred = document_q if host_q is None else host_q | document_q
         self.assertIsNotNone(pred)
         with self.assertNumQueries(1):
             self.assertEqual(_pks(qs.filter(pred).distinct()), {self.doc.pk})
-        empty = granted(built_registries((self.host,)), qs, self.alice, self.change, kind='complete')
-        self.assertIsNone(empty)
+        self.assertIsNone(host_q)
 
 class CoreCommonPermissionsProjectionTest(KernelHostRequiredMixin, TestCase):
 
@@ -104,11 +106,11 @@ class CoreCommonPermissionsProjectionTest(KernelHostRequiredMixin, TestCase):
         self.assertIn('change_document', codes)
         qs = Document.objects.filter(pk=self.doc.pk)
         with self.assertNumQueries(1):
-            rows = list(common_permissions(built_registries((self.handle,)), qs, self.alice))
+            rows = list(_compile_common_permissions(self.handle, qs, self.alice))
         self.assertTrue(any((row.codename == 'change_document' for row in rows)))
         empty = Document.objects.none()
         with self.assertNumQueries(1):
-            self.assertFalse(list(common_permissions(built_registries((self.handle,)), empty, self.alice)))
+            self.assertFalse(list(_compile_common_permissions(self.handle, empty, self.alice)))
 
 class RegisteredOrdinaryModelTest(KernelHostRequiredMixin, TestCase):
 

@@ -14,7 +14,7 @@ from django.http import HttpRequest
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import override_settings
 
-from tests.apps import configured_catalog
+from tests.support import configured_catalog
 from tests.kernel_host.apps import KernelHostConfig
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.backends import DocumentBackend
@@ -85,7 +85,7 @@ class ReadmeExampleAuthorizationTest(TestCase):
         self.assertNotIsInstance(owner, TrustsImplementationConfig)
         catalog = configured_catalog(DOCUMENT_BACKEND)
         self.assertEqual(catalog.path, DOCUMENT_BACKEND)
-        from trusts.apps import catalogs
+        from trusts.backends import catalogs
 
         self.assertIs(catalog, catalogs[DocumentBackend])
         self.assertTrue(catalog.records)
@@ -93,8 +93,9 @@ class ReadmeExampleAuthorizationTest(TestCase):
             catalog.records[0].content_model,
             Document,
         )
-        record = catalog.get_permission_condition_record(
-            Document, 'non_confidential',
+        record = next(
+            item for model, code, item in catalog.iter_permission_conditions()
+            if model is Document and code == 'non_confidential'
         )
         self.assertIsNotNone(record)
         self.assertEqual(
@@ -278,7 +279,7 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
         self.assertIn('from trusts.decorators import authorization_required', rst)
         self.assertNotIn('RegistryConditionLookup', rst)
         self.assertNotIn('trusts.conditions._ir', rst)
-        self.assertNotIn('set_condition_lookup', rst)
+        self.assertNotIn('set_filter_lookup', rst)
 
     def test_no_test_modules_in_installable_trusts_package(self):
         import importlib.util
