@@ -135,8 +135,7 @@ def _load_listed():
             ))
             continue
         if isinstance(backend, TrustModelBackendMixin):
-            catalog = backend._catalog()
-            catalogs.setdefault(id(catalog), catalog)
+            catalogs.setdefault(id(backend._catalog()), backend._catalog())
             listed.add(id(config))
     return tuple(catalogs.values()), errors, listed
 

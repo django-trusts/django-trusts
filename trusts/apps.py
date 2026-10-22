@@ -6,7 +6,7 @@ from typing import TypeVar
 import django.apps
 from django.db.models import Model
 
-from trusts.errors import PermissionConditionError, TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
 
@@ -53,7 +53,6 @@ class Recorder(object):
     def add_named_filter(self, model, code, predicate):
         """Record a named-filter builder. The compiler parses it at build."""
         self._open('add_named_filter')
-        self._reject_duplicate_filter(model, code)
         self._rows.append((
             'add_named_filter', (model, code, predicate), {},
         ))
@@ -72,33 +71,11 @@ class Recorder(object):
     def play(self, target):
         """Replay this log on ``target``.
 
-        An unfrozen log raises. A second play replays the same calls
-        onto that target.
+        The caller freezes the log first. A second play replays the
+        same calls onto that target.
         """
-        if not self.frozen:
-            raise TrustsConfigurationError(
-                'play refused: this registry is not frozen.'
-            )
         for name, args, kwargs in self._rows:
             getattr(target, name)(*args, **kwargs)
-
-    def _reject_duplicate_filter(self, model, code):
-        meta = getattr(model, '_meta', None)
-        if meta is None:
-            return
-        label = meta.label
-        for name, args, _kwargs in self._rows:
-            if name != 'add_named_filter':
-                continue
-            prior, prior_code = args[0], args[1]
-            prior_meta = getattr(prior, '_meta', None)
-            if prior_meta is None or prior_code != code:
-                continue
-            if prior_meta.label == label:
-                raise PermissionConditionError(
-                    'Named filter %r is already registered on %s.'
-                    % (code, label)
-                )
 
     def _open(self, method):
         if self.frozen:

@@ -294,7 +294,6 @@ class Compiler(object):
         self._user_conditions = None
         self._user_override = None
         self._named_filters = {}
-        self._catalog = None
         self.query_compiler = query_compiler
         self.path = path
         self.family = family
@@ -874,7 +873,7 @@ class Compiler(object):
         store. User-rule and override fragments and the plan table are
         compiled here. A later call returns that same catalog.
         """
-        if self._catalog is not None:
+        if self.frozen:
             return self._catalog
         named_filters = dict(self._named_filters)
         stored = self._stored_user_conditions()
@@ -901,7 +900,6 @@ class Compiler(object):
         rules = (primary, absent)
         plans = plan_table(
             self.records, self.delegations, model, stored, rules, override_q)
-        self.frozen = True
         shape = CatalogShape(
             records=self.records, delegations=self.delegations,
             named_filters=named_filters,
@@ -910,9 +908,9 @@ class Compiler(object):
             path=self.path, family=self.family, user_model=model,
             user_rules=rules, override_q=override_q, plans=plans,
         )
-        catalog = Catalog(shape, user_model=model)
-        self._catalog = catalog
-        return catalog
+        self._catalog = Catalog(shape, user_model=model)
+        self.frozen = True
+        return self._catalog
 
     def _stored_user_conditions(self):
         """``None`` when the registry still uses the built-in rule."""
