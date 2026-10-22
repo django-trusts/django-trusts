@@ -23,7 +23,6 @@ from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
 from trusts.compile.nodes import Along
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.apps import Recorder
 from trusts.compile.factory import Compiler
 from tests.support import built_catalog, compiler
 ROOT = Path(__file__).resolve().parents[2]
@@ -89,14 +88,14 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         wheel = (ROOT / 'scripts' / 'verify-wheel-install.py').read_text()
         self.assertIn('trusts/py.typed', wheel)
         self.assertIn('register contextual typing', wheel)
-        self.assertIn('Recorder.register', wheel)
+        self.assertIn('Compiler.register', wheel)
         metadata = (ROOT / 'scripts' / 'verify-package-metadata.py').read_text()
         self.assertIn('trusts/py.typed', metadata)
         pyright = (ROOT / 'scripts' / 'verify-wheel-pyright.py').read_text()
         self.assertIn('not_a_field', pyright)
         self.assertIn('AnnotatedGrant', pyright)
         self.assertIn('TrustsConfigMixin', pyright)
-        self.assertIn('self.recorder.register', pyright)
+        self.assertIn('get_registry().register', pyright)
         self.assertIn('condition=', pyright)
         self.assertIn('t.team == t.document', pyright)
         self.assertNotIn('import BackendHandle', pyright)
@@ -145,8 +144,8 @@ class RegisterWheelSignatureTest(SimpleTestCase):
         register = _fake_register(names, annotations, keyword_only=keyword_only)
         self.wheel.assert_register_signature(register)
 
-    def test_installed_contract_accepts_recorder_register(self):
-        self.wheel.assert_register_signature(Recorder.register)
+    def test_installed_contract_accepts_register(self):
+        self.wheel.assert_register_signature(Compiler.register)
 
     def test_error_branches_fail_closed(self):
         trust_var = get_args(self.hints['trust'])[0]

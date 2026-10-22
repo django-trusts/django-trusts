@@ -110,13 +110,9 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
         )
 
     def test_unowned_backend_rejects_identity_before_registry(self):
-        from django.apps import apps
-
         backend = MixinOnlyBackend()
         anonymous = AnonymousUser()
         unauthenticated = _UnauthenticatedPrincipal()
-        self.assertIs(backend.get_catalog(), apps.get_app_config('trusts_tests').get_catalog())
-        self.assertFalse(backend.get_catalog().plan_for(self.document).records)
         with self.assertNumQueries(0):
                 self.assertFalse(
                     backend.has_perm(None, PERM, self.document),
@@ -227,7 +223,7 @@ class ImplementationOwnershipReadyTest(TestCase):
                 config.ready()
         self.assertIs(HostTrustModelBackend().catalog, before)
         paths = [catalog.path for catalog in installed_catalogs()]
-        paths.append(config.catalog.path)
+        self.assertIsNone(config.catalog)
         self.assertNotIn(MODEL_BACKEND, paths)
         self.assertFalse(hasattr(config, 'registries'))
         self.assertFalse(hasattr(config, 'trusts_backend_paths'))

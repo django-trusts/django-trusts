@@ -9,7 +9,7 @@ from django.contrib.auth.backends import ModelBackend
 from django.test import override_settings
 from django.utils.module_loading import import_string
 
-from trusts.apps import TrustsConfigMixin
+from trusts.apps import TrustsConfigMixin, catalog_of
 from trusts.backends import TrustModelBackendMixin
 from trusts.compile.factory import Compiler
 from trusts.errors import TrustsConfigurationError
@@ -119,7 +119,7 @@ def configured_catalog(path):
     """Catalog of the app that contains the backend class at ``path``."""
 
     cls = import_string(path)
-    return config_for_class(cls).get_catalog()
+    return catalog_of(config_for_class(cls))
 
 
 @contextmanager
@@ -288,9 +288,23 @@ def listed_relationship(factories):
 
 
 def replay_recorder(compiler, backend_cls):
-    """Replay an app recorder onto a compiler this test owns."""
+    """Register the document app's rows onto a compiler this test owns.
 
-    config_for_class(backend_cls).recorder.play(compiler)
+    Grants are the models.py registrations. The named filter is the
+    ready() registration. The host app registers nothing, so other
+    backends are left empty.
+    """
+    from tests.myapp.backends import DocumentBackend
+    from tests.myapp.models import Document, register_document_grants
+
+    if backend_cls is not DocumentBackend:
+        return compiler
+    register_document_grants(compiler)
+    compiler.add_named_filter(
+        Document,
+        'non_confidential',
+        lambda u, p, o: o.confidential != True,
+    )
     return compiler
 
 
@@ -298,31 +312,17 @@ def replay_recorder(compiler, backend_cls):
 def unbound_named_filters(backend_cls):
     """Publish a document catalog whose lookup has no named filters."""
 
-    from tests.myapp.models import DocumentDelegation, DocumentGrant
-    from trusts.apps import Recorder
+    from tests.myapp.models import register_document_grants
 
     config = config_for_class(backend_cls)
     saved = config.catalog
-    recorder = Recorder()
-    recorder.register(
-        trust=DocumentGrant, user='user', permission='permission',
-        content='document',
-    )
-    recorder.register(
-        trust=DocumentDelegation, delegate='delegate', sponsor='sponsor',
-        content='document',
-        condition=lambda relationship, permission: (
-            relationship.allowed_permissions.contains(permission)
-        ),
-    )
-    recorder.freeze()
     compiler = Compiler(
         query_compiler=Compiler.default_query_compiler(),
         path=saved.path,
         family=config.family,
         user_model=saved.user_model or get_user_model(),
     )
-    recorder.play(compiler)
+    register_document_grants(compiler)
     config.catalog = compiler.compile()
     try:
         yield config.catalog

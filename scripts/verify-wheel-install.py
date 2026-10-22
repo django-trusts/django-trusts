@@ -31,7 +31,7 @@ def assert_register_signature(register) -> None:
 
     Ordinary roles stay one-argument path callables. Delegated registration
     adds ``delegate`` and ``sponsor`` and a second ``condition`` callable.
-    ``Recorder.register`` returns ``None``.
+    ``Compiler.register`` is the method ``get_registry()`` returns.
     """
     import inspect
     from collections.abc import Callable as AbcCallable
@@ -168,8 +168,9 @@ def main() -> int:
     import sys as _sys
     import trusts
     import trusts.apps as apps_mod
-    from trusts.apps import Recorder, TrustsConfigMixin
+    from trusts.apps import TrustsConfigMixin
     from trusts.backends import TrustModelBackendMixin
+    from trusts.compile.factory import Compiler
     from trusts.decorators import filter_by_permitted_content
     from trusts.errors import PermissionConditionError
     from trusts.models import AuthorizedManager, AuthorizedManagerMixin, AuthorizedQuerySet
@@ -186,9 +187,9 @@ def main() -> int:
     typed_marker = Path(trusts.__file__).resolve().parent / 'py.typed'
     if not typed_marker.is_file():
         raise SystemExit('installed wheel missing trusts/py.typed')
-    assert_register_signature(Recorder.register)
+    assert_register_signature(Compiler.register)
     print('py.typed present')
-    print('register contextual typing', Recorder.register)
+    print('register contextual typing', Compiler.register)
 
     from django.apps import apps as django_apps
 

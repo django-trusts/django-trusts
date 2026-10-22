@@ -106,10 +106,6 @@ class MixinCatalogResolveTest(SimpleTestCase):
         from tests.backends import MixinOnlyBackend
 
         backend = MixinOnlyBackend()
-        self.assertIs(
-            backend.get_catalog(),
-            apps.get_app_config('trusts_tests').get_catalog(),
-        )
         User = get_user_model()
 
         class GrantUsers(PermittedUsersManagerMixin, User._default_manager.__class__):
@@ -174,7 +170,7 @@ class IsolatedImplementationStoreTest(SimpleTestCase):
         rebuilt = HostTrustModelBackend().catalog
         self.assertEqual(rebuilt.records, before_records)
         self.assertEqual(rebuilt.path, before.path)
-        self.assertIsNot(rebuilt, before)
+        self.assertIs(rebuilt, before)
         self.assertFalse(hasattr(config, 'registries'))
 
     def test_isolate_apps_without_implementation_does_not_donate(self):

@@ -18,7 +18,7 @@ from django.db import connections
 
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
-from trusts.apps import TrustsConfigMixin
+from trusts.apps import TrustsConfigMixin, catalog_of
 from trusts.backends import TrustModelBackendMixin
 from trusts.compile.factory import probe_along_capabilities
 from trusts.decorators import _declared_authorization_guards
@@ -135,7 +135,8 @@ def _load_listed():
             ))
             continue
         if isinstance(backend, TrustModelBackendMixin):
-            catalogs.setdefault(id(backend.get_catalog()), backend.get_catalog())
+            catalog = backend._catalog()
+            catalogs.setdefault(id(catalog), catalog)
             listed.add(id(config))
     return tuple(catalogs.values()), errors, listed
 
@@ -323,7 +324,7 @@ def check_unlisted_catalog(app_configs, **kwargs):
     for config in django_apps.get_app_configs():
         if not isinstance(config, TrustsConfigMixin):
             continue
-        catalog = config.catalog
+        catalog = catalog_of(config)
         if not (catalog.records or catalog.delegations):
             continue
         if id(config) in listed:

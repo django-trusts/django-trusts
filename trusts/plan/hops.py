@@ -1,5 +1,6 @@
 """Path and model identity from Django ``_meta``. No registry and no ``Q``."""
 
+from django.core.exceptions import AppRegistryNotReady
 from django.db.models import Model
 from django.db.models.base import ModelBase
 from django.db.models.query import QuerySet
@@ -52,6 +53,25 @@ def require_instance(value, role):
             '%s must be a model instance, not %r.' % (role, value)
         )
     return value
+
+
+def relation_target(field):
+    """Model a relation points at, before ``apps.models_ready``.
+
+    ``Field.related_model`` calls ``apps.check_models_ready()``.
+    Registration from ``models.py`` runs while that flag is still false.
+    ``remote_field.model`` is the resolved class once the target is
+    registered.
+    """
+    remote = getattr(field, 'remote_field', None)
+    if remote is not None:
+        model = getattr(remote, 'model', None)
+        if model is not None:
+            return model
+    try:
+        return getattr(field, 'related_model', None)
+    except AppRegistryNotReady:
+        return None
 
 
 def resolved_hop(field, role, path):

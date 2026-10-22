@@ -315,7 +315,7 @@ class BuildCatalogShapeTest(SimpleTestCase):
             [(Document, 'owned', condition)],
         )
         again = registry.compile()
-        self.assertIsNot(again.named_filters, catalog.named_filters)
+        self.assertIs(again, catalog)
         self.assertIs(
             again.named_filters[(Document._meta.label, 'owned')][1],
             condition,

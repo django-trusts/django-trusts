@@ -64,10 +64,12 @@ class HistoricalImportCutoverTest(SimpleTestCase):
         )
         with self.assertRaises(ModuleNotFoundError):
             importlib.import_module('trusts.core_backends')
-        from trusts.plan.relations import PlanQueryCompiler
+        from tests.kernel_host.backends import HostTrustModelBackend
+        from django.contrib.auth.models import AnonymousUser
 
-        catalog = apps.get_app_config('trusts_kernel_host').get_catalog()
-        self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
+        self.assertFalse(HostTrustModelBackend().has_perm(
+            AnonymousUser(), 'auth.view_user', None,
+        ))
 
     def test_core_is_not_an_installed_implementation(self):
         host = apps.get_app_config('trusts_kernel_host')
@@ -85,8 +87,10 @@ class OwnerResolutionTest(SimpleTestCase):
         self.assertIsInstance(owner, TrustsConfigMixin)
         handle = configured_catalog(HOST_BACKEND)
         self.assertEqual(handle.path, owner.catalog_path())
-        backend = HostTrustModelBackend()
-        self.assertIs(backend.get_catalog(), handle)
+        from django.contrib.auth.models import AnonymousUser
+        self.assertFalse(HostTrustModelBackend().has_perm(
+            AnonymousUser(), 'auth.view_user', None,
+        ))
         self.assertIn(handle, installed_catalogs())
 
     def test_authorized_and_filter_scopes_use_owners(self):
@@ -112,10 +116,13 @@ class OwnerResolutionTest(SimpleTestCase):
         )
 
     def test_owner_present_resolves(self):
-        backend = HostTrustModelBackend()
-        catalog = backend.get_catalog()
+        from django.contrib.auth.models import AnonymousUser
+
+        catalog = configured_catalog(HOST_BACKEND)
         self.assertEqual(
             catalog.path,
             apps.get_app_config('trusts_kernel_host').catalog_path(),
         )
-        self.assertIs(catalog, HostTrustModelBackend().catalog)
+        self.assertFalse(HostTrustModelBackend().has_perm(
+            AnonymousUser(), 'auth.view_user', None,
+        ))

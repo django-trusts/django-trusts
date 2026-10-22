@@ -11,7 +11,6 @@ from django.db import connection, models
 from django.test import TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
 
-from trusts.apps import Recorder
 from trusts.backends import TrustModelBackendMixin
 from trusts.errors import PermissionConditionError
 from trusts.models import PermittedQuerySet, PermittedUsersMixin
@@ -115,16 +114,13 @@ class SavedRowPermittedUsersTest(TransactionTestCase):
             for model in (SavedTeam, SavedProject, SavedNote, SavedGrant):
                 editor.create_model(model)
         try:
-            recorder = Recorder()
-            recorder.register(
+            factory = compiler(path=BACKEND)
+            factory.register(
                 trust=SavedGrant, user='user', permission='permission',
                 content='note',
             )
             for code, (builder, _allowed) in filters.items():
-                recorder.add_named_filter(SavedNote, code, builder)
-            recorder.freeze()
-            factory = compiler(path=BACKEND)
-            recorder.play(factory.get_recorder_target())
+                factory.add_named_filter(SavedNote, code, builder)
             with published_class_catalog(
                 _SavedBackend, factory,
             ), override_settings(AUTHENTICATION_BACKENDS=(BACKEND,)):

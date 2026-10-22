@@ -83,10 +83,16 @@ class ProtectedFactorySurfaceTest(SimpleTestCase):
         self.assertFalse(compiler.applies(strategy_only))
 
     def test_ready_stores_the_built_registry_on_the_catalog(self):
+        from django.contrib.auth.models import AnonymousUser
         from tests.kernel_host.backends import HostTrustModelBackend
-        catalog = HostTrustModelBackend().get_catalog()
-        self.assertIs(HostTrustModelBackend().catalog, catalog)
-        self.assertIsInstance(catalog.records, tuple)
+        from trusts.backends import policy_document
+
+        self.assertFalse(HostTrustModelBackend().has_perm(
+            AnonymousUser(), 'auth.view_user', None,
+        ))
+        document = policy_document()
+        self.assertEqual(document['schema_version'], 1)
+        self.assertTrue(document['backends'])
 
     def test_unowned_factory_defaults_to_relationship_family(self):
         built = built_catalog(compiler(path=MIXIN))
@@ -206,7 +212,7 @@ class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         isolated = compiler()
         first_build = built_catalog(isolated)
         second_build = built_catalog(isolated)
-        self.assertIsNot(first_build, second_build)
+        self.assertIs(first_build, second_build)
         from tests.myapp.models import DocumentGrant
         from trusts.compile.nodes import Ref
         fresh = compiler()

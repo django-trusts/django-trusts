@@ -16,8 +16,6 @@ from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
 from django.utils import timezone
 
-import tests as tests_module
-from trusts.apps import Recorder, TrustsConfigMixin
 from trusts.backends import TrustModelBackendMixin
 from trusts.errors import PermissionConditionError
 from trusts.models import PermittedQuerySet, PermittedUsersMixin
@@ -231,16 +229,13 @@ class NullRuleAgreementTest(TransactionTestCase):
                 lambda u, p, o, mark=held: o.marks.contains(mark),
                 lambda u, r, mark=held: r.marks.filter(pk=mark).exists(),
             )
-            recorder = Recorder()
-            recorder.register(
+            factory = compiler(path='tests.core.test_issue333._PairBackend')
+            factory.register(
                 trust=PairGrant, user='user', permission='permission',
                 content='pair',
             )
             for code, (builder, _allowed) in filters.items():
-                recorder.add_named_filter(Pair, code, builder)
-            recorder.freeze()
-            factory = compiler(path='tests.core.test_issue333._PairBackend')
-            recorder.play(factory.get_recorder_target())
+                factory.add_named_filter(Pair, code, builder)
             with published_class_catalog(
                 _PairBackend, factory,
             ), override_settings(AUTHENTICATION_BACKENDS=(backend,)):
@@ -318,24 +313,18 @@ class DuplicateNamedFilterTest(SimpleTestCase):
 
     def test_second_filter_with_one_code_raises_and_is_never_built(self):
         _Mark, Pair, _PairGrant = _pair_models()
-
-        class _Config(TrustsConfigMixin):
-            name = 'tests.core.fresh333'
-            label = 'fresh333'
-
         calls = []
 
         def second(u, p, o):
             calls.append(1)
             return o.left == 2
 
-        config = _Config('tests.core.fresh333', tests_module)
-        config.recorder.add_named_filter(
+        registry = compiler()
+        registry.add_named_filter(
             Pair, 'pick', lambda u, p, o: o.left == 1,
         )
-        config.recorder.add_named_filter(Pair, 'pick', second)
         with self.assertRaisesRegex(
             PermissionConditionError, "'pick' is already registered",
         ):
-            config.ready()
+            registry.add_named_filter(Pair, 'pick', second)
         self.assertEqual(calls, [])

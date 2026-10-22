@@ -1,9 +1,10 @@
 """Generic Trusts backend mixin.
 
-The backend borrows the recorder and catalog of the app config that
-contains its class. That config is a ``TrustsConfigMixin``. Inquiry
-reads ``self.catalog``. Each listed backend answers from that catalog
-only. A miss returns nothing. Callers OR the grant ``Q`` objects.
+The backend reads the catalog of the app config that contains its
+class. That config is a ``TrustsConfigMixin``. ``get_registry()`` is
+how an application registers. Each listed backend answers from that
+catalog only. A miss returns nothing. Callers OR the grant ``Q``
+objects.
 """
 
 from django.apps import apps
@@ -11,7 +12,9 @@ from django.contrib.auth import get_backends, load_backend
 from django.contrib.auth.models import Permission
 from django.db.models import Model, Q, QuerySet
 
-from trusts.apps import TrustsConfigMixin, installed_catalogs
+from typing import TYPE_CHECKING
+
+from trusts.apps import TrustsConfigMixin, catalog_of, installed_catalogs, open_registry
 from trusts.compile.catalogs import (
     assert_same_database,
     catalog_models,
@@ -25,6 +28,9 @@ from trusts.plan.relations import bind_checked_user, known_skip_names
 from trusts.plan.rewrites import bind_once
 from trusts.plan.users import assert_persisted_principal
 
+if TYPE_CHECKING:
+    from trusts.compile.factory import Compiler
+
 
 class TrustModelBackendMixin(object):
     """Object-permission backend. The catalog belongs to the app config."""
@@ -37,30 +43,44 @@ class TrustModelBackendMixin(object):
                 config,
                 '%s.%s' % (type(self).__module__, type(self).__qualname__),
             ))
+        self._config = config
         self.catalog = config.catalog
-        self.recorder = config.recorder
 
-    def get_catalog(self):
-        """Catalog taken from the containing app config at construction."""
+    def get_registry(self) -> "Compiler":
+        """Open registry for this backend's app.
+
+        Registration walks models and does not build the catalog.
+        """
+        return open_registry(self._config)
+
+    def _catalog(self):
+        """Catalog this instance answers from.
+
+        Construction copies the app catalog. The first question builds
+        that catalog when it does not exist yet. A catalog stored on
+        this instance is the one the question uses.
+        """
+        if self.catalog is None:
+            self.catalog = catalog_of(self._config)
         return self.catalog
 
     def has_perm(self, user_obj, permext, obj=None, **skip_flags):
         """Object check. No object denies."""
         if obj is None or not isinstance(obj, (QuerySet, Model)):
             return False
-        return self.catalog.has_perm(user_obj, permext, obj, **skip_flags)
+        return self._catalog().has_perm(user_obj, permext, obj, **skip_flags)
 
     def get_all_permissions(self, user_obj, obj=None, **skip_flags):
         """Permissions this catalog grants on the object."""
         if obj is None or not isinstance(obj, (QuerySet, Model)):
             return set()
-        return self.catalog.get_all_permissions(user_obj, obj, **skip_flags)
+        return self._catalog().get_all_permissions(user_obj, obj, **skip_flags)
 
     def get_group_permissions(self, user_obj, obj=None, **skip_flags):
         """Group permissions this catalog grants on the object."""
         if obj is None or not isinstance(obj, (QuerySet, Model)):
             return set()
-        return self.catalog.get_group_permissions(user_obj, obj, **skip_flags)
+        return self._catalog().get_group_permissions(user_obj, obj, **skip_flags)
 
     def singular_permission_accepted(self, perm):
         """``auth.Permission`` only, unless a backend overrides this."""
@@ -68,21 +88,21 @@ class TrustModelBackendMixin(object):
 
     def permitted_users_predicate(self, content, perm, *, skipped=()):
         """``Q`` over candidate users, or ``None`` when this path does not apply."""
-        return self.catalog.permitted_users_predicate(
+        return self._catalog().permitted_users_predicate(
             content, perm, skipped=skipped,
             accepts_permission=self.singular_permission_accepted,
         )
 
     def authorized_grant_q(self, subject, user, permission, *, skipped=()):
         """Grant for an authorized-row filter."""
-        return self.catalog.complete_grant_q(
+        return self._catalog().complete_grant_q(
             subject, user, permission, skipped=skipped)
 
     def permitted_grant_q(self, subject, user, permission, *, skipped=(),
                           conditions=(), binding=None, api=None):
         """Grant for a permitted-row filter."""
         model = subject.model if isinstance(subject, QuerySet) else subject
-        predicate, _owned = self.catalog.authorization_grant(
+        predicate, _owned = self._catalog().authorization_grant(
             subject, user, model, permission, conditions, binding,
             api=api, skipped=skipped)
         return predicate
@@ -92,7 +112,7 @@ class TrustModelBackendMixin(object):
         """Grant for a permitted-content prefix."""
         return permitted_content_q(
             subject.model, user, permission, content=content,
-            catalog=self.catalog, skipped=skipped)
+            catalog=self._catalog(), skipped=skipped)
 
     def policy_document(self, *, alias=None):
         """This backend's part of the policy document.
@@ -102,7 +122,7 @@ class TrustModelBackendMixin(object):
         ``alias`` overrides ``TRUSTS_POLICY_DATABASE`` for this call.
         """
         resolved = resolve_policy_database(alias)
-        return _build_document((self.catalog,), resolved)
+        return _build_document((self._catalog(),), resolved)
 
 
 def policy_document(backend=None, *, alias=None):
@@ -192,7 +212,7 @@ def open_grant(ask, user, *, backend=None, skip_flags=None,
     chosen = trusts_backends(backend)
     inquiry = bind_checked_user(
         user, skip_flags=skip_flags, require_user=require_user,
-        skip_names=known_skip_names(item.get_catalog() for item in chosen))
+        skip_names=known_skip_names(item._catalog() for item in chosen))
     if preflight:
         _selected_conditions_owned(model, conditions, chosen, api)
     if inquiry.denied:
@@ -222,7 +242,7 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
         if not chosen:
             raise TrustsConfigurationError(
                 'No Trusts backend is listed in AUTHENTICATION_BACKENDS.')
-        user_model = chosen[0].get_catalog().user_model
+        user_model = chosen[0]._catalog().user_model
         user_queryset = user_model._default_manager.get_queryset()
     elif not isinstance(user_queryset, QuerySet):
         raise TrustsConfigurationError(
@@ -237,7 +257,7 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     else:
         for item in chosen:
             involved.extend(
-                catalog_models(item.get_catalog(), content, principal_model))
+                catalog_models(item._catalog(), content, principal_model))
     alias = database_alias(content, user_queryset)
     assert_same_database(alias, involved)
     if user_queryset.db != alias:
@@ -265,7 +285,7 @@ def _selected_conditions_owned(model, conditions, chosen, api):
         return
     incomplete = False
     for item in chosen:
-        has_plan, owns = item.get_catalog().authorization_preflight(
+        has_plan, owns = item._catalog().authorization_preflight(
             model, conditions)
         if owns:
             return
@@ -278,7 +298,7 @@ def _combine(ask, chosen):
     combined = user_model = None
     seen = set()
     for item in chosen:
-        catalog = item.get_catalog()
+        catalog = item._catalog()
         marker = id(catalog)
         if marker in seen:
             continue

@@ -48,3 +48,38 @@ class DocumentDelegation(models.Model):
 
     class Meta:
         app_label = 'myapp'
+
+
+from django.apps import apps as django_apps
+
+from tests.myapp.backends import DocumentBackend
+
+
+def register_document_grants(registry):
+    """Document grants. Called from models import and from ``ready()``.
+
+    ``set_installed_apps()`` builds a new app config and does not
+    re-execute this module, so ``ready()`` registers there. The first
+    import registers here and marks that config.
+    """
+    registry.register(
+        trust=DocumentGrant,
+        user='user',
+        permission='permission',
+        content='document',
+    )
+    registry.register(
+        trust=DocumentDelegation,
+        delegate='delegate',
+        sponsor='sponsor',
+        content='document',
+        condition=lambda relationship, permission: (
+            relationship.allowed_permissions.contains(permission)
+        ),
+    )
+
+
+_backend = DocumentBackend()
+register_document_grants(_backend.get_registry())
+django_apps.get_app_config('myapp')._grants = True
+del _backend

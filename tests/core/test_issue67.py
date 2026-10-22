@@ -33,7 +33,7 @@ class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         rebuilt = HostTrustModelBackend().catalog
         self.assertEqual(rebuilt.records, catalog.records)
         self.assertEqual(rebuilt.path, catalog.path)
-        self.assertIsNot(rebuilt, catalog)
+        self.assertIs(rebuilt, catalog)
         self.assertFalse(hasattr(live, 'registries'))
 
     def test_reader_obtains_registry_via_app_config_not_package_root(self):
@@ -61,16 +61,22 @@ class ContributorIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
         from django.apps import apps
 
         from tests.myapp.backends import DocumentBackend
+        from tests.myapp.models import DocumentGrant
+        from trusts.errors import TrustsConfigurationError
 
         contributor = apps.get_app_config('myapp')
         self.assertIsInstance(contributor, DocumentConfig)
-        recorder = DocumentBackend().recorder
+        registry = DocumentBackend().get_registry()
         built = configured_catalog(DOCUMENT_BACKEND)
-        self.assertTrue(recorder.frozen)
         before = built.records
         contributor.ready()
         self.assertEqual(built.records, before)
         self.assertTrue(built.plan_for(Document).records)
+        with self.assertRaises(TrustsConfigurationError):
+            registry.register(
+                trust=DocumentGrant, user='user', permission='permission',
+                content='document',
+            )
 
     def test_host_ready_does_not_replace_or_donate_document(self):
         host = apps.get_app_config('trusts_kernel_host')
