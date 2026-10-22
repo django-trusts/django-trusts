@@ -104,4 +104,5 @@ class IsolatedAppsDoesNotDonateToLiveRegistryTest(SimpleTestCase):
         self.assertIsNone(getattr(contributor, '_trusts_tup_category_registry_id', None))
         self.assertIsNone(getattr(contributor, '_document_grant_registry_id', None))
         self.assertEqual(live.records, before)
-        self.assertFalse(hasattr(apps.get_app_config('trusts_kernel_host'), 'registries'))
+        owner = apps.get_containing_app_config(HostTrustModelBackend.__module__)
+        self.assertFalse(hasattr(owner, 'registries'))

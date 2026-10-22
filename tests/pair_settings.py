@@ -30,6 +30,9 @@ INSTALLED_APPS = (
 
 AUTHENTICATION_BACKENDS = (
     'trusts.zero.backends.TrustModelBackend',
+    # TestsConfig registers Category, Ticket, and TestGroupJunction
+    # when Zero is installed. The listed backend's module lives in
+    # that app, so those records are a listed catalog.
     'tests.backends.TestsTrustBackend',
 )
 

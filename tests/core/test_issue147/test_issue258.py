@@ -11,12 +11,12 @@ import tempfile
 from decimal import Decimal
 from pathlib import Path
 
+from django.apps import apps as django_apps
 from django.contrib.auth.models import Permission
 from django.core import checks as django_checks
 from django.db import models
 from django.test import SimpleTestCase, override_settings
 
-from tests.core import kernel_host_listed
 from tests.core.test_issue147.test_sql_export import (
     CHECK_ID_POLICY_LOCK,
     ConstantDocument,
@@ -223,9 +223,14 @@ class PolicyLockConfigurationTest(SimpleTestCase):
         with override_settings(AUTHENTICATION_BACKENDS=()):
             empty = yaml.safe_load(render_policy_sql_bytes())
         paths = [row['path'] for row in empty['backends']]
-        if kernel_host_listed():
+        if django_apps.is_installed('tests.myapp'):
             self.assertIn('tests.myapp.apps.DocumentConfig', paths)
-            self.assertNotIn('tests.kernel_host.apps.KernelHostConfig', paths)
+            self.assertNotIn(
+                'tests.kernel_host.apps.KernelHostConfig', paths,
+            )
+        else:
+            self.assertIn('tests.apps.TestsConfig', paths)
+            self.assertIn('trusts.zero.apps.ZeroConfig', paths)
         self.assertTrue(all(row['contents'] for row in empty['backends']))
 
         handle = _document_handle('documents.backends.FilterlessBackend')

@@ -14,7 +14,6 @@ from django.db import connection, models
 from django.http import HttpRequest
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
-
 from tests.core import kernel_host_listed
 from tests.models import Organization, Ticket, ticket_meta_own
 from tests.support import built_catalog, compiler, override_catalog

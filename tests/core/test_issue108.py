@@ -89,8 +89,8 @@ class ImplementationReadyTest(KernelHostRequiredMixin, SimpleTestCase):
 
 class MixinCatalogResolveTest(SimpleTestCase):
     def test_outside_backend_is_not_constructed(self):
-        if not kernel_host_listed():
-            self.skipTest('kernel-only host path is not listed on the pair')
+        if not apps.is_installed('tests.gh_permissions'):
+            self.skipTest('gh_permissions is not installed on the pair')
         with override_settings(AUTHENTICATION_BACKENDS=(HOST, OUTSIDE, OUTSIDE)):
             messages = [
                 message for message in run_checks()
