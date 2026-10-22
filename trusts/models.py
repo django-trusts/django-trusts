@@ -6,7 +6,7 @@ from django.db.models import Manager, Model, QuerySet
 
 from trusts.backends import (
     compile_permitted_users, filter_listed, grant_authorized, grant_permitted)
-from trusts.compile.catalogs import (
+from trusts.compile.factory import (
     codename_binding,
     guard_conditions,
     guard_permission_string,

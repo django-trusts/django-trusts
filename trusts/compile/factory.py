@@ -8,9 +8,11 @@ from functools import partial
 from typing import TypeVar
 
 from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 
+from django.contrib.auth.models import Permission
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Model, Q
+from django.db.models import Model, Q, Subquery
 
 from trusts.plan.hops import (
     concrete_model,
@@ -49,6 +51,8 @@ from trusts.compile.resolution import (
     _resolve_permission_path,
 )
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
+from trusts.utils import parse_perm_code
+from trusts.plan.writers import compile_expression_q
 
 T = TypeVar('T', bound=Model)
 from trusts.compile.catalogs import Catalog, Question
@@ -321,34 +325,60 @@ def prefix_models(records, delegations):
     return tuple(found)
 
 
-def question_descriptors(catalog):
-    """Questions for one built catalog, in document order."""
+def _invoke(linked, name, head, kw, *args, **kwargs):
+    """Call one catalog method once ``linked`` holds the built catalog."""
+    return getattr(linked[0], name)(*head, *args, **{**kw, **kwargs})
+
+
+def question_descriptors(records, delegations, linked):
+    """Questions for one built catalog, in document order.
+
+    ``linked`` is a one-item list. ``Compiler.compile`` stores the catalog
+    there before returning it, so each question calls that catalog.
+    """
     questions, prefixes = [], {}
-    for model, records, delegations in content_groups(
-        catalog.records, catalog.delegations,
+    for model, group_records, group_delegations in content_groups(
+        records, delegations,
     ):
-        found = prefix_models(records, delegations)
+        found = prefix_models(group_records, group_delegations)
         prefixes[model] = found
         questions.extend(
-            Question(name, model, records, delegations, fn)
+            Question(name, model, group_records, group_delegations, fn)
             for name, fn, keep in (
                 (
                     'permitted',
-                    partial(catalog._question_content_grant, model),
+                    partial(
+                        _invoke, linked, '_question_content_grant', (model,), {},
+                    ),
                     True,
                 ),
-                ('has_perm', catalog.has_permission, True),
-                ('get_all_permissions', catalog.permissions_for, True),
+                (
+                    'has_perm',
+                    partial(_invoke, linked, 'has_permission', (), {}),
+                    True,
+                ),
+                (
+                    'get_all_permissions',
+                    partial(_invoke, linked, 'permissions_for', (), {}),
+                    True,
+                ),
                 (
                     'get_group_permissions',
-                    partial(catalog.permissions_for, kind='group'),
-                    any(record.via_group for record in records),
+                    partial(
+                        _invoke, linked, 'permissions_for', (), {'kind': 'group'},
+                    ),
+                    any(record.via_group for record in group_records),
                 ),
-                ('get_permitted_users', catalog.permitted_users, True),
+                (
+                    'get_permitted_users',
+                    partial(_invoke, linked, 'permitted_users', (), {}),
+                    True,
+                ),
                 (
                     'filter_by_permitted_content',
                     partial(
-                        catalog._question_filter_by_permitted_content, model,
+                        _invoke, linked,
+                        '_question_filter_by_permitted_content', (model,), {},
                     ),
                     bool(found),
                 ),
@@ -356,6 +386,82 @@ def question_descriptors(catalog):
             if keep
         )
     return tuple(questions), prefixes
+
+
+def guard_permission_string(permission, *, api):
+    """Exact ``app_label.codename`` form. Does not infer a model name."""
+    if not isinstance(permission, str):
+        raise TypeError(
+            '%s permission must be an app_label.codename string, not %r.'
+            % (api, type(permission).__name__)
+        )
+    if ':' in permission or permission.count('.') != 1:
+        raise TrustsConfigurationError(
+            '%s permission must be one base "app_label.codename" string '
+            'without a colon: %r.' % (api, permission)
+        )
+    app_label, codename = permission.split('.')
+    if not app_label or not codename:
+        raise TrustsConfigurationError(
+            '%s permission must be one base "app_label.codename" string, '
+            'not %r.' % (api, permission)
+        )
+    return app_label, codename
+
+
+def guard_conditions(conditions, *, api):
+    if type(conditions) is not tuple:
+        raise TypeError(
+            '%s conditions must be an exact tuple, not %r.'
+            % (api, type(conditions).__name__)
+        )
+    seen = set()
+    for name in conditions:
+        if not isinstance(name, str) or not name or name != name.strip() or ':' in name:
+            raise TrustsConfigurationError(
+                '%s condition name is malformed: %r.' % (api, name)
+            )
+        if name in seen:
+            raise TrustsConfigurationError(
+                '%s conditions must not contain duplicates: %r.'
+                % (api, name)
+            )
+        seen.add(name)
+    return conditions
+
+
+def codename_binding(model, app_label, codename):
+    """Unevaluated pk of the exact codename on ``model``'s content type."""
+    return Subquery(
+        Permission.objects.filter(
+            content_type__app_label=app_label.lower(),
+            content_type__model=model._meta.model_name,
+            codename=codename,
+        ).values('pk')[:1]
+    )
+
+
+def compile_stored_condition_q(stored, model, perm, user, user_model=None):
+    """Compile one stored ``(model, tree)`` pair, or raise fail-closed."""
+    cond = parse_perm_code(perm)[3]
+    if stored is None:
+        raise _unknown_condition_error(model, cond)
+    _registered, tree = stored
+    grant = perm.split(':', 1)[0] if isinstance(perm, str) else perm
+    return compile_expression_q(tree, model, user, grant, user_model)
+
+
+def _unknown_condition_error(model, cond_code):
+    meta = getattr(model, '_meta', None)
+    if meta is not None:
+        return AttributeError(
+            'Permission condition code "%s" is not associate with model "%s_%s"'
+            % (cond_code, meta.app_label, meta.model_name)
+        )
+    return AttributeError(
+        'Permission condition code "%s" is not associate with model "%s"'
+        % (cond_code, model)
+    )
 
 
 class Compiler(object):
@@ -985,13 +1091,21 @@ class Compiler(object):
         plans = plan_table(
             self.records, self.delegations, model, stored, rules, override_q,
             self.query_compiler)
+        linked = []
+        questions, prefixes = question_descriptors(
+            self.records, self.delegations, linked)
         self._catalog = Catalog(
             records=self.records, delegations=self.delegations,
-            named_filters=self._named_filters,
+            named_filters=MappingProxyType(dict(self._named_filters)),
             user_conditions=stored, user_override=self._user_override,
             path=self.path, family=self.family, user_model=model,
-            user_rules=rules, override_q=override_q, plans=plans,
+            user_rules=rules, override_q=override_q,
+            plans=MappingProxyType(dict(plans)),
+            questions=questions,
+            content_prefixes=MappingProxyType(dict(prefixes)),
+            compile_condition=compile_stored_condition_q,
         )
+        linked.append(self._catalog)
         self.frozen = True
         return self._catalog
 

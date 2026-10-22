@@ -1,11 +1,10 @@
 """One built catalog. Not a builder and not a second store."""
 
-from dataclasses import dataclass, replace
-from types import MappingProxyType
+from dataclasses import dataclass, field, replace
 
 from django.contrib.auth.models import Permission
 from django.db import router
-from django.db.models import Model, Q, QuerySet, Subquery
+from django.db.models import Model, Q, QuerySet
 
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.utils import parse_perm_code
@@ -21,7 +20,7 @@ from trusts.plan.conditions import (
     validate_expression,
 )
 from trusts.plan.grammar import is_predicate
-from trusts.plan.writers import compile_expression_q, evaluate_expression
+from trusts.plan.writers import evaluate_expression
 from trusts.plan.contents import (
     _as_q,
     _compile_granted,
@@ -81,8 +80,9 @@ class Question(object):
 class Catalog(object):
     """Answers from the rows ``Compiler.compile`` stored.
 
-    ``named_filters`` and ``plans`` are immutable mappings copied at
-    build. ``plans`` maps keys to plans; ``None`` is the default.
+    ``named_filters``, ``plans``, and ``content_prefixes`` are immutable
+    mappings the factory stored. ``questions`` is that build's question
+    tuple. ``plans`` maps keys to plans; ``None`` is the default.
     ``user_rules`` is ``(primary, absent)``.
     """
 
@@ -99,20 +99,7 @@ class Catalog(object):
     plans: object
     questions: tuple = ()
     content_prefixes: object = None
-
-    def __post_init__(self):
-        object.__setattr__(
-            self, 'named_filters', MappingProxyType(dict(self.named_filters)),
-        )
-        object.__setattr__(
-            self, 'plans', MappingProxyType(dict(self.plans)),
-        )
-        from trusts.compile.factory import question_descriptors
-        questions, prefixes = question_descriptors(self)
-        object.__setattr__(self, 'questions', questions)
-        object.__setattr__(
-            self, 'content_prefixes', MappingProxyType(prefixes),
-        )
+    compile_condition: object = field(default=None, repr=False, compare=False)
 
     def plan_for(self, content, *, user=None, permission=None):
         """Look up ``(content, user, permission)``. A miss is the default."""
@@ -449,7 +436,7 @@ class Catalog(object):
         stored = self._stored_named_filter(model, cond)
         if stored is None or not isinstance(obj, QuerySet):
             return stored, None
-        return stored, compile_stored_condition_q(
+        return stored, self.compile_condition(
             stored, obj.model, permext, user_obj, self.user_model,
         )
 
@@ -497,68 +484,8 @@ class PreparedInquiry(object):
         return bool(self.qs.exists())
 
 
-def guard_permission_string(permission, *, api):
-    """Exact ``app_label.codename`` form. Does not infer a model name."""
-    if not isinstance(permission, str):
-        raise TypeError(
-            '%s permission must be an app_label.codename string, not %r.'
-            % (api, type(permission).__name__)
-        )
-    if ':' in permission or permission.count('.') != 1:
-        raise TrustsConfigurationError(
-            '%s permission must be one base "app_label.codename" string '
-            'without a colon: %r.' % (api, permission)
-        )
-    app_label, codename = permission.split('.')
-    if not app_label or not codename:
-        raise TrustsConfigurationError(
-            '%s permission must be one base "app_label.codename" string, '
-            'not %r.' % (api, permission)
-        )
-    return app_label, codename
-
-
-def guard_conditions(conditions, *, api):
-    if type(conditions) is not tuple:
-        raise TypeError(
-            '%s conditions must be an exact tuple, not %r.'
-            % (api, type(conditions).__name__)
-        )
-    seen = set()
-    for name in conditions:
-        if not isinstance(name, str) or not name or name != name.strip() or ':' in name:
-            raise TrustsConfigurationError(
-                '%s condition name is malformed: %r.' % (api, name)
-            )
-        if name in seen:
-            raise TrustsConfigurationError(
-                '%s conditions must not contain duplicates: %r.'
-                % (api, name)
-            )
-        seen.add(name)
-    return conditions
-
-
-def codename_binding(model, app_label, codename):
-    """Unevaluated pk of the exact codename on ``model``'s content type."""
-    return Subquery(
-        Permission.objects.filter(
-            content_type__app_label=app_label.lower(),
-            content_type__model=model._meta.model_name,
-            codename=codename,
-        ).values('pk')[:1]
-    )
-
-
 def _content_model(obj):
     return obj.model if isinstance(obj, QuerySet) else obj.__class__
-
-
-def _model_label(model):
-    meta = model._meta if isinstance(model, type) else getattr(model, '_meta', None)
-    if meta is None:
-        return model
-    return meta.label
 
 
 def _perm_codes(permission_qs):
@@ -624,22 +551,12 @@ def _selected_condition_q(catalog, model, permission, conditions, user, *, api):
         stored = catalog._stored_named_filter(model, name)
         if stored is None:
             return None
-        part = compile_stored_condition_q(
+        part = catalog.compile_condition(
             stored, model, '%s:%s' % (permission, name), user,
             catalog.user_model,
         )
         extra_q = part if extra_q is None else extra_q & part
     return extra_q
-
-
-def compile_stored_condition_q(stored, model, perm, user, user_model=None):
-    """Compile one stored ``(model, tree)`` pair, or raise fail-closed."""
-    cond = parse_perm_code(perm)[3]
-    if stored is None:
-        raise _unknown_condition_error(model, cond)
-    _registered, tree = stored
-    grant = perm.split(':', 1)[0] if isinstance(perm, str) else perm
-    return compile_expression_q(tree, model, user, grant, user_model)
 
 
 def evaluate_registered_expression(expr, user, perm, obj, model=None, user_model=None):
@@ -658,19 +575,6 @@ def evaluate_registered_expression(expr, user, perm, obj, model=None, user_model
     validate_expression(expr, klass, user_model)
     return evaluate_expression(
         expr, user, perm, obj, model=klass, user_model=user_model,
-    )
-
-
-def _unknown_condition_error(model, cond_code):
-    meta = getattr(model, '_meta', None)
-    if meta is not None:
-        return AttributeError(
-            'Permission condition code "%s" is not associate with model "%s_%s"'
-            % (cond_code, meta.app_label, meta.model_name)
-        )
-    return AttributeError(
-        'Permission condition code "%s" is not associate with model "%s"'
-        % (cond_code, model)
     )
 
 
