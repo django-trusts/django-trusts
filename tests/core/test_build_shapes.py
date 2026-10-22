@@ -619,7 +619,6 @@ class CatalogFromShapeTest(TransactionTestCase):
                 named_filters={},
                 user_conditions=None,
                 user_override=None,
-                compiler=PlanQueryCompiler(),
                 path='shape-answers',
                 family='relationship',
                 user_model=User,
@@ -650,7 +649,7 @@ class CatalogFromShapeTest(TransactionTestCase):
             empty = Catalog(
                 records=(), delegations=(), named_filters={},
                 user_conditions=None, user_override=None,
-                compiler=PlanQueryCompiler(), path='empty-shape',
+                path='empty-shape',
                 family='relationship', user_model=User,
                 user_rules=(Q(), Q()), override_q=None,
                 plans=_shape_plans((), User),
@@ -675,9 +674,11 @@ class CatalogFromShapeTest(TransactionTestCase):
 def _shape_plans(records, user_model):
     """Plans a hand-built catalog would have stored at compile()."""
     rules = (Q(), Q())
+    query_compiler = PlanQueryCompiler()
     table = {
         None: relation_plan(
             records, (), None, None, None, user_model, None, rules, None,
+            query_compiler,
         ),
     }
     for content in {record.content_model for record in records}:
@@ -685,7 +686,7 @@ def _shape_plans(records, user_model):
             for terminal in (None, Permission):
                 table[content, principal, terminal] = relation_plan(
                     records, (), content, principal, terminal,
-                    user_model, None, rules, None,
+                    user_model, None, rules, None, query_compiler,
                 )
     return table
 

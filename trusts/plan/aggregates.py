@@ -30,11 +30,6 @@ from trusts.plan.relations import (
 )
 
 
-def _compiler_applies(compiler, plan):
-    """Applicability is ``compiler.applies``."""
-    return bool(compiler.applies(plan))
-
-
 def all_match(catalog, candidates, user, permission, *, kind='complete',
               extra_q=None, permission_model=None, skipped=()):
     """True iff candidates are nonempty and no row lacks the aggregate proof.
@@ -87,10 +82,10 @@ def _compile_common_permissions(catalog, candidates, user, *, kind='complete',
                                 skipped=()):
     """Permission queryset for ``catalog``. It sponsors itself."""
     qs = candidate_queryset(candidates)
-    compiler = catalog.compiler
     plan = catalog.plan_for(candidates, user=user)
-    if not _compiler_applies(compiler, plan):
+    if not plan.applicable:
         return None
+    compiler = plan.query_compiler
     perm_expr = OuterRef(OuterRef(plan.permission_column))
     permission_model = plan.permission_model
     if kind == 'complete':

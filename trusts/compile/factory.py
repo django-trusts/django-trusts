@@ -190,7 +190,8 @@ class PublicRegistration:
 
 
 def relation_plan(records, delegations, content, user, permission,
-                  catalog_user, user_conditions, user_rules, override_q):
+                  catalog_user, user_conditions, user_rules, override_q,
+                  query_compiler=None):
     """One plan for ``(content, user, permission)``. An empty selection is a plan."""
     chosen = tuple(
         record for record in records
@@ -235,15 +236,24 @@ def relation_plan(records, delegations, content, user, permission,
             user_conditions is not None or builtin_user_conditions(subject)
         ) else absent
         closed, override = rules, override_q
-    return RelationPlan(
+    plan = RelationPlan(
         records=chosen, delegations=bridges, permission_model=plan_permission,
         content_identity=content, user_rules=rules, user_rules_closed=closed,
         user_override_q=override, user_model=catalog_user,
-        permission_column=column)
+        permission_column=column,
+        applicable=bool(chosen or bridges),
+        query_compiler=query_compiler,
+    )
+    if query_compiler is None:
+        return plan
+    decided = bool(query_compiler.applies(plan))
+    if decided == plan.applicable:
+        return plan
+    return replace(plan, applicable=decided)
 
 
 def plan_table(records, delegations, catalog_user, user_conditions,
-               user_rules, override_q):
+               user_rules, override_q, query_compiler):
     """Selectable keys in first-seen order. ``None`` is the default plan."""
     users, perms, order = {}, {}, []
     observed = [
@@ -265,13 +275,13 @@ def plan_table(records, delegations, catalog_user, user_conditions,
     table = {
         (content, user, perm): relation_plan(
             records, delegations, content, user, perm, catalog_user,
-            user_conditions, user_rules, override_q)
+            user_conditions, user_rules, override_q, query_compiler)
         for content in order
         for user in (None, *users[content])
         for perm in (None, *perms[content])}
     table[None] = relation_plan(
         records, delegations, None, None, None, catalog_user,
-        user_conditions, user_rules, override_q)
+        user_conditions, user_rules, override_q, query_compiler)
     return table
 
 
@@ -923,13 +933,13 @@ class Compiler(object):
             override_q = compile_override_q(model, '', slot, {})
         rules = (primary, absent)
         plans = plan_table(
-            self.records, self.delegations, model, stored, rules, override_q)
+            self.records, self.delegations, model, stored, rules, override_q,
+            self.query_compiler)
         self.frozen = True
         catalog = Catalog(
             records=self.records, delegations=self.delegations,
             named_filters=named_filters,
             user_conditions=stored, user_override=self._user_override,
-            compiler=self.query_compiler,
             path=self.path, family=self.family, user_model=model,
             user_rules=rules, override_q=override_q, plans=plans,
         )

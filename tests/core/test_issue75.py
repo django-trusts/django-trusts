@@ -24,7 +24,6 @@ from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.plan.contents import granted
 import tests as tests_module
 HOST = HOST_BACKEND
@@ -48,8 +47,7 @@ def _contribute_document(registry):
 
 def _evaluate(handle, queryset, user, permission):
     plan = handle.plan_for(queryset, user=user, permission=permission)
-    compiler = handle.compiler
-    return compiler.complete_exists(plan, queryset, user, permission)
+    return plan.content_exists(user, permission)
 
 class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
 
@@ -62,7 +60,6 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
             apps.get_app_config('trusts_kernel_host').catalog_path(),
         )
         self.assertIs(catalog, HostTrustModelBackend().catalog)
-        self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
 
     def test_duplicate_identical_paths_do_not_raise(self):
         from django.apps import apps
@@ -101,9 +98,13 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertEqual(rebuilt.path, first.path)
         self.assertIs(rebuilt, first)
 
-    def test_live_catalog_stores_an_explicit_plan_compiler(self):
+    def test_live_catalog_denies_an_anonymous_user(self):
+        from django.contrib.auth.models import AnonymousUser
+
         catalog = HostTrustModelBackend().catalog
-        self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
+        self.assertFalse(catalog.has_perm(
+            AnonymousUser(), 'auth.view_user', None,
+        ))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes', attr_name='isolated_apps')
 class IsolatedAppsPathStoreTest(SimpleTestCase):

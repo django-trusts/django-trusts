@@ -93,7 +93,6 @@ class Catalog(object):
     named_filters: object
     user_conditions: object
     user_override: object
-    compiler: object
     path: str
     family: str
     user_model: object
@@ -127,10 +126,6 @@ class Catalog(object):
 
     def _stored_named_filter(self, model, code):
         return self.named_filters.get((condition_model_key(model), code))
-
-    def applies(self, plan):
-        """Whether this catalog's compiler will compile ``plan``."""
-        return bool(self.compiler.applies(plan))
 
     def has_permission(self, user, content, permission, *,
                        extra_q=None, permission_model=None,
@@ -394,7 +389,8 @@ class Catalog(object):
 
     def prepare_has_perm(self, user_obj, permext, obj, *, skipped):
         model = _content_model(obj)
-        if not self.applies(self.plan_for(obj, user=user_obj)):
+        plan = self.plan_for(obj, user=user_obj)
+        if not plan.applicable:
             return PreparedInquiry(model, result=False)
         stored, extra_q = self._condition_overlay(permext, obj, user_obj)
         applabel, modelname, action, cond = parse_perm_code(permext)
