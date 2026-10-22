@@ -34,6 +34,7 @@ from trusts.plan.grammar import (
     inquiry_partner,
     invoke,
     is_inquiry,
+    is_predicate,
     symbol_path,
     symbol_token,
     unsupported,
@@ -51,8 +52,6 @@ from trusts.compile.resolution import (
     _resolve_permission_path,
 )
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
-from trusts.utils import parse_perm_code
-from trusts.plan.writers import compile_expression_q
 
 T = TypeVar('T', bound=Model)
 from trusts.compile.catalogs import Catalog, Question
@@ -63,6 +62,7 @@ from trusts.plan.conditions import (
     condition_model_label,
     normalize_expression,
     parse_named_filter,
+    validate_expression,
     require_boolean_field,
 )
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan, bind_checked_user
@@ -441,27 +441,23 @@ def codename_binding(model, app_label, codename):
     )
 
 
-def compile_stored_condition_q(stored, model, perm, user, user_model=None):
-    """Compile one stored ``(model, tree)`` pair, or raise fail-closed."""
-    cond = parse_perm_code(perm)[3]
-    if stored is None:
-        raise _unknown_condition_error(model, cond)
-    _registered, tree = stored
-    grant = perm.split(':', 1)[0] if isinstance(perm, str) else perm
-    return compile_expression_q(tree, model, user, grant, user_model)
+def _prepare_conditions(filters, user_model):
+    """Check each stored condition and keep its resolved tree.
 
-
-def _unknown_condition_error(model, cond_code):
-    meta = getattr(model, '_meta', None)
-    if meta is not None:
-        return AttributeError(
-            'Permission condition code "%s" is not associate with model "%s_%s"'
-            % (cond_code, meta.app_label, meta.model_name)
-        )
-    return AttributeError(
-        'Permission condition code "%s" is not associate with model "%s"'
-        % (cond_code, model)
-    )
+    Object and principal field paths are checked against the models now.
+    The asking user and the grant are not known until the question.
+    """
+    prepared = {}
+    for key, pair in filters.items():
+        model, tree = pair
+        if not is_predicate(tree):
+            raise PermissionConditionError(
+                'Permission condition did not produce a comparison, '
+                '.contains(), boolean field, or combination with & and |.'
+            )
+        validate_expression(tree, model, user_model)
+        prepared[key] = pair
+    return prepared
 
 
 class Compiler(object):
@@ -1061,8 +1057,10 @@ class Compiler(object):
 
         The user model is already known. Named filters are copied into
         a new mapping, so the catalog does not share this compiler's
-        store. User-rule and override fragments and the plan table are
-        compiled here. A later call returns that same catalog.
+        store. Each stored condition is checked here; the asking user
+        is applied when the question is asked. User-rule and override
+        fragments and the plan table are compiled here. A later call
+        returns that same catalog.
         """
         if self.frozen:
             return self._catalog
@@ -1103,7 +1101,9 @@ class Compiler(object):
             plans=MappingProxyType(dict(plans)),
             questions=questions,
             content_prefixes=MappingProxyType(dict(prefixes)),
-            compile_condition=compile_stored_condition_q,
+            prepared_conditions=MappingProxyType(
+                _prepare_conditions(self._named_filters, model),
+            ),
         )
         linked.append(self._catalog)
         self.frozen = True

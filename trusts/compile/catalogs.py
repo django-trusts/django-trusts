@@ -1,6 +1,6 @@
 """One built catalog. Not a builder and not a second store."""
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 
 from django.contrib.auth.models import Permission
 from django.db import router
@@ -20,7 +20,7 @@ from trusts.plan.conditions import (
     validate_expression,
 )
 from trusts.plan.grammar import is_predicate
-from trusts.plan.writers import evaluate_expression
+from trusts.plan.writers import compile_to_q, evaluate_expression
 from trusts.plan.contents import (
     _as_q,
     _compile_granted,
@@ -80,10 +80,10 @@ class Question(object):
 class Catalog(object):
     """Answers from the rows ``Compiler.compile`` stored.
 
-    ``named_filters``, ``plans``, and ``content_prefixes`` are immutable
-    mappings the factory stored. ``questions`` is that build's question
-    tuple. ``plans`` maps keys to plans; ``None`` is the default.
-    ``user_rules`` is ``(primary, absent)``.
+    ``named_filters``, ``plans``, ``content_prefixes``, and
+    ``prepared_conditions`` are immutable mappings the factory stored.
+    ``questions`` is that build's question tuple. ``plans`` maps keys to
+    plans; ``None`` is the default. ``user_rules`` is ``(primary, absent)``.
     """
 
     records: tuple
@@ -99,7 +99,7 @@ class Catalog(object):
     plans: object
     questions: tuple = ()
     content_prefixes: object = None
-    compile_condition: object = field(default=None, repr=False, compare=False)
+    prepared_conditions: object = None
 
     def plan_for(self, content, *, user=None, permission=None):
         """Look up ``(content, user, permission)``. A miss is the default."""
@@ -433,11 +433,11 @@ class Catalog(object):
         if not cond:
             return None, None
         model = _content_model(obj)
-        stored = self._stored_named_filter(model, cond)
+        stored = _condition_entry(self, model, cond)
         if stored is None or not isinstance(obj, QuerySet):
             return stored, None
-        return stored, self.compile_condition(
-            stored, obj.model, permext, user_obj, self.user_model,
+        return stored, _apply_prepared(
+            stored, obj.model, user_obj, permext, self.user_model,
         )
 
     def _resolve_skipped(self, subject, skip_flags, skipped, *, require_user=True):
@@ -544,15 +544,31 @@ def _owns_selected_conditions(catalog, model, conditions):
     return True
 
 
+def _condition_entry(catalog, model, code):
+    """The checked tree for this model and code, or None when it is absent."""
+    return (catalog.prepared_conditions or {}).get(
+        (condition_model_key(model), code),
+    )
+
+
+def _apply_prepared(entry, model, user, perm, user_model):
+    """Bind the asking user and this call's grant. ``entry`` is ``(model, tree)``."""
+    return compile_to_q(
+        entry[1], model, user,
+        perm.split(':', 1)[0] if isinstance(perm, str) else perm,
+        user_model,
+    )
+
+
 def _selected_condition_q(catalog, model, permission, conditions, user, *, api):
     """AND this catalog's selected names, or None when any name is missing."""
     extra_q = None
     for name in conditions:
-        stored = catalog._stored_named_filter(model, name)
+        stored = _condition_entry(catalog, model, name)
         if stored is None:
             return None
-        part = catalog.compile_condition(
-            stored, model, '%s:%s' % (permission, name), user,
+        part = _apply_prepared(
+            stored, model, user, '%s:%s' % (permission, name),
             catalog.user_model,
         )
         extra_q = part if extra_q is None else extra_q & part

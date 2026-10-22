@@ -12,7 +12,6 @@ from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
     ModelIdentity,
     resolve_field_path,
-    resolve_object_field_path,
     validate_expression,
 )
 from trusts.plan.grammar import Tree, is_predicate
@@ -137,7 +136,7 @@ def _classify(node, model, user, perm, user_model):
         return _Bound(node.value)
     if _node(node, 'field'):
         if node.root == 'object':
-            return _Unbound(resolve_object_field_path(model, node.path))
+            return _Unbound('__'.join(node.path))
         if node.root == 'user':
             if not node.path:
                 return _Bound(user)
@@ -280,7 +279,7 @@ def _evaluate_contains(node, user, perm, obj, model, user_model):
 def _compile_bare(node, model, user, perm, user_model):
     field = node.item
     if field.root == 'object':
-        return boolean_q(resolve_object_field_path(model, field.path))
+        return boolean_q('__'.join(field.path))
     if boolean_holds(_bound_value(field, user, perm, user_model)):
         return Q()
     return Q(pk__in=())
@@ -290,13 +289,9 @@ def _compile_contains(node, model, user, perm, user_model):
     left = node.left
     right = node.right
     if left.root == 'object':
-        lookup = resolve_field_path(
-            model, left.path, ref_kind='object', collection=True,
-        )
+        lookup = '__'.join(left.path)
         if _node(right, 'field') and right.root == 'object':
-            return contains_q(
-                lookup, F(resolve_object_field_path(model, right.path)),
-            )
+            return contains_q(lookup, F('__'.join(right.path)))
         value = member_pk(_bound_value(right, user, perm, user_model))
         if value is None:
             return Q(pk__in=())
@@ -305,7 +300,7 @@ def _compile_contains(node, model, user, perm, user_model):
     if _node(right, 'field') and right.root == 'object':
         if manager is None:
             return Q(pk__in=())
-        member = resolve_object_field_path(model, right.path)
+        member = '__'.join(right.path)
         return Q(**{'%s__in' % member: manager.values('pk')})
     if _collection_contains(
         manager, member_pk(_bound_value(right, user, perm, user_model)),
