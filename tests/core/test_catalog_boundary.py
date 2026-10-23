@@ -11,6 +11,7 @@ import trusts.backends as backends
 import trusts.compile.catalogs as catalogs
 import trusts.compile.factory as factory
 import trusts.decorators as decorators
+import trusts.inspect.snapshot as snapshot
 import trusts.models as models
 from tests.support import compiler
 
@@ -35,9 +36,13 @@ class CatalogFactoryBoundaryTest(SimpleTestCase):
         self.assertNotIn('trusts.plan.rewrites', catalog_imports)
         self.assertFalse(any(name.endswith('.factory') for name in catalog_imports))
         self.assertIn('trusts.compile.catalogs', factory_imports)
-        backend_imports = _imported_modules(backends)
-        self.assertFalse(any(name.startswith('trusts.plan') for name in backend_imports))
-        for module in (models, decorators, backends):
+        for module in (backends, snapshot):
+            found = _imported_modules(module)
+            self.assertFalse(any(name.startswith('trusts.plan') for name in found))
+        self.assertFalse(any(
+            name.startswith('trusts.compile') for name in _imported_modules(snapshot)
+        ))
+        for module in (models, decorators, backends, snapshot):
             found = _imported_modules(module)
             self.assertNotIn('trusts.compile.factory', found)
             self.assertFalse(any(name.endswith('.factory') for name in found))

@@ -29,7 +29,7 @@ class _IdentInReach(Expression):
         self.attname = attname
         self.w_sql = w_sql
         self.w_params = w_params
-        self.bound = bound
+        self.along_bound = bound
 
     def as_sql(self, compiler, connection):
         qn = connection.ops.quote_name
@@ -62,6 +62,7 @@ class GrantReach(Expression):
         self.record = record
         self.content = content
         walk = record.along
+        self.along_bound = walk.bound
         self.lhs = None
         self.suffix_query = None
         self.grant_query = None
@@ -178,6 +179,7 @@ class _KeyedReach(Expression):
     def __init__(self, walk, seed_query, key, candidate):
         super().__init__(output_field=BooleanField())
         self.walk = walk
+        self.along_bound = walk.bound
         self.seed_query = seed_query
         self.key = key
         self.candidate = candidate
@@ -219,6 +221,7 @@ class _AnchorInInverseReach(Expression):
     def __init__(self, record, content):
         super().__init__(output_field=BooleanField())
         self.record = record
+        self.along_bound = record.along.bound
         self.seed_query = _content_walk_seed(record.along, content)
 
     def copy(self):
@@ -265,6 +268,7 @@ class _PrefixInForwardWalk(Expression):
                  content_identity=None, suffix_lookup=None):
         super().__init__(output_field=BooleanField())
         walk = record.along
+        self.along_bound = walk.bound
         seed = bind_record_qs(
             record,
             user=user,

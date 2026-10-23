@@ -4,7 +4,7 @@ from django.contrib.auth.models import Permission
 from django.db.models import F, Model, Q
 
 from trusts.errors import PermissionConditionError
-from trusts.plan.grammar import Tree, inquiry_partner, unsupported
+from trusts.plan.grammar import Tree, unsupported
 from trusts.plan.hops import lookup_text, require_instance
 from trusts.plan.writers import (
     boolean_q,
@@ -113,7 +113,7 @@ class _PredicateCompiler(object):
         raise unsupported(node.kind, 'a relation condition')
 
     def _eq(self, node):
-        partner = inquiry_partner(node)
+        partner = node.inquiry_partner()
         if partner is not None:
             return self._bind_inquiry(partner.path)
         if node.left.kind == 'const' or node.right.kind == 'const':
@@ -123,7 +123,7 @@ class _PredicateCompiler(object):
         })
 
     def _ne(self, node):
-        column = inquiry_partner(node)
+        column = node.inquiry_partner()
         if (
             column is not None
             and column.kind == 'field'
@@ -158,7 +158,7 @@ class _PredicateCompiler(object):
         return column_q(lookup, value, equal, field=False)
 
     def _contains(self, node):
-        if inquiry_partner(node) is not None:
+        if node.inquiry_partner() is not None:
             return self._bind_inquiry(node.left.path)
         if node.right.kind == 'const':
             value = member_pk(node.right.value)

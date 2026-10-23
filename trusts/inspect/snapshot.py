@@ -50,16 +50,6 @@ from django.conf import settings
 from django.db.utils import DEFAULT_DB_ALIAS
 from django.contrib.auth.models import Permission
 from django.db import connections
-from trusts.plan.grammar import Tree, inquiry_partner
-from trusts.plan.rewrites import BindTable
-from trusts.plan.recursions import (
-        GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
-        _PrefixInForwardWalk,
-    )
-from trusts.plan.rewrites import BoundBool
-from trusts.plan.standards import SkipFlag
-from trusts.plan.conditions import ModelIdentity
-from trusts.compile.factory import RegisteredDelegation
 
 
 SCHEMA_VERSION = 1
@@ -365,7 +355,7 @@ class _PolicyVisitor(object):
         delegated_rows = []
         for record in legs:
             trust_id = self._trust_ids[id(record)]
-            if isinstance(record, RegisteredDelegation):
+            if record in delegations:
                 row = {
                     'id': trust_id,
                     'root': _model_label(record.root),
@@ -675,18 +665,11 @@ class _PolicyConditionText(object):
         self._grouped = False
 
     def render(self, node, *, grouped=False):
-        if not isinstance(node, Tree):
-            raise TrustsConfigurationError(
-                'Policy SQL cannot render condition node %s.'
-                % type(node).__name__
-            )
         previous = self._grouped
         self._grouped = grouped
         try:
-            if node.kind == 'and':
-                return self._and(node)
-            if node.kind == 'or':
-                return self._join(node, 'or')
+            if node.kind in ('and', 'or'):
+                return self._join(node, node.kind)
             if node.kind == 'eq':
                 return self._eq(node)
             if node.kind == 'ne':
@@ -695,16 +678,9 @@ class _PolicyConditionText(object):
                 return self._contains(node)
             if node.kind == 'not':
                 return 'not %s' % self.render(node.item, grouped=True)
-            if node.kind == 'bare':
-                return _condition_path(node.item)
-            raise TrustsConfigurationError(
-                'Policy SQL cannot render condition node %s.' % node.kind
-            )
+            return _condition_path(node.item)
         finally:
             self._grouped = previous
-
-    def _and(self, node):
-        return self._join(node, 'and')
 
     def _join(self, node, word):
         text = '%s %s %s' % (
@@ -717,7 +693,7 @@ class _PolicyConditionText(object):
         return text
 
     def _eq(self, node):
-        row = inquiry_partner(node)
+        row = node.inquiry_partner()
         if row is not None:
             return self._membership(row)
         return self._pair(node, '==')
@@ -758,30 +734,19 @@ def _render_condition(condition, *, permission_token='$permission.id'):
 
 
 def _condition_path(operand):
-    if isinstance(operand, Tree) and operand.kind == 'field':
-        if not operand.path:
-            raise TrustsConfigurationError(
-                'Policy SQL condition path is empty.'
-            )
-        return '__'.join(operand.path)
-    raise TrustsConfigurationError(
-        'Policy SQL condition path is not a relationship path.'
-    )
+    return '__'.join(operand.path)
 
 
 def _operand_text(operand):
-    if isinstance(operand, Tree) and operand.kind == 'field':
+    if operand.kind == 'field':
         return _condition_path(operand)
-    if isinstance(operand, Tree) and operand.kind == 'const':
-        return _constant_text(operand.value)
-    raise TrustsConfigurationError(
-        'Policy SQL condition path is not a relationship path.'
-    )
+    return _constant_text(operand.value)
 
 
 def _constant_text(value):
-    if isinstance(value, ModelIdentity):
-        return str(value.pk)
+    as_tuple = getattr(value, 'as_tuple', None)
+    if as_tuple is not None and not isinstance(value, Decimal):
+        return str(as_tuple()[2])
     if value is None:
         return 'None'
     if isinstance(value, bool):
@@ -1071,11 +1036,11 @@ def _filter_queues(expr):
         queues.setdefault(path, []).append(symbol)
 
     def walk(node):
-        if isinstance(node, Tree) and node.kind in ('and', 'or'):
+        if node.kind in ('and', 'or'):
             walk(node.left)
             walk(node.right)
             return
-        if isinstance(node, Tree) and node.kind in ('eq', 'ne'):
+        if node.kind in ('eq', 'ne'):
             pair = _comparison_symbol(node)
             if pair is not None:
                 add(pair[0], pair[1])
@@ -1092,7 +1057,7 @@ def _comparison_symbol(node):
     object_ref = None
     other = None
     for side in (left, right):
-        if isinstance(side, Tree) and side.kind == 'field' and side.root == 'object':
+        if side.kind == 'field' and side.root == 'object':
             if object_ref is None:
                 object_ref = side
             else:
@@ -1101,20 +1066,20 @@ def _comparison_symbol(node):
             other = side
     if object_ref is None or other is None:
         return None
-    if isinstance(other, Tree) and other.kind == 'field' and other.root == 'object':
+    if other.kind == 'field' and other.root == 'object':
         return None
     path = '__'.join(object_ref.path)
-    if isinstance(other, Tree) and other.kind == 'const':
+    if other.kind == 'const':
         return path, _with_hint(
             {'const': _json_const(other.value)}, path or 'literal',
         )
-    if isinstance(other, Tree) and other.kind == 'field' and other.root == 'user':
+    if other.kind == 'field' and other.root == 'user':
         if other.path:
             bind = 'user.%s' % '__'.join(other.path)
         else:
             bind = 'user.id'
         return path, _with_hint({'bind': bind}, _request_hint(bind))
-    if isinstance(other, Tree) and other.kind == 'field' and other.root == 'permission':
+    if other.kind == 'field' and other.root == 'permission':
         return path, _with_hint(
             {'bind': 'permission.id'}, _request_hint('permission.id'),
         )
@@ -1196,8 +1161,9 @@ def _classify_compiled(node, sql, params, query=None):
 
 def _symbol_for_new_param(node, query=None):
 
-    if isinstance(node, BindTable):
-        column = node.next_column()
+    next_column = getattr(node, 'next_column', None)
+    if next_column is not None:
+        column = next_column()
         if column.kind == 'bind':
             return _with_hint({'bind': column.label}, _request_hint(column.label))
         if column.label == 'content pk':
@@ -1213,29 +1179,15 @@ def _symbol_for_new_param(node, query=None):
         return _with_hint(
             {'const': _json_const(column.value)}, column.label,
         )
-    if isinstance(node, (GrantReach, _PrefixInForwardWalk)):
+    along_bound = getattr(node, 'along_bound', None)
+    if along_bound is not None:
         return _with_hint(
-            {'const': _json_const(node.record.along.bound)}, 'along bound',
+            {'const': _json_const(along_bound)}, 'along bound',
         )
-    if isinstance(node, _KeyedReach):
+    hint = getattr(node, 'hint', None)
+    if hint is not None:
         return _with_hint(
-            {'const': _json_const(node.walk.bound)}, 'along bound',
-        )
-    if isinstance(node, _AnchorInInverseReach):
-        return _with_hint(
-            {'const': _json_const(node.record.along.bound)}, 'along bound',
-        )
-    if isinstance(node, _IdentInReach):
-        return _with_hint(
-            {'const': _json_const(node.bound)}, 'along bound',
-        )
-    if isinstance(node, SkipFlag):
-        return _with_hint(
-            {'const': _json_const(node.value)}, 'skip_%s' % node.name,
-        )
-    if isinstance(node, BoundBool):
-        return _with_hint(
-            {'const': _json_const(node.value)}, node.hint,
+            {'const': _json_const(node.value)}, hint,
         )
     if isinstance(node, Value):
         return _with_hint(
@@ -1316,10 +1268,7 @@ def _value_hint(node, query):
 def _const_hint(node, value):
     """Readable label for one constant lookup placeholder."""
     lhs = getattr(node, 'lhs', None)
-    if isinstance(lhs, (
-        GrantReach, _IdentInReach, _KeyedReach, _AnchorInInverseReach,
-        _PrefixInForwardWalk,
-    )) and value is True:
+    if getattr(lhs, 'along_bound', None) is not None and value is True:
         return 'along match'
     name = _lookup_field_name(node)
     label = _lookup_model_label(node)
@@ -1475,12 +1424,14 @@ def _json_const(value):
             'seconds': value.seconds,
             'microseconds': value.microseconds,
         }
-    if isinstance(value, ModelIdentity):
+    as_tuple = getattr(value, 'as_tuple', None)
+    if as_tuple is not None:
+        app_label, model_name, pk = as_tuple()
         return {
             'type': 'model',
-            'app_label': value.app_label,
-            'model': value.model_name,
-            'pk': _json_const(value.pk),
+            'app_label': app_label,
+            'model': model_name,
+            'pk': _json_const(pk),
         }
     raise TrustsConfigurationError(
         'Policy SQL render cannot record constant %r (%s).'

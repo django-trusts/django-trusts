@@ -30,9 +30,7 @@ from trusts.compile.nodes import (
 from trusts.plan.grammar import (
     Symbol,
     Tree,
-    inquiry_partner,
     invoke,
-    is_inquiry,
     is_predicate,
     symbol_path,
     symbol_token,
@@ -1147,10 +1145,6 @@ def _row_paths_comparable(left_path, right_path, root):
     return True
 
 
-def _compares_bare_inquiry(node):
-    return is_inquiry(node.left) or is_inquiry(node.right)
-
-
 def _require_row_field(node):
     if node.kind != 'field' or node.root != 'row' or not node.path:
         raise PermissionConditionError(
@@ -1227,9 +1221,9 @@ def _validate_row_comparison(node, root, *, delegated, matches):
     where = _relation_where(delegated)
     _reject_inquiry_hop(node.left, where, member=False)
     _reject_inquiry_hop(node.right, where, member=False)
-    if _compares_bare_inquiry(node):
-        column = inquiry_partner(node)
-        if column is None or column.kind != 'field' or not column.path:
+    column = node.inquiry_partner()
+    if column is not None:
+        if column.kind != 'field' or not column.path:
             raise unsupported(
                 'Comparing the requested permission to a constant',
                 where,
@@ -1265,7 +1259,7 @@ def _validate_row_contains(node, root, permission_model, *,
     if member.kind == 'const':
         check_const_member(root, node.left.path, node.right.value)
         return
-    if is_inquiry(member):
+    if node.inquiry_partner() is not None:
         _path, model, _field, target = _resolve_permission_path(
             root, node.left.path,
         )
