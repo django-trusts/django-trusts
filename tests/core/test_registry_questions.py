@@ -9,6 +9,7 @@ handle-based aggregate is the comparison
 (the handle is the subject there), SQL is compared literally;
 otherwise results are compared.
 """
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
@@ -249,6 +250,8 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.assertEqual(_pks(named.question(self.alice, self.read)), {self.doc_a.pk})
 
     def test_backend_walk_questions_includes_named_filter(self):
+        if not apps.is_installed('tests.myapp'):
+            self.skipTest('document app is not installed')
         seen = []
 
         class _Visitor(object):
