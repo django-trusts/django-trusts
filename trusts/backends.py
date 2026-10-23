@@ -50,6 +50,10 @@ class TrustModelBackendMixin(object):
         """Catalog this instance answers from. The app config owns it."""
         return self._config.catalog
 
+    def walk_questions(self, visitor):
+        """Walk this catalog's questions in document order."""
+        return self._catalog().walk_questions(visitor)
+
     def has_perm(self, user_obj, permext, obj=None, **skip_flags):
         """Object check. No object denies."""
         if obj is None or not isinstance(obj, (QuerySet, Model)):

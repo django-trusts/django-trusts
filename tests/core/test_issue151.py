@@ -139,7 +139,7 @@ class LiveEnsureSelfBindTest(KernelHostRequiredMixin, SimpleTestCase):
         catalog = configured_catalog(DOCUMENT_BACKEND)
         found = {
             (model, code)
-            for model, code, record in catalog.iter_permission_conditions()
+            for (_label, code), (model, _tree) in catalog.named_filters.items()
         }
         self.assertIn((Document, 'non_confidential'), found)
 
@@ -182,7 +182,8 @@ class NamedConditionCompilationTest(TransactionTestCase):
             )
             built = built_catalog(registry)
         found = {
-            code for model, code, _tree in built.iter_permission_conditions()
+            code
+            for (_label, code), (model, _tree) in built.named_filters.items()
             if model is Note
         }
         self.assertIn('owned', found)

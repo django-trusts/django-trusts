@@ -48,7 +48,6 @@ from trusts.inspect.yaml import (
 )
 from django.conf import settings
 from django.db.utils import DEFAULT_DB_ALIAS
-from trusts.plan.writers import compile_expression_q
 from django.contrib.auth.models import Permission
 from django.db import connections
 from trusts.plan.grammar import Tree, inquiry_partner
@@ -257,12 +256,15 @@ class _PolicyVisitor(object):
         self.catalog = catalog
         self._trust_ids = dict(trust_ids or {})
         self._contents = {}
+        self._order = []
         self._classifier_records = {}
 
-    def content_for(self, label):
-        return self._contents[label]
+    def contents(self):
+        return [self._contents[label] for label in self._order]
 
     def visit(self, question):
+        if question.name == 'named_filter':
+            return self._visit_named_filter(question)
         content = self._ensure_content(
             question.content_model, question.records, question.delegations,
         )
@@ -274,7 +276,7 @@ class _PolicyVisitor(object):
         permission = _role_sentinel(records[0], 'permission', alias)
         if question.name == 'filter_by_permitted_content':
             rows = []
-            for prefix in self.catalog.permitted_content_prefix_models(model):
+            for prefix in question.prefixes:
                 queryset = question.question(
                     _content_manager(prefix).all(), user, permission,
                 )
@@ -315,6 +317,36 @@ class _PolicyVisitor(object):
             queryset, alias, record=records[0], expr=None, records=records,
             reverse_users=question.name == 'get_permitted_users',
         ))
+        return content
+
+    def _visit_named_filter(self, question):
+        model = question.content_model
+        label = _model_label(model)
+        code = question.code
+        if (
+            not isinstance(code, str)
+            or _PORTABLE_ID_SEGMENT.fullmatch(code) is None
+        ):
+            raise TrustsConfigurationError(
+                'Named filter on %s has a non-portable code %r.'
+                % (label, code)
+            )
+        queryset = question.question(
+            _any_sentinel_user(self.alias, self.catalog.user_model),
+            _any_sentinel_permission(self.alias),
+        )
+        row = {
+            'id': _dotless_id(label, code),
+            **_sql_row(_compile_queryset(
+                queryset, self.alias, record=None, expr=question.expr,
+            )),
+        }
+        content = self._contents.get(label)
+        if content is None:
+            content = {'model': label}
+            self._contents[label] = content
+            self._order.append(label)
+        content.setdefault('named_filters', []).append(row)
         return content
 
     def _ensure_content(self, model, records, delegations):
@@ -398,6 +430,7 @@ class _PolicyVisitor(object):
             content['delegations'] = delegated_rows
         self._contents[label] = content
         self._classifier_records[label] = classifier_records
+        self._order.append(label)
         return content
 
 
@@ -442,68 +475,21 @@ def _project_backend(catalog, alias):
     delegations = tuple(catalog.delegations)
     all_records = records + delegations
     ids = _assign_ids(all_records)
-    named_filters = _project_named_filters(catalog, alias)
     return {
         'path': path,
-        'contents': _project_contents(
-            catalog, alias, all_records, ids, named_filters,
-        ),
+        'contents': _project_contents(catalog, alias, all_records, ids),
     }
 
 
-def _project_contents(catalog, alias, records, ids, named_filters):
-    groups = []
-    index = {}
-    for record, trust_id in zip(records, ids):
-        label = _model_label(record.content_model)
-        slot = index.get(label)
-        if slot is None:
-            index[label] = len(groups)
-            groups.append({
-                'label': label,
-                'model': record.content_model,
-                'legs': [],
-            })
-            slot = index[label]
-        groups[slot]['legs'].append((record, trust_id))
-    filters_by_model = {}
-    filter_order = []
-    for row in named_filters:
-        model = row['model']
-        bucket = filters_by_model.get(model)
-        if bucket is None:
-            filters_by_model[model] = bucket = []
-            filter_order.append(model)
-        bucket.append(row)
-    contents = []
-    seen = set()
+def _project_contents(catalog, alias, records, ids):
     visitor = _PolicyVisitor(
         catalog, alias,
         trust_ids={
             id(record): trust_id for record, trust_id in zip(records, ids)
         },
     )
-    if groups:
-        catalog.walk_questions(visitor)
-        for group in groups:
-            seen.add(group['label'])
-            content = visitor.content_for(group['label'])
-            filters = filters_by_model.get(group['label'], ())
-            if filters:
-                content['named_filters'] = [
-                    _named_filter_row(row) for row in filters
-                ]
-            contents.append(content)
-    for model in filter_order:
-        if model in seen:
-            continue
-        contents.append({
-            'model': model,
-            'named_filters': [
-                _named_filter_row(row) for row in filters_by_model[model]
-            ],
-        })
-    return contents
+    catalog.walk_questions(visitor)
+    return visitor.contents()
 
 
 _CONST_SOURCE = {
@@ -557,14 +543,6 @@ def _present_params(symbols):
         if token is not None:
             params.append(token)
     return params
-
-
-def _named_filter_row(row):
-    return {
-        'id': row['id'],
-        'params': _present_params(row['params']),
-        'sql': _format_policy_sql(row['sql']),
-    }
 
 
 def _sql_row(compiled):
@@ -855,49 +833,6 @@ def _base_id(record):
             getattr(along, 'bound', None),
         )
     return label.replace('.', '__')
-
-
-def _project_named_filters(catalog, alias):
-    rows = []
-    iterator = catalog.iter_permission_conditions
-    if not callable(iterator):
-        return rows
-    for model, code, record in iterator():
-        model_label = _model_label(model)
-        if (
-            not isinstance(code, str)
-            or _PORTABLE_ID_SEGMENT.fullmatch(code) is None
-        ):
-            raise TrustsConfigurationError(
-                'Named filter on %s has a non-portable code %r.'
-                % (model_label, code)
-            )
-        if isinstance(record, Tree):
-            expr = record
-        else:
-            expr = getattr(record, 'expr', None)
-        sql, params = _compile_named_filter(
-            model, expr, alias, catalog.user_model,
-        )
-        rows.append({
-            'model': model_label,
-            'id': _dotless_id(model_label, code),
-            'params': params,
-            'sql': sql,
-        })
-    return rows
-
-
-def _compile_named_filter(model, expr, alias, user_model):
-
-    compiled = compile_expression_q(
-        expr, model,
-        _any_sentinel_user(alias, user_model),
-        _any_sentinel_permission(alias),
-        user_model=user_model,
-    )
-    queryset = model._meta.concrete_model._default_manager.filter(compiled)
-    return _compile_queryset(queryset, alias, record=None, expr=expr)
 
 
 def _any_sentinel_user(alias, user_model):

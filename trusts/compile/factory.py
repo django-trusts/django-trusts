@@ -330,20 +330,24 @@ def _invoke(linked, name, head, kw, *args, **kwargs):
     return getattr(linked[0], name)(*head, *args, **{**kw, **kwargs})
 
 
-def question_descriptors(records, delegations, linked):
+def question_descriptors(records, delegations, linked, named_filters):
     """Questions for one built catalog, in document order.
 
     ``linked`` is a one-item list. ``Compiler.compile`` stores the catalog
     there before returning it, so each question calls that catalog.
+    Content-group questions come first. Named-filter questions follow,
+    in registration order.
     """
-    questions, prefixes = [], {}
+    questions = []
     for model, group_records, group_delegations in content_groups(
         records, delegations,
     ):
         found = prefix_models(group_records, group_delegations)
-        prefixes[model] = found
         questions.extend(
-            Question(name, model, group_records, group_delegations, fn)
+            Question(
+                name, model, group_records, group_delegations, fn,
+                prefixes=found if name == 'filter_by_permitted_content' else (),
+            )
             for name, fn, keep in (
                 (
                     'permitted',
@@ -385,7 +389,15 @@ def question_descriptors(records, delegations, linked):
             )
             if keep
         )
-    return tuple(questions), prefixes
+    for (_label, code), (model, tree) in named_filters.items():
+        questions.append(Question(
+            'named_filter', model, (), (),
+            partial(
+                _invoke, linked, '_question_named_filter', (model, tree), {},
+            ),
+            code=code, expr=tree,
+        ))
+    return tuple(questions)
 
 
 def _prepare_conditions(filters, user_model):
@@ -1037,8 +1049,8 @@ class Compiler(object):
             self.records, self.delegations, model, stored, rules, override_q,
             self.query_compiler)
         linked = []
-        questions, prefixes = question_descriptors(
-            self.records, self.delegations, linked)
+        questions = question_descriptors(
+            self.records, self.delegations, linked, self._named_filters)
         self._catalog = Catalog(
             records=self.records, delegations=self.delegations,
             named_filters=MappingProxyType(dict(self._named_filters)),
@@ -1047,7 +1059,6 @@ class Compiler(object):
             user_rules=rules, override_q=override_q,
             plans=MappingProxyType(dict(plans)),
             questions=questions,
-            content_prefixes=MappingProxyType(dict(prefixes)),
             prepared_conditions=MappingProxyType(
                 _prepare_conditions(self._named_filters, model),
             ),

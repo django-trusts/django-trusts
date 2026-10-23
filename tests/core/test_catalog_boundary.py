@@ -65,7 +65,6 @@ class CatalogFactoryBoundaryTest(SimpleTestCase):
         catalog = compiler().compile()
         self.assertIsInstance(catalog.named_filters, MappingProxyType)
         self.assertIsInstance(catalog.plans, MappingProxyType)
-        self.assertIsInstance(catalog.content_prefixes, MappingProxyType)
         self.assertIsInstance(catalog.questions, tuple)
         self.assertIsInstance(catalog.prepared_conditions, MappingProxyType)
         self.assertFalse(hasattr(catalog, 'compile_condition'))
@@ -75,8 +74,6 @@ class CatalogFactoryBoundaryTest(SimpleTestCase):
             catalog.named_filters['extra'] = None
         with self.assertRaises(TypeError):
             catalog.plans[None] = None
-        with self.assertRaises(TypeError):
-            catalog.content_prefixes['extra'] = ()
         with self.assertRaises(dataclasses.FrozenInstanceError):
             catalog.questions = ()
         again = compiler().compile()

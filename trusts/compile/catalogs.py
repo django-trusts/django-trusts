@@ -70,6 +70,9 @@ class Question(object):
     - ``filter_by_permitted_content``:
       ``question(queryset, user, permission) -> QuerySet`` where
       ``queryset`` is over a proper-prefix model of ``content_model``.
+      ``prefixes`` is those models.
+    - ``named_filter``: ``question(user, permission) -> QuerySet``.
+      ``code`` is the filter code and ``expr`` is the stored tree.
     """
 
     name: str
@@ -77,14 +80,17 @@ class Question(object):
     records: tuple
     delegations: tuple
     question: object
+    prefixes: tuple = ()
+    code: object = None
+    expr: object = None
 
 
 @dataclass(frozen=True, slots=True, eq=False)
 class Catalog(object):
     """Answers from the rows ``Compiler.compile`` stored.
 
-    ``named_filters``, ``plans``, ``content_prefixes``, and
-    ``prepared_conditions`` are immutable mappings the factory stored.
+    ``named_filters``, ``plans``, and ``prepared_conditions`` are
+    immutable mappings the factory stored.
     ``questions`` is that build's question tuple. ``plans`` maps keys to
     plans; ``None`` is the default. ``user_rules`` is ``(primary, absent)``.
     """
@@ -101,7 +107,6 @@ class Catalog(object):
     override_q: object
     plans: object
     questions: tuple = ()
-    content_prefixes: object = None
     prepared_conditions: object = None
 
     def plan_for(self, content, *, user=None, permission=None):
@@ -114,11 +119,6 @@ class Catalog(object):
         key = (resolved, principal, terminal)
         plan = self.plans.get(key, self.plans[None])
         return replace(plan, content_identity=_candidate_model(content))
-
-    def iter_permission_conditions(self):
-        """Yield ``(model, code, tree)`` from the frozen named-filter copy."""
-        for (_label, code), (model, tree) in self.named_filters.items():
-            yield model, code, tree
 
     def _stored_named_filter(self, model, code):
         return self.named_filters.get((condition_model_key(model), code))
@@ -325,7 +325,8 @@ class Catalog(object):
         call is collected. Conditional questions are included only when
         they can arise: ``get_group_permissions`` only for a group with a
         ``via_group`` record, and ``filter_by_permitted_content`` only for
-        a group whose content path has a proper prefix.
+        a group whose content path has a proper prefix. Named-filter
+        questions follow the content-group questions, in registration order.
         """
         visit = visitor.visit
         return tuple(visit(question) for question in self.questions)
@@ -482,13 +483,6 @@ class Catalog(object):
             return False, skipped
         return False, {}
 
-    def permitted_content_prefix_models(self, model):
-        """Concrete models that are a proper prefix of ``model``'s path."""
-        prefixes = self.content_prefixes
-        if not prefixes:
-            return ()
-        return prefixes.get(content_model(model), ())
-
     def _question_has_perm(self, user, content, permission):
         inquiry = _instance_exists_query(self, content, user, permission)
         return False if inquiry is None else inquiry
@@ -505,6 +499,12 @@ class Catalog(object):
         return self.filter_by_permitted_content(
             queryset, user, permission, content=content_model,
         )
+
+    def _question_named_filter(self, model, tree, user, permission):
+        compiled = compile_to_q(
+            tree, model, user, permission, self.user_model,
+        )
+        return model._meta.concrete_model._default_manager.filter(compiled)
 
 
 class PreparedInquiry(object):

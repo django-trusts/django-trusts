@@ -12,9 +12,8 @@ from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
     ModelIdentity,
     resolve_field_path,
-    validate_expression,
 )
-from trusts.plan.grammar import Tree, is_predicate
+from trusts.plan.grammar import Tree
 
 
 def contains_q(lookup, member):
@@ -334,13 +333,3 @@ def compile_to_q(node, model, user, perm, user_model=None):
         '.contains(), or boolean field.'
     )
 
-
-def compile_expression_q(expr, model, user, perm, user_model=None):
-    """Compile a registered ``Tree`` to ``Q``. Fail closed if invalid."""
-    if not is_predicate(expr):
-        raise PermissionConditionError(
-            'Permission condition did not produce a comparison, '
-            '.contains(), boolean field, or combination with & and |.'
-        )
-    validate_expression(expr, model, user_model)
-    return compile_to_q(expr, model, user, perm, user_model)
