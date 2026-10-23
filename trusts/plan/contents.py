@@ -347,6 +347,14 @@ def permitted_content_q(scope_model, user, permission, *, content, catalog,
     return wrapped
 
 
+def bind_filtered_queryset(queryset, predicate, *, user_model):
+    if predicate is None:
+        return queryset.none()
+    return bind_once(
+        queryset.filter(predicate).distinct(), user_model=user_model,
+    )
+
+
 def _compile_permitted_content_queryset(
     queryset, user, permission, *, content, catalog, skipped=(),
 ):
@@ -354,10 +362,8 @@ def _compile_permitted_content_queryset(
         queryset.model, user, permission, content=content, catalog=catalog,
         skipped=skipped,
     )
-    if wrapped is None:
-        return queryset.none()
-    return bind_once(
-        queryset.filter(wrapped).distinct(), user_model=catalog.user_model,
+    return bind_filtered_queryset(
+        queryset, wrapped, user_model=catalog.user_model,
     )
 
 
