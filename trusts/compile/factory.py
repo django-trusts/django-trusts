@@ -1087,17 +1087,6 @@ class Compiler(object):
             )
 
 
-def probe_along_capabilities(connection):
-    """Execute a plain recursive CTE. Raises on failure."""
-    with connection.cursor() as cursor:
-        cursor.execute(
-            'WITH RECURSIVE t(n) AS ('
-            'SELECT 0 UNION ALL SELECT n + 1 FROM t WHERE n < 0'
-            ') SELECT n FROM t'
-        )
-        cursor.fetchone()
-
-
 def _validate_equal_paths(left_path, right_path, root):
     _left_path, left_model, _left_field, left_target = _resolve_forward_singles(
         root, left_path, 'condition',

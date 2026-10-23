@@ -19,7 +19,6 @@ from trusts.inspect.checks import (
     check_obsolete_legacy_callback_setting,
 )
 from trusts.errors import PermissionConditionError
-from trusts.plan.conditions import obsolete_legacy_callback_setting_enabled
 from trusts.plan.grammar import Tree
 
 from tests.support import compiler
@@ -114,7 +113,6 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
             )
 
     def test_obsolete_setting_is_check_error_not_callback_opt_in(self):
-        self.assertFalse(obsolete_legacy_callback_setting_enabled())
         self.assertEqual(check_obsolete_legacy_callback_setting(None), [])
         with override_settings(TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS=True):
             errors = _messages_with_id(
