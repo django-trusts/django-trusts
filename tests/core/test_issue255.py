@@ -1,8 +1,8 @@
 """Reverse permission inquiry (#255).
 
-One saved content object and one permission. The private compiler and
-both public adapters return the same rows as ``user.has_perm`` for the
-candidate user queryset. Construction is zero SQL. Evaluation is one
+One saved content object and one permission. ``Catalog.permitted_users``
+and both public adapters return the same rows as ``user.has_perm`` for
+the candidate user queryset. Construction is zero SQL. Evaluation is one
 statement. Core does not add an ``is_active`` exclusion around a custom
 reverse predicate. ``skip_is_active=True`` is passed only to the
 Trusts-owned mixin method.
@@ -23,7 +23,6 @@ from django.test.utils import isolate_apps
 from tests.core import KernelHostRequiredMixin
 from tests.core.test_issue147.test_sql_export import Folder, FolderGrant, _document_handle, _handle as _export_handle
 from tests.myapp.backends import DocumentBackend
-from trusts.plan.users import lock_permitted_users_queryset
 from tests.core.test_issue246 import _tables
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
@@ -190,9 +189,9 @@ def _seal_document_factory(factory):
         built_catalog,
         config_for_class,
         mixin_configs,
-        snapshot_installed_catalogs,
+        snapshot_config_catalogs,
     )
-    saved = snapshot_installed_catalogs()
+    saved = snapshot_config_catalogs()
     previous = config_for_class(DocumentBackend).catalog
     family = config_for_class(DocumentBackend).family if previous is None else previous.family
     factory.path = DOCUMENT_BACKEND
@@ -205,15 +204,15 @@ def _seal_document_factory(factory):
 @contextmanager
 def _document_registry():
     from tests.support import (
-        restore_installed_catalogs,
-        snapshot_installed_catalogs,
+        restore_config_catalogs,
+        snapshot_config_catalogs,
     )
-    saved = snapshot_installed_catalogs()
+    saved = snapshot_config_catalogs()
     registry = compiler(path=DOCUMENT_BACKEND)
     try:
         yield registry
     finally:
-        restore_installed_catalogs(saved)
+        restore_config_catalogs(saved)
 
 def _handle(registry):
     registry.path = DOCUMENT_BACKEND
@@ -249,7 +248,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
         handle.register(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
         handle.register(trust=FolderPermit, user='user', permission='permission', content='directory', along=('directory__parent', 2))
         folder = Folder(pk=1)
-        queryset = lock_permitted_users_queryset(built_catalog(handle), folder, Permission(pk=1))
+        queryset = built_catalog(handle).permitted_users(folder, Permission(pk=1))
         self.assertIn('WITH RECURSIVE', str(queryset.query))
         document = yaml.safe_load(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
@@ -441,19 +440,16 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         self.assertNotIn(self.alice.pk, found)
         self.assertNotIn(self.superuser.pk, found)
 
-    def test_queryset_arguments_and_unsaved_content_fail_before_sql(self):
+    def test_queryset_arguments_and_unsaved_content_are_empty_before_sql(self):
         unsaved = Document(title='unsaved-255')
         with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError):
-                unsaved.get_permitted_users(self.change)
-            with self.assertRaises(TrustsConfigurationError):
-                self.document.get_permitted_users(Permission.objects.all())
-            with self.assertRaises(TrustsConfigurationError):
-                self.document.get_permitted_users(Document.objects.all())
-            with self.assertRaises(TrustsConfigurationError):
-                PlainUserManager.permitted(PlainUserManager(), Document.objects.all(), self.change)
-            with self.assertRaises(ValueError):
-                self.document.get_permitted_users('not-a-permission')
+            self.assertEqual(list(unsaved.get_permitted_users(self.change)), [])
+            self.assertEqual(list(self.document.get_permitted_users(Permission.objects.all())), [])
+            self.assertEqual(list(self.document.get_permitted_users(Document.objects.all())), [])
+            wrong_user = PlainUserManager.permitted(
+                PlainUserManager(), Document.objects.all(), self.change)
+            self.assertEqual(list(wrong_user), [])
+            self.assertEqual(list(self.document.get_permitted_users('not-a-permission')), [])
 
     def test_and_or_composition_stays_lazy_and_evaluates_once(self):
         with self.assertNumQueries(0):
@@ -842,7 +838,7 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
                     found = _pks(folder.get_permitted_users(permission))
                 expected = {user.pk for user in candidates if _object_backend_allows(user, permission.user_perm_str, folder)}
                 self.assertEqual(found, expected)
-                locked = _pks(lock_permitted_users_queryset(built_catalog(self.handle), folder, permission))
+                locked = _pks(built_catalog(self.handle).permitted_users(folder, permission))
                 self.assertEqual(locked, found)
         self.assertIn(self.alice.pk, _pks(at_bound.get_permitted_users(permission)))
         self.assertNotIn(self.alice.pk, _pks(beyond.get_permitted_users(permission)))
@@ -881,15 +877,11 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
         with self.assertNumQueries(0):
             chosen = uuid_manager.permitted(paper, permission)
         self.assertIs(chosen.model, self.UuidUser)
-        with self.assertNumQueries(1):
-            found = _pks(chosen)
-        self.assertIn(person.pk, found)
-        self.assertIsInstance(person.pk, uuid.UUID)
-        self.assertEqual(found, {person.pk})
+        self.assertEqual(list(chosen), [])
         with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                paper.get_permitted_users(permission)
-        self.assertIn(self.UuidUser._meta.label, str(ctx.exception))
+            empty = paper.get_permitted_users(permission)
+        self.assertEqual(list(empty), [])
+        self.assertIs(empty.model, get_user_model())
 
 def _user_manager():
     manager = PlainUserManager()
@@ -905,7 +897,7 @@ def _reverse_agrees(test, handle, content, perm, candidates):
     expected = {user.pk for user in candidates if _object_backend_allows(user, code, content)}
     test.assertEqual(found, expected)
     test.assertEqual(_pks(_user_manager().permitted(content, perm)), found)
-    test.assertEqual(_pks(lock_permitted_users_queryset(built_catalog(handle), content, perm)), found)
+    test.assertEqual(_pks(built_catalog(handle).permitted_users(content, perm)), found)
     return found
 
 def _assert_along_lock(test, handle, specs, *, group=False):

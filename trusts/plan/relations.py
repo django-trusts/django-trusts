@@ -24,7 +24,6 @@ from trusts.plan.predicates import (
 from trusts.plan.recursions import GrantReach
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.standards import (
-    BUILTIN_USER_CONDITIONS,
     bind_skip_flags,
     condition_names,
 )
@@ -92,26 +91,19 @@ class SkipParams(object):
 
 
 def known_skip_names(subjects):
-    """Condition and override names on these catalogs or registries.
-
-    No subject yet means the built-in ``is_active`` condition only.
-    """
+    """Condition and override names on these catalogs or registries."""
     names = set()
-    saw = False
     for subject in subjects:
         if subject is None:
             continue
-        saw = True
         names.update(condition_names(
             subject.user_conditions, subject.user_override,
         ))
-    if not saw:
-        names.update(rule.name for rule in BUILTIN_USER_CONDITIONS)
     return frozenset(names)
 
 
 def user_skip_params(user, skip_flags, *, subjects=None, catalog=None,
-                     require_user=True, skip_names=None):
+                     require_user=True):
     """Validate ``skip_*`` keywords and return their bound values.
 
     Anonymous, unauthenticated, and ``None`` are denied before SQL.
@@ -120,24 +112,23 @@ def user_skip_params(user, skip_flags, *, subjects=None, catalog=None,
     """
     selected = {}
     for key, value in skip_flags.items():
-        if not key.startswith('skip_') or not key[5:].isidentifier():
-            raise TypeError('Unexpected keyword argument %r.' % (key,))
-        _require_mode_flag(value, key)
+        if (
+            not key.startswith('skip_') or not key[5:].isidentifier()
+            or not isinstance(value, bool)
+        ):
+            return SkipParams(True, {})
         selected[key[5:]] = value
     denied = require_user and (
         user is None or _user_identity_denied(user)
     )
     if denied:
         return SkipParams(True, {})
-    if skip_names is not None:
-        known = frozenset(skip_names)
-    elif catalog is not None:
+    if catalog is not None:
         known = known_skip_names((catalog,))
     else:
         known = known_skip_names(subjects or ())
-    unknown = next((name for name in selected if name not in known), None)
-    if unknown is not None:
-        raise TypeError('Unknown skip keyword %r.' % ('skip_%s' % unknown,))
+    if any(name not in known for name in selected):
+        return SkipParams(True, {})
     return SkipParams(False, {
         name: selected.get(name, False) for name in known
     })
@@ -188,13 +179,6 @@ def _or_q(left, right):
     return left | right
 
 
-def _require_mode_flag(value, name):
-    """A skip keyword must be a real boolean."""
-    if not isinstance(value, bool):
-        raise TypeError('%s must be a bool, not %r.' % (name, value))
-    return value
-
-
 def _user_identity_denied(user):
     """Anonymous and unauthenticated users are denied even when
     ``skip_is_active`` is true.
@@ -213,7 +197,7 @@ def _user_identity_denied(user):
 def bind_checked_user(subject, grant=None, *, rules=None, override=None,
                       identity=None, values=None, plan=None, closed=False,
                       with_override=True, skip_flags=None, require_user=True,
-                      catalog=None, subjects=None, skip_names=None):
+                      catalog=None, subjects=None):
     """Validate ``skip_*``, deny before SQL, and bind one registration fragment.
 
     ``skip_flags`` is a public inquiry. ``values`` means that inquiry
@@ -223,7 +207,7 @@ def bind_checked_user(subject, grant=None, *, rules=None, override=None,
     if skip_flags is not None:
         inquiry = user_skip_params(
             subject, skip_flags, subjects=subjects, catalog=catalog,
-            require_user=require_user, skip_names=skip_names,
+            require_user=require_user,
         )
         if inquiry.denied:
             return SkipParams(True, {}, None)
@@ -364,7 +348,8 @@ class RelationPlan:
         lookup (``Subquery`` / nested ``OuterRef``) so callers can bind
         permission identity in the same SQL statement.
         """
-        user = require_instance(user, 'user')
+        if not isinstance(user, Model):
+            return None
         permission = bind_terminal(permission, 'permission')
         if not self.records:
             return None
@@ -382,12 +367,8 @@ class RelationPlan:
         without the outer user. Eligible grants and candidate users join
         outside the recursive CTE.
         """
-        content = require_instance(content, 'content')
-        if content.pk is None:
-            raise TrustsConfigurationError(
-                'content must be a saved %s instance.'
-                % content._meta.label
-            )
+        if not isinstance(content, Model) or content.pk is None:
+            return None
         permission = bind_terminal(permission, 'permission')
         if not self.records:
             return None
@@ -455,6 +436,12 @@ class RelationPlan:
     def filter_content(self, queryset, user, permission, *,
                        skipped=()):
         """Lazy queryset of candidate rows correlated to the same plan."""
+        if (
+            not isinstance(user, Model)
+            or not isinstance(permission, Model)
+            or permission.pk is None
+        ):
+            return queryset.none()
         return self._bound_queryset(
             user,
             self.content_exists(user, permission),

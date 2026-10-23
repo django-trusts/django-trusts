@@ -1,3 +1,4 @@
+from django.apps import apps
 from django.contrib.auth.models import Permission
 from django.db import models
 
@@ -82,4 +83,10 @@ def register_document_app(registry):
     )
 
 
-register_document_app(DocumentBackend().get_registry())
+_config = apps.get_containing_app_config(DocumentBackend.__module__)
+if (
+    _config is not None and _config.label == 'myapp'
+    and not _config.recorder.frozen
+):
+    register_document_app(_config.recorder)
+    _config._registered_from_models = True

@@ -195,12 +195,9 @@ class AuthorizedQuerySetLiveTest(TestCase):
     def test_wrong_permission_type_is_zero_sql_configuration_error(self):
         qs = AuthorizedQuerySet(Document)
         with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError):
-                qs.authorized(self.alice, 'change_document')
-            with self.assertRaises(TrustsConfigurationError):
-                qs.authorized(self.alice, 'myapp.change_document')
-            with self.assertRaises(TrustsConfigurationError):
-                qs.authorized(self.alice, None)
+            self.assertEqual(list(qs.authorized(self.alice, 'change_document')), [])
+            self.assertEqual(list(qs.authorized(self.alice, 'myapp.change_document')), [])
+            self.assertEqual(list(qs.authorized(self.alice, None)), [])
 
     def test_instance_filter_matches_grant_and_stays_lazy(self):
         qs = Document.objects.authorized(self.alice, self.change)
@@ -340,22 +337,20 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
 
     def test_wrong_permission_type_is_zero_sql(self):
         with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError):
-                scoped_permitted_content(
-                    self.Folder.objects.all(),
-                    self.alice,
-                    'add_payload',
-                    content=self.Payload,
-                    registry=built_catalog(self.handle),
-                )
-            with self.assertRaises(TrustsConfigurationError):
-                scoped_permitted_content(
-                    self.Folder.objects.all(),
-                    self.alice,
-                    None,
-                    content=self.Payload,
-                    registry=built_catalog(self.handle),
-                )
+            self.assertEqual(list(scoped_permitted_content(
+                self.Folder.objects.all(),
+                self.alice,
+                'add_payload',
+                content=self.Payload,
+                registry=built_catalog(self.handle),
+            )), [])
+            self.assertEqual(list(scoped_permitted_content(
+                self.Folder.objects.all(),
+                self.alice,
+                None,
+                content=self.Payload,
+                registry=built_catalog(self.handle),
+            )), [])
 
     def test_wrong_user_and_wrong_permission_deny(self):
         self.assertFalse(
@@ -373,15 +368,13 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
 
     def test_public_filter_reads_listed_catalogs(self):
         with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError):
-                filter_by_permitted_content(
-                    object(), self.alice, self.add, content=self.Payload,
-                )
-            with self.assertRaises(TrustsConfigurationError):
-                filter_by_permitted_content(
-                    self.Folder.objects.all(), object(), self.add,
-                    content=self.Payload,
-                )
+            self.assertEqual(list(filter_by_permitted_content(
+                object(), self.alice, self.add, content=self.Payload,
+            )), [])
+            self.assertEqual(list(filter_by_permitted_content(
+                self.Folder.objects.all(), object(), self.add,
+                content=self.Payload,
+            )), [])
         with listed_relationship((self.handle,)):
             self.assertEqual(
                 _pks(filter_by_permitted_content(

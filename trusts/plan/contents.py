@@ -102,15 +102,16 @@ def granted(catalog, candidates, user, permission, *, kind='complete',
             permission_model=None, skipped=()):
     """This relationship-family catalog's complete (or group) predicate.
 
-    A valid compiler returning ``None`` is inapplicable. Compiler
-    exceptions propagate. An empty result is ``None``. A catalog whose
+    A valid compiler returning ``None`` is inapplicable. A user that is
+    not a model instance returns ``None``. Compiler exceptions for a
+    real inquiry propagate. An empty result is ``None``. A catalog whose
     family is not relationship returns ``None``.
 
     ``permission`` may be a permission instance or an unevaluated lookup
     (``Subquery`` / ``OuterRef``). Expressions are not passed to
     ``plan_for``; the plan is selected by content and user terminals.
     """
-    if catalog.family != 'relationship':
+    if catalog.family != 'relationship' or not isinstance(user, Model):
         return None
     return _compile_granted(
         catalog, candidates, user, permission, kind=kind,
@@ -346,6 +347,14 @@ def permitted_content_q(scope_model, user, permission, *, content, catalog,
     return wrapped
 
 
+def bind_filtered_queryset(queryset, predicate, *, user_model):
+    if predicate is None:
+        return queryset.none()
+    return bind_once(
+        queryset.filter(predicate).distinct(), user_model=user_model,
+    )
+
+
 def _compile_permitted_content_queryset(
     queryset, user, permission, *, content, catalog, skipped=(),
 ):
@@ -353,10 +362,8 @@ def _compile_permitted_content_queryset(
         queryset.model, user, permission, content=content, catalog=catalog,
         skipped=skipped,
     )
-    if wrapped is None:
-        return queryset.none()
-    return bind_once(
-        queryset.filter(wrapped).distinct(), user_model=catalog.user_model,
+    return bind_filtered_queryset(
+        queryset, wrapped, user_model=catalog.user_model,
     )
 
 

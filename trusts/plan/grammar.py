@@ -182,6 +182,20 @@ class Tree(object):
             and self.item == other.item
         )
 
+    def inquiry_partner(self):
+        """The path matched against the requested permission, or ``None``.
+
+        That is ``path`` in ``inquiry == path``, ``path == inquiry``, and
+        ``path.contains(inquiry)``.
+        """
+        if self.kind == 'contains' and is_inquiry(self.right):
+            return self.left
+        if self.kind in ('eq', 'ne') and is_inquiry(self.left):
+            return self.right
+        if self.kind in ('eq', 'ne') and is_inquiry(self.right):
+            return self.left
+        return None
+
     def __repr__(self):
         return 'Tree(%s)' % self.kind
 
@@ -336,21 +350,6 @@ def symbol_token(symbol):
 def is_inquiry(node):
     """True for the bare requested-permission root of a delegated condition."""
     return node.kind == 'field' and node.root == 'inquiry' and not node.path
-
-
-def inquiry_partner(node):
-    """The path matched against the requested permission, or ``None``.
-
-    That is ``path`` in ``inquiry == path``, ``path == inquiry``, and
-    ``path.contains(inquiry)``.
-    """
-    if node.kind == 'contains' and is_inquiry(node.right):
-        return node.left
-    if node.kind in ('eq', 'ne') and is_inquiry(node.left):
-        return node.right
-    if node.kind in ('eq', 'ne') and is_inquiry(node.right):
-        return node.left
-    return None
 
 
 def is_predicate(node):

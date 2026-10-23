@@ -212,7 +212,7 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
 
 class ImplementationOwnershipReadyTest(TestCase):
     def test_non_mixin_path_is_skipped_at_ready_with_zero_sql(self):
-        from trusts.apps import installed_catalogs
+        from django.apps import apps
 
         config = _bind(NonMixinOwnerConfig, ready=False)
         before = configured_catalog(HOST)
@@ -221,8 +221,17 @@ class ImplementationOwnershipReadyTest(TestCase):
             with self.assertNumQueries(0):
                 config.ready()
         self.assertIs(configured_catalog(HOST), before)
-        paths = [catalog.path for catalog in installed_catalogs()]
-        self.assertIsNone(config.catalog)
+        paths = [
+            installed.catalog.path
+            for installed in apps.get_app_configs()
+            if isinstance(installed, TrustsConfigMixin)
+        ]
+        self.assertEqual(config.catalog.records, ())
+        self.assertEqual(config.catalog.delegations, ())
+        self.assertEqual(
+            config.catalog.path,
+            'tests.core.test_issue199.NonMixinOwnerConfig',
+        )
         self.assertNotIn(MODEL_BACKEND, paths)
         self.assertFalse(hasattr(config, 'registries'))
         self.assertFalse(hasattr(config, 'trusts_backend_paths'))

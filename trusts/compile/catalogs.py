@@ -12,6 +12,7 @@ from trusts.plan.aggregates import (
     _compile_common_permissions,
     _delegated_user_exists,
     all_match,
+    _instance_exists_query,
     instance_match,
 )
 from trusts.plan.conditions import (
@@ -26,6 +27,7 @@ from trusts.plan.contents import (
     _compile_granted,
     _compile_permitted_content_queryset,
     _ordinary_records,
+    bind_filtered_queryset,
     granted,
 )
 from trusts.plan.delegations import _sponsor_record_matches
@@ -35,12 +37,12 @@ from trusts.plan.hops import (
     require_instance,
 )
 from trusts.plan.relations import _candidate_model, bind_checked_user
-from trusts.plan.rewrites import bind_once
 from trusts.plan.users import (
     _named_filter_q,
     _permission_binding_for_plan,
     _plan_user_model,
     _reverse_checked,
+    assert_persisted_principal,
 )
 
 _NO_PRESET = object()
@@ -59,7 +61,9 @@ class Question(object):
     catalog question families; its call signature depends on ``name``:
 
     - ``permitted``: ``question(user, permission) -> QuerySet``
-    - ``has_perm``: ``question(user, content, permission) -> bool``
+    - ``has_perm``: ``question(user, content, permission)`` returns the
+      exists query runtime executes. The object is true when a row is
+      held and false when this catalog grants nothing.
     - ``get_all_permissions`` / ``get_group_permissions``:
       ``question(user, content) -> QuerySet | ()``
     - ``get_permitted_users``: ``question(content, permission)``
@@ -67,6 +71,9 @@ class Question(object):
     - ``filter_by_permitted_content``:
       ``question(queryset, user, permission) -> QuerySet`` where
       ``queryset`` is over a proper-prefix model of ``content_model``.
+      ``prefixes`` is those models.
+    - ``named_filter``: ``question(user, permission) -> QuerySet``.
+      ``code`` is the filter code and ``expr`` is the stored tree.
     """
 
     name: str
@@ -74,14 +81,17 @@ class Question(object):
     records: tuple
     delegations: tuple
     question: object
+    prefixes: tuple = ()
+    code: object = None
+    expr: object = None
 
 
 @dataclass(frozen=True, slots=True, eq=False)
 class Catalog(object):
     """Answers from the rows ``Compiler.compile`` stored.
 
-    ``named_filters``, ``plans``, ``content_prefixes``, and
-    ``prepared_conditions`` are immutable mappings the factory stored.
+    ``named_filters``, ``plans``, and ``prepared_conditions`` are
+    immutable mappings the factory stored.
     ``questions`` is that build's question tuple. ``plans`` maps keys to
     plans; ``None`` is the default. ``user_rules`` is ``(primary, absent)``.
     """
@@ -98,7 +108,6 @@ class Catalog(object):
     override_q: object
     plans: object
     questions: tuple = ()
-    content_prefixes: object = None
     prepared_conditions: object = None
 
     def plan_for(self, content, *, user=None, permission=None):
@@ -111,11 +120,6 @@ class Catalog(object):
         key = (resolved, principal, terminal)
         plan = self.plans.get(key, self.plans[None])
         return replace(plan, content_identity=_candidate_model(content))
-
-    def iter_permission_conditions(self):
-        """Yield ``(model, code, tree)`` from the frozen named-filter copy."""
-        for (_label, code), (model, tree) in self.named_filters.items():
-            yield model, code, tree
 
     def _stored_named_filter(self, model, code):
         return self.named_filters.get((condition_model_key(model), code))
@@ -130,9 +134,10 @@ class Catalog(object):
         ordinary records. The compiler bound at construction compiles
         the grant.
         """
-        user = require_instance(user, 'user')
-        if isinstance(permission, Model):
-            permission = require_instance(permission, 'permission')
+        if not isinstance(user, Model):
+            return False
+        if isinstance(permission, Model) and permission.pk is None:
+            return False
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if isinstance(content, QuerySet):
             if denied:
@@ -143,7 +148,8 @@ class Catalog(object):
                 permission_model=permission_model, skipped=values,
             )
             return False if matched is None else bool(matched)
-        content = require_instance(content, 'content')
+        if not isinstance(content, Model) or content.pk is None:
+            return False
         if denied:
             return False
         matched = instance_match(
@@ -156,12 +162,19 @@ class Catalog(object):
     def filter_authorized(self, queryset, user, permission, *,
                           skipped=None, **skip_flags):
         """Q2: rows of ``queryset`` ``user`` may access for ``permission``."""
-        if not isinstance(queryset, QuerySet):
-            raise TrustsConfigurationError(
-                'filter_authorized requires a QuerySet, not %r.' % (queryset,)
+        if (
+            not isinstance(queryset, QuerySet)
+            or not isinstance(user, Model)
+            or not isinstance(permission, Model)
+            or permission.pk is None
+        ):
+            return (
+                queryset.none() if isinstance(queryset, QuerySet)
+                else type(queryset[0])._default_manager.none()
+                if isinstance(queryset, (list, tuple)) and queryset
+                and isinstance(queryset[0], Model)
+                else queryset
             )
-        user = require_instance(user, 'user')
-        permission = require_instance(permission, 'permission')
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if denied:
             return queryset.none()
@@ -169,22 +182,26 @@ class Catalog(object):
             self, queryset, user, permission,
             kind='complete', skipped=values,
         )
-        if granted_q is None:
-            return queryset.none()
-        return bind_once(
-            queryset.filter(granted_q).distinct(), user_model=self.user_model,
+        return bind_filtered_queryset(
+            queryset, granted_q, user_model=self.user_model,
         )
 
     def filter_by_permitted_content(self, queryset, user, permission, *,
                                     content, skipped=None, **skip_flags):
         """Scope rows that are a proper prefix of ``content`` for this catalog."""
-        if not isinstance(queryset, QuerySet):
-            raise TrustsConfigurationError(
-                'filter_by_permitted_content requires a QuerySet, not %r.'
-                % (queryset,)
+        if (
+            not isinstance(queryset, QuerySet)
+            or not isinstance(user, Model)
+            or not isinstance(permission, Model)
+            or permission.pk is None
+        ):
+            return (
+                queryset.none() if isinstance(queryset, QuerySet)
+                else type(queryset[0])._default_manager.none()
+                if isinstance(queryset, (list, tuple)) and queryset
+                and isinstance(queryset[0], Model)
+                else queryset
             )
-        user = require_instance(user, 'user')
-        permission = require_instance(permission, 'permission')
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if denied:
             return queryset.none()
@@ -201,7 +218,12 @@ class Catalog(object):
         ``get_group_permissions``; ``'complete'`` is ``get_all_permissions``.
         The compiler bound at construction compiles the grant.
         """
-        user = require_instance(user, 'user')
+        if not isinstance(user, Model):
+            return ()
+        if not isinstance(content, (Model, QuerySet)) or (
+            isinstance(content, Model) and content.pk is None
+        ):
+            return ()
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         plan = self.plan_for(content, user=user)
         if denied:
@@ -228,9 +250,12 @@ class Catalog(object):
         plan = self.plan_for(content)
         if not plan.records and not plan.delegations:
             return None
-        binding, condition = _permission_binding_for_plan(
+        bound = _permission_binding_for_plan(
             accepts_permission, content, perm, plan,
         )
+        if bound is None:
+            return None
+        binding, condition = bound
         exists = plan.user_exists(content, binding) if plan.records else None
         if plan.delegations:
             permission_model = (
@@ -275,19 +300,18 @@ class Catalog(object):
         denied, values = self._resolve_skipped(
             None, skip_flags, None, require_user=False,
         )
-        predicate = self.permitted_users_predicate(
-            content, perm, skipped=values,
+        predicate = (
+            None if denied else self.permitted_users_predicate(
+                content, perm, skipped=values,
+            )
         )
         plan = self.plan_for(content)
-        if predicate is None:
-            user_model = (
-                _plan_user_model(plan, content)
-                if plan.records or plan.delegations else self.user_model
-            )
-            return user_model._default_manager.none()
-        user_model = _plan_user_model(plan, content)
-        return bind_once(
-            user_model._default_manager.filter(predicate).distinct(),
+        user_model = (
+            _plan_user_model(plan, content)
+            if plan.records or plan.delegations else self.user_model
+        )
+        return bind_filtered_queryset(
+            user_model._default_manager, predicate,
             user_model=self.user_model,
         )
 
@@ -299,7 +323,8 @@ class Catalog(object):
         call is collected. Conditional questions are included only when
         they can arise: ``get_group_permissions`` only for a group with a
         ``via_group`` record, and ``filter_by_permitted_content`` only for
-        a group whose content path has a proper prefix.
+        a group whose content path has a proper prefix. Named-filter
+        questions follow the content-group questions, in registration order.
         """
         visit = visitor.visit
         return tuple(visit(question) for question in self.questions)
@@ -354,13 +379,15 @@ class Catalog(object):
         )
 
     def has_perm(self, user_obj, permext, obj, **skip_flags):
-        inquiry = bind_checked_user(
-            user_obj, skip_flags=skip_flags, catalog=self,
-        )
-        if inquiry.denied:
+        if not isinstance(user_obj, Model) or not isinstance(obj, (Model, QuerySet)):
+            return False
+        if isinstance(obj, Model) and obj.pk is None:
+            return False
+        denied, values = self._resolve_skipped(user_obj, skip_flags)
+        if denied:
             return False
         entry = self.prepare_has_perm(
-            user_obj, permext, obj, skipped=inquiry.values,
+            user_obj, permext, obj, skipped=values,
         )
         return entry.execute()
 
@@ -376,11 +403,12 @@ class Catalog(object):
 
     def prepare_has_perm(self, user_obj, permext, obj, *, skipped):
         model = _content_model(obj)
+        try: applabel, modelname, action, cond = parse_perm_code(permext)
+        except ValueError: return PreparedInquiry(model, result=False)
         plan = self.plan_for(obj, user=user_obj)
         if not plan.applicable:
             return PreparedInquiry(model, result=False)
         stored, extra_q = self._condition_overlay(permext, obj, user_obj)
-        applabel, modelname, action, cond = parse_perm_code(permext)
         perm = '%s.%s_%s' % (applabel, action, modelname)
         if cond and stored is None:
             return PreparedInquiry(model, result=False)
@@ -415,14 +443,11 @@ class Catalog(object):
         return PreparedInquiry(model, result=bool(met))
 
     def _permission_codes(self, user_obj, obj, skip_flags, *, kind):
-        inquiry = bind_checked_user(
-            user_obj, skip_flags=skip_flags, catalog=self,
-        )
-        if inquiry.denied:
+        denied, values = self._resolve_skipped(user_obj, skip_flags)
+        if denied:
             return set()
         qs = self.permissions_for(
-            user_obj, obj, kind=kind,
-            skipped=dict(inquiry.values) if isinstance(inquiry.values, dict) else {},
+            user_obj, obj, kind=kind, skipped=values,
         )
         if qs is None or qs == ():
             return set()
@@ -440,23 +465,19 @@ class Catalog(object):
             stored, obj.model, user_obj, permext, self.user_model,
         )
 
-    def _resolve_skipped(self, subject, skip_flags, skipped, *, require_user=True):
-        if skip_flags:
-            inquiry = bind_checked_user(
-                subject, skip_flags=skip_flags, catalog=self,
-                require_user=require_user,
-            )
-            return inquiry.denied, inquiry.values
-        if isinstance(skipped, dict):
+    def _resolve_skipped(self, subject, skip_flags, skipped=None, *,
+                         require_user=True):
+        if isinstance(skipped, dict) and not skip_flags:
             return False, skipped
-        return False, {}
+        inquiry = bind_checked_user(
+            subject, skip_flags=skip_flags, catalog=self,
+            require_user=require_user,
+        )
+        return inquiry.denied, inquiry.values
 
-    def permitted_content_prefix_models(self, model):
-        """Concrete models that are a proper prefix of ``model``'s path."""
-        prefixes = self.content_prefixes
-        if not prefixes:
-            return ()
-        return prefixes.get(content_model(model), ())
+    def _question_has_perm(self, user, content, permission):
+        inquiry = _instance_exists_query(self, content, user, permission)
+        return False if inquiry is None else inquiry
 
     def _question_content_grant(self, content_model, user, permission):
         return self.filter_authorized(
@@ -470,6 +491,12 @@ class Catalog(object):
         return self.filter_by_permitted_content(
             queryset, user, permission, content=content_model,
         )
+
+    def _question_named_filter(self, model, tree, user, permission):
+        compiled = compile_to_q(
+            tree, model, user, permission, self.user_model,
+        )
+        return model._meta.concrete_model._default_manager.filter(compiled)
 
 
 class PreparedInquiry(object):
@@ -594,37 +621,6 @@ def evaluate_registered_expression(expr, user, perm, obj, model=None, user_model
     )
 
 
-def require_saved_content(content):
-    if isinstance(content, QuerySet):
-        raise TrustsConfigurationError(
-            'get_permitted_users accepts one saved content object, '
-            'not a queryset.'
-        )
-    if not isinstance(content, Model):
-        raise TrustsConfigurationError(
-            'content must be a saved model instance, not %r.' % (content,)
-        )
-    if content.pk is None:
-        raise PermissionConditionError('Save the object first.')
-
-
-def reject_permission_shape(perm):
-    if isinstance(perm, QuerySet):
-        raise TrustsConfigurationError(
-            'get_permitted_users accepts one permission, not a queryset.'
-        )
-    if isinstance(perm, (str, Model)):
-        if isinstance(perm, Model) and perm.pk is None:
-            raise TrustsConfigurationError(
-                'permission must be a saved %s instance.' % perm._meta.label
-            )
-        return
-    raise TrustsConfigurationError(
-        'permission must be a permission string or model instance, not %r.'
-        % (perm,)
-    )
-
-
 def catalog_models(catalog, content, principal_model):
     """Models this catalog's plan joins, after the user model matches."""
     plan = catalog.plan_for(content)
@@ -633,15 +629,7 @@ def catalog_models(catalog, content, principal_model):
     for record in plan.records:
         registered = record.user_model._meta.concrete_model
         if registered is not expected:
-            raise TrustsConfigurationError(
-                'Reverse permission inquiry candidate user model is %s, '
-                'but %s registers %s.'
-                % (
-                    expected._meta.label,
-                    record.root._meta.label,
-                    registered._meta.label,
-                )
-            )
+            return None
         models.extend((
             record.root, record.user_model, record.permission_model,
             record.content_model,
@@ -649,15 +637,7 @@ def catalog_models(catalog, content, principal_model):
     for record in plan.delegations:
         registered = record.delegate_model._meta.concrete_model
         if registered is not expected:
-            raise TrustsConfigurationError(
-                'Reverse permission inquiry candidate user model is %s, '
-                'but %s registers delegate %s.'
-                % (
-                    expected._meta.label,
-                    record.root._meta.label,
-                    registered._meta.label,
-                )
-            )
+            return None
         models.extend((
             record.root, record.delegate_model, record.sponsor_model,
             record.content_model,
@@ -692,3 +672,79 @@ def assert_same_database(alias, models):
                 'not one SQL statement.'
                 % (concrete._meta.label, alias, chosen)
             )
+
+
+def filter_catalogs(catalogs, queryset, user, *, ask, skip_flags,
+                    require_user=True, extra_q=None, user_model=None):
+    """OR each listed catalog's grant and bind ``user_model``."""
+    combined = None
+    for item, catalog in catalogs:
+        denied, values = catalog._resolve_skipped(
+            user, skip_flags, require_user=require_user,
+        )
+        if denied:
+            return queryset.none()
+        part = ask(item, values)
+        if part is None:
+            continue
+        clause = part if extra_q is None else part & extra_q
+        combined = clause if combined is None else combined | clause
+    return bind_filtered_queryset(
+        queryset, combined, user_model=user_model,
+    )
+
+
+def compile_catalog_users(catalogs, content, perm, *, user_queryset=None,
+                          user_model, **skip_flags):
+    """Lazy user queryset for one saved content object and one permission."""
+    if user_queryset is not None and not isinstance(user_queryset, QuerySet):
+        return user_model._default_manager.none()
+    if user_queryset is not None and (
+        user_queryset.model is None
+        or user_queryset.model._meta.concrete_model
+        is not user_model._meta.concrete_model
+    ):
+        return (
+            user_model._default_manager.none()
+            if user_queryset.model is None else user_queryset.none()
+        )
+    if user_queryset is None:
+        user_queryset = user_model._default_manager.get_queryset()
+    if (
+        not isinstance(content, Model) or content.pk is None
+        or isinstance(perm, QuerySet)
+        or not isinstance(perm, (str, Model))
+        or (isinstance(perm, Model) and perm.pk is None)
+    ):
+        return user_queryset.none()
+    principal = user_queryset.model
+    assert_persisted_principal(principal)
+    combined = None
+    involved = [principal, type(content)]
+    if isinstance(perm, (str, Permission)):
+        involved.append(Permission)
+    for item, catalog in catalogs:
+        denied, values = catalog._resolve_skipped(
+            None, skip_flags, require_user=False,
+        )
+        if denied:
+            return user_queryset.none()
+        predicate = item.permitted_users_predicate(
+            content, perm, skipped=values,
+        )
+        if predicate is None:
+            continue
+        models = catalog_models(catalog, content, principal)
+        if models is None:
+            continue
+        combined = predicate if combined is None else combined | predicate
+        involved.extend(models)
+    if combined is None:
+        return user_queryset.none()
+    alias = database_alias(content, user_queryset)
+    assert_same_database(alias, involved)
+    if user_queryset.db != alias:
+        user_queryset = user_queryset.using(alias)
+    return bind_filtered_queryset(
+        user_queryset, combined, user_model=principal,
+    )

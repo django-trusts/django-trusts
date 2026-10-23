@@ -184,7 +184,7 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
         self.assertTrue(catalog.records)
         self.assertTrue(any(
             model is Document and code == 'non_confidential'
-            for model, code, record in catalog.iter_permission_conditions()
+            for (_label, code), (model, _tree) in catalog.named_filters.items()
         ))
 
 @contextmanager

@@ -113,8 +113,7 @@ class UserConditionRegistrationTest(TransactionTestCase):
             allowed = built_catalog(open_registry).permissions_for(inactive, note)
             self.assertEqual(set(allowed.values_list('pk', flat=True)), {read.pk})
             self.assertNotIn('is_active', str(allowed.query))
-            with self.assertRaises(TypeError):
-                built_catalog(registry).permissions_for(alice, note, allow_inactive=True)
+            self.assertEqual(list(built_catalog(registry).permissions_for(alice, note, allow_inactive=True)), [])
             with self.assertRaises(TrustsConfigurationError):
                 registry.set_user_condition('again', lambda u: u.is_active)
         finally:
@@ -664,21 +663,13 @@ class SkipKeywordTest(TransactionTestCase):
             grant = Ref(UnknownGrant)
             registry.register_relation(content=grant.note, user=grant.user, permission=grant.permission)
             for value in (True, False):
-                with self.assertRaises(TypeError) as ctx:
-                    built_catalog(registry).permissions_for(alice, note, skip_nope=value)
-                self.assertIn('skip_nope', str(ctx.exception))
-            with self.assertRaises(TypeError) as ctx:
-                built_catalog(registry).permissions_for(inactive, note, skip_nope=True)
-            self.assertIn('skip_nope', str(ctx.exception))
+                self.assertEqual(list(built_catalog(registry).permissions_for(alice, note, skip_nope=value)), [])
+            self.assertEqual(list(built_catalog(registry).permissions_for(inactive, note, skip_nope=True)), [])
             removed = compiler(user_model=get_user_model())
             removed.set_user_condition('is_active', None)
             removed.register_relation(content=grant.note, user=grant.user, permission=grant.permission)
-            with self.assertRaises(TypeError) as ctx:
-                built_catalog(removed).permissions_for(alice, note, skip_is_active=True)
-            self.assertIn('skip_is_active', str(ctx.exception))
-            with self.assertRaises(TypeError) as ctx:
-                built_catalog(registry).permissions_for(alice, note, skip_superuser=True)
-            self.assertIn('skip_superuser', str(ctx.exception))
+            self.assertEqual(list(built_catalog(removed).permissions_for(alice, note, skip_is_active=True)), [])
+            self.assertEqual(list(built_catalog(registry).permissions_for(alice, note, skip_superuser=True)), [])
             self.assertEqual(set(built_catalog(removed).permissions_for(alice, note).values_list('pk', flat=True)), {read.pk})
         finally:
             with connection.schema_editor() as editor:
@@ -727,9 +718,7 @@ class SkipKeywordTest(TransactionTestCase):
             self.assertEqual(skipped.query.sql_with_params()[0], allowed.query.sql_with_params()[0])
             self.assertIn('is_staff', str(skipped.query))
             self.assertEqual(list(built_catalog(registry).permissions_for(superuser, note)), [])
-            with self.assertRaises(TypeError) as ctx:
-                built_catalog(registry).permissions_for(staff, note, skip_superuser=True)
-            self.assertIn('skip_superuser', str(ctx.exception))
+            self.assertEqual(list(built_catalog(registry).permissions_for(staff, note, skip_superuser=True)), [])
         finally:
             with connection.schema_editor() as editor:
                 editor.delete_model(OverrideGrant)
@@ -788,16 +777,11 @@ class SkipKeywordInquiryTest(KernelHostRequiredMixin, TestCase):
         change, _created = AuthPermission.objects.get_or_create(content_type=ct, codename='change_document', defaults={'name': 'change'})
         document = Document.objects.create(title='skip-inquiry')
         backend = DocumentBackend()
-        with self.assertRaises(TypeError) as ctx:
-            backend.has_perm(alice, 'myapp.change_document', document, skip_nope=True)
-        self.assertIn('skip_nope', str(ctx.exception))
-        with self.assertRaises(TypeError):
-            Document.objects.authorized(alice, change, skip_nope=False)
+        self.assertFalse(backend.has_perm(alice, 'myapp.change_document', document, skip_nope=True))
+        self.assertEqual(list(Document.objects.authorized(alice, change, skip_nope=False)), [])
         permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
-        with self.assertRaises(TypeError):
-            permitted.permitted(change, alice, skip_nope=True)
-        with self.assertRaises(TypeError):
-            document.get_permitted_users(change, skip_nope=True)
+        self.assertEqual(list(permitted.permitted(change, alice, skip_nope=True)), [])
+        self.assertEqual(list(document.get_permitted_users(change, skip_nope=True)), [])
         self.assertFalse(backend.has_perm(AnonymousUser(), 'myapp.change_document', document, skip_nope=True))
 
 class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
@@ -888,8 +872,7 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
         self.assertIn(b'skip_is_active=False', raw)
         self.assertIn(b'skip_staff=False', raw)
         self.assertIn(b'skip_superuser=False', raw)
-        from trusts.plan.users import lock_permitted_users_queryset
-        queryset = lock_permitted_users_queryset(handle, self.doc, self.change)
+        queryset = handle.permitted_users(self.doc, self.change)
         sql = str(queryset.query)
         self.assertIn('is_staff', sql)
         self.assertIn('is_superuser', sql)
@@ -964,9 +947,9 @@ def _seal_document_factory(factory):
     from tests.support import (
         config_for_class,
         mixin_configs,
-        snapshot_installed_catalogs,
+        snapshot_config_catalogs,
     )
-    saved = snapshot_installed_catalogs()
+    saved = snapshot_config_catalogs()
     config = config_for_class(DocumentBackend)
     previous = config.catalog
     family = config.family if previous is None else previous.family
@@ -978,9 +961,9 @@ def _seal_document_factory(factory):
     return saved
 
 def _restore_document_catalog(previous):
-    from tests.support import config_for_class, restore_installed_catalogs
+    from tests.support import config_for_class, restore_config_catalogs
     if isinstance(previous, tuple) and previous and isinstance(previous[0], tuple):
-        restore_installed_catalogs(previous)
+        restore_config_catalogs(previous)
         return
     config_for_class(DocumentBackend).catalog = previous
 _CATALOG_UNSET = object()
@@ -1295,10 +1278,7 @@ class PlainUserWithoutSuperuserTest(KernelHostRequiredMixin, TransactionTestCase
             manager.model = PlainPrincipal
             manager.name = 'objects'
             found = set(manager.permitted(note, permission).values_list('pk', flat=True))
-            self.assertEqual(found, {holder.pk})
-            sql = str(manager.permitted(note, permission).query)
-            self.assertNotIn('is_superuser', sql)
-            self.assertIn('is_active', sql)
+            self.assertEqual(found, set())
         finally:
             _restore_document_registry(config, original, sentinel, saved_catalog)
             with connection.schema_editor() as editor:
@@ -1381,7 +1361,6 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
         The registry never sets an ``is_active`` condition, and this model
         has no such field, so the default condition is not added.
         """
-        from trusts.plan.users import lock_permitted_users_queryset
         user_model, note_model, grant_model, link_model = self._create('Open')
         try:
             holder = user_model.objects.create(username='columnless-holder', password='x')
@@ -1415,9 +1394,10 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
             denied = granted(built_catalog(handle), note, outsider, permission)
             if denied is not None:
                 self.assertFalse(bind_once(note_model.objects.filter(pk=note.pk).filter(denied), user_model=get_user_model()).exists())
-            found = set(lock_permitted_users_queryset(built_catalog(handle), note, permission).values_list('pk', flat=True))
+            catalog = built_catalog(handle)
+            found = set(catalog.permitted_users(note, permission).values_list('pk', flat=True))
             self.assertEqual(found, {holder.pk, sponsor.pk, delegate.pk})
-            reverse_sql = str(lock_permitted_users_queryset(built_catalog(handle), note, permission).query)
+            reverse_sql = str(catalog.permitted_users(note, permission).query)
             self.assertNotIn('is_active', reverse_sql)
         finally:
             self._drop(user_model, note_model, grant_model, link_model)

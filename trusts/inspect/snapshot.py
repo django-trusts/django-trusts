@@ -48,24 +48,8 @@ from trusts.inspect.yaml import (
 )
 from django.conf import settings
 from django.db.utils import DEFAULT_DB_ALIAS
-from trusts.plan.writers import compile_expression_q
 from django.contrib.auth.models import Permission
 from django.db import connections
-from trusts.plan.grammar import Tree, inquiry_partner
-from trusts.plan.rewrites import BindTable
-from trusts.plan.recursions import (
-        GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
-        _PrefixInForwardWalk,
-    )
-from trusts.plan.rewrites import BoundBool
-from trusts.plan.standards import SkipFlag
-from trusts.plan.conditions import ModelIdentity
-from trusts.compile.factory import RegisteredDelegation
-from trusts.plan.rewrites import bind_once
-from trusts.plan.rewrites import bound_exists_query
-from trusts.plan.aggregates import _compile_common_permissions
-from trusts.plan.users import lock_permitted_users_queryset
-from trusts.plan.contents import _compile_permitted_content_queryset
 
 
 SCHEMA_VERSION = 1
@@ -253,9 +237,8 @@ class _PolicyVisitor(object):
     """Snapshot visitor: renders each walked question to policy SQL.
 
     Supplies the alias and the user/permission/content sentinels for one
-    catalog. ``visit(question)`` is the single visitor method
-    :meth:`Catalog.walk_questions` calls. The six ``_compile_*`` methods
-    below are its per-question bodies.
+    catalog. ``visit(question)`` calls that question and renders the
+    queryset or exists query it returns.
     """
 
     def __init__(self, catalog, alias, *, trust_ids=None):
@@ -263,45 +246,97 @@ class _PolicyVisitor(object):
         self.catalog = catalog
         self._trust_ids = dict(trust_ids or {})
         self._contents = {}
+        self._order = []
         self._classifier_records = {}
-        self._ordinary_records = {}
 
-    def content_for(self, label):
-        return self._contents[label]
+    def contents(self):
+        return [self._contents[label] for label in self._order]
 
     def visit(self, question):
+        if question.name == 'named_filter':
+            return self._visit_named_filter(question)
         content = self._ensure_content(
             question.content_model, question.records, question.delegations,
         )
         label = _model_label(question.content_model)
-        classifier = self._classifier_records[label]
-        ordinary = self._ordinary_records[label]
+        records = self._classifier_records[label]
         model = question.content_model
-        if question.name == 'permitted':
-            content['permitted'] = _sql_row(
-                self._compile_content_grant(classifier, model))
-        elif question.name == 'has_perm':
-            content['has_perm'] = _sql_row(
-                self._compile_has_perm(classifier, model))
-        elif question.name == 'get_all_permissions':
-            content['get_all_permissions'] = _sql_row(
-                self._compile_get_all_permissions(classifier, model))
-        elif question.name == 'get_group_permissions':
-            content['get_group_permissions'] = _sql_row(
-                self._compile_get_group_permissions(ordinary, model))
-        elif question.name == 'get_permitted_users':
-            content['get_permitted_users'] = _sql_row(
-                self._compile_get_permitted_users(classifier, model))
-        elif question.name == 'filter_by_permitted_content':
-            rows = self._compile_filter_by_permitted_content(
-                classifier, model)
+        alias = self.alias
+        user = _role_sentinel(records[0], 'user', alias)
+        permission = _role_sentinel(records[0], 'permission', alias)
+        if question.name == 'filter_by_permitted_content':
+            rows = []
+            for prefix in question.prefixes:
+                queryset = question.question(
+                    _content_manager(prefix).all(), user, permission,
+                )
+                if queryset.query.is_empty():
+                    continue
+                sql, symbols = _compile_queryset(
+                    queryset, alias, record=records[0], expr=None,
+                    records=records,
+                )
+                rows.append({
+                    'model': _model_label(prefix),
+                    'params': _present_params(symbols),
+                    'sql': _format_policy_sql(sql),
+                })
             if rows:
                 content['filter_by_permitted_content'] = rows
+            return content
+        if question.name == 'permitted':
+            queryset = question.question(user, permission)
+        elif question.name == 'has_perm':
+            queryset = question.question(
+                user, _content_sentinel(model, alias), permission,
+            )
+        elif question.name in ('get_all_permissions', 'get_group_permissions'):
+            queryset = question.question(
+                user, _content_sentinel(model, alias),
+            )
+        elif question.name == 'get_permitted_users':
+            instance = _content_sentinel(model, alias)
+            _populate_reverse_along_identity(instance, records, alias)
+            queryset = question.question(instance, permission)
         else:
             raise TrustsConfigurationError(
                 'Policy SQL visitor cannot render question %r.'
                 % (question.name,)
             )
+        content[question.name] = _sql_row(_compile_queryset(
+            queryset, alias, record=records[0], expr=None, records=records,
+            reverse_users=question.name == 'get_permitted_users',
+        ))
+        return content
+
+    def _visit_named_filter(self, question):
+        model = question.content_model
+        label = _model_label(model)
+        code = question.code
+        if (
+            not isinstance(code, str)
+            or _PORTABLE_ID_SEGMENT.fullmatch(code) is None
+        ):
+            raise TrustsConfigurationError(
+                'Named filter on %s has a non-portable code %r.'
+                % (label, code)
+            )
+        queryset = question.question(
+            _any_sentinel_user(self.alias, self.catalog.user_model),
+            _any_sentinel_permission(self.alias),
+        )
+        row = {
+            'id': _dotless_id(label, code),
+            **_sql_row(_compile_queryset(
+                queryset, self.alias, record=None, expr=question.expr,
+            )),
+        }
+        content = self._contents.get(label)
+        if content is None:
+            content = {'model': label}
+            self._contents[label] = content
+            self._order.append(label)
+        content.setdefault('named_filters', []).append(row)
         return content
 
     def _ensure_content(self, model, records, delegations):
@@ -320,7 +355,7 @@ class _PolicyVisitor(object):
         delegated_rows = []
         for record in legs:
             trust_id = self._trust_ids[id(record)]
-            if isinstance(record, RegisteredDelegation):
+            if record in delegations:
                 row = {
                     'id': trust_id,
                     'root': _model_label(record.root),
@@ -385,103 +420,8 @@ class _PolicyVisitor(object):
             content['delegations'] = delegated_rows
         self._contents[label] = content
         self._classifier_records[label] = classifier_records
-        self._ordinary_records[label] = records
+        self._order.append(label)
         return content
-
-    # -- per-question SQL bodies (formerly the six _compile_* fns) ----
-
-    def _compile_content_grant(self, records, model):
-
-        catalog, alias = self.catalog, self.alias
-        user = _role_sentinel(records[0], 'user', alias)
-        permission = _role_sentinel(records[0], 'permission', alias)
-        queryset = _content_manager(model).all()
-        predicate = catalog.complete_grant_q(queryset, user, permission)
-        queryset = bind_once(
-            queryset.filter(predicate).distinct(),
-            user_model=catalog.user_model,
-        )
-        return _compile_queryset(
-            queryset, alias, record=records[0], expr=None, records=records,
-        )
-
-    def _compile_has_perm(self, records, model):
-
-        catalog, alias = self.catalog, self.alias
-        user = _role_sentinel(records[0], 'user', alias)
-        permission = _role_sentinel(records[0], 'permission', alias)
-        instance = _content_sentinel(model, alias)
-        predicate = catalog.complete_grant_q(instance, user, permission)
-        exists = _content_manager(model).filter(pk=instance.pk).filter(predicate)
-        compiled = bound_exists_query(exists, user_model=catalog.user_model)
-        return _compile_queryset(
-            _Query(compiled),
-            alias, record=records[0], expr=None, records=records,
-        )
-
-    def _compile_get_all_permissions(self, records, model):
-
-        catalog, alias = self.catalog, self.alias
-        user = _role_sentinel(records[0], 'user', alias)
-        instance = _content_sentinel(model, alias)
-        queryset = _compile_common_permissions(
-            catalog, instance, user, kind='complete',
-        )
-        return _compile_queryset(
-            queryset, alias, record=records[0], expr=None, records=records,
-        )
-
-    def _compile_get_permitted_users(self, records, model):
-
-        catalog, alias = self.catalog, self.alias
-        content = _content_sentinel(model, alias)
-        _populate_reverse_along_identity(content, records, alias)
-        permission = _role_sentinel(records[0], 'permission', alias)
-        queryset = lock_permitted_users_queryset(
-            catalog, content, permission,
-        )
-        return _compile_queryset(
-            queryset, alias, record=records[0], expr=None, records=records,
-            reverse_users=True,
-        )
-
-    def _compile_filter_by_permitted_content(self, records, model):
-        """One statement per proper prefix, the queryset that actually runs."""
-        catalog, alias = self.catalog, self.alias
-        user = _role_sentinel(records[0], 'user', alias)
-        permission = _role_sentinel(records[0], 'permission', alias)
-        rows = []
-        for prefix in catalog.permitted_content_prefix_models(model):
-            queryset = _compile_permitted_content_queryset(
-                _content_manager(prefix).all(),
-                user,
-                permission,
-                content=model,
-                catalog=catalog,
-            )
-            if queryset.query.is_empty():
-                continue
-            sql, symbols = _compile_queryset(
-                queryset, alias, record=records[0], expr=None, records=records,
-            )
-            rows.append({
-                'model': _model_label(prefix),
-                'params': _present_params(symbols),
-                'sql': _format_policy_sql(sql),
-            })
-        return rows
-
-    def _compile_get_group_permissions(self, records, model):
-
-        catalog, alias = self.catalog, self.alias
-        user = _role_sentinel(records[0], 'user', alias)
-        instance = _content_sentinel(model, alias)
-        queryset = _compile_common_permissions(
-            catalog, instance, user, kind='group',
-        )
-        return _compile_queryset(
-            queryset, alias, record=records[0], expr=None, records=records,
-        )
 
 
 def _build_document(catalogs, alias):
@@ -525,68 +465,21 @@ def _project_backend(catalog, alias):
     delegations = tuple(catalog.delegations)
     all_records = records + delegations
     ids = _assign_ids(all_records)
-    named_filters = _project_named_filters(catalog, alias)
     return {
         'path': path,
-        'contents': _project_contents(
-            catalog, alias, all_records, ids, named_filters,
-        ),
+        'contents': _project_contents(catalog, alias, all_records, ids),
     }
 
 
-def _project_contents(catalog, alias, records, ids, named_filters):
-    groups = []
-    index = {}
-    for record, trust_id in zip(records, ids):
-        label = _model_label(record.content_model)
-        slot = index.get(label)
-        if slot is None:
-            index[label] = len(groups)
-            groups.append({
-                'label': label,
-                'model': record.content_model,
-                'legs': [],
-            })
-            slot = index[label]
-        groups[slot]['legs'].append((record, trust_id))
-    filters_by_model = {}
-    filter_order = []
-    for row in named_filters:
-        model = row['model']
-        bucket = filters_by_model.get(model)
-        if bucket is None:
-            filters_by_model[model] = bucket = []
-            filter_order.append(model)
-        bucket.append(row)
-    contents = []
-    seen = set()
+def _project_contents(catalog, alias, records, ids):
     visitor = _PolicyVisitor(
         catalog, alias,
         trust_ids={
             id(record): trust_id for record, trust_id in zip(records, ids)
         },
     )
-    if groups:
-        catalog.walk_questions(visitor)
-        for group in groups:
-            seen.add(group['label'])
-            content = visitor.content_for(group['label'])
-            filters = filters_by_model.get(group['label'], ())
-            if filters:
-                content['named_filters'] = [
-                    _named_filter_row(row) for row in filters
-                ]
-            contents.append(content)
-    for model in filter_order:
-        if model in seen:
-            continue
-        contents.append({
-            'model': model,
-            'named_filters': [
-                _named_filter_row(row) for row in filters_by_model[model]
-            ],
-        })
-    return contents
+    catalog.walk_questions(visitor)
+    return visitor.contents()
 
 
 _CONST_SOURCE = {
@@ -640,14 +533,6 @@ def _present_params(symbols):
         if token is not None:
             params.append(token)
     return params
-
-
-def _named_filter_row(row):
-    return {
-        'id': row['id'],
-        'params': _present_params(row['params']),
-        'sql': _format_policy_sql(row['sql']),
-    }
 
 
 def _sql_row(compiled):
@@ -747,11 +632,6 @@ def _role_sentinel(record, role, alias):
     )
 
 
-class _Query(object):
-    def __init__(self, query):
-        self.query = query
-
-
 def _relation(record, role):
     return {
         'path': getattr(record, '%s_field' % role),
@@ -785,18 +665,11 @@ class _PolicyConditionText(object):
         self._grouped = False
 
     def render(self, node, *, grouped=False):
-        if not isinstance(node, Tree):
-            raise TrustsConfigurationError(
-                'Policy SQL cannot render condition node %s.'
-                % type(node).__name__
-            )
         previous = self._grouped
         self._grouped = grouped
         try:
-            if node.kind == 'and':
-                return self._and(node)
-            if node.kind == 'or':
-                return self._join(node, 'or')
+            if node.kind in ('and', 'or'):
+                return self._join(node, node.kind)
             if node.kind == 'eq':
                 return self._eq(node)
             if node.kind == 'ne':
@@ -805,16 +678,9 @@ class _PolicyConditionText(object):
                 return self._contains(node)
             if node.kind == 'not':
                 return 'not %s' % self.render(node.item, grouped=True)
-            if node.kind == 'bare':
-                return _condition_path(node.item)
-            raise TrustsConfigurationError(
-                'Policy SQL cannot render condition node %s.' % node.kind
-            )
+            return _condition_path(node.item)
         finally:
             self._grouped = previous
-
-    def _and(self, node):
-        return self._join(node, 'and')
 
     def _join(self, node, word):
         text = '%s %s %s' % (
@@ -827,7 +693,7 @@ class _PolicyConditionText(object):
         return text
 
     def _eq(self, node):
-        row = inquiry_partner(node)
+        row = node.inquiry_partner()
         if row is not None:
             return self._membership(row)
         return self._pair(node, '==')
@@ -868,30 +734,19 @@ def _render_condition(condition, *, permission_token='$permission.id'):
 
 
 def _condition_path(operand):
-    if isinstance(operand, Tree) and operand.kind == 'field':
-        if not operand.path:
-            raise TrustsConfigurationError(
-                'Policy SQL condition path is empty.'
-            )
-        return '__'.join(operand.path)
-    raise TrustsConfigurationError(
-        'Policy SQL condition path is not a relationship path.'
-    )
+    return '__'.join(operand.path)
 
 
 def _operand_text(operand):
-    if isinstance(operand, Tree) and operand.kind == 'field':
+    if operand.kind == 'field':
         return _condition_path(operand)
-    if isinstance(operand, Tree) and operand.kind == 'const':
-        return _constant_text(operand.value)
-    raise TrustsConfigurationError(
-        'Policy SQL condition path is not a relationship path.'
-    )
+    return _constant_text(operand.value)
 
 
 def _constant_text(value):
-    if isinstance(value, ModelIdentity):
-        return str(value.pk)
+    as_tuple = getattr(value, 'as_tuple', None)
+    if as_tuple is not None and not isinstance(value, Decimal):
+        return str(as_tuple()[2])
     if value is None:
         return 'None'
     if isinstance(value, bool):
@@ -943,49 +798,6 @@ def _base_id(record):
             getattr(along, 'bound', None),
         )
     return label.replace('.', '__')
-
-
-def _project_named_filters(catalog, alias):
-    rows = []
-    iterator = catalog.iter_permission_conditions
-    if not callable(iterator):
-        return rows
-    for model, code, record in iterator():
-        model_label = _model_label(model)
-        if (
-            not isinstance(code, str)
-            or _PORTABLE_ID_SEGMENT.fullmatch(code) is None
-        ):
-            raise TrustsConfigurationError(
-                'Named filter on %s has a non-portable code %r.'
-                % (model_label, code)
-            )
-        if isinstance(record, Tree):
-            expr = record
-        else:
-            expr = getattr(record, 'expr', None)
-        sql, params = _compile_named_filter(
-            model, expr, alias, catalog.user_model,
-        )
-        rows.append({
-            'model': model_label,
-            'id': _dotless_id(model_label, code),
-            'params': params,
-            'sql': sql,
-        })
-    return rows
-
-
-def _compile_named_filter(model, expr, alias, user_model):
-
-    compiled = compile_expression_q(
-        expr, model,
-        _any_sentinel_user(alias, user_model),
-        _any_sentinel_permission(alias),
-        user_model=user_model,
-    )
-    queryset = model._meta.concrete_model._default_manager.filter(compiled)
-    return _compile_queryset(queryset, alias, record=None, expr=expr)
 
 
 def _any_sentinel_user(alias, user_model):
@@ -1224,11 +1036,11 @@ def _filter_queues(expr):
         queues.setdefault(path, []).append(symbol)
 
     def walk(node):
-        if isinstance(node, Tree) and node.kind in ('and', 'or'):
+        if node.kind in ('and', 'or'):
             walk(node.left)
             walk(node.right)
             return
-        if isinstance(node, Tree) and node.kind in ('eq', 'ne'):
+        if node.kind in ('eq', 'ne'):
             pair = _comparison_symbol(node)
             if pair is not None:
                 add(pair[0], pair[1])
@@ -1245,7 +1057,7 @@ def _comparison_symbol(node):
     object_ref = None
     other = None
     for side in (left, right):
-        if isinstance(side, Tree) and side.kind == 'field' and side.root == 'object':
+        if side.kind == 'field' and side.root == 'object':
             if object_ref is None:
                 object_ref = side
             else:
@@ -1254,20 +1066,20 @@ def _comparison_symbol(node):
             other = side
     if object_ref is None or other is None:
         return None
-    if isinstance(other, Tree) and other.kind == 'field' and other.root == 'object':
+    if other.kind == 'field' and other.root == 'object':
         return None
     path = '__'.join(object_ref.path)
-    if isinstance(other, Tree) and other.kind == 'const':
+    if other.kind == 'const':
         return path, _with_hint(
             {'const': _json_const(other.value)}, path or 'literal',
         )
-    if isinstance(other, Tree) and other.kind == 'field' and other.root == 'user':
+    if other.kind == 'field' and other.root == 'user':
         if other.path:
             bind = 'user.%s' % '__'.join(other.path)
         else:
             bind = 'user.id'
         return path, _with_hint({'bind': bind}, _request_hint(bind))
-    if isinstance(other, Tree) and other.kind == 'field' and other.root == 'permission':
+    if other.kind == 'field' and other.root == 'permission':
         return path, _with_hint(
             {'bind': 'permission.id'}, _request_hint('permission.id'),
         )
@@ -1349,8 +1161,9 @@ def _classify_compiled(node, sql, params, query=None):
 
 def _symbol_for_new_param(node, query=None):
 
-    if isinstance(node, BindTable):
-        column = node.next_column()
+    next_column = getattr(node, 'next_column', None)
+    if next_column is not None:
+        column = next_column()
         if column.kind == 'bind':
             return _with_hint({'bind': column.label}, _request_hint(column.label))
         if column.label == 'content pk':
@@ -1366,29 +1179,15 @@ def _symbol_for_new_param(node, query=None):
         return _with_hint(
             {'const': _json_const(column.value)}, column.label,
         )
-    if isinstance(node, (GrantReach, _PrefixInForwardWalk)):
+    along_bound = getattr(node, 'along_bound', None)
+    if along_bound is not None:
         return _with_hint(
-            {'const': _json_const(node.record.along.bound)}, 'along bound',
+            {'const': _json_const(along_bound)}, 'along bound',
         )
-    if isinstance(node, _KeyedReach):
+    hint = getattr(node, 'hint', None)
+    if hint is not None:
         return _with_hint(
-            {'const': _json_const(node.walk.bound)}, 'along bound',
-        )
-    if isinstance(node, _AnchorInInverseReach):
-        return _with_hint(
-            {'const': _json_const(node.record.along.bound)}, 'along bound',
-        )
-    if isinstance(node, _IdentInReach):
-        return _with_hint(
-            {'const': _json_const(node.bound)}, 'along bound',
-        )
-    if isinstance(node, SkipFlag):
-        return _with_hint(
-            {'const': _json_const(node.value)}, 'skip_%s' % node.name,
-        )
-    if isinstance(node, BoundBool):
-        return _with_hint(
-            {'const': _json_const(node.value)}, node.hint,
+            {'const': _json_const(node.value)}, hint,
         )
     if isinstance(node, Value):
         return _with_hint(
@@ -1469,10 +1268,7 @@ def _value_hint(node, query):
 def _const_hint(node, value):
     """Readable label for one constant lookup placeholder."""
     lhs = getattr(node, 'lhs', None)
-    if isinstance(lhs, (
-        GrantReach, _IdentInReach, _KeyedReach, _AnchorInInverseReach,
-        _PrefixInForwardWalk,
-    )) and value is True:
+    if getattr(lhs, 'along_bound', None) is not None and value is True:
         return 'along match'
     name = _lookup_field_name(node)
     label = _lookup_model_label(node)
@@ -1628,12 +1424,14 @@ def _json_const(value):
             'seconds': value.seconds,
             'microseconds': value.microseconds,
         }
-    if isinstance(value, ModelIdentity):
+    as_tuple = getattr(value, 'as_tuple', None)
+    if as_tuple is not None:
+        app_label, model_name, pk = as_tuple()
         return {
             'type': 'model',
-            'app_label': value.app_label,
-            'model': value.model_name,
-            'pk': _json_const(value.pk),
+            'app_label': app_label,
+            'model': model_name,
+            'pk': _json_const(pk),
         }
     raise TrustsConfigurationError(
         'Policy SQL render cannot record constant %r (%s).'

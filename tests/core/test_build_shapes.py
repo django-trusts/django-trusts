@@ -311,7 +311,10 @@ class BuildCatalogShapeTest(SimpleTestCase):
         self.assertEqual(catalog.records, registry.records)
         self.assertEqual(catalog.delegations, ())
         self.assertEqual(
-            list(catalog.iter_permission_conditions()),
+            [
+                (model, code, tree)
+                for (_label, code), (model, tree) in catalog.named_filters.items()
+            ],
             [(Document, 'owned', condition)],
         )
         again = registry.compile()

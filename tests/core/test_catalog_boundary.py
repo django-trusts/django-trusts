@@ -7,9 +7,12 @@ from types import MappingProxyType
 
 from django.test import SimpleTestCase
 
+import trusts.backends as backends
 import trusts.compile.catalogs as catalogs
 import trusts.compile.factory as factory
 import trusts.decorators as decorators
+import trusts.inspect.checks as checks
+import trusts.inspect.snapshot as snapshot
 import trusts.models as models
 from tests.support import compiler
 
@@ -31,9 +34,17 @@ class CatalogFactoryBoundaryTest(SimpleTestCase):
         catalog_imports = _imported_modules(catalogs)
         factory_imports = _imported_modules(factory)
         self.assertNotIn('trusts.compile.factory', catalog_imports)
+        self.assertNotIn('trusts.plan.rewrites', catalog_imports)
         self.assertFalse(any(name.endswith('.factory') for name in catalog_imports))
         self.assertIn('trusts.compile.catalogs', factory_imports)
-        for module in (models, decorators):
+        for module in (backends, snapshot):
+            found = _imported_modules(module)
+            self.assertFalse(any(name.startswith('trusts.plan') for name in found))
+        for module in (checks, snapshot):
+            self.assertFalse(any(
+                name.startswith('trusts.compile') for name in _imported_modules(module)
+            ))
+        for module in (models, decorators, backends, checks, snapshot):
             found = _imported_modules(module)
             self.assertNotIn('trusts.compile.factory', found)
             self.assertFalse(any(name.endswith('.factory') for name in found))
@@ -65,7 +76,6 @@ class CatalogFactoryBoundaryTest(SimpleTestCase):
         catalog = compiler().compile()
         self.assertIsInstance(catalog.named_filters, MappingProxyType)
         self.assertIsInstance(catalog.plans, MappingProxyType)
-        self.assertIsInstance(catalog.content_prefixes, MappingProxyType)
         self.assertIsInstance(catalog.questions, tuple)
         self.assertIsInstance(catalog.prepared_conditions, MappingProxyType)
         self.assertFalse(hasattr(catalog, 'compile_condition'))
@@ -75,8 +85,6 @@ class CatalogFactoryBoundaryTest(SimpleTestCase):
             catalog.named_filters['extra'] = None
         with self.assertRaises(TypeError):
             catalog.plans[None] = None
-        with self.assertRaises(TypeError):
-            catalog.content_prefixes['extra'] = ()
         with self.assertRaises(dataclasses.FrozenInstanceError):
             catalog.questions = ()
         again = compiler().compile()

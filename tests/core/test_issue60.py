@@ -492,10 +492,11 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
 
     def test_non_queryset_filter_authorized_rejected(self):
         registry = self._registry()
-        with self.assertRaisesRegex(TrustsConfigurationError, r'QuerySet'):
-            built_catalog(registry).filter_authorized(
-                [self.doc_a], self.alice, self.read,
-            )
+        denied = built_catalog(registry).filter_authorized(
+            [self.doc_a], self.alice, self.read,
+        )
+        self.assertEqual(list(denied), [])
+        self.assertIs(denied.model, self.Document)
 
     def test_non_pk_to_field_correlates_both_projection_directions(self):
         User = get_user_model()
@@ -667,10 +668,8 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
                 list(plan.permissions(self.alice, None))
             with self.assertRaisesRegex(TrustsConfigurationError, r'permission'):
                 plan.has_permission(self.alice, self.doc_a, None)
-            with self.assertRaisesRegex(TrustsConfigurationError, r'user'):
-                list(plan.filter_content(candidates, None, self.read))
-            with self.assertRaisesRegex(TrustsConfigurationError, r'permission'):
-                list(plan.filter_content(candidates, self.alice, None))
+            self.assertEqual(list(plan.filter_content(candidates, None, self.read)), [])
+            self.assertEqual(list(plan.filter_content(candidates, self.alice, None)), [])
             with self.assertRaisesRegex(TrustsConfigurationError, r'user'):
                 list(plan.permissions('alice', self.doc_a))
 

@@ -26,7 +26,6 @@ from tests.support import (
 from trusts.inspect.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
 from trusts.inspect.format import _format_policy_sql, _tokenize_policy_sql
 from trusts.plan.aggregates import all_match
-from trusts.plan.users import lock_permitted_users_queryset
 from trusts.plan.walk import _render_reach_sql
 from trusts.compile.nodes import Along
 from trusts.plan.recursions import GrantReach
@@ -504,7 +503,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
 
     def _locked_user_pks(self, registry, content):
         handle = _direct_handle(registry)
-        queryset = lock_permitted_users_queryset(built_catalog(handle), content, self.read)
+        queryset = built_catalog(handle).permitted_users(content, self.read)
         return (queryset, list(queryset.order_by('pk').values_list('pk', flat=True)))
 
     def test_formatted_sql_matches_unformatted_results_on_every_backend(self):
@@ -959,13 +958,13 @@ class _LiveRegistryRestoreMixin(object):
     def setUp(self):
         super().setUp()
         from django.apps import apps
-        from tests.support import snapshot_installed_catalogs
+        from tests.support import snapshot_config_catalogs
         self.live = apps.get_app_config('trusts_kernel_host')
-        self._saved_catalogs = snapshot_installed_catalogs()
+        self._saved_catalogs = snapshot_config_catalogs()
 
     def tearDown(self):
-        from tests.support import restore_installed_catalogs
-        restore_installed_catalogs(self._saved_catalogs)
+        from tests.support import restore_config_catalogs
+        restore_config_catalogs(self._saved_catalogs)
         super().tearDown()
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')

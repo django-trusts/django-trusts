@@ -60,7 +60,6 @@ from django.db.models import (
     UUIDField,
 )
 from django.apps import apps as django_apps
-from django.conf import settings as django_settings
 from django.db.backends.base.base import BaseDatabaseWrapper
 from django.db.models.fields import GenericIPAddressField
 from django.http import HttpRequest
@@ -92,19 +91,6 @@ def permission_binding(perm, model):
             content_type__model=modelname,
         ).values('pk')[:1]
     )
-
-
-def obsolete_legacy_callback_setting_enabled():
-    """True when the deleted runtime-callback setting is still ``True``.
-
-    The setting no longer enables object-only callbacks. A True value is
-    a configuration error (``trusts.E007``). Missing or False is quiet.
-    Read at call time so ``override_settings`` works.
-    """
-
-    return bool(getattr(
-        django_settings, 'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS', False
-    ))
 
 
 def _node(node, *kinds):
@@ -590,16 +576,25 @@ def condition_model_label(model):
     return repr(model)
 
 
+_PARSED_NAMED_FILTERS = {}
+
+
 def parse_named_filter(builder, model, code, user_model):
     """Return the checked tree for one named-filter builder.
 
-    The builder runs once. Constants are normalized into durable
-    values. When ``model`` has ``_meta``, field paths and operand
-    types are checked against that model and ``user_model``.
+    The builder runs once. A later parse of the same builder, model,
+    code, and user model returns that tree. Constants are normalized
+    into durable values. When ``model`` has ``_meta``, field paths and
+    operand types are checked against that model and ``user_model``.
     """
+    key = (builder, condition_model_key(model), condition_model_key(user_model), code)
+    expr = _PARSED_NAMED_FILTERS.get(key)
+    if expr is not None:
+        return expr
     expr = normalize_expression(
         invoke(builder, ('user', 'permission', 'object')),
     )
     if getattr(model, '_meta', None) is not None:
         validate_expression(expr, model, user_model)
+    _PARSED_NAMED_FILTERS[key] = expr
     return expr
