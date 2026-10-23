@@ -123,13 +123,12 @@ class PermittedUsersMixin:
 class PermittedUsersManagerMixin:
     """Optional adapter on an application's existing user manager.
 
-    ``permitted`` and ``with_perm`` both call the one reverse inquiry.
-    Each listed backend contributes its own predicate. A queryset whose
-    model is not ``AUTH_USER_MODEL``, or that is not a queryset, is
-    empty. ``backend`` is one dotted path.
-    Stock ``auth.User`` does not acquire either method. The content
-    adapter ``get_permitted_users`` remains the path that does not
-    require a user-manager change.
+    ``permitted`` calls the one reverse inquiry. Each listed backend
+    contributes its own predicate. A queryset whose model is not
+    ``AUTH_USER_MODEL``, or that is not a queryset, is empty.
+    ``backend`` is one dotted path. Stock ``auth.User`` does not
+    acquire this method. The content adapter ``get_permitted_users``
+    remains the path that does not require a user-manager change.
     """
 
     def permitted(self, content, perm, backend=None, **skip_flags):
@@ -137,20 +136,6 @@ class PermittedUsersManagerMixin:
             content, perm, user_queryset=self.get_queryset(), backend=backend,
             **skip_flags,
         )
-
-    def with_perm(self, perm, is_active=True, include_superusers=True,
-                  backend=None, obj=None, **skip_flags):
-        """Users holding ``perm`` on ``obj``. No object yields no users.
-
-        ``is_active`` and ``include_superusers`` are ignored. The
-        catalog's user conditions decide. ``skip_<name>`` is forwarded.
-        """
-        del is_active, include_superusers
-        if obj is None:
-            return self.get_queryset().none()
-        return compile_permitted_users(
-            obj, perm, user_queryset=self.get_queryset(),
-            backend=backend, **skip_flags)
 
 
 PermittedManager = Manager.from_queryset(PermittedQuerySet)

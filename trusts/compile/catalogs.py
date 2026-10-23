@@ -403,6 +403,7 @@ class Catalog(object):
 
     def prepare_has_perm(self, user_obj, permext, obj, *, skipped):
         model = _content_model(obj)
+        if not isinstance(permext, str): return PreparedInquiry(model, result=False)
         try: applabel, modelname, action, cond = parse_perm_code(permext)
         except ValueError: return PreparedInquiry(model, result=False)
         plan = self.plan_for(obj, user=user_obj)
@@ -676,14 +677,18 @@ def assert_same_database(alias, models):
 
 def filter_catalogs(catalogs, queryset, user, *, ask, skip_flags,
                     require_user=True, extra_q=None, user_model=None):
-    """OR each listed catalog's grant and bind ``user_model``."""
+    """OR each listed catalog's grant and bind ``user_model``.
+
+    A catalog that rejects the inquiry contributes nothing. When every
+    catalog rejects it, the result is empty.
+    """
     combined = None
     for item, catalog in catalogs:
         denied, values = catalog._resolve_skipped(
             user, skip_flags, require_user=require_user,
         )
         if denied:
-            return queryset.none()
+            continue
         part = ask(item, values)
         if part is None:
             continue
@@ -728,7 +733,7 @@ def compile_catalog_users(catalogs, content, perm, *, user_queryset=None,
             None, skip_flags, require_user=False,
         )
         if denied:
-            return user_queryset.none()
+            continue
         predicate = item.permitted_users_predicate(
             content, perm, skipped=values,
         )

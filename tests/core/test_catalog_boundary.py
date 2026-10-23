@@ -48,6 +48,7 @@ class CatalogFactoryBoundaryTest(SimpleTestCase):
             found = _imported_modules(module)
             self.assertNotIn('trusts.compile.factory', found)
             self.assertFalse(any(name.endswith('.factory') for name in found))
+        self.assertNotIn('trusts.backends', _imported_modules(snapshot))
 
     def test_catalog_methods_do_not_assign_fields(self):
         tree = ast.parse(inspect.getsource(catalogs.Catalog))

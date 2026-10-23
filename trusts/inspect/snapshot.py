@@ -35,10 +35,12 @@ import uuid
 from decimal import Decimal
 from pathlib import Path
 
+from django.apps import apps
 from django.core import checks as django_checks
 from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
+from trusts.apps import TrustsConfigMixin
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.format import _format_policy_sql
 from trusts.inspect.yaml import (
@@ -167,16 +169,24 @@ def resolve_policy_database(override=None):
     return alias
 
 
+def _installed_document(*, alias=None):
+    """Policy document for every installed Trusts config."""
+    return _build_document(tuple(
+        config.catalog for config in apps.get_app_configs()
+        if isinstance(config, TrustsConfigMixin)
+    ), resolve_policy_database(alias))
+
+
 def render_policy_sql_bytes(*, alias=None):
     """Return the schema-1 policy SQL document as UTF-8 bytes.
 
     ``alias`` overrides ``TRUSTS_POLICY_DATABASE`` for this call only.
-    The document is ``policy_document()`` for the installed configs.
+    The document is ``_installed_document()`` for the installed configs.
     Compilation uses ``as_sql()`` / ``sql_with_params()`` and does not
     execute the exported statements. A failure raises before a partial
     document is returned.
     """
-    return _dump_document(policy_document(alias=alias))
+    return _dump_document(_installed_document(alias=alias))
 
 
 def write_policy_lock(payload, *, override=None):
@@ -1656,6 +1666,3 @@ def _atomic_write(path, payload):
                 os.unlink(tmp_name)
             except OSError:
                 pass
-
-
-from trusts.backends import policy_document
