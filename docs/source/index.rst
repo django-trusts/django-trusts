@@ -60,7 +60,7 @@ django-trusts requires Python 3.12--3.14 and Django 6.1.
    python -m pip install "django-trusts @ git+https://github.com/django-trusts/django-trusts@dev"
 
 Every app that hosts Trusts registrations or a Trusts backend must extend
-``TrustsConfigMixin`` on its Django ``AppConfig``, so the app owns its catalog.
+``TrustsConfigMixin`` on its Django ``AppConfig``.
 
 Define the models
 -----------------
@@ -234,8 +234,7 @@ Register the model paths when the application starts:
        name = "documents"
 
        def ready(self):
-           super().ready()
-
+           from .backends import DocumentBackend
            from .models import (
                Document,
                DocumentDelegation,
@@ -268,6 +267,7 @@ Register the model paths when the application starts:
                "non_confidential",
                predicate=lambda u, p, o: o.confidential != True,
            )
+           super().ready()
 
 The first registration reaches permission objects directly. The second reaches
 Django ``auth.Group`` objects; ``django-trusts`` follows each group's
@@ -451,13 +451,11 @@ as ``user.has_perm(permission, document)``, not the same string codec.
 A relationship-family backend participates only when it has an applicable
 ``auth.Permission`` plan for the queryset model and owns every selected
 name as a queryable condition. Other backends contribute nothing. If none
-own the full set, the call raises ``TrustsConfigurationError`` before SQL.
-``.permitted()`` still validates and raises on first use.
-``authorization_required`` does not: a backend that does not own the
-names returns an empty queryset, and the view is 403 or 404.
+contribute, the queryset is empty; in ``authorization_required``, the view
+is 403 or 404.
 
-Malformed permissions and conditions raise before SQL. A well-formed
-permission for another content type produces an empty queryset. Named conditions remain explicit:
+Malformed permissions and conditions, and a well-formed
+permission for another content type, produce an empty queryset. Named conditions remain explicit:
 
 .. code-block:: python
 
@@ -475,8 +473,8 @@ permitted content sits under those rows. The result is a lazy queryset of
 the same model.
 
 ``permission`` is a saved permission row. ``content`` is the protected
-model. Each Trusts backend answers from its own catalog; pass ``backend=``
-when more than one registers the model.
+model. ``backend`` is optional and defaults to the installed relationship
+backends; pass ``backend=`` when more than one registers the model.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
 the user may read:
@@ -560,7 +558,7 @@ condition:
 
 .. code-block:: python
 
-   registry = backend.registry
+   registry = backend.get_registry()
    registry.set_user_condition("is_active", lambda u: u.is_active)
 
 Setting the same name replaces that condition. Pass ``None`` to remove it:
@@ -675,7 +673,7 @@ unsupported in 1.0.
 
 .. code-block:: python
 
-   backend.register(
+   registry.register(
        trust=TeamDocumentPermission,
        user=lambda t: t.team.members,
        permission=lambda t: t.permission,

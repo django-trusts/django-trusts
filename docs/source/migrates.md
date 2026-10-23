@@ -38,7 +38,7 @@ missing field. The messages name the surface, for example
 "'|' is not supported in a relation condition."
 Named filters accept `.contains()`, `~`, and a bare boolean field.
 The predicates compiler and the relation-condition guards raise `PermissionConditionError` directly and do not wrap it.
-`get_permitted_users` reads object-side fields from the saved row. Save first; an in-memory change is ignored, and a never-saved object raises `PermissionConditionError` (`Save the object first.`).
+`get_permitted_users` reads object-side fields from the saved row. Save first; an in-memory change is ignored, and a never-saved object returns an empty queryset before SQL.
 
 | | Old | New |
 | --- | --- | --- |
@@ -49,7 +49,7 @@ The predicates compiler and the relation-condition guards raise `PermissionCondi
 | Ordered comparison (`<`, `<=`, `>`, `>=`) | rejected when the builder returned | rejected at the operator, same class |
 | `condition=` or user-rule grammar, missing field, or non-boolean user-rule field | `TrustsConfigurationError` | `PermissionConditionError` (still caught by `except TrustsConfigurationError`) |
 | Missing field in a `user=`, `permission=`, `delegate=`, or `sponsor=` path | `TrustsConfigurationError` | `PermissionConditionError` (still caught by `except TrustsConfigurationError`) |
-| Second `add_named_filter` with the same model and code | replaced the first filter | `PermissionConditionError` at `ready()`; the second builder is not called |
+| Second `add_named_filter` with the same model and code | replaced the first filter | `PermissionConditionError` when registered; the second builder is not called |
 
 An `except TrustsConfigurationError` block now also catches condition
 errors. Catch `PermissionConditionError` first to tell them apart.
@@ -86,11 +86,11 @@ Migration-bot checklist:
 ## Test-only names removed
 
 These names were importable and unused by the authorization runtime.
-Call the catalog or the condition compiler instead.
+Use the public inquiry methods instead.
 
 | | Old | New |
 | --- | --- | --- |
-| Permission rows | `RelationPlan.common_permissions(user, content)` | `catalog.permissions_for(user, content)` |
+| Permission rows | `RelationPlan.common_permissions(user, content)` | `user.get_all_permissions(content)` |
 | Condition object check | `ConditionRegistry.evaluate_permission_condition(...)` | `qs.permitted(permission, user, conditions=(code,))` |
 | Stored-condition object check | `evaluate_stored_condition(...)` | the same compiled `Q` |
 | Compiler failure type | `TrustsCompilerError` | `TrustsConfigurationError` |
@@ -107,11 +107,11 @@ Migration-bot checklist:
 ## `Meta.permission_conditions` removed (#330)
 
 Named filters are not a model `Meta` option. Register the predicate on
-the app config's recorder.
+`backend.get_registry()`.
 
 | | Old | New |
 | --- | --- | --- |
-| Named filter | `class Meta: permission_conditions = (('name', predicate),)` | `recorder.add_named_filter(Model, 'name', predicate)` in `AppConfig.ready()` |
+| Named filter | `class Meta: permission_conditions = (('name', predicate),)` | `registry.add_named_filter(Model, 'name', predicate)` in `AppConfig.ready()` |
 
 django-trusts does not append `permission_conditions` to
 `django.db.models.options.DEFAULT_NAMES`.
@@ -125,17 +125,17 @@ Migration-bot checklist:
 `TrustsImplementationConfig` is gone. Subclass `TrustsConfigMixin`.
 List the backend's dotted path in `AUTHENTICATION_BACKENDS`. That
 module must live in the app whose config extends `TrustsConfigMixin`.
-Call `self.recorder.register(...)` and `self.recorder.add_named_filter(...)`
-before `super().ready()`. `ready()` freezes the recorder and builds
-the catalog. A call after `super().ready()` raises
-`TrustsConfigurationError`.
+Obtain the registry with `backend.get_registry()` and call
+`registry.register(...)` and `registry.add_named_filter(...)` before
+`super().ready()`. `ready()` freezes the registry. A call after
+`super().ready()` raises `TrustsConfigurationError`.
 
 | | Old | New |
 | --- | --- | --- |
-| App config | `class DocumentsConfig(TrustsImplementationConfig)` | `class DocumentsConfig(TrustsConfigMixin)` |
+| App config | `class DocumentsConfig(TrustsImplementationConfig)` | `class DocumentsConfig(TrustsConfigMixin, AppConfig)` |
 | Which backend | `trusts_backend_paths = ("documents.backends.DocumentBackend",)` | Delete `trusts_backend_paths`. The same path belongs in `AUTHENTICATION_BACKENDS`. |
-| Registration | `backend = self.configured_backend()` then `backend.register(...)` | `self.recorder.register(...)` before `super().ready()` |
-| Handle list | `configured_handles()` | Gone. Each listed Trusts backend answers from its app's catalog. |
+| Registration | `backend = self.configured_backend()` then `backend.register(...)` | `registry = DocumentBackend().get_registry()` then `registry.register(...)` before `super().ready()` |
+| Handle list | `configured_handles()` | Gone. Each listed Trusts backend answers from its own registrations. |
 | Config does not extend the mixin | Ownership was `trusts_backend_paths` on `TrustsImplementationConfig` | Constructing the backend raises `TrustsMixinRequired`. `manage.py check` reports `trusts.E012` (`Extend TrustsConfigMixin on the app config.` or `Move the backend into an app whose config extends TrustsConfigMixin.`). |
 | Backend does not construct | Import or construction failure inside `ready()` | `trusts.E011`: `Authentication backend %s could not be built`. Hint: `Fix AUTHENTICATION_BACKENDS so the backend constructs.` |
 | Queryset classes | `from trusts.query import AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager` | `from trusts.models import AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager`. `trusts.query` is gone. |
@@ -144,7 +144,7 @@ the catalog. A call after `super().ready()` raises
 | Compiler check | `trusts.E004` from `check_query_compilers` | Removed, along with `compiler_for_class`. Drop `trusts.E004` from `SILENCED_SYSTEM_CHECKS`. |
 | Family override | `_authorization_family` on `TrustsImplementationConfig` | `family` on `TrustsConfigMixin` (default `'relationship'`) |
 | `filter_authorized_scopes(..., handles=)` | Backend objects, or every relationship-family handle | `filter_by_permitted_content(..., backend=)` in `trusts.decorators`. See the next section. `handles=` is not accepted. |
-| `authorization_required` when no listed backend has a plan for the model | `TrustsConfigurationError` at request time (`authorization_required has no applicable auth.Permission plan`) | `PermissionDenied` when the row exists, `Http404` when it does not. A catalog that did not register the model, or that does not own the selected names, returns an empty queryset and does not raise. There is no system check for decorator condition names. `.permitted()` still raises `TrustsConfigurationError` before SQL when a backend has a plan and does not own the selected names. |
+| `authorization_required` when no listed backend has a plan for the model | `TrustsConfigurationError` at request time (`authorization_required has no applicable auth.Permission plan`) | `PermissionDenied` when the row exists, `Http404` when it does not. A backend that did not register the model, or that does not own the selected names, returns an empty queryset and does not raise. There is no system check for decorator condition names. |
 
 ```python
 # Old
@@ -165,11 +165,12 @@ class DocumentsConfig(TrustsImplementationConfig):
         )
 
 # New
-class DocumentsConfig(TrustsConfigMixin):
+class DocumentsConfig(TrustsConfigMixin, AppConfig):
     name = "documents"
 
     def ready(self):
-        self.recorder.register(
+        registry = DocumentBackend().get_registry()
+        registry.register(
             trust=DocumentPermission,
             user=lambda t: t.user,
             permission=lambda t: t.permission,
@@ -196,7 +197,7 @@ Migration-bot checklist:
 - `trusts.E012`
 - `TrustsMixinRequired`
 - `TrustsConfigMixin`
-- `self.recorder.register`
+- `get_registry(`
 
 ## `filter_authorized_scopes` removed (#302)
 
@@ -277,7 +278,7 @@ Migration-bot checklist:
 | Chained queryset | The list method is not on `QuerySet` | `Repository.objects.filter(...).permitted(...)` when the queryset mixes in `PermittedQuerySetMixin` and is supplied with `as_manager()` or `from_queryset` |
 | Attachment names | `AuthorizedQuerySet`, `AuthorizedManagerMixin`, `AuthorizedManager` | Those names stay. Add `PermittedQuerySetMixin`, `PermittedQuerySet`, and `PermittedManager` |
 | `.authorized(user, permission, extra_q=None)` | Instance projection, any registered terminal | Retained. User conditions and overrides apply; not routed through `.permitted` validation |
-| Malformed permission, bad `conditions`, missing `auth.Permission` plan, or conditions no backend owns together | n/a | `TypeError` or `TrustsConfigurationError` before SQL, including for an anonymous user |
+| Malformed permission, bad `conditions`, missing `auth.Permission` plan, or conditions no backend owns together | n/a | Empty `.permitted()` queryset before SQL, including for an anonymous user |
 | Well-formed permission for another content type | Denial on the instance projection when the row's content type does not match | Empty `.permitted()` queryset |
 
 New code should use `.permitted()`. For user checks and audit options, see
@@ -344,7 +345,7 @@ backend.register(
 )
 
 # New public handle (one symbolic callable)
-backend.register(
+registry.register(
     trust=TeamDocumentPermission,
     user=lambda t: t.team.members,
     permission=lambda t: t.permission,
@@ -357,11 +358,11 @@ backend.register(
 ```
 
 The condition runs once after the freeze check, in the same `AppConfig.ready()`
-world as path lambdas. The stored overlay is private `Equal` /
-`PermissionIn` / `All` and contains no callable. Literal Python `in` is
-unsupported and is not recovered through AST, bytecode, `dis`, or a
-`__contains__` side channel. Public `register(condition=...)` rejects
-prebuilt `All` / `Equal` / `permission_in` values (`TypeError`).
+world as path lambdas. The stored overlay is private and contains no
+callable. Literal Python `in` is unsupported and is not recovered through
+AST, bytecode, `dis`, or a `__contains__` side channel. Public
+`register(condition=...)` rejects a prebuilt condition
+(`PermissionConditionError`).
 
 `.contains` is a reserved method on the condition proxy. A model field
 actually named `contains` cannot be walked in `condition=`. Path lambdas

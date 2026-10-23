@@ -51,7 +51,7 @@ was entitled to create that state.
 
 A configured Trusts implementation backend is the public registration
 boundary. Application code uses the object returned by
-`configured_backend()`; it must not construct private registry or compiler
+`backend.get_registry()`; it must not construct private registry or compiler
 objects.
 
 The registration APIs define permission sources and restrictions:
@@ -75,7 +75,7 @@ its skip name.
 
 ### Ordinary relationship authorization
 
-Call `registry.register()` or `registry.register_delegation()` from the owning
+Call `registry.register()` from the owning
 implementation's `AppConfig.ready()` before the registry freezes.
 
 The public registration signature is
@@ -150,7 +150,7 @@ normalized expression data and retains no callable. A two-argument builder on
 an ordinary registration, or any unsupported arity, is a configuration error.
 
 Inputs and configuration are validated before any override. Invalid input
-raises even for a user the override would grant. An override cannot turn a
+is denied even for a user the override would grant. An override cannot turn a
 permission for another content type into a grant or bypass content identity
 and candidate-existence checks, including those enforced in SQL.
 
@@ -202,7 +202,7 @@ Audit the following boundaries:
 - the exact delegation row must bind its delegate, sponsor, content, and
   condition state; rows must not borrow fields from one another;
 - the sponsor-grant query is the live OR-union of applicable ordinary grants
-  on that catalog;
+  on that backend;
 - the current compiler excludes delegated registrations from the sponsor
   ordinary-grant union, preventing an unbounded chain or cycle;
 - relationship scope can narrow the sponsor ceiling but cannot manufacture a
@@ -262,7 +262,7 @@ The supported projections consume the same normalized registration:
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
 | Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Registered user conditions and overrides and relationship-family SQL before pagination |
-| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | Each Trusts backend answers from its own catalog, including its user conditions and overrides. Pass `backend=` when more than one registers the model. |
+| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | Each Trusts backend answers from its own registrations, including its user conditions and overrides. Pass `backend=` when more than one registers the model. |
 | View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
 `.permitted(permission, user)` is the public content-list inquiry.
@@ -482,10 +482,9 @@ including a custom model that has a `content_type` foreign key.
 String `has_perm` still infers the model from the codename suffix. That
 codec gap is [issue #268](https://github.com/django-trusts/django-trusts/issues/268).
 `.permitted()` and `authorization_required` bind the exact codename to the
-protected model's content type instead. `.permitted()` uses that ownership rule and raises.
-`authorization_required` asks each backend; a backend that does not own
-the names returns an empty queryset, and the view is 403 or 404. There
-is no system check for those decorator names.
+protected model's content type instead. Each asks each backend; a backend
+that does not own the names contributes nothing (an empty queryset, or
+403 / 404 on the view). There is no system check for those decorator names.
 
 The [Django backend boundary](#django-auths-checks-before-calling-backends)
 still applies to native `user.has_perm()`. Trusts-owned inquiries use the

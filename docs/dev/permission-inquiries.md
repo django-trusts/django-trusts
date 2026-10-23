@@ -120,8 +120,8 @@ An auth permission primary key is never compared with a custom terminal
 that happens to use the same integer.
 
 Non-owners contribute nothing. Their unconditioned grants are not OR'd in.
-If no participating backend owns the name set, the call raises
-`TrustsConfigurationError`. Backend order does not change the condition.
+If no participating backend owns the name set, the queryset is empty.
+Backend order does not change the condition.
 
 ### Compilation
 
@@ -491,8 +491,7 @@ contract and their result equivalence are proven. Each implementation slice
 must be re-sized from the accepted previous head.
 
 For `along=`, returned users must agree with the backend object check under
-the same bound, terminal condition, and user conditions and overrides; see the
-[registry walk implementation](core-registry.md) for the SQL construction.
+the same bound, terminal condition, and user conditions and overrides.
 
 The content adapter's candidate model is `settings.AUTH_USER_MODEL`. A
 registration whose user terminal is a different model fails that adapter
