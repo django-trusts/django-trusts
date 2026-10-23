@@ -119,7 +119,7 @@ class MixinCatalogResolveTest(SimpleTestCase):
 
         manager = GrantUsers()
         manager.model = User
-        held = manager.with_perm('myapp.change_document')
+        held = manager.permitted(object(), 'myapp.change_document')
         self.assertIsInstance(held, QuerySet)
         self.assertIs(held.model, User)
         self.assertEqual(backend.get_all_permissions(object(), None), set())

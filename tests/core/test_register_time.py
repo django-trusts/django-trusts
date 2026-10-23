@@ -138,3 +138,16 @@ class DotlessHasPermTest(TestCase):
         with self.assertNumQueries(0):
             self.assertIs(backend.has_perm(user, 'nodot', document), False)
             self.assertIs(user.has_perm('nodot', document), False)
+
+    def test_non_string_permission_returns_false(self):
+        from django.apps import apps
+        if not apps.is_installed('tests.myapp'):
+            self.skipTest('document app is not installed')
+        user = get_user_model().objects.create_user('bad-type-user', password='x')
+        document = Document.objects.create(title='bad-type')
+        backend = DocumentBackend()
+        with self.assertNumQueries(0):
+            self.assertIs(backend.has_perm(user, None, document), False)
+            self.assertIs(backend.has_perm(user, 42, document), False)
+            self.assertIs(user.has_perm(None, document), False)
+            self.assertIs(user.has_perm(42, document), False)

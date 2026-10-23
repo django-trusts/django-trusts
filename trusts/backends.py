@@ -15,6 +15,11 @@ from django.db.models import Model, QuerySet, Subquery
 from trusts.apps import Recorder, TrustsConfigMixin
 from trusts.compile.catalogs import compile_catalog_users, filter_catalogs
 from trusts.errors import TrustsConfigurationError, TrustsMixinRequired
+from trusts.inspect.snapshot import (
+    _build_document,
+    _installed_document,
+    resolve_policy_database,
+)
 
 
 class TrustModelBackendMixin(object):
@@ -148,10 +153,7 @@ def policy_document(backend=None, *, alias=None):
     the result is that backend's ``policy_document()``.
     """
     if backend is None:
-        resolved = resolve_policy_database(alias)
-        return _build_document(tuple(
-            config.catalog for config in apps.get_app_configs()
-            if isinstance(config, TrustsConfigMixin)), resolved)
+        return _installed_document(alias=alias)
     if not isinstance(backend, str):
         raise TypeError(
             'backend must be a dotted import path string (got %r).' % backend)
@@ -245,7 +247,3 @@ def _catalogs(backend):
         seen.add(marker)
         chosen.append((item, catalog))
     return chosen
-
-
-# snapshot imports policy_document. These names are bound first.
-from trusts.inspect.snapshot import _build_document, resolve_policy_database
