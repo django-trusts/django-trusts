@@ -309,6 +309,34 @@ Migration-bot checklist:
 - `from_queryset`
 - `as_manager()`
 
+## Request-time fail-closed (#343)
+
+A malformed permission or condition, a missing plan, or condition names
+no backend owns return an empty queryset (`none()`) at request time.
+They do not raise `TrustsConfigurationError`, `TypeError`, or `ValueError`.
+`authorization_required` is `PermissionDenied` when the row exists and
+`Http404` when it does not. Registration errors still raise at
+`register()` and `ready()`. The decorator still validates its declaration
+arguments when the view is decorated.
+
+| | Old | New |
+| --- | --- | --- |
+| `.permitted()` malformed permission, bad `conditions`, missing plan, or unowned names | `TrustsConfigurationError` or `TypeError` before SQL | `none()` before SQL |
+| `.authorized()` string, unsaved permission, or a user that is not a model instance | `TrustsConfigurationError` or `TypeError` before SQL | `none()` |
+| `get_permitted_users()` / `User.objects.permitted()` malformed permission, missing plan, or unsaved content | `TrustsConfigurationError`, `TypeError`, or `ValueError` before SQL | `none()` |
+| `filter_by_permitted_content()` malformed user or permission, or a missing plan | `TrustsConfigurationError` or `TypeError` before SQL | `none()` |
+| `authorization_required` when no backend has a plan or owns the names | `TrustsConfigurationError` before the grant query | `PermissionDenied` when the row exists, `Http404` when it does not |
+
+Migration-bot checklist:
+
+- `.permitted(`
+- `.authorized(`
+- `get_permitted_users(`
+- `User.objects.permitted(`
+- `filter_by_permitted_content(`
+- `authorization_required(`
+- `TrustsConfigurationError`
+
 ## Unused `get_short_model_name` helper (#217)
 
 | | Old | New |

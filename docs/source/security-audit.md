@@ -262,7 +262,7 @@ The supported projections consume the same normalized registration:
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
 | Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Registered user conditions and overrides and relationship-family SQL before pagination |
-| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | Each Trusts backend answers from its own registrations, including its user conditions and overrides. Pass `backend=` when more than one registers the model. |
+| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | Each Trusts backend answers from its own registrations, including its user conditions and overrides; `backend=` selects one backend. |
 | View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
 `.permitted(permission, user)` is the public content-list inquiry.

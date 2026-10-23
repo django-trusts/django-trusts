@@ -474,7 +474,7 @@ the same model.
 
 ``permission`` is a saved permission row. ``content`` is the protected
 model. ``backend`` is optional and defaults to the installed relationship
-backends; pass ``backend=`` when more than one registers the model.
+backends; pass ``backend=`` to select one.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
 the user may read:
