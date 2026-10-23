@@ -96,7 +96,11 @@ def _permission_binding_for_plan(accepts_permission, content, perm, plan):
     if isinstance(perm, Model) and perm.pk is None:
         return None
     if accepts_permission is None:
-        accepted = isinstance(perm, Permission)
+        accepted = isinstance(perm, Permission) or (
+            isinstance(perm, Model)
+            and permission_model is not None
+            and perm._meta.concrete_model is permission_model
+        )
     else:
         accepted = bool(accepts_permission(perm))
     if not accepted:
