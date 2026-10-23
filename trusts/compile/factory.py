@@ -354,7 +354,7 @@ def question_descriptors(records, delegations, linked):
                 ),
                 (
                     'has_perm',
-                    partial(_invoke, linked, 'has_permission', (), {}),
+                    partial(_invoke, linked, '_question_has_perm', (), {}),
                     True,
                 ),
                 (

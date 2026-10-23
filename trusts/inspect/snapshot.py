@@ -61,11 +61,6 @@ from trusts.plan.rewrites import BoundBool
 from trusts.plan.standards import SkipFlag
 from trusts.plan.conditions import ModelIdentity
 from trusts.compile.factory import RegisteredDelegation
-from trusts.plan.rewrites import bind_once
-from trusts.plan.rewrites import bound_exists_query
-from trusts.plan.aggregates import _compile_common_permissions
-from trusts.plan.users import lock_permitted_users_queryset
-from trusts.plan.contents import _compile_permitted_content_queryset
 
 
 SCHEMA_VERSION = 1
@@ -253,9 +248,8 @@ class _PolicyVisitor(object):
     """Snapshot visitor: renders each walked question to policy SQL.
 
     Supplies the alias and the user/permission/content sentinels for one
-    catalog. ``visit(question)`` is the single visitor method
-    :meth:`Catalog.walk_questions` calls. The six ``_compile_*`` methods
-    below are its per-question bodies.
+    catalog. ``visit(question)`` calls that question and renders the
+    queryset or exists query it returns.
     """
 
     def __init__(self, catalog, alias, *, trust_ids=None):
@@ -264,7 +258,6 @@ class _PolicyVisitor(object):
         self._trust_ids = dict(trust_ids or {})
         self._contents = {}
         self._classifier_records = {}
-        self._ordinary_records = {}
 
     def content_for(self, label):
         return self._contents[label]
@@ -274,34 +267,54 @@ class _PolicyVisitor(object):
             question.content_model, question.records, question.delegations,
         )
         label = _model_label(question.content_model)
-        classifier = self._classifier_records[label]
-        ordinary = self._ordinary_records[label]
+        records = self._classifier_records[label]
         model = question.content_model
-        if question.name == 'permitted':
-            content['permitted'] = _sql_row(
-                self._compile_content_grant(classifier, model))
-        elif question.name == 'has_perm':
-            content['has_perm'] = _sql_row(
-                self._compile_has_perm(classifier, model))
-        elif question.name == 'get_all_permissions':
-            content['get_all_permissions'] = _sql_row(
-                self._compile_get_all_permissions(classifier, model))
-        elif question.name == 'get_group_permissions':
-            content['get_group_permissions'] = _sql_row(
-                self._compile_get_group_permissions(ordinary, model))
-        elif question.name == 'get_permitted_users':
-            content['get_permitted_users'] = _sql_row(
-                self._compile_get_permitted_users(classifier, model))
-        elif question.name == 'filter_by_permitted_content':
-            rows = self._compile_filter_by_permitted_content(
-                classifier, model)
+        alias = self.alias
+        user = _role_sentinel(records[0], 'user', alias)
+        permission = _role_sentinel(records[0], 'permission', alias)
+        if question.name == 'filter_by_permitted_content':
+            rows = []
+            for prefix in self.catalog.permitted_content_prefix_models(model):
+                queryset = question.question(
+                    _content_manager(prefix).all(), user, permission,
+                )
+                if queryset.query.is_empty():
+                    continue
+                sql, symbols = _compile_queryset(
+                    queryset, alias, record=records[0], expr=None,
+                    records=records,
+                )
+                rows.append({
+                    'model': _model_label(prefix),
+                    'params': _present_params(symbols),
+                    'sql': _format_policy_sql(sql),
+                })
             if rows:
                 content['filter_by_permitted_content'] = rows
+            return content
+        if question.name == 'permitted':
+            queryset = question.question(user, permission)
+        elif question.name == 'has_perm':
+            queryset = question.question(
+                user, _content_sentinel(model, alias), permission,
+            )
+        elif question.name in ('get_all_permissions', 'get_group_permissions'):
+            queryset = question.question(
+                user, _content_sentinel(model, alias),
+            )
+        elif question.name == 'get_permitted_users':
+            instance = _content_sentinel(model, alias)
+            _populate_reverse_along_identity(instance, records, alias)
+            queryset = question.question(instance, permission)
         else:
             raise TrustsConfigurationError(
                 'Policy SQL visitor cannot render question %r.'
                 % (question.name,)
             )
+        content[question.name] = _sql_row(_compile_queryset(
+            queryset, alias, record=records[0], expr=None, records=records,
+            reverse_users=question.name == 'get_permitted_users',
+        ))
         return content
 
     def _ensure_content(self, model, records, delegations):
@@ -385,103 +398,7 @@ class _PolicyVisitor(object):
             content['delegations'] = delegated_rows
         self._contents[label] = content
         self._classifier_records[label] = classifier_records
-        self._ordinary_records[label] = records
         return content
-
-    # -- per-question SQL bodies (formerly the six _compile_* fns) ----
-
-    def _compile_content_grant(self, records, model):
-
-        catalog, alias = self.catalog, self.alias
-        user = _role_sentinel(records[0], 'user', alias)
-        permission = _role_sentinel(records[0], 'permission', alias)
-        queryset = _content_manager(model).all()
-        predicate = catalog.complete_grant_q(queryset, user, permission)
-        queryset = bind_once(
-            queryset.filter(predicate).distinct(),
-            user_model=catalog.user_model,
-        )
-        return _compile_queryset(
-            queryset, alias, record=records[0], expr=None, records=records,
-        )
-
-    def _compile_has_perm(self, records, model):
-
-        catalog, alias = self.catalog, self.alias
-        user = _role_sentinel(records[0], 'user', alias)
-        permission = _role_sentinel(records[0], 'permission', alias)
-        instance = _content_sentinel(model, alias)
-        predicate = catalog.complete_grant_q(instance, user, permission)
-        exists = _content_manager(model).filter(pk=instance.pk).filter(predicate)
-        compiled = bound_exists_query(exists, user_model=catalog.user_model)
-        return _compile_queryset(
-            _Query(compiled),
-            alias, record=records[0], expr=None, records=records,
-        )
-
-    def _compile_get_all_permissions(self, records, model):
-
-        catalog, alias = self.catalog, self.alias
-        user = _role_sentinel(records[0], 'user', alias)
-        instance = _content_sentinel(model, alias)
-        queryset = _compile_common_permissions(
-            catalog, instance, user, kind='complete',
-        )
-        return _compile_queryset(
-            queryset, alias, record=records[0], expr=None, records=records,
-        )
-
-    def _compile_get_permitted_users(self, records, model):
-
-        catalog, alias = self.catalog, self.alias
-        content = _content_sentinel(model, alias)
-        _populate_reverse_along_identity(content, records, alias)
-        permission = _role_sentinel(records[0], 'permission', alias)
-        queryset = lock_permitted_users_queryset(
-            catalog, content, permission,
-        )
-        return _compile_queryset(
-            queryset, alias, record=records[0], expr=None, records=records,
-            reverse_users=True,
-        )
-
-    def _compile_filter_by_permitted_content(self, records, model):
-        """One statement per proper prefix, the queryset that actually runs."""
-        catalog, alias = self.catalog, self.alias
-        user = _role_sentinel(records[0], 'user', alias)
-        permission = _role_sentinel(records[0], 'permission', alias)
-        rows = []
-        for prefix in catalog.permitted_content_prefix_models(model):
-            queryset = _compile_permitted_content_queryset(
-                _content_manager(prefix).all(),
-                user,
-                permission,
-                content=model,
-                catalog=catalog,
-            )
-            if queryset.query.is_empty():
-                continue
-            sql, symbols = _compile_queryset(
-                queryset, alias, record=records[0], expr=None, records=records,
-            )
-            rows.append({
-                'model': _model_label(prefix),
-                'params': _present_params(symbols),
-                'sql': _format_policy_sql(sql),
-            })
-        return rows
-
-    def _compile_get_group_permissions(self, records, model):
-
-        catalog, alias = self.catalog, self.alias
-        user = _role_sentinel(records[0], 'user', alias)
-        instance = _content_sentinel(model, alias)
-        queryset = _compile_common_permissions(
-            catalog, instance, user, kind='group',
-        )
-        return _compile_queryset(
-            queryset, alias, record=records[0], expr=None, records=records,
-        )
 
 
 def _build_document(catalogs, alias):
@@ -745,11 +662,6 @@ def _role_sentinel(record, role, alias):
         getattr(record, '%s_target' % role),
         alias=alias,
     )
-
-
-class _Query(object):
-    def __init__(self, query):
-        self.query = query
 
 
 def _relation(record, role):

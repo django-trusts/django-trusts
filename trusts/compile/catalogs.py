@@ -12,6 +12,7 @@ from trusts.plan.aggregates import (
     _compile_common_permissions,
     _delegated_user_exists,
     all_match,
+    _instance_exists_query,
     instance_match,
 )
 from trusts.plan.conditions import (
@@ -59,7 +60,9 @@ class Question(object):
     catalog question families; its call signature depends on ``name``:
 
     - ``permitted``: ``question(user, permission) -> QuerySet``
-    - ``has_perm``: ``question(user, content, permission) -> bool``
+    - ``has_perm``: ``question(user, content, permission)`` returns the
+      exists query runtime executes. The object is true when a row is
+      held and false when this catalog grants nothing.
     - ``get_all_permissions`` / ``get_group_permissions``:
       ``question(user, content) -> QuerySet | ()``
     - ``get_permitted_users``: ``question(content, permission)``
@@ -485,6 +488,10 @@ class Catalog(object):
         if not prefixes:
             return ()
         return prefixes.get(content_model(model), ())
+
+    def _question_has_perm(self, user, content, permission):
+        inquiry = _instance_exists_query(self, content, user, permission)
+        return False if inquiry is None else inquiry
 
     def _question_content_grant(self, content_model, user, permission):
         return self.filter_authorized(

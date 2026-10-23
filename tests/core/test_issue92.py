@@ -26,7 +26,6 @@ from tests.support import (
 from trusts.inspect.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
 from trusts.inspect.format import _format_policy_sql, _tokenize_policy_sql
 from trusts.plan.aggregates import all_match
-from trusts.plan.users import lock_permitted_users_queryset
 from trusts.plan.walk import _render_reach_sql
 from trusts.compile.nodes import Along
 from trusts.plan.recursions import GrantReach
@@ -504,7 +503,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
 
     def _locked_user_pks(self, registry, content):
         handle = _direct_handle(registry)
-        queryset = lock_permitted_users_queryset(built_catalog(handle), content, self.read)
+        queryset = built_catalog(handle).permitted_users(content, self.read)
         return (queryset, list(queryset.order_by('pk').values_list('pk', flat=True)))
 
     def test_formatted_sql_matches_unformatted_results_on_every_backend(self):

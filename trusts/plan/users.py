@@ -26,12 +26,10 @@ from trusts.plan.writers import (
     member_pk,
     values_match,
 )
-from trusts.plan.rewrites import bind_once
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.utils import parse_perm_code
-from trusts.plan.contents import _as_q, _ordinary_records
+from trusts.plan.contents import _as_q
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
-from trusts.plan.aggregates import _delegated_user_exists
 from trusts.plan.grammar import Tree
 
 
@@ -51,57 +49,6 @@ def _reverse_checked(plan, exists, user_model, permission, content, values,
     if checked.predicate is None:
         return None
     return _trusts_eligibility_q(user_model) & checked.predicate
-
-
-def lock_permitted_users_queryset(catalog, content, permission):
-    """Backend-local reverse queryset compiled into the policy lock.
-
-    This is the backend branch (eligibility and complete grants), not
-    Django's outer superuser rule and not other backends. ``permission``
-    is the permission-row sentinel, classified as ``permission.<target>``.
-    Content is classified as ``content.<target>``.
-    """
-    plan = catalog.plan_for(content)
-    if not plan.records and not plan.delegations:
-        raise TrustsConfigurationError(
-            'Policy SQL found no permitted-users query for %s.'
-            % content._meta.label
-        )
-    user_model = _plan_user_model(plan, content)
-    exists = plan.user_exists(content, permission) if plan.records else None
-    if plan.delegations:
-        permission_model = (
-            permission._meta.concrete_model
-            if isinstance(permission, Model) else None
-        )
-        delegated = _delegated_user_exists(
-            plan.delegations,
-            _ordinary_records(
-                catalog, content, permission_model,
-            ),
-            content,
-            permission,
-            content_identity=plan.content_identity,
-        )
-        if delegated is not None:
-            exists = (
-                delegated if exists is None else (_as_q(exists) | delegated)
-            )
-    if plan.user_rules_closed is None:
-        return user_model._default_manager.all().filter(pk__isnull=True)
-    predicate = _reverse_checked(
-        plan, exists, user_model, permission, content, {},
-        plan.permission_model,
-    )
-    if predicate is None:
-        raise TrustsConfigurationError(
-            'Policy SQL found no permitted-users query for %s.'
-            % content._meta.label
-        )
-    return bind_once(
-        user_model._default_manager.all().filter(predicate).distinct(),
-        user_model=catalog.user_model,
-    )
 
 
 def _plan_user_model(plan, content):
