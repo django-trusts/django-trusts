@@ -125,9 +125,8 @@ messages = [
     message for message in run_checks()
     if getattr(message, 'id', None) == 'trusts.E008'
 ]
-for message in messages:
-    if 'partial_201' in message.msg:
-        raise SystemExit('partial declaration leaked into trusts.E008')
+if messages:
+    raise SystemExit('trusts.E008 is retired')
 print('partial-declaration-ok')
 """
 
@@ -137,9 +136,9 @@ import os
 os.environ['DJANGO_SETTINGS_MODULE'] = 'tests.settings'
 import django
 django.setup()
+from django.core.exceptions import PermissionDenied
 from django.db import connection
-from django.http import HttpRequest
-from django.test.utils import CaptureQueriesContext
+from django.http import Http404, HttpRequest
 from tests.myapp.models import Document
 from trusts.errors import TrustsConfigurationError
 from trusts.decorators import authorization_required
@@ -162,18 +161,21 @@ def _request(user):
     request.META['SERVER_PORT'] = '80'
     return request
 
+table = Document._meta.db_table
+if table not in connection.introspection.table_names():
+    with connection.schema_editor() as editor:
+        editor.create_model(Document)
+
 for user in (_Principal(), _Principal(superuser=True)):
-    with CaptureQueriesContext(connection) as captured:
-        try:
-            _missing(_request(user), pk=1)
-        except TrustsConfigurationError as exc:
-            if 'missing_201' not in str(exc):
-                raise
-        else:
-            raise SystemExit('expected TrustsConfigurationError')
-    if captured.captured_queries:
-        raise SystemExit('missing-name probe issued SQL')
-print('missing-name-preflight-ok')
+    try:
+        _missing(_request(user), pk=1)
+    except (PermissionDenied, Http404):
+        pass
+    except TrustsConfigurationError:
+        raise SystemExit('missing name must not raise TrustsConfigurationError')
+    else:
+        raise SystemExit('expected denial')
+print('missing-name-denied-ok')
 """
 
 
@@ -210,9 +212,9 @@ class AuthorizationRequiredDeclarationTest(TestCase):
         stdout = _run_isolated(_PARTIAL_DECLARATION_SOURCE)
         self.assertIn('partial-declaration-ok', stdout)
 
-    def test_missing_selected_name_fails_before_candidate_or_superuser(self):
+    def test_missing_selected_name_is_denied_without_raising(self):
         stdout = _run_isolated(_MISSING_NAME_SOURCE)
-        self.assertIn('missing-name-preflight-ok', stdout)
+        self.assertIn('missing-name-denied-ok', stdout)
 
 
 class AuthorizationRequiredPopulateReadinessTest(SimpleTestCase):
@@ -244,7 +246,7 @@ class AuthorizationRequiredReadinessPreflightTest(
             document=self.secret, user=self.alice, permission=self.change,
         )
 
-    def test_unbound_selected_name_fails_before_candidate_or_superuser(self):
+    def test_unbound_selected_name_denies_without_raising(self):
         @authorization_required(Document, PERM, ('non_confidential',))
         def _filtered(request, pk):
             return 'ok'
@@ -252,12 +254,10 @@ class AuthorizationRequiredReadinessPreflightTest(
         from tests.myapp.backends import DocumentBackend
 
         with unbound_named_filters(DocumentBackend):
-            with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    _filtered(_request(self.alice), pk=self.open_doc.pk)
-                self.assertIn('non_confidential', str(ctx.exception))
-                with self.assertRaises(TrustsConfigurationError):
-                    _filtered(_request(self.superuser), pk=self.open_doc.pk)
+            for user in (self.alice, self.superuser):
+                with self.assertNumQueries(1):
+                    with self.assertRaises(PermissionDenied):
+                        _filtered(_request(user), pk=self.open_doc.pk)
 
         with self.assertNumQueries(1):
             self.assertEqual(

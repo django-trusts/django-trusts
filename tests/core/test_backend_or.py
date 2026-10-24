@@ -21,7 +21,7 @@ from tests.core.pair_alpha.models import Note, NoteAlso, NoteGrant, Shelf
 from tests.core.pair_beta.backends import PairBetaBackend
 from tests.core.pair_beta.models import Binder, Page, PageDirect, PageGrant
 from tests.support import compiler, push_catalog
-from trusts.decorators import _declared_authorization_guards, authorization_required
+from trusts.decorators import authorization_required
 from trusts.errors import TrustsConfigurationError
 from trusts.models import PermittedUsersManagerMixin
 
@@ -132,12 +132,6 @@ class ListedBackendOrTest(TestCase):
         self.child = Binder.objects.create(title='child', parent=self.root)
         self.root_page = Page.objects.create(binder=self.root, title='root-page')
         self.child_page = Page.objects.create(binder=self.child, title='child-page')
-
-    def _forget(self, model, permission):
-        try:
-            _declared_authorization_guards.remove((model, permission, ()))
-        except ValueError:
-            pass
 
     def test_only_the_registering_catalog_answers(self):
         NoteGrant.objects.create(
@@ -525,7 +519,6 @@ class ListedBackendOrTest(TestCase):
             guard = authorization_required(model, code, backend=paths[name])(
                 lambda request, pk: 'ok',
             )
-            self.addCleanup(self._forget, model, code)
             with self.assertRaises(PermissionDenied):
                 guard(_request(self.holder), pk=obj.pk)
         for name in allowed:
@@ -544,7 +537,6 @@ class ListedBackendOrTest(TestCase):
             guard = authorization_required(model, code, backend=path)(
                 lambda request, pk: 'ok',
             )
-            self.addCleanup(self._forget, model, code)
             self.assertEqual(guard(_request(self.holder), pk=obj.pk), 'ok')
 
     def _users(self, obj, backend=None):
