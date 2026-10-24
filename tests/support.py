@@ -15,6 +15,7 @@ from trusts.backends import (
     RelationshipBackend,
     TrustModelBackendMixin,
 )
+from trusts.compile.appbuild import build_app_catalog
 from trusts.compile.compilers import Compiler
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import render_policy_sql_bytes
@@ -66,10 +67,10 @@ def app_catalog_path(config):
 
 def backend_state(config):
     """State object for ``config``, or ``None`` when unset."""
-    states = getattr(config, '_states', None)
-    if not isinstance(states, dict):
+    lookup = getattr(config, 'get_config', None)
+    if not callable(lookup):
         return None
-    return states.get(RELATIONSHIP_BACKEND_KEY)
+    return lookup(RELATIONSHIP_BACKEND_KEY)
 
 
 def ensure_backend_state(config):
@@ -78,7 +79,9 @@ def ensure_backend_state(config):
     if state is not None:
         return state
     return config.get_or_create_config(
-        RELATIONSHIP_BACKEND_KEY, RelationshipBackend,
+        RELATIONSHIP_BACKEND_KEY,
+        RelationshipBackend,
+        on_ready=build_app_catalog,
     )
 
 

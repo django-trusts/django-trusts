@@ -20,6 +20,7 @@ from tests.core import KernelHostRequiredMixin
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import TrustsConfigMixin
+from trusts.compile.appbuild import build_app_catalog
 
 
 PERM = 'myapp.change_document'
@@ -219,7 +220,9 @@ class ImplementationOwnershipReadyTest(TestCase):
 
         config = _bind(NonMixinOwnerConfig, ready=False)
         config.get_or_create_config(
-            RELATIONSHIP_BACKEND_KEY, RelationshipBackend,
+            RELATIONSHIP_BACKEND_KEY,
+            RelationshipBackend,
+            on_ready=build_app_catalog,
         )
         before = configured_catalog(HOST)
         self.assertFalse(hasattr(config, 'registries'))

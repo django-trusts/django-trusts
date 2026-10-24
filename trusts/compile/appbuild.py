@@ -11,18 +11,18 @@ from trusts.errors import TrustsConfigurationError
 import trusts.inspect.checks  # noqa: F401
 
 
-def build_app_catalog(state, app_config):
+def build_app_catalog(config, state):
     """Freeze ``state.recorder``, replay it, and store the catalog.
 
     A second call keeps the catalog already stored. Registrations with
-    no listed backend whose module resolves to ``app_config`` raise.
+    no listed backend whose module resolves to ``config`` raise.
     """
     if state.catalog is not None:
         return
     compiler = Compiler(
         user_model=get_user_model(),
         path='%s.%s' % (
-            type(app_config).__module__, type(app_config).__qualname__,
+            type(config).__module__, type(config).__qualname__,
         ),
         family=state.family,
         query_compiler=(
@@ -35,10 +35,10 @@ def build_app_catalog(state, app_config):
     if state.catalog.records or state.catalog.delegations:
         if not any(
             django.apps.apps.get_containing_app_config(
-                path.rpartition('.')[0]) is app_config
+                path.rpartition('.')[0]) is config
             for path in settings.AUTHENTICATION_BACKENDS
         ):
             raise TrustsConfigurationError(
                 'Trusts app %s has registrations but no AUTHENTICATION_BACKENDS '
                 'entry resolves to it. List a backend whose module lives in this app.'
-                % app_config.label)
+                % config.label)

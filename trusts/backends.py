@@ -14,7 +14,6 @@ from django.contrib.auth import get_backends, get_user_model, load_backend
 from django.contrib.auth.models import Permission
 from django.db.models import Model, QuerySet, Subquery
 
-from trusts.apps import AppLifecycle
 from trusts.compile.appbuild import build_app_catalog
 from trusts.compile.catalogs import compile_catalog_users, filter_catalogs
 from trusts.compile.compilers import RegistrationListener
@@ -111,7 +110,7 @@ class Recorder(Registry):
             )
 
 
-class RelationshipBackend(AppLifecycle):
+class RelationshipBackend:
     """Registration log and catalog for one app config.
 
     ``family`` and ``query_compiler`` come from the backend class that
@@ -123,9 +122,6 @@ class RelationshipBackend(AppLifecycle):
         self.query_compiler = query_compiler
         self.recorder = Recorder(RegistrationListener())
         self.catalog = None
-
-    def app_ready(self, app_config):
-        build_app_catalog(self, app_config)
 
 
 class TrustModelBackendMixin(object):
@@ -151,15 +147,18 @@ class TrustModelBackendMixin(object):
                 family=backend_type.family,
                 query_compiler=backend_type.query_compiler,
             ),
+            on_ready=build_app_catalog,
         )
         return state.recorder
 
     def _state(self):
         config = apps.get_containing_app_config(type(self).__module__)
-        states = getattr(config, '_states', None) if config is not None else None
-        if not isinstance(states, dict):
+        if config is None:
             return None
-        return states.get(RELATIONSHIP_BACKEND_KEY)
+        lookup = getattr(config, 'get_config', None)
+        if not callable(lookup):
+            return None
+        return lookup(RELATIONSHIP_BACKEND_KEY)
 
     def _catalog(self):
         """Catalog this backend answers from, or ``None`` when unset."""

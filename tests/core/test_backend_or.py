@@ -21,6 +21,7 @@ from tests.core.pair_alpha.models import Note, NoteAlso, NoteGrant, Shelf
 from tests.core.pair_beta.backends import PairBetaBackend
 from tests.core.pair_beta.models import Binder, Page, PageDirect, PageGrant
 from tests.support import compiler, push_catalog
+from trusts.compile.appbuild import build_app_catalog
 from trusts.decorators import authorization_required
 from trusts.errors import TrustsConfigurationError
 from trusts.models import PermittedUsersManagerMixin
@@ -393,7 +394,9 @@ class ListedBackendOrTest(TestCase):
 
         config = Unlisted('tests.core.pair_alpha', pair_alpha)
         config.get_or_create_config(
-            RELATIONSHIP_BACKEND_KEY, RelationshipBackend,
+            RELATIONSHIP_BACKEND_KEY,
+            RelationshipBackend,
+            on_ready=build_app_catalog,
         ).recorder.register(
             trust=NoteGrant, user='user', permission='permission',
             content='shelf',

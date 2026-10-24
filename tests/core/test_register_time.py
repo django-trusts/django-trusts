@@ -11,6 +11,7 @@ from django.test import TestCase
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import TrustsConfigMixin
+from trusts.compile.appbuild import build_app_catalog
 from trusts.errors import TrustsConfigurationError
 
 
@@ -28,7 +29,9 @@ def _probe():
 def _recorder(config):
     from trusts.backends import RELATIONSHIP_BACKEND_KEY, RelationshipBackend
     return config.get_or_create_config(
-        RELATIONSHIP_BACKEND_KEY, RelationshipBackend,
+        RELATIONSHIP_BACKEND_KEY,
+        RelationshipBackend,
+        on_ready=build_app_catalog,
     ).recorder
 
 
