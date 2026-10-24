@@ -49,9 +49,16 @@ class _BoundBackend(TrustModelBackendMixin, ModelBackend):
         if not getattr(self, '_sealed', False):
             self._factory.path = 'tests.core.issue203'
             self._factory.family = TrustsConfigMixin.family
-            self.catalog = built_catalog(self._factory)
+            built = built_catalog(self._factory)
+            self._previous_catalog = self._config.catalog
+            self._config.catalog = built
             self._sealed = True
         return super().has_perm(user_obj, perm, obj, **skip_flags)
+
+    def restore(self):
+        if getattr(self, '_sealed', False):
+            self._config.catalog = self._previous_catalog
+            self._sealed = False
 
 class _BuilderLog(object):
 
@@ -126,6 +133,10 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
         self.Tag, self.Note, self.NoteGrant = _note_models()
         self.handle = _handle(self.NoteGrant)
         self.backend = _BoundBackend(self.handle)
+
+    def tearDown(self):
+        self.backend.restore()
+        super().tearDown()
 
     def _reject(self, code, builder, needle):
         with self.assertNumQueries(0):

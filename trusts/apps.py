@@ -1,10 +1,9 @@
-"""Each host app config owns one recorder and the catalog built from it."""
+"""Each host app config owns one registration log and the catalog built from it."""
 
 from collections.abc import Callable
 from typing import TypeVar
 
 import django.apps
-from django.contrib.auth import get_user_model
 from django.db.models import Model
 
 from trusts.errors import TrustsConfigurationError
@@ -16,7 +15,7 @@ class Recorder(object):
     """Ordered log of registration calls for one app config.
 
     ``play`` replays each call, in order, as the same method on
-    ``target``. The recorder must already be frozen. A later ``play``
+    ``target``. The log must already be frozen. A later ``play``
     replays those same calls onto the new target.
     """
 
@@ -38,7 +37,7 @@ class Recorder(object):
         ) = None,
         along=None,
     ):
-        self._open()
+        self._open('register')
         self._rows.append(('register', (), {
             'trust': trust,
             'user': user,
@@ -52,18 +51,18 @@ class Recorder(object):
         }))
 
     def add_named_filter(self, model, code, predicate):
-        """Record a named-filter builder for ``ready``."""
-        self._open()
+        """Record a named-filter builder. The compiler parses it at build."""
+        self._open('add_named_filter')
         self._rows.append((
             'add_named_filter', (model, code, predicate), {},
         ))
 
     def set_user_condition(self, name, expr, on='*'):
-        self._open()
+        self._open('set_user_condition')
         self._rows.append(('set_user_condition', (name, expr), {'on': on}))
 
     def set_user_override(self, name, expr, on='user'):
-        self._open()
+        self._open('set_user_override')
         self._rows.append(('set_user_override', (name, expr), {'on': on}))
 
     def freeze(self):
@@ -72,29 +71,25 @@ class Recorder(object):
     def play(self, target):
         """Replay this log on ``target``.
 
-        An unfrozen recorder raises. A second play replays the same
-        calls onto that target.
+        The caller freezes the log first. A second play replays the
+        same calls onto that target.
         """
-        if not self.frozen:
-            raise TrustsConfigurationError(
-                'play refused: this recorder is not frozen.'
-            )
         for name, args, kwargs in self._rows:
             getattr(target, name)(*args, **kwargs)
 
-    def _open(self):
+    def _open(self, method):
         if self.frozen:
             raise TrustsConfigurationError(
-                'register refused: this recorder is frozen. '
-                'The catalog was already built by TrustsConfigMixin.ready().'
+                '%s refused: this registry is frozen. '
+                'The catalog is already built.' % method
             )
 
 
 class TrustsConfigMixin(django.apps.AppConfig):
-    """Records every registration call through ``self.recorder``.
+    """App config whose backend registers through ``get_registry()``.
 
-    ``ready`` freezes that recorder; the compiler builds the catalog.
-    Order across apps does not matter.
+    ``ready`` does not build the catalog. The first question builds it
+    from this config's registration log. Order across apps does not matter.
     """
 
     family = 'relationship'
@@ -106,34 +101,39 @@ class TrustsConfigMixin(django.apps.AppConfig):
         self.recorder = Recorder()
         self.catalog = None
 
-    def get_catalog(self):
-        """Catalog built by ``ready``. Raises before that build."""
-        if self.catalog is None:
-            raise TrustsConfigurationError('catalog not built yet')
-        return self.catalog
-
     def catalog_path(self):
         """Identity stored on the catalog and in the policy lockfile."""
         return '%s.%s' % (type(self).__module__, type(self).__qualname__)
 
     def ready(self):
-        # phase-1 import raises AppRegistryNotReady: compile/resolution.py
-        # imports django.contrib.contenttypes.fields before apps are ready.
-        from trusts.compile.factory import Compiler
-
-        user_model = get_user_model()
-        compiler = Compiler(
-            user_model=user_model,
-            path=self.catalog_path(),
-            family=self.family,
-            query_compiler=self.query_compiler or Compiler.default_query_compiler(),
-        )
-        self.recorder.freeze()
-        self.recorder.play(compiler.get_recorder_target())
-        self.catalog = compiler.compile()
         # phase-1 import raises AppRegistryNotReady: snapshot imports
         # auth.Permission before apps are ready.
         import trusts.inspect.checks  # noqa: F401
+
+
+def catalog_of(config):
+    """Catalog for ``config``, built once on the first call.
+
+    The compiler is constructed here, when the user model is known,
+    and the registration log is replayed onto it.
+    """
+    if config.catalog is not None:
+        return config.catalog
+    from django.contrib.auth import get_user_model
+    from trusts.compile.factory import Compiler
+
+    compiler = Compiler(
+        user_model=get_user_model(),
+        path=config.catalog_path(),
+        family=config.family,
+        query_compiler=(
+            config.query_compiler or Compiler.default_query_compiler()
+        ),
+    )
+    config.recorder.freeze()
+    config.recorder.play(compiler)
+    config.catalog = compiler.compile()
+    return config.catalog
 
 
 def installed_catalogs():
@@ -141,6 +141,5 @@ def installed_catalogs():
     found = []
     for config in django.apps.apps.get_app_configs():
         if isinstance(config, TrustsConfigMixin):
-            found.append(config.get_catalog())
+            found.append(catalog_of(config))
     return tuple(found)
-

@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 env:
-  # Exact Zero candidate companion.
-  COMPANION_ZERO_SHA: 36f577c3774b7851c03fcd13c3203adb24cd07e9
+  # Zero registry-at-models, PR #54, CI run 39756967058.
+  COMPANION_ZERO_SHA: 66f21235988264f0ea23f3da45efb54cb768bf29
   # Exact GH Permissions candidate companion.
   COMPANION_GH_SHA: 3bd80f82199b37cd34c1028ecd669e88711c3270
 

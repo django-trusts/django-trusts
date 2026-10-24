@@ -1,4 +1,4 @@
-"""Registration marshaling and the ready-time sweep."""
+"""Registration walk and the one catalog build."""
 
 __all__ = []
 
@@ -274,15 +274,15 @@ def plan_table(records, delegations, catalog_user, user_conditions,
 
 
 class Compiler(object):
-    """Replay target for one recorder.
+    """Internal registry walk and the one catalog build.
 
-    The app recorder stores every registration call. ``ready`` replays
-    that log onto this compiler. ``register`` performs zero SQL.
-    ``compile`` freezes this compiler and returns a ``Catalog``. A later
-    ``compile`` returns another catalog from the same stored rows.
-    After that, ``register``, ``register_delegation``,
-    ``add_named_filter``, ``set_user_condition``, and
-    ``set_user_override`` raise ``TrustsConfigurationError``.
+    Callers register on the app's registration log. That log is replayed
+    here when the catalog is built, and the user model is already known.
+    ``register`` walks models and performs zero SQL. ``compile`` freezes
+    this registry and returns its ``Catalog``. A later ``compile`` returns
+    that same catalog. After the build, ``register``,
+    ``register_delegation``, ``add_named_filter``, ``set_user_condition``,
+    and ``set_user_override`` raise ``TrustsConfigurationError``.
     """
 
     def __init__(self, *, user_model, query_compiler, path, family):
@@ -301,11 +301,8 @@ class Compiler(object):
 
     @staticmethod
     def default_query_compiler():
-        """Plan compiler ``ready`` stores when the config does not set one."""
+        """Plan compiler stored when the config does not set one."""
         return PlanQueryCompiler()
-
-    def get_recorder_target(self):
-        return self
 
     def add_named_filter(self, model, code, predicate):
         """Register a ``:code`` condition on ``model`` for this instance.
@@ -346,10 +343,9 @@ class Compiler(object):
     def set_user_condition(self, name, expr, on='*'):
         """Set, replace, or remove one named user condition.
 
-        Record this before ``register()``. The catalog sweep checks the
-        order at ready. ``None`` removes that name. ``on`` is ``*``,
-        ``user``, or ``sponsor``.
-        The lambda is walked once against this factory's ``user_model``.
+        Record this before ``register()``. ``None`` removes that name.
+        ``on`` is ``*``, ``user``, or ``sponsor``. The lambda is walked
+        once and checked against the user model.
         """
         self._open('set_user_condition')
         self._open_for_rules('condition')
@@ -390,9 +386,8 @@ class Compiler(object):
     def set_user_override(self, name, expr, on='user'):
         """Store the one checked-user override, or clear it with ``None``.
 
-        Record this before ``register()``. The catalog sweep checks the
-        order at ready. ``on="sponsor"`` and ``on="*"`` raise. The name cannot match a
-        registered condition.
+        Record this before ``register()``. ``on="sponsor"`` and ``on="*"``
+        raise. The name cannot match a registered condition.
         """
         self._open('set_user_override')
         self._open_for_rules('override')
@@ -871,13 +866,15 @@ class Compiler(object):
         )
 
     def compile(self):
-        """Freeze this compiler and return its ``Catalog``.
+        """Build this registry's catalog once and freeze registration.
 
-        Named filters are copied into a new mapping, so the catalog
-        does not share this compiler's store. User-rule and override
-        fragments and the plan table are compiled here. A later call
-        compiles another catalog from the same stored rows.
+        The user model is already known. Named filters are copied into
+        a new mapping, so the catalog does not share this compiler's
+        store. User-rule and override fragments and the plan table are
+        compiled here. A later call returns that same catalog.
         """
+        if self.frozen:
+            return self._catalog
         named_filters = dict(self._named_filters)
         stored = self._stored_user_conditions()
         model = self.user_model
@@ -903,7 +900,6 @@ class Compiler(object):
         rules = (primary, absent)
         plans = plan_table(
             self.records, self.delegations, model, stored, rules, override_q)
-        self.frozen = True
         shape = CatalogShape(
             records=self.records, delegations=self.delegations,
             named_filters=named_filters,
@@ -912,7 +908,9 @@ class Compiler(object):
             path=self.path, family=self.family, user_model=model,
             user_rules=rules, override_q=override_q, plans=plans,
         )
-        return Catalog(shape, user_model=model)
+        self._catalog = Catalog(shape, user_model=model)
+        self.frozen = True
+        return self._catalog
 
     def _stored_user_conditions(self):
         """``None`` when the registry still uses the built-in rule."""
@@ -923,14 +921,15 @@ class Compiler(object):
     def _open(self, method):
         if self.frozen:
             raise TrustsConfigurationError(
-                '%s refused: this compiler is frozen.' % method
+                '%s refused: this registry is frozen. '
+                'The catalog is already built.' % method
             )
 
     def _open_for_rules(self, kind):
         if self._order or self._delegation_order:
             raise TrustsConfigurationError(
                 'Record user conditions and the override before '
-                'register(). The catalog sweep checks this at ready().'
+                'register().'
             )
 
 

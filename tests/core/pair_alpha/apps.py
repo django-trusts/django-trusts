@@ -8,8 +8,3 @@ class PairAlphaConfig(trusts_apps.TrustsConfigMixin):
     label = 'pair_alpha'
     default = False
     default_auto_field = 'django.db.models.AutoField'
-
-    def ready(self):
-        if self.recorder.frozen:
-            return
-        super().ready()

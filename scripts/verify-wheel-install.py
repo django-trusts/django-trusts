@@ -31,7 +31,7 @@ def assert_register_signature(register) -> None:
 
     Ordinary roles stay one-argument path callables. Delegated registration
     adds ``delegate`` and ``sponsor`` and a second ``condition`` callable.
-    ``Recorder.register`` returns ``None``.
+    ``Recorder.register`` is the method ``get_registry()`` returns.
     """
     import inspect
     from collections.abc import Callable as AbcCallable
@@ -168,8 +168,9 @@ def main() -> int:
     import sys as _sys
     import trusts
     import trusts.apps as apps_mod
-    from trusts.apps import Recorder, TrustsConfigMixin
+    from trusts.apps import TrustsConfigMixin
     from trusts.backends import TrustModelBackendMixin
+    from trusts.apps import Recorder
     from trusts.decorators import filter_by_permitted_content
     from trusts.errors import PermissionConditionError
     from trusts.models import AuthorizedManager, AuthorizedManagerMixin, AuthorizedQuerySet

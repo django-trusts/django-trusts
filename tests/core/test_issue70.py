@@ -45,14 +45,18 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
 
     def test_frozen_recorder_is_not_rewritten(self):
         from tests.myapp.backends import DocumentBackend
+        from trusts.errors import TrustsConfigurationError
 
         isolated = compiler()
         isolate_live_registry(self.contributor, isolated, DOCUMENT_BACKEND)
-        recorder = DocumentBackend().recorder
         self.contributor.ready()
-        self.assertTrue(recorder.frozen)
         self.assertEqual(isolated.records, ())
         self.assertTrue(self.live_catalog.plan_for(Document).records)
+        with self.assertRaises(TrustsConfigurationError):
+            DocumentBackend().get_registry().register(
+                trust=DocumentGrant, user='user', permission='permission',
+                content='document',
+            )
 
     def test_conflicting_contribution_does_not_reach_the_frozen_recorder(self):
         isolated = compiler()

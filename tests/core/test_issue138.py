@@ -1,4 +1,7 @@
-from tests.support import listed_relationship, configured_catalog, replay_recorder, compiler
+from tests.support import (
+    listed_relationship, configured_catalog, replay_recorder, compiler,
+    register_installed_document_app,
+)
 """#138: authorization_required Trusts-only pk guard."""
 from contextlib import contextmanager
 from django.conf import settings
@@ -85,6 +88,11 @@ class AuthorizationRequiredDeclarationTest(SimpleTestCase):
 
 @override_settings(AUTHENTICATION_BACKENDS=AUTHENTICATION_BACKENDS, INSTALLED_APPS=INSTALLED_APPS)
 class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        register_installed_document_app()
 
     def setUp(self):
         User = get_user_model()
@@ -296,6 +304,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        register_installed_document_app()
         cls.ExtraDocumentGrant, cls.OtherPermission, cls.OtherPermissionGrant = _extra_grant_models()
 
     @classmethod

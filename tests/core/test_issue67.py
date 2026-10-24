@@ -20,37 +20,31 @@ import tests as tests_module
 
 class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_package_registry_is_created_in_init_not_replaced_by_ready(self):
-        # The catalog is built in ready(), not AppConfig.__init__.
-        # A second ready() builds another catalog from the same log.
-        from tests.kernel_host.backends import HostTrustModelBackend
-
+        # The catalog is built on the first question, not in ready().
+        # A second ready() leaves that catalog in place.
         live = apps.get_app_config('trusts_kernel_host')
         self.assertIsInstance(live, TrustsConfigMixin)
         self.assertIs(type(live), KernelHostConfig)
-        catalog = HostTrustModelBackend().catalog
+        catalog = configured_catalog(HOST_BACKEND)
         self.assertIsInstance(catalog.records, tuple)
         live.ready()
-        rebuilt = HostTrustModelBackend().catalog
+        rebuilt = configured_catalog(HOST_BACKEND)
         self.assertEqual(rebuilt.records, catalog.records)
         self.assertEqual(rebuilt.path, catalog.path)
-        self.assertIsNot(rebuilt, catalog)
+        self.assertIs(rebuilt, catalog)
         self.assertFalse(hasattr(live, 'registries'))
 
     def test_reader_obtains_registry_via_app_config_not_package_root(self):
         import trusts
 
-        from tests.kernel_host.backends import HostTrustModelBackend
-
-        live = HostTrustModelBackend().catalog
+        live = configured_catalog(HOST_BACKEND)
         self.assertIsInstance(live.records, tuple)
         self.assertIsNone(getattr(trusts, 'registry', None))
         self.assertIsNone(getattr(trusts, 'TrustsRegistry', None))
         self.assertIsNone(getattr(trusts, 'RelationPlan', None))
 
     def test_isolated_core_registries_stay_independent(self):
-        from tests.kernel_host.backends import HostTrustModelBackend
-
-        live = HostTrustModelBackend().catalog
+        live = configured_catalog(HOST_BACKEND)
         isolated = compiler()
         self.assertIsNot(isolated, live)
         self.assertEqual(isolated.records, ())
@@ -61,24 +55,29 @@ class ContributorIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
         from django.apps import apps
 
         from tests.myapp.backends import DocumentBackend
+        from tests.myapp.models import DocumentGrant
+        from trusts.errors import TrustsConfigurationError
 
         contributor = apps.get_app_config('myapp')
         self.assertIsInstance(contributor, DocumentConfig)
-        recorder = DocumentBackend().recorder
+        registry = DocumentBackend().get_registry()
         built = configured_catalog(DOCUMENT_BACKEND)
-        self.assertTrue(recorder.frozen)
         before = built.records
         contributor.ready()
         self.assertEqual(built.records, before)
         self.assertTrue(built.plan_for(Document).records)
+        with self.assertRaises(TrustsConfigurationError):
+            registry.register(
+                trust=DocumentGrant, user='user', permission='permission',
+                content='document',
+            )
 
     def test_host_ready_does_not_replace_or_donate_document(self):
         host = apps.get_app_config('trusts_kernel_host')
         self.assertEqual(
             configured_catalog(HOST_BACKEND).path, host.catalog_path(),
         )
-        from tests.kernel_host.backends import HostTrustModelBackend
-        catalog = HostTrustModelBackend().catalog
+        catalog = configured_catalog(HOST_BACKEND)
         before = catalog.records
         host.ready()
         self.assertEqual(catalog.records, before)
@@ -96,7 +95,7 @@ class IsolatedAppsDoesNotDonateToLiveRegistryTest(SimpleTestCase):
         if not kernel_host_listed():
             self.skipTest('kernel-only host path is not listed on the pair')
         from tests.kernel_host.backends import HostTrustModelBackend
-        live = HostTrustModelBackend().catalog
+        live = configured_catalog(HOST_BACKEND)
         before = live.records
         contributor = TestsConfig('tests', tests_module)
         contributor.apps = self.isolated_apps

@@ -118,7 +118,7 @@ class ConditionLookupBindTest(TestCase):
         self.assertEqual(dict(shape.named_filters), {})
         with self.assertNumQueries(0):
             again = registry.compile()
-        self.assertIsNot(again.named_filters, shape.named_filters)
+        self.assertIs(again, shape)
         with self.assertRaises(TrustsConfigurationError):
             registry.add_named_filter(
                 Document, 'own', lambda u, p, o: o.title == 'keep',
@@ -148,7 +148,7 @@ class ConditionLookupBindTest(TestCase):
         self.assertNotIn((Document._meta.label, 'named'), blank.named_filters)
         with self.assertNumQueries(0):
             again = registry.compile()
-        self.assertIsNot(again.named_filters, shape.named_filters)
+        self.assertIs(again, shape)
         self.assertIs(
             again.named_filters[(Document._meta.label, 'named')][1],
             record,

@@ -48,3 +48,38 @@ class DocumentDelegation(models.Model):
 
     class Meta:
         app_label = 'myapp'
+
+
+from tests.myapp.backends import DocumentBackend
+
+
+def register_document_grants(registry):
+    """Document grant rows. The named filter is registered beside them."""
+    registry.register(
+        trust=DocumentGrant,
+        user='user',
+        permission='permission',
+        content='document',
+    )
+    registry.register(
+        trust=DocumentDelegation,
+        delegate='delegate',
+        sponsor='sponsor',
+        content='document',
+        condition=lambda relationship, permission: (
+            relationship.allowed_permissions.contains(permission)
+        ),
+    )
+
+
+def register_document_app(registry):
+    """Everything this app registers. Called from the end of this module."""
+    register_document_grants(registry)
+    registry.add_named_filter(
+        Document,
+        'non_confidential',
+        lambda u, p, o: o.confidential != True,
+    )
+
+
+register_document_app(DocumentBackend().get_registry())

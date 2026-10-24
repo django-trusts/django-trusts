@@ -77,7 +77,7 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         registry = compiler()
         built = built_catalog(registry)
         again = built_catalog(registry)
-        self.assertIsNot(built.named_filters, again.named_filters)
+        self.assertIs(built, again)
         self.assertFalse(hasattr(registry, 'filter_lookup'))
 
 
@@ -151,7 +151,7 @@ class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
         self.assertNotIn(
             (Document._meta.label, 'missing'), shape.named_filters,
         )
-        self.assertIsNot(registry.compile().named_filters, shape.named_filters)
+        self.assertIs(registry.compile(), shape)
 
     def test_unknown_condition_fail_closes_through_supported_backend_path(self):
         backend = DocumentBackend()

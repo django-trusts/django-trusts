@@ -96,7 +96,7 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         self.assertIn('not_a_field', pyright)
         self.assertIn('AnnotatedGrant', pyright)
         self.assertIn('TrustsConfigMixin', pyright)
-        self.assertIn('self.recorder.register', pyright)
+        self.assertIn('get_registry().register', pyright)
         self.assertIn('condition=', pyright)
         self.assertIn('t.team == t.document', pyright)
         self.assertNotIn('import BackendHandle', pyright)
@@ -107,6 +107,13 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         self.assertEqual(names, ['trust', 'user', 'permission', 'content', 'group', 'delegate', 'sponsor', 'condition', 'along'])
         for name in names:
             self.assertEqual(signature.parameters[name].kind, inspect.Parameter.KEYWORD_ONLY, name)
+        public = inspect.signature(Recorder.register)
+        public_names = [name for name in public.parameters if name != 'self']
+        self.assertEqual(public_names, names)
+        for name in public_names:
+            self.assertEqual(
+                public.parameters[name].kind, inspect.Parameter.KEYWORD_ONLY, name,
+            )
 
 def _wheel_install_module():
     path = ROOT / 'scripts' / 'verify-wheel-install.py'
@@ -145,8 +152,8 @@ class RegisterWheelSignatureTest(SimpleTestCase):
         register = _fake_register(names, annotations, keyword_only=keyword_only)
         self.wheel.assert_register_signature(register)
 
-    def test_installed_contract_accepts_recorder_register(self):
-        self.wheel.assert_register_signature(Recorder.register)
+    def test_installed_contract_accepts_register(self):
+        self.wheel.assert_register_signature(Compiler.register)
 
     def test_error_branches_fail_closed(self):
         trust_var = get_args(self.hints['trust'])[0]

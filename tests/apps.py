@@ -30,15 +30,17 @@ class TestsConfig(trusts_apps.TrustsConfigMixin):
     default_auto_field = 'django.db.models.AutoField'
 
     def ready(self):
+        # This app registers only here. Document registers in models.py.
         # Zero's TrustUserPermission is absent from kernel settings.
         # Register those rows on this config when the model is installed.
-        # Re-entry finds the recorder frozen and stops before register.
+        # Re-entry finds the rows already registered and stops.
         # isolate_apps() builds another Apps registry. Importing the check
         # stack from that registry's ready() breaks reverse relations on
         # models created in the test, so only the process registry builds.
-        if self.recorder.frozen:
-            return
         if self.apps is not django_apps:
+            return
+        if getattr(self, '_donated', False):
+            super().ready()
             return
         try:
             TrustUserPermission = self.apps.get_model(
@@ -53,13 +55,16 @@ class TestsConfig(trusts_apps.TrustsConfigMixin):
         self._donate_tup(
             TrustUserPermission, Category, Ticket, TestGroupJunction,
         )
+        self._donated = True
         super().ready()
 
     def _donate_tup(self, TrustUserPermission, Category, Ticket,
                     TestGroupJunction):
-        recorder = self.recorder
+        from tests.backends import TestsTrustBackend
+
+        registry = TestsTrustBackend().get_registry()
         rev = Category._meta.get_field('trust').remote_field.get_accessor_name()
-        recorder.register(
+        registry.register(
             trust=TrustUserPermission,
             user='entity',
             permission='permission',
@@ -68,7 +73,7 @@ class TestsConfig(trusts_apps.TrustsConfigMixin):
             ),
         )
         rev = Ticket._meta.get_field('trust').remote_field.get_accessor_name()
-        recorder.register(
+        registry.register(
             trust=TrustUserPermission,
             user='entity',
             permission='permission',
@@ -80,7 +85,7 @@ class TestsConfig(trusts_apps.TrustsConfigMixin):
         rev = TestGroupJunction._meta.get_field(
             'trust',
         ).remote_field.get_accessor_name()
-        recorder.register(
+        registry.register(
             trust=TrustUserPermission,
             user='entity',
             permission='permission',
