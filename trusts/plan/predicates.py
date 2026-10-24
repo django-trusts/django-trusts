@@ -3,8 +3,17 @@
 from django.contrib.auth.models import Permission
 from django.db.models import F, Model, Q
 
-from trusts.errors import TrustsConfigurationError
+from trusts.errors import PermissionConditionError
+from trusts.plan.grammar import Tree, inquiry_partner, unsupported
 from trusts.plan.hops import lookup_text, require_instance
+from trusts.plan.writers import (
+    boolean_q,
+    negate_q,
+    column_q,
+    columns_q,
+    contains_q,
+    member_pk,
+)
 
 __all__ = [
     'bind_terminal',
@@ -85,57 +94,90 @@ class _PredicateCompiler(object):
     def compile(self, node):
         if node is None:
             return None
-        accept = getattr(type(node), 'accept', None)
-        if accept is None:
-            raise TrustsConfigurationError(
-                'condition is not supported; omit it or pass None.'
-            )
-        return accept(node, self)
+        if not isinstance(node, Tree):
+            raise unsupported('This condition', 'a relation condition')
+        if node.kind == 'and':
+            return self.compile(node.left) & self.compile(node.right)
+        if node.kind == 'or':
+            return self.compile(node.left) | self.compile(node.right)
+        if node.kind == 'not':
+            return negate_q(self.record.root, self.compile(node.item))
+        if node.kind == 'eq':
+            return self._eq(node)
+        if node.kind == 'ne':
+            return self._ne(node)
+        if node.kind == 'contains':
+            return self._contains(node)
+        if node.kind == 'bare':
+            return boolean_q(lookup_text(node.item.path))
+        raise unsupported(node.kind, 'a relation condition')
 
-    def visit_all(self, node):
-        parts = [
-            self.compile(predicate) for predicate in node.predicates
-        ]
-        parts = [part for part in parts if part is not None]
-        if not parts:
-            return None
-        compiled = parts[0]
-        for part in parts[1:]:
-            compiled &= part
-        return compiled
-
-    def visit_equal(self, node):
+    def _eq(self, node):
+        partner = inquiry_partner(node)
+        if partner is not None:
+            return self._bind_inquiry(partner.path)
+        if node.left.kind == 'const' or node.right.kind == 'const':
+            return self._against_constant(node, True)
         return Q(**{
-            lookup_text(node.left._path): F(lookup_text(node.right._path)),
+            lookup_text(node.left.path): F(lookup_text(node.right.path)),
         })
 
-    def visit_permission_in(self, node):
-        compiled = Q()
-        for ref in node.refs:
-            compiled &= Q(**{
-                lookup_text(ref._path): F(self.record.permission_field),
-            })
-        return compiled
+    def _ne(self, node):
+        column = inquiry_partner(node)
+        if (
+            column is not None
+            and column.kind == 'field'
+            and column.path
+        ):
+            if self.permission is None:
+                raise PermissionConditionError(
+                    'Delegated inquiry-permission condition needs the requested '
+                    'permission binding.'
+                )
+            return column_q(
+                lookup_text(column.path),
+                bind_terminal(self.permission, 'permission'),
+                False,
+                field=True,
+            )
+        if node.left.kind == 'const' or node.right.kind == 'const':
+            return self._against_constant(node, False)
+        return columns_q(
+            lookup_text(node.left.path),
+            lookup_text(node.right.path),
+            False,
+        )
 
-    def visit_inquiry_permission_match(self, node):
+    def _against_constant(self, node, equal):
+        if node.left.kind == 'const':
+            lookup = lookup_text(node.right.path)
+            value = node.left.value
+        else:
+            lookup = lookup_text(node.left.path)
+            value = node.right.value
+        return column_q(lookup, value, equal, field=False)
+
+    def _contains(self, node):
+        if inquiry_partner(node) is not None:
+            return self._bind_inquiry(node.left.path)
+        if node.right.kind == 'const':
+            value = member_pk(node.right.value)
+            if value is None:
+                return Q(pk__in=())
+            return contains_q(lookup_text(node.left.path), value)
+        return contains_q(
+            lookup_text(node.left.path),
+            F(self.record.permission_field),
+        )
+
+    def _bind_inquiry(self, path):
         if self.permission is None:
-            raise TrustsConfigurationError(
+            raise PermissionConditionError(
                 'Delegated inquiry-permission condition needs the requested '
                 'permission binding.'
             )
-        require = getattr(type(node.ref), 'require_same_root', None)
-        if require is None:
-            raise TrustsConfigurationError(
-                '%s must be a root-relative Ref, not %r.'
-                % ('delegated inquiry permission', node.ref)
-            )
-        ref = require(
-            node.ref, self.record.root, 'delegated inquiry permission',
-        )
         return Q(**{
-            lookup_text(ref._path): bind_terminal(
-                self.permission, 'permission',
-            ),
+            lookup_text(path): bind_terminal(self.permission, 'permission'),
         })
 
 

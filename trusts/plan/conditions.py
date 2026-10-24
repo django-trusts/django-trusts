@@ -1,34 +1,35 @@
-"""Private condition IR and compiler (issue #4 V1 / #142 Stage B).
+"""Private condition language (issue #4 V1 / #142 Stage B).
 
-This module is not an application-facing import. Register named
-conditions as builders on the recorder's ``add_named_filter``.
-``from trusts.conditions import Expr`` must fail.
+This module is not an application-facing import. It parses and checks
+a builder. Python evaluation and the queryset ``Q`` live in
+``trusts.plan.writers``. ``parse_named_filter`` returns the stored
+node, a ``trusts.plan.grammar.Tree``.
 
-A callable argument to condition registration is a **builder**: Core
-invokes it exactly once with symbolic ``(u, p, o)`` refs, validates the
-returned predicate, normalizes constants into durable IR, and stores
-only that IR. The callable is discarded from the policy record and is
-never invoked during ``has_perm``, enumeration, or queryset filtering.
+A callable argument to ``parse_named_filter`` is a **builder**: this
+module invokes it exactly once with symbolic ``(u, p, o)`` refs,
+validates the returned predicate, and normalizes constants into durable
+IR. The callable is not part of the returned tree and is never invoked
+during ``has_perm``, enumeration, or queryset filtering.
 
 Builders are trusted startup/configuration code, the same class as
 ``AppConfig.ready()``. Core does not sandbox them. Core's own
 registration path issues zero SQL (symbolic refs plus ``_meta``).
 
-Prebuilt ``Expr`` trees are not accepted at register.
-
-Permission-condition records live on an instantiable
-``ConditionRegistry`` (also exposed on each built registry and the
-recorder's ``add_named_filter``).
+Prebuilt trees are not accepted at register.
+``parse_named_filter`` is the entry point: one builder in, one checked
+tree out. The compiler stores that tree. This module does not.
 
 V1 grammar: principal/object field refs and relationship traversal
 (``_meta`` fields on the content model and the entity/user model; not
 Python properties); literal constants; ``==`` / ``!=``; nested ``&`` /
-``|``. Operand types must match without Django field coercion:
+``|``; ``.contains()`` on a forward many-to-many; a bare boolean field;
+and ``~`` on a boolean field or on ``&`` / ``|``. Operand types must
+match without Django field coercion:
 ``CharField`` compares to ``str``, relations compare to model identity
 (not raw primary keys). Missing attribute names fail closed; they are
 not treated as ``NULL``. Python ``and`` / ``or`` / ``not`` and chained
 comparisons cannot be overloaded and raise
-``PermissionConditionBooleanError``.
+``PermissionConditionError``.
 """
 
 __all__ = []
@@ -38,13 +39,11 @@ from decimal import Decimal
 from io import IOBase
 from uuid import UUID
 
-from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
+from django.core.exceptions import FieldDoesNotExist
 from django.contrib.auth.models import Permission
 from django.db.models import (
-    F,
     Manager,
     Model,
-    Q,
     QuerySet,
     Subquery,
     BinaryField,
@@ -67,12 +66,14 @@ from django.db.models.fields import GenericIPAddressField
 from django.http import HttpRequest
 from django.utils.functional import Promise, SimpleLazyObject
 
-from trusts.errors import (
-    PermissionConditionBooleanError,
-    PermissionConditionError,
-    PermissionConditionNotQueryable,
-    PermissionConditionUnsupported,
+from trusts.plan.grammar import (
+    Tree,
+    invoke,
+    is_predicate,
+    missing_field,
+    unsupported,
 )
+from trusts.errors import PermissionConditionError
 
 
 def get_short_model_name_lower(klass):
@@ -143,155 +144,8 @@ def obsolete_legacy_callback_setting_enabled():
     ))
 
 
-_BOOLEAN_ERROR_MESSAGE = (
-    "Python 'and'/'or'/'not' cannot be used in permission conditions "
-    "because they cannot be overloaded; chained comparisons such as "
-    "`0 < o.amount < 100` also truth-test a symbolic node. Use '&' and "
-    "'|' for conjunction and disjunction, and '!=' instead of combining "
-    "'not' with '=='."
-)
-
-_SCALAR_CONSTANT_TYPES = (
-    type(None), bool, int, float, str, bytes,
-    Decimal, UUID, datetime, date, time, timedelta,
-)
-
-
-def _boolean_error():
-    raise PermissionConditionBooleanError(_BOOLEAN_ERROR_MESSAGE)
-
-
-def _unsupported(what):
-    raise PermissionConditionUnsupported(
-        '%s is not supported in declarative permission conditions.' % what
-    )
-
-
-class Expr(object):
-    """Node in a permission-condition expression tree."""
-
-    def __eq__(self, other):
-        return Eq(self, as_node(other))
-
-    def __ne__(self, other):
-        return Ne(self, as_node(other))
-
-    def __and__(self, other):
-        return _bool_op(And, self, as_node(other), '&')
-
-    def __or__(self, other):
-        return _bool_op(Or, self, as_node(other), '|')
-
-    def __rand__(self, other):
-        return _bool_op(And, as_node(other), self, '&')
-
-    def __ror__(self, other):
-        return _bool_op(Or, as_node(other), self, '|')
-
-    def __bool__(self):
-        _boolean_error()
-
-    def __call__(self, *args, **kwargs):
-        _unsupported('Function or method calls')
-
-    def __getitem__(self, key):
-        _unsupported('Indexing')
-
-    def __iter__(self):
-        _unsupported('Iteration')
-
-    def __add__(self, other):
-        _unsupported('Arithmetic')
-
-    def __radd__(self, other):
-        _unsupported('Arithmetic')
-
-    def __sub__(self, other):
-        _unsupported('Arithmetic')
-
-    def __rsub__(self, other):
-        _unsupported('Arithmetic')
-
-    def __mul__(self, other):
-        _unsupported('Arithmetic')
-
-    def __rmul__(self, other):
-        _unsupported('Arithmetic')
-
-    def __truediv__(self, other):
-        _unsupported('Arithmetic')
-
-    def __rtruediv__(self, other):
-        _unsupported('Arithmetic')
-
-    def __floordiv__(self, other):
-        _unsupported('Arithmetic')
-
-    def __mod__(self, other):
-        _unsupported('Arithmetic')
-
-    def __pow__(self, other):
-        _unsupported('Arithmetic')
-
-    def __lt__(self, other):
-        return _Ordering('lt', self, as_node(other))
-
-    def __le__(self, other):
-        return _Ordering('le', self, as_node(other))
-
-    def __gt__(self, other):
-        return _Ordering('gt', self, as_node(other))
-
-    def __ge__(self, other):
-        return _Ordering('ge', self, as_node(other))
-
-    def __setitem__(self, key, value):
-        _unsupported('Item assignment')
-
-    def __invert__(self):
-        _unsupported("Unary '~' / 'not'")
-
-    def __contains__(self, item):
-        _unsupported("'in' tests")
-
-    def __hash__(self):
-        return id(self)
-
-    def to_tuple(self):
-        raise NotImplementedError
-
-
-class Ref(Expr):
-    """Symbolic principal, permission, or object reference, with optional path."""
-
-    def __init__(self, source, path=()):
-        if source not in ('principal', 'permission', 'object'):
-            raise PermissionConditionError('Unknown reference source %r.' % (source,))
-        self.source = source
-        self.path = tuple(path)
-
-    def __getattr__(self, name):
-        if name.startswith('_'):
-            raise AttributeError(name)
-        return Ref(self.source, self.path + (name,))
-
-    def __setattr__(self, name, value):
-        if name in ('source', 'path'):
-            object.__setattr__(self, name, value)
-            return
-        _unsupported('Assignment to symbolic fields')
-
-    def __delattr__(self, name):
-        _unsupported('Deletion of symbolic fields')
-
-    def to_tuple(self):
-        return ('ref', self.source, self.path)
-
-    def __repr__(self):
-        name = {'principal': 'u', 'permission': 'p', 'object': 'o'}[self.source]
-        if not self.path:
-            return name
-        return '%s.%s' % (name, '.'.join(self.path))
+def _node(node, *kinds):
+    return isinstance(node, Tree) and node.kind in kinds
 
 
 class ModelIdentity(object):
@@ -330,88 +184,10 @@ class ModelIdentity(object):
         )
 
 
-class Const(Expr):
-    def __init__(self, value):
-        self.value = value
-
-    def to_tuple(self):
-        if isinstance(self.value, ModelIdentity):
-            return ('const', self.value.as_tuple())
-        return ('const', self.value)
-
-    def __repr__(self):
-        return repr(self.value)
-
-
-class Eq(Expr):
-    def __init__(self, left, right):
-        self.left = left
-        self.right = right
-
-    def to_tuple(self):
-        return ('eq', self.left.to_tuple(), self.right.to_tuple())
-
-    def __repr__(self):
-        return '(%r == %r)' % (self.left, self.right)
-
-
-class Ne(Expr):
-    def __init__(self, left, right):
-        self.left = left
-        self.right = right
-
-    def to_tuple(self):
-        return ('ne', self.left.to_tuple(), self.right.to_tuple())
-
-    def __repr__(self):
-        return '(%r != %r)' % (self.left, self.right)
-
-
-class And(Expr):
-    def __init__(self, left, right):
-        self.left = left
-        self.right = right
-
-    def to_tuple(self):
-        return ('and', self.left.to_tuple(), self.right.to_tuple())
-
-    def __repr__(self):
-        return '(%r & %r)' % (self.left, self.right)
-
-
-class Or(Expr):
-    def __init__(self, left, right):
-        self.left = left
-        self.right = right
-
-    def to_tuple(self):
-        return ('or', self.left.to_tuple(), self.right.to_tuple())
-
-    def __repr__(self):
-        return '(%r | %r)' % (self.left, self.right)
-
-
-class _Ordering(Expr):
-    """Ordering comparison node so chained ``a < b < c`` hits ``__bool__``.
-
-    Not part of the V1 grammar. Registering one as a condition is rejected.
-    """
-
-    def __init__(self, op, left, right):
-        self.op = op
-        self.left = left
-        self.right = right
-
-    def to_tuple(self):
-        return (self.op, self.left.to_tuple(), self.right.to_tuple())
-
-    def __repr__(self):
-        symbols = {'lt': '<', 'le': '<=', 'gt': '>', 'ge': '>='}
-        return '(%r %s %r)' % (self.left, symbols.get(self.op, self.op), self.right)
-
-
-def is_predicate(node):
-    return isinstance(node, (Eq, Ne, And, Or))
+_SCALAR_CONSTANT_TYPES = (
+    type(None), bool, int, float, str, bytes,
+    Decimal, UUID, datetime, date, time, timedelta,
+)
 
 
 def _is_allowed_scalar(value):
@@ -430,25 +206,29 @@ def _reject_forbidden_constant(value):
             )
         return
     if isinstance(value, QuerySet):
-        _unsupported('QuerySet constants')
+        raise unsupported('A QuerySet constant', 'a named filter')
     if isinstance(value, Manager):
-        _unsupported('Manager constants')
+        raise unsupported('A Manager constant', 'a named filter')
     if isinstance(value, (list, dict, set, tuple, frozenset)):
-        _unsupported('Mutable or collection constants of type %s' % type(value).__name__)
+        raise unsupported(
+            'A %s constant' % type(value).__name__, 'a named filter',
+        )
     if isinstance(value, IOBase):
-        _unsupported('File / stream constants')
+        raise unsupported('A file or stream constant', 'a named filter')
     if isinstance(value, HttpRequest):
-        _unsupported('HttpRequest constants')
+        raise unsupported('An HttpRequest constant', 'a named filter')
     if isinstance(value, Promise):
-        _unsupported('Lazy / promise constants')
+        raise unsupported('A lazy promise constant', 'a named filter')
     if isinstance(value, SimpleLazyObject):
-        _unsupported('Lazy / request object constants')
+        raise unsupported('A SimpleLazyObject constant', 'a named filter')
     if isinstance(value, BaseDatabaseWrapper):
-        _unsupported('Database connection constants')
+        raise unsupported('A database connection constant', 'a named filter')
     if callable(value) and not isinstance(value, type) and not isinstance(value, Model):
-        _unsupported('Callable constants')
+        raise unsupported('A callable constant', 'a named filter')
     if not _is_allowed_scalar(value) and not isinstance(value, (Model, ModelIdentity)):
-        _unsupported('Constant of type %s' % type(value).__name__)
+        raise unsupported(
+            'A %s constant' % type(value).__name__, 'a named filter',
+        )
 
 
 def normalize_constant(value):
@@ -463,96 +243,43 @@ def normalize_constant(value):
 
 
 def normalize_expression(node):
-    """Normalize Const operands in place. Returns ``node``."""
-    if isinstance(node, (And, Or, Eq, Ne, _Ordering)):
-        normalize_expression(node.left)
-        normalize_expression(node.right)
-        return node
-    if isinstance(node, Const):
-        node.value = normalize_constant(node.value)
-        return node
+    """Return a tree whose constants are durable values."""
+    if _node(node, 'and', 'or', 'eq', 'ne', 'contains'):
+        left = normalize_expression(node.left)
+        right = normalize_expression(node.right)
+        if left is node.left and right is node.right:
+            return node
+        return Tree(node.kind, left=left, right=right)
+    if _node(node, 'not', 'bare'):
+        item = normalize_expression(node.item)
+        if item is node.item:
+            return node
+        return Tree(node.kind, item=item)
+    if _node(node, 'const'):
+        value = normalize_constant(node.value)
+        if value is node.value:
+            return node
+        return Tree('const', value=value)
     return node
 
 
-def as_node(value):
-    if isinstance(value, Expr):
-        return value
-    if isinstance(value, ModelIdentity):
-        return Const(value)
-    _reject_forbidden_constant(value)
-    if isinstance(value, Model):
-        return Const(normalize_constant(value))
-    if _is_allowed_scalar(value):
-        return Const(value)
-    _unsupported('Constant of type %s' % type(value).__name__)
+def _collection_terminal(field, last, collection):
+    """Forward many-to-many allowed as the last hop of ``.contains()``."""
+    return (
+        last
+        and collection
+        and field.many_to_many
+        and not getattr(field, 'auto_created', False)
+    )
 
 
-def _bool_op(cls, left, right, op):
-    if not is_predicate(left) or not is_predicate(right):
-        raise PermissionConditionUnsupported(
-            "'%s' requires comparison operands (for example "
-            "`(u == o.owner) %s (o.status != 'locked')`)." % (op, op)
-        )
-    return cls(left, right)
-
-
-def principal_ref():
-    return Ref('principal')
-
-
-def permission_ref():
-    return Ref('permission')
-
-
-def object_ref():
-    return Ref('object')
-
-
-def condition_refs():
-    """Return symbolic ``(u, p, o)`` for private compiler tests.
-
-    Application code registers a builder with
-    ``backend.add_named_filter``. These objects are policy
-    data, not live principals or content rows. This helper is not a
-    public import.
-    """
-    return principal_ref(), permission_ref(), object_ref()
-
-
-class _QueryNamespace(object):
-    """Controlled lookup namespace for declarative permission conditions.
-
-    Not a Django ``QuerySet``. V1 equality uses ``==`` / ``!=`` on
-    ``condition_refs()``. Future relational operations (Django-style
-    lookup names such as ``iexact`` or ``in``) belong here so they are
-    not added as ad-hoc methods on ``Ref``. V1 does not implement those
-    lookups.
-    """
-
-    def __getattr__(self, name):
-        if name.startswith('_'):
-            raise AttributeError(name)
-        raise PermissionConditionUnsupported(
-            'TQ.%s is not implemented in V1 permission conditions. '
-            'The implemented grammar is field refs, constants, ==, !=, '
-            '& and |. Additional lookups will be added to this namespace '
-            'explicitly.' % name
-        )
-
-    def __repr__(self):
-        return 'TQ'
-
-
-Query = _QueryNamespace()
-TQ = Query
-
-
-def resolve_field_path(model, path, ref_kind='object'):
+def resolve_field_path(model, path, ref_kind='object', *, collection=False):
     """Validate ``path`` against ``model`` and return the Django lookup string.
 
     Relationship traversal is allowed; a non-relational field may only appear
-    as the last component. Missing names raise ``PermissionConditionError``
-    rather than resolving to ``None``.
+    as the last component. ``collection`` allows that last component to be a
+    forward many-to-many, which is the left side of ``.contains()``. Missing
+    names raise ``PermissionConditionError`` rather than resolving to ``None``.
     """
     if not path:
         raise PermissionConditionError(
@@ -568,15 +295,11 @@ def resolve_field_path(model, path, ref_kind='object'):
         try:
             field = current._meta.get_field(name)
         except FieldDoesNotExist:
-            raise PermissionConditionError(
-                'Permission condition field %r is not on model %s '
-                '(path %s).' % (
-                    name,
-                    current._meta.label,
-                    '.'.join(path[:i + 1]),
-                )
-            )
-        if field.many_to_many or field.one_to_many:
+            raise missing_field(ref_kind, path[:i + 1], name, current)
+        last = i == len(path) - 1
+        if (field.many_to_many or field.one_to_many) and not _collection_terminal(
+            field, last, collection,
+        ):
             raise PermissionConditionError(
                 'Multi-valued relation %r on %s is not supported in V1 '
                 'permission conditions (path %s). ManyToManyField and '
@@ -587,7 +310,6 @@ def resolve_field_path(model, path, ref_kind='object'):
                     '.'.join(path[:i + 1]),
                 )
             )
-        last = i == len(path) - 1
         if not last:
             if not field.is_relation:
                 raise PermissionConditionError(
@@ -605,8 +327,10 @@ def resolve_object_field_path(model, path):
     return resolve_field_path(model, path, ref_kind='object')
 
 
-def _terminal_field(model, path, ref_kind='object'):
-    resolve_field_path(model, path, ref_kind=ref_kind)
+def _terminal_field(model, path, ref_kind='object', *, collection=False):
+    resolve_field_path(
+        model, path, ref_kind=ref_kind, collection=collection,
+    )
     current = model
     field = None
     for i, name in enumerate(path):
@@ -706,19 +430,20 @@ def _spec_from_const(value):
 
 
 def _operand_spec(node, model, user_model):
-    if isinstance(node, Const):
+    if _node(node, 'const'):
         return _spec_from_const(node.value)
-    if isinstance(node, Ref):
-        if node.source == 'object':
-            return _spec_from_field(_terminal_field(model, node.path, 'object'))
-        if node.source == 'principal':
+    if _node(node, 'field'):
+        if node.root in ('object', 'row'):
+            ref = 'object' if node.root == 'object' else 'condition'
+            return _spec_from_field(_terminal_field(model, node.path, ref))
+        if node.root == 'user':
             entity = user_model
             if not node.path:
                 return ('instance', entity, entity._meta.label)
             return _spec_from_field(
                 _terminal_field(entity, node.path, 'principal')
             )
-        if node.source == 'permission':
+        if node.root == 'permission':
             return ('scalar', (str,), 'permission')
     raise PermissionConditionError(
         'Cannot type-check permission condition node %r.' % (node,)
@@ -735,7 +460,7 @@ def _specs_compatible(left, right):
     return False
 
 
-def _check_comparison_types(node, model, user_model):
+def check_comparison_types(node, model, user_model):
     left = _operand_spec(node.left, model, user_model)
     right = _operand_spec(node.right, model, user_model)
     if _specs_compatible(left, right):
@@ -746,6 +471,89 @@ def _check_comparison_types(node, model, user_model):
         'CharField values are strings, and relations compare to model '
         'instances (not raw primary keys).' % (left[2], right[2])
     )
+
+
+def _check_member_spec(spec, related):
+    if spec[0] == 'null':
+        return
+    if spec[0] == 'instance' and _models_compatible(spec[1], related):
+        return
+    if _specs_compatible(spec, _spec_from_field(related._meta.pk)):
+        return
+    raise PermissionConditionError(
+        'Permission condition .contains() member is incompatible with '
+        '%s (%s).' % (related._meta.label, spec[2])
+    )
+
+
+def _validate_contains(node, model, user_model):
+    left = node.left
+    right = node.right
+    if not _node(left, 'field') or left.root not in ('object', 'user'):
+        raise PermissionConditionError(
+            'Malformed permission condition node %r.' % (node,)
+        )
+    host = model if left.root == 'object' else user_model
+    ref = 'object' if left.root == 'object' else 'principal'
+    collection = _terminal_field(
+        host, left.path, ref, collection=True,
+    )
+    related = collection.remote_field.model
+    if _node(right, 'const'):
+        if right.value is not None:
+            _check_member_spec(_spec_from_const(right.value), related)
+        return
+    if not _node(right, 'field'):
+        raise PermissionConditionError(
+            'Malformed permission condition node %r.' % (node,)
+        )
+    _validate_node(right, model, user_model)
+    _check_member_spec(_operand_spec(right, model, user_model), related)
+
+
+def require_boolean_field(model, path, ref_kind, *, where=None, name=None):
+    """One bare-boolean check for named filters, relations, and user rules."""
+    field = _terminal_field(model, path, ref_kind)
+    concrete = name is not None
+    ok = isinstance(field, BooleanField) and (
+        not concrete or getattr(field, 'concrete', False)
+    )
+    if ok:
+        return field
+    if name is not None:
+        raise PermissionConditionError(
+            'User condition %r needs %s.%s to be a concrete BooleanField.'
+            % (name, model._meta.label, '__'.join(path))
+        )
+    raise PermissionConditionError(
+        'A bare field in %s must be a boolean, not %s.%s.'
+        % (where, field.model._meta.label, field.name)
+    )
+
+
+def check_const_member(model, collection_path, value, ref_kind='condition'):
+    """A constant ``.contains()`` member must fit the related primary key."""
+    field = _terminal_field(
+        model, collection_path, ref_kind, collection=True,
+    )
+    if value is None:
+        return
+    _check_member_spec(_spec_from_const(value), field.remote_field.model)
+
+
+def _validate_bare(node, model, user_model):
+    item = node.item
+    if (
+        not _node(item, 'field')
+        or item.root not in ('object', 'user')
+        or not item.path
+    ):
+        raise PermissionConditionError(
+            'Malformed permission condition node %r.' % (node,)
+        )
+    host = model if item.root == 'object' else user_model
+    ref = 'object' if item.root == 'object' else 'principal'
+    require_boolean_field(host, item.path, ref, where='a named filter')
 
 
 def validate_expression(node, model, user_model=None):
@@ -759,32 +567,42 @@ def validate_expression(node, model, user_model=None):
     """
     if not is_predicate(node):
         raise PermissionConditionError(
-            'Permission condition did not produce a comparison expression.'
+            'Permission condition did not produce a comparison, '
+            '.contains(), or boolean field.'
         )
     _validate_node(node, model, user_model)
 
 
 def _validate_node(node, model, user_model):
-    if isinstance(node, (And, Or)):
+    if _node(node, 'and', 'or'):
         _validate_node(node.left, model, user_model)
         _validate_node(node.right, model, user_model)
         return
-    if isinstance(node, (Eq, Ne)):
+    if _node(node, 'eq', 'ne'):
         _validate_node(node.left, model, user_model)
         _validate_node(node.right, model, user_model)
-        _check_comparison_types(node, model, user_model)
+        check_comparison_types(node, model, user_model)
         return
-    if isinstance(node, Const):
+    if _node(node, 'contains'):
+        _validate_contains(node, model, user_model)
         return
-    if isinstance(node, Ref):
-        if node.source == 'object':
+    if _node(node, 'bare'):
+        _validate_bare(node, model, user_model)
+        return
+    if _node(node, 'not'):
+        _validate_node(node.item, model, user_model)
+        return
+    if _node(node, 'const'):
+        return
+    if _node(node, 'field'):
+        if node.root == 'object':
             resolve_field_path(model, node.path, ref_kind='object')
-        elif node.source == 'principal':
+        elif node.root == 'user':
             if node.path:
                 resolve_field_path(
                     user_model, node.path, ref_kind='principal',
                 )
-        elif node.source == 'permission':
+        elif node.root == 'permission':
             if node.path:
                 raise PermissionConditionError(
                     'Permission references cannot traverse attributes in V1.'
@@ -795,428 +613,30 @@ def _validate_node(node, model, user_model):
     )
 
 
-def _walk_model_path(instance, model, path):
-    """Follow a ``_meta`` field path on ``instance``.
-
-    A missing field name raises ``PermissionConditionError``. A legitimate
-    nullable relation (or a missing reverse one-to-one) resolves to ``None``.
-    Python properties are not consulted: only model fields.
-    """
-    current = instance
-    current_model = model
-    for i, name in enumerate(path):
-        try:
-            field = current_model._meta.get_field(name)
-        except FieldDoesNotExist:
-            raise PermissionConditionError(
-                'Permission condition field %r is not on model %s '
-                '(path %s).' % (
-                    name,
-                    current_model._meta.label,
-                    '.'.join(path[:i + 1]),
-                )
-            )
-        last = i == len(path) - 1
-        if field.many_to_many or field.one_to_many:
-            raise PermissionConditionError(
-                'Multi-valued relation %r on %s is not supported in V1 '
-                'permission conditions (path %s). ManyToManyField and '
-                'reverse one-to-many membership is not defined; '
-                'has_perm and permitted both reject these refs.' % (
-                    name,
-                    current_model._meta.label,
-                    '.'.join(path[:i + 1]),
-                )
-            )
-        if not last and not field.is_relation:
-            raise PermissionConditionError(
-                'Cannot traverse field %r on %s in a permission '
-                'condition; relationship traversal requires a '
-                'ForeignKey or OneToOneField.' % (
-                    name, current_model._meta.label
-                )
-            )
-        if current is None:
-            return None
-        if field.is_relation and not field.many_to_many and not field.one_to_many:
-            try:
-                current = getattr(current, field.name)
-            except ObjectDoesNotExist:
-                current = None
-            if not last:
-                current_model = field.remote_field.model
-            continue
-        current = getattr(current, field.attname)
-    return current
-
-
-def _resolve_runtime(node, user, perm, obj, model, user_model):
-    if isinstance(node, Const):
-        return node.value
-    if isinstance(node, Ref):
-        if node.source == 'principal':
-            if not node.path:
-                return user
-            return _walk_model_path(user, user_model, node.path)
-        if node.source == 'permission':
-            if node.path:
-                raise PermissionConditionError(
-                    'Permission references cannot traverse attributes in V1.'
-                )
-            return perm
-        if node.source == 'object':
-            return _walk_model_path(obj, model, node.path)
-    raise PermissionConditionError(
-        'Cannot evaluate permission condition node %r.' % (node,)
-    )
-
-
-def evaluate_expression(node, user, perm, obj, model=None, user_model=None):
-    """Evaluate a captured expression against a real principal/permission/object."""
-    if model is None:
-        model = obj.__class__
-    if isinstance(node, And):
-        return evaluate_expression(
-            node.left, user, perm, obj, model, user_model,
-        ) and evaluate_expression(
-            node.right, user, perm, obj, model, user_model,
-        )
-    if isinstance(node, Or):
-        return evaluate_expression(
-            node.left, user, perm, obj, model, user_model,
-        ) or evaluate_expression(
-            node.right, user, perm, obj, model, user_model,
-        )
-    if isinstance(node, Eq):
-        return _resolve_runtime(node.left, user, perm, obj, model, user_model) == (
-            _resolve_runtime(node.right, user, perm, obj, model, user_model)
-        )
-    if isinstance(node, Ne):
-        return _resolve_runtime(node.left, user, perm, obj, model, user_model) != (
-            _resolve_runtime(node.right, user, perm, obj, model, user_model)
-        )
-    raise PermissionConditionError(
-        'Permission condition did not produce a comparison expression.'
-    )
-
-
-class _Bound(object):
-    def __init__(self, value):
-        self.value = value
-
-
-class _Unbound(object):
-    def __init__(self, lookup):
-        self.lookup = lookup
-
-
-def _classify(node, model, user, perm, user_model):
-    if isinstance(node, Const):
-        return _Bound(node.value)
-    if isinstance(node, Ref):
-        if node.source == 'object':
-            return _Unbound(resolve_object_field_path(model, node.path))
-        if node.source == 'principal':
-            if not node.path:
-                return _Bound(user)
-            return _Bound(_walk_model_path(user, user_model, node.path))
-        if node.source == 'permission':
-            if node.path:
-                raise PermissionConditionError(
-                    'Permission references cannot traverse attributes in V1.'
-                )
-            return _Bound(perm)
-    raise PermissionConditionError(
-        'Cannot compile permission condition node %r.' % (node,)
-    )
-
-
-def _always_true():
-    return Q()
-
-
-def _always_false():
-    return Q(pk__in=())
-
-
-def _q_eq_lookup(lookup, value):
-    if value is None:
-        return Q(**{'%s__isnull' % lookup: True})
-    return Q(**{lookup: value})
-
-
-def _q_ne_lookup(lookup, value):
-    # Match Python: ``None != x`` is True when ``x is not None``.
-    if value is None:
-        return Q(**{'%s__isnull' % lookup: False})
-    return Q(**{'%s__isnull' % lookup: True}) | ~Q(**{lookup: value})
-
-
-def _q_eq_fields(a, b):
-    # Python ``None == None`` is True; SQL ``NULL = NULL`` is not.
-    return (
-        (Q(**{'%s__isnull' % a: True}) & Q(**{'%s__isnull' % b: True})) |
-        (
-            Q(**{'%s__isnull' % a: False}) &
-            Q(**{'%s__isnull' % b: False}) &
-            Q(**{a: F(b)})
-        )
-    )
-
-
-def _q_ne_fields(a, b):
-    return (
-        (Q(**{'%s__isnull' % a: True}) & Q(**{'%s__isnull' % b: False})) |
-        (Q(**{'%s__isnull' % a: False}) & Q(**{'%s__isnull' % b: True})) |
-        (
-            Q(**{'%s__isnull' % a: False}) &
-            Q(**{'%s__isnull' % b: False}) &
-            ~Q(**{a: F(b)})
-        )
-    )
-
-
-def _sql_constant(value):
-    if isinstance(value, ModelIdentity):
-        return value.pk
-    return value
-
-
-def _compile_comparison(node, model, user, perm, user_model):
-    left = _classify(node.left, model, user, perm, user_model)
-    right = _classify(node.right, model, user, perm, user_model)
-    equal = isinstance(node, Eq)
-    if isinstance(left, _Bound) and isinstance(right, _Bound):
-        matches = (left.value == right.value) if equal else (left.value != right.value)
-        return _always_true() if matches else _always_false()
-    if isinstance(left, _Unbound) and isinstance(right, _Bound):
-        lookup, value = left.lookup, _sql_constant(right.value)
-    elif isinstance(left, _Bound) and isinstance(right, _Unbound):
-        lookup, value = right.lookup, _sql_constant(left.value)
-    else:
-        a, b = left.lookup, right.lookup
-        return _q_eq_fields(a, b) if equal else _q_ne_fields(a, b)
-    return _q_eq_lookup(lookup, value) if equal else _q_ne_lookup(lookup, value)
-
-
-def compile_to_q(node, model, user, perm, user_model=None):
-    """Compile an expression tree to a Django ``Q`` for ``model`` rows."""
-    if isinstance(node, And):
-        return compile_to_q(node.left, model, user, perm, user_model) & compile_to_q(
-            node.right, model, user, perm, user_model
-        )
-    if isinstance(node, Or):
-        return compile_to_q(node.left, model, user, perm, user_model) | compile_to_q(
-            node.right, model, user, perm, user_model
-        )
-    if isinstance(node, (Eq, Ne)):
-        return _compile_comparison(node, model, user, perm, user_model)
-    raise PermissionConditionError(
-        'Permission condition did not produce a comparison expression.'
-    )
-
-
-def compile_expression_q(expr, model, user, perm, user_model=None):
-    """Compile a registered ``Expr`` to ``Q``. Fail closed if invalid."""
-    if not is_predicate(expr):
-        raise PermissionConditionError(
-            'Permission condition did not produce a V1 comparison '
-            'expression (==, !=, &, | over principal and object fields).'
-        )
-    validate_expression(expr, model, user_model)
-    return compile_to_q(expr, model, user, perm, user_model)
-
-
-def evaluate_registered_expression(expr, user, perm, obj, model=None, user_model=None):
-    """Evaluate a registered ``Expr`` against a real principal/object."""
-    if not is_predicate(expr):
-        raise PermissionConditionError(
-            'Permission condition did not produce a V1 comparison '
-            'expression (==, !=, &, | over principal and object fields).'
-        )
-    klass = model
-    if klass is None:
-        klass = (
-            obj.model if hasattr(obj, 'model') and not isinstance(obj, Model)
-            else obj.__class__
-        )
-    validate_expression(expr, klass, user_model)
-    return evaluate_expression(
-        expr, user, perm, obj, model=klass, user_model=user_model,
-    )
-
-
-def _condition_model_key(model):
+def condition_model_key(model):
     meta = getattr(model, '_meta', None)
     if meta is not None:
         return meta.label
     return model
 
 
-def _unknown_condition_error(model, cond_code):
-    meta = getattr(model, '_meta', None)
-    if meta is not None:
-        return AttributeError(
-            'Permission condition code "%s" is not associate with model "%s_%s"'
-            % (cond_code, meta.app_label, meta.model_name)
-        )
-    return AttributeError(
-        'Permission condition code "%s" is not associate with model "%s"'
-        % (cond_code, model)
-    )
-
-
-def _condition_model_label(model):
+def condition_model_label(model):
     meta = getattr(model, '_meta', None)
     if meta is not None:
         return meta.label
     return repr(model)
 
 
-def _invoke_condition_builder(builder, model, cond_code):
-    """Invoke a trusted builder once with symbolic refs; return a predicate."""
-    u, p, o = condition_refs()
-    try:
-        result = builder(u, p, o)
-    except PermissionConditionError:
-        raise
-    except Exception as exc:
-        raise PermissionConditionError(
-            'Permission condition builder %r on %s raised %s: %s'
-            % (cond_code, _condition_model_label(model), type(exc).__name__, exc)
-        ) from exc
-    if isinstance(result, bool):
-        raise PermissionConditionError(
-            'Permission condition builder %r on %s returned a boolean; '
-            'return a comparison of the symbolic refs (for example '
-            '`u == o.owner`).' % (cond_code, _condition_model_label(model))
-        )
-    if not isinstance(result, Expr) or not is_predicate(result):
-        raise PermissionConditionError(
-            'Permission condition builder %r on %s did not return a V1 '
-            'comparison expression, got %r.'
-            % (cond_code, _condition_model_label(model), result)
-        )
-    return result
+def parse_named_filter(builder, model, code, user_model):
+    """Return the checked tree for one named-filter builder.
 
-
-class ConditionRecord(object):
-    """Registered condition: normalized declarative IR only.
-
-    ``model`` is retained so a registration can be validated by the
-    system check after all apps have loaded. This record is
-    implementation-neutral: it does not name Zero nouns. The builder
-    callable is never stored.
+    The builder runs once. Constants are normalized into durable
+    values. When ``model`` has ``_meta``, field paths and operand
+    types are checked against that model and ``user_model``.
     """
-
-    __slots__ = ('expr', 'model')
-
-    def __init__(self, expr=None, model=None):
-        self.expr = expr
-        self.model = model
-
-
-class ConditionRegistry(object):
-    """Per-instance store of permission-condition records.
-
-    Create a new instance per isolated context. There is no
-    process-global singleton. Records are keyed by model identity plus
-    condition code on *this* instance, so two registries never share or
-    overwrite each other.
-
-    A callable argument is a registration-time builder: invoked once
-    with symbolic refs, then discarded. A prebuilt ``Expr`` raises
-    ``TypeError`` before this store is mutated.
-    """
-
-    def __init__(self, user_model=None):
-        self.user_model = user_model
-        self._records = {}
-
-    def register_permission_condition(self, model, cond_code, condition, user_model=None):
-        """Register a ``:cond_code`` condition on ``model``.
-
-        Pass a builder ``callable(u, p, o)`` that returns a V1
-        comparison. Core invokes it exactly once with symbolic refs,
-        normalizes constants, and stores only IR.
-
-        A prebuilt ``Expr`` raises ``TypeError`` before any record is
-        stored. Non-callables also raise ``TypeError``.
-        """
-        if isinstance(condition, Expr) or not callable(condition):
-            raise TypeError(
-                'register_permission_condition expected a builder callable, '
-                'got %r.' % (type(condition).__name__,)
-            )
-        expr = _invoke_condition_builder(condition, model, cond_code)
-        normalize_expression(expr)
-        if getattr(model, '_meta', None) is not None:
-            validate_expression(expr, model, user_model)
-        record = ConditionRecord(expr=expr, model=model)
-        self._records[(_condition_model_key(model), cond_code)] = record
-        return record
-
-    def get_permission_condition_record(self, model, cond_code):
-        """Return the record for ``(model, cond_code)``, or ``None``."""
-        return self._records.get((_condition_model_key(model), cond_code))
-
-    def iter_permission_conditions(self):
-        """Yield ``(model, cond_code, record)`` for every registration.
-
-        Identity comes from the record so registrations remain
-        validatable without importing extra application modules.
-        """
-        for (_key, cond_code), record in self._records.items():
-            yield record.model, cond_code, record
-
-    def compile_registered_condition_q(self, model, perm, user):
-        """Compile a ``:condition`` suffix to ``Q``, or raise fail-closed.
-
-        Unregistered codes raise ``AttributeError``. Unbound records and
-        registered trees that are not valid V1 fail closed.
-        """
-        cond = permission_condition_code(perm)
-        return compile_stored_condition_q(
-            self.get_permission_condition_record(model, cond),
-            model, perm, user, self.user_model,
-        )
-
-
-def compile_stored_condition_q(record, model, perm, user, user_model=None):
-    """Compile one stored condition record, or raise fail-closed."""
-    cond = permission_condition_code(perm)
-    if record is None:
-        raise _unknown_condition_error(model, cond)
-    if record.expr is None:
-        raise PermissionConditionError(
-            'Permission condition %r on %s is unbound.'
-            % (cond, _condition_model_label(model))
-        )
-    grant = perm.split(':', 1)[0] if isinstance(perm, str) else perm
-    return compile_expression_q(record.expr, model, user, grant, user_model)
-
-
-class FrozenConditionLookup(object):
-    """Condition rows frozen at ``build()``.
-
-    The rows are a tuple taken once from the factory store. This lookup
-    does not share that mutable store.
-    """
-
-    __slots__ = ('_index',)
-
-    def __init__(self, rows):
-        self._index = {
-            (_condition_model_key(model), code): record
-            for model, code, record in rows
-        }
-
-    def record_for(self, model, cond_code):
-        return self._index.get((_condition_model_key(model), cond_code))
-
-    def compile_q(self, model, perm_string, user, user_model=None):
-        cond = permission_condition_code(perm_string)
-        return compile_stored_condition_q(
-            self.record_for(model, cond), model, perm_string, user,
-            user_model,
-        )
+    expr = normalize_expression(
+        invoke(builder, ('user', 'permission', 'object')),
+    )
+    if getattr(model, '_meta', None) is not None:
+        validate_expression(expr, model, user_model)
+    return expr

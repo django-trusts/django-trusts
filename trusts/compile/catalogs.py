@@ -15,13 +15,15 @@ from trusts.plan.aggregates import (
     instance_match,
 )
 from trusts.plan.conditions import (
-    compile_stored_condition_q,
-    evaluate_registered_expression,
+    condition_model_key,
     parse_perm_code,
     permission_binding,
     permission_condition_code,
     permission_has_condition,
+    validate_expression,
 )
+from trusts.plan.grammar import is_predicate
+from trusts.plan.writers import compile_expression_q, evaluate_expression
 from trusts.plan.contents import (
     _as_q,
     _compile_granted,
@@ -53,8 +55,8 @@ class CatalogShape(object):
     """Frozen data ``Compiler.compile`` hands to one ``Catalog``.
 
     ``path`` and ``family`` are that catalog's identity.
-    ``conditions`` is the ``(model, code, record)`` tuple taken once at
-    build. ``user_rules`` is ``(primary, absent)``: stored rules use
+    ``named_filters`` maps ``(model label, code)`` to ``(model, tree)``,
+    copied once at build. ``user_rules`` is ``(primary, absent)``: stored rules use
     ``primary``; the built-in rule uses ``primary`` when the subject has
     a concrete boolean ``is_active`` and ``absent`` otherwise.
     ``override_q`` is the override compiled against the catalog user
@@ -64,10 +66,9 @@ class CatalogShape(object):
 
     records: tuple
     delegations: tuple
-    conditions: tuple
+    named_filters: dict
     user_conditions: object
     user_override: object
-    filter_lookup: object
     compiler: object
     path: str
     family: str
@@ -119,8 +120,7 @@ class Catalog(object):
         self.user_model = user_model
         self.user_conditions = shape.user_conditions
         self.user_override = shape.user_override
-        self.filter_lookup = shape.filter_lookup
-        self.conditions = shape.conditions
+        self.named_filters = dict(shape.named_filters)
         self.user_rules = shape.user_rules
         self.override_q = shape.override_q
         self.plans = shape.plans
@@ -136,19 +136,13 @@ class Catalog(object):
         plan = self.plans.get(key, self.plans[None])
         return replace(plan, content_identity=_candidate_model(content))
 
-    def compile_registered_condition_q(self, model, perm, user):
-        """Compile a registered ``:condition`` to ``Q`` from this catalog."""
-        cond = permission_condition_code(perm)
-        return compile_stored_condition_q(
-            self.get_permission_condition_record(model, cond),
-            model, perm, user, self.user_model,
-        )
-
-    def get_permission_condition_record(self, model, cond_code):
-        return self.filter_lookup.record_for(model, cond_code)
-
     def iter_permission_conditions(self):
-        return iter(self.conditions)
+        """Yield ``(model, code, tree)`` from the frozen named-filter copy."""
+        for (_label, code), (model, tree) in self.named_filters.items():
+            yield model, code, tree
+
+    def _stored_named_filter(self, model, code):
+        return self.named_filters.get((condition_model_key(model), code))
 
     def applies(self, plan):
         """Whether this catalog's compiler will compile ``plan``."""
@@ -252,19 +246,16 @@ class Catalog(object):
         return qs
 
     def permitted_users_predicate(self, content, perm, *,
-                                  skipped=(), filter_lookup=None,
+                                  skipped=(),
                                   accepts_permission=None):
         """Q3 predicate: ``Q`` over candidate users, or ``None``.
 
-        ``filter_lookup`` defaults to this catalog's lookup.
         ``accepts_permission`` is the singular-permission callable;
         omitted means ``auth.Permission``.
         """
         plan = self.plan_for(content)
         if not plan.records and not plan.delegations:
             return None
-        if filter_lookup is None:
-            filter_lookup = self.filter_lookup
         binding, condition = _permission_binding_for_plan(
             accepts_permission, content, perm, plan,
         )
@@ -298,7 +289,8 @@ class Catalog(object):
             return None
         if condition:
             overlay = _named_filter_q(
-                filter_lookup, content, condition[1], condition[0], user_model,
+                self.named_filters, content, condition[1], condition[0],
+                user_model,
             )
             if overlay is None:
                 return None
@@ -420,10 +412,10 @@ class Catalog(object):
         model = _content_model(obj)
         if not self.applies(self.plan_for(obj, user=user_obj)):
             return PreparedInquiry(model, result=False)
-        record, extra_q = self._condition_overlay(permext, obj, user_obj)
+        stored, extra_q = self._condition_overlay(permext, obj, user_obj)
         applabel, modelname, action, _cond = parse_perm_code(permext)
         perm = '%s.%s_%s' % (applabel, action, modelname)
-        if permission_has_condition(permext) and record is None:
+        if permission_has_condition(permext) and stored is None:
             return PreparedInquiry(model, result=False)
         held = self.has_permission(
             user_obj, obj, permission_binding(perm, model),
@@ -432,17 +424,13 @@ class Catalog(object):
         )
         if not held:
             return PreparedInquiry(model, result=False)
-        if record is None or extra_q is not None:
+        if stored is None or extra_q is not None:
             return PreparedInquiry(model, result=True)
-        return self.permission_condition_met(record, user_obj, perm, obj)
+        return self.permission_condition_met(stored, user_obj, perm, obj)
 
-    def permission_condition_met(self, record, user_obj, perm, obj):
+    def permission_condition_met(self, stored, user_obj, perm, obj):
         model = _content_model(obj)
-        if record.expr is None:
-            label = _model_label(model)
-            raise PermissionConditionError(
-                'Permission condition on %s is unbound.' % label
-            )
+        _registered, tree = stored
         if isinstance(obj, QuerySet):
             objs, model = obj.all(), obj.model
         elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
@@ -451,7 +439,7 @@ class Catalog(object):
             objs = [obj]
         met = all(
             evaluate_registered_expression(
-                record.expr, user_obj, perm, item,
+                tree, user_obj, perm, item,
                 model=model or item.__class__,
                 user_model=self.user_model,
             )
@@ -478,12 +466,11 @@ class Catalog(object):
             return None, None
         cond = parse_perm_code(permext)[3]
         model = _content_model(obj)
-        lookup = self.filter_lookup
-        record = lookup.record_for(model, cond)
-        if record is None or not isinstance(obj, QuerySet):
-            return record, None
-        return record, lookup.compile_q(
-            obj.model, permext, user_obj, self.user_model,
+        stored = self._stored_named_filter(model, cond)
+        if stored is None or not isinstance(obj, QuerySet):
+            return stored, None
+        return stored, compile_stored_condition_q(
+            stored, obj.model, permext, user_obj, self.user_model,
         )
 
     def _resolve_skipped(self, subject, skip_flags, skipped, *, require_user=True):
@@ -708,35 +695,71 @@ def _auth_permission_plan_for_model(catalog, model):
 
 
 def _owns_selected_conditions(catalog, model, conditions):
-    """True when every selected name is registered with a queryable expr."""
+    """True when every selected name is registered with a queryable tree."""
     if not conditions:
         return True
-    lookup = catalog.filter_lookup
     for name in conditions:
-        record = lookup.record_for(model, name)
-        if record is None or record.expr is None:
+        stored = catalog._stored_named_filter(model, name)
+        if stored is None:
             return False
     return True
 
 
 def _selected_condition_q(catalog, model, permission, conditions, user, *, api):
     """AND this catalog's selected names, or None when any name is missing."""
-    lookup = catalog.filter_lookup
     extra_q = None
     for name in conditions:
-        record = lookup.record_for(model, name)
-        if record is None:
+        stored = catalog._stored_named_filter(model, name)
+        if stored is None:
             return None
-        if record.expr is None:
-            raise TrustsConfigurationError(
-                '%s condition %r on %s is unsupported.'
-                % (api, name, model._meta.label)
-            )
-        part = lookup.compile_q(
-            model, '%s:%s' % (permission, name), user, catalog.user_model,
+        part = compile_stored_condition_q(
+            stored, model, '%s:%s' % (permission, name), user,
+            catalog.user_model,
         )
         extra_q = part if extra_q is None else extra_q & part
     return extra_q
+
+
+def compile_stored_condition_q(stored, model, perm, user, user_model=None):
+    """Compile one stored ``(model, tree)`` pair, or raise fail-closed."""
+    cond = permission_condition_code(perm)
+    if stored is None:
+        raise _unknown_condition_error(model, cond)
+    _registered, tree = stored
+    grant = perm.split(':', 1)[0] if isinstance(perm, str) else perm
+    return compile_expression_q(tree, model, user, grant, user_model)
+
+
+def evaluate_registered_expression(expr, user, perm, obj, model=None, user_model=None):
+    """Evaluate a registered ``Tree`` against a real principal/object."""
+    if not is_predicate(expr):
+        raise PermissionConditionError(
+            'Permission condition did not produce a comparison, '
+            '.contains(), boolean field, or combination with & and |.'
+        )
+    klass = model
+    if klass is None:
+        klass = (
+            obj.model if hasattr(obj, 'model') and not isinstance(obj, Model)
+            else obj.__class__
+        )
+    validate_expression(expr, klass, user_model)
+    return evaluate_expression(
+        expr, user, perm, obj, model=klass, user_model=user_model,
+    )
+
+
+def _unknown_condition_error(model, cond_code):
+    meta = getattr(model, '_meta', None)
+    if meta is not None:
+        return AttributeError(
+            'Permission condition code "%s" is not associate with model "%s_%s"'
+            % (cond_code, meta.app_label, meta.model_name)
+        )
+    return AttributeError(
+        'Permission condition code "%s" is not associate with model "%s"'
+        % (cond_code, model)
+    )
 
 
 def require_saved_content(content):
@@ -750,9 +773,7 @@ def require_saved_content(content):
             'content must be a saved model instance, not %r.' % (content,)
         )
     if content.pk is None:
-        raise TrustsConfigurationError(
-            'content must be a saved %s instance.' % content._meta.label
-        )
+        raise PermissionConditionError('Save the object first.')
 
 
 def reject_permission_shape(perm):

@@ -20,6 +20,7 @@ from trusts.plan.hops import (
 )
 from trusts.compile.nodes import _is_model_class
 from trusts.errors import TrustsConfigurationError
+from trusts.plan.grammar import missing_field
 
 
 def _classify_field(field):
@@ -276,10 +277,7 @@ def _resolve_permission_path(root, path):
         try:
             field = current._meta.get_field(name)
         except FieldDoesNotExist:
-            raise TrustsConfigurationError(
-                '%s path %r refers to missing field %r on %s.'
-                % (role, path_text(path), name, current._meta.label)
-            )
+            raise missing_field(role, path, name, current)
         kind = _classify_field(field)
         if kind == 'scalar':
             raise TrustsConfigurationError(
@@ -391,10 +389,7 @@ def _resolve_path(root, path, role, *, trailing_reverse=False,
         try:
             field = current._meta.get_field(name)
         except FieldDoesNotExist:
-            raise TrustsConfigurationError(
-                '%s path %r refers to missing field %r on %s.'
-                % (role, path_text(path), name, current._meta.label)
-            )
+            raise missing_field(role, path, name, current)
 
         kind = _classify_field(field)
         last_kind = kind
@@ -540,10 +535,7 @@ def _resolve_forward_singles(root, path, role):
         try:
             field = current._meta.get_field(name)
         except FieldDoesNotExist:
-            raise TrustsConfigurationError(
-                '%s path %r refers to missing field %r on %s.'
-                % (role, path_text(path), name, current._meta.label)
-            )
+            raise missing_field(role, path, name, current)
         kind = _classify_field(field)
         if kind == 'scalar':
             raise TrustsConfigurationError(
@@ -603,10 +595,7 @@ def _resolve_permission_in_path(root, path, role, permission_model,
         try:
             field = current._meta.get_field(name)
         except FieldDoesNotExist:
-            raise TrustsConfigurationError(
-                '%s path %r refers to missing field %r on %s.'
-                % (role, path_text(path), name, current._meta.label)
-            )
+            raise missing_field(role, path, name, current)
         kind = _classify_field(field)
         if kind == 'scalar':
             raise TrustsConfigurationError(

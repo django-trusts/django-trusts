@@ -40,7 +40,6 @@ from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
 from trusts.apps import installed_catalogs
-from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.format import _format_policy_sql
 from trusts.inspect.yaml import (
@@ -50,10 +49,10 @@ from trusts.inspect.yaml import (
 )
 from django.conf import settings
 from django.db.utils import DEFAULT_DB_ALIAS
-from trusts.plan.conditions import compile_expression_q
+from trusts.plan.writers import compile_expression_q
 from django.contrib.auth.models import Permission
 from django.db import connections
-from trusts.plan import conditions as _ir
+from trusts.plan.grammar import Tree, inquiry_partner
 from trusts.plan.rewrites import BindTable
 from trusts.plan.recursions import (
         GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
@@ -778,10 +777,8 @@ def _permission_token(target):
 class _PolicyConditionText(object):
     """Render one stored predicate as a policy-lock condition line.
 
-    The node dispatches through ``accept``, the same way
-    ``plan.predicates._PredicateCompiler`` keeps ``Q`` off the nodes. Text stays
-    here. ``grouped`` is restored around each child so a nested ``All``
-    does not change its parent's parentheses.
+    Text stays here. ``grouped`` is restored around each child so a
+    nested conjunction does not change its parent's parentheses.
     """
 
     def __init__(self, permission_token):
@@ -789,8 +786,7 @@ class _PolicyConditionText(object):
         self._grouped = False
 
     def render(self, node, *, grouped=False):
-        accept = getattr(type(node), 'accept', None)
-        if accept is None:
+        if not isinstance(node, Tree):
             raise TrustsConfigurationError(
                 'Policy SQL cannot render condition node %s.'
                 % type(node).__name__
@@ -798,42 +794,63 @@ class _PolicyConditionText(object):
         previous = self._grouped
         self._grouped = grouped
         try:
-            return accept(node, self)
+            if node.kind == 'and':
+                return self._and(node)
+            if node.kind == 'or':
+                return self._join(node, 'or')
+            if node.kind == 'eq':
+                return self._eq(node)
+            if node.kind == 'ne':
+                return self._pair(node, '!=')
+            if node.kind == 'contains':
+                return self._contains(node)
+            if node.kind == 'not':
+                return 'not %s' % self.render(node.item, grouped=True)
+            if node.kind == 'bare':
+                return _condition_path(node.item)
+            raise TrustsConfigurationError(
+                'Policy SQL cannot render condition node %s.' % node.kind
+            )
         finally:
             self._grouped = previous
 
-    def visit_all(self, node):
-        if len(node.predicates) == 1:
-            return self.render(
-                node.predicates[0], grouped=self._grouped,
-            )
-        parts = [
-            self.render(part, grouped=True) for part in node.predicates
-        ]
-        text = ' and '.join(parts)
+    def _and(self, node):
+        return self._join(node, 'and')
+
+    def _join(self, node, word):
+        text = '%s %s %s' % (
+            self.render(node.left, grouped=True),
+            word,
+            self.render(node.right, grouped=True),
+        )
         if self._grouped:
             return '(%s)' % text
         return text
 
-    def visit_equal(self, node):
-        return '%s == %s' % (
-            _condition_path(node.left),
-            _condition_path(node.right),
+    def _eq(self, node):
+        row = inquiry_partner(node)
+        if row is not None:
+            return self._membership(row)
+        return self._pair(node, '==')
+
+    def _pair(self, node, operator):
+        return '%s %s %s' % (
+            _operand_text(node.left),
+            operator,
+            _operand_text(node.right),
         )
 
-    def visit_permission_in(self, node):
-        parts = [
-            '%s in %s' % (self.permission_token, _condition_path(ref))
-            for ref in node.refs
-        ]
-        text = ' and '.join(parts)
-        if self._grouped and len(node.refs) > 1:
-            return '(%s)' % text
-        return text
+    def _contains(self, node):
+        if node.right.kind == 'const':
+            return '%s in %s' % (
+                _constant_text(node.right.value),
+                _condition_path(node.left),
+            )
+        return self._membership(node.left)
 
-    def visit_inquiry_permission_match(self, node):
+    def _membership(self, collection):
         return '%s in %s' % (
-            self.permission_token, _condition_path(node.ref),
+            self.permission_token, _condition_path(collection),
         )
 
 
@@ -841,8 +858,7 @@ def _render_condition(condition, *, permission_token='$permission.id'):
     """One Python-like condition line, or ``None`` when none is stored.
 
     A trust id ending in ``__cond`` means ``record.condition`` is set.
-    Field paths stay bare. ``Equal`` compares two columns.
-    ``permission_in`` and ``_InquiryPermissionMatch`` are membership:
+    Field paths stay bare. Equality compares two columns. Membership is
     ``$permission.<target> in <collection>``. ``permission_token`` is the
     same token the SQL parameter uses. The line is a double-quoted YAML
     string.
@@ -853,15 +869,35 @@ def _render_condition(condition, *, permission_token='$permission.id'):
 
 
 def _condition_path(operand):
-    if isinstance(operand, Ref):
-        if not operand._path:
+    if isinstance(operand, Tree) and operand.kind == 'field':
+        if not operand.path:
             raise TrustsConfigurationError(
                 'Policy SQL condition path is empty.'
             )
-        return '__'.join(operand._path)
+        return '__'.join(operand.path)
     raise TrustsConfigurationError(
         'Policy SQL condition path is not a relationship path.'
     )
+
+
+def _operand_text(operand):
+    if isinstance(operand, Tree) and operand.kind == 'field':
+        return _condition_path(operand)
+    if isinstance(operand, Tree) and operand.kind == 'const':
+        return _constant_text(operand.value)
+    raise TrustsConfigurationError(
+        'Policy SQL condition path is not a relationship path.'
+    )
+
+
+def _constant_text(value):
+    if isinstance(value, ModelIdentity):
+        return str(value.pk)
+    if value is None:
+        return 'None'
+    if isinstance(value, bool):
+        return 'True' if value else 'False'
+    return repr(value)
 
 
 def _assign_ids(records):
@@ -925,7 +961,10 @@ def _project_named_filters(catalog, alias):
                 'Named filter on %s has a non-portable code %r.'
                 % (model_label, code)
             )
-        expr = getattr(record, 'expr', None)
+        if isinstance(record, Tree):
+            expr = record
+        else:
+            expr = getattr(record, 'expr', None)
         sql, params = _compile_named_filter(
             model, expr, alias, catalog.user_model,
         )
@@ -1186,11 +1225,11 @@ def _filter_queues(expr):
         queues.setdefault(path, []).append(symbol)
 
     def walk(node):
-        if isinstance(node, (_ir.And, _ir.Or)):
+        if isinstance(node, Tree) and node.kind in ('and', 'or'):
             walk(node.left)
             walk(node.right)
             return
-        if isinstance(node, (_ir.Eq, _ir.Ne)):
+        if isinstance(node, Tree) and node.kind in ('eq', 'ne'):
             pair = _comparison_symbol(node)
             if pair is not None:
                 add(pair[0], pair[1])
@@ -1207,7 +1246,7 @@ def _comparison_symbol(node):
     object_ref = None
     other = None
     for side in (left, right):
-        if isinstance(side, _ir.Ref) and side.source == 'object':
+        if isinstance(side, Tree) and side.kind == 'field' and side.root == 'object':
             if object_ref is None:
                 object_ref = side
             else:
@@ -1216,20 +1255,20 @@ def _comparison_symbol(node):
             other = side
     if object_ref is None or other is None:
         return None
-    if isinstance(other, _ir.Ref) and other.source == 'object':
+    if isinstance(other, Tree) and other.kind == 'field' and other.root == 'object':
         return None
     path = '__'.join(object_ref.path)
-    if isinstance(other, _ir.Const):
+    if isinstance(other, Tree) and other.kind == 'const':
         return path, _with_hint(
             {'const': _json_const(other.value)}, path or 'literal',
         )
-    if isinstance(other, _ir.Ref) and other.source == 'principal':
+    if isinstance(other, Tree) and other.kind == 'field' and other.root == 'user':
         if other.path:
             bind = 'user.%s' % '__'.join(other.path)
         else:
             bind = 'user.id'
         return path, _with_hint({'bind': bind}, _request_hint(bind))
-    if isinstance(other, _ir.Ref) and other.source == 'permission':
+    if isinstance(other, Tree) and other.kind == 'field' and other.root == 'permission':
         return path, _with_hint(
             {'bind': 'permission.id'}, _request_hint('permission.id'),
         )

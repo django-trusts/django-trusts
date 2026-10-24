@@ -23,7 +23,6 @@ from tests.support import (
 from tests.core import kernel_host_listed
 from tests.myapp.models import Document, DocumentGrant
 from trusts.decorators import filter_by_permitted_content
-from trusts.plan.conditions import FrozenConditionLookup
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.models import (
@@ -116,11 +115,10 @@ class ConditionLookupBindTest(TestCase):
         registry = compiler()
         with self.assertNumQueries(0):
             shape = registry.compile()
-        self.assertIsInstance(shape.filter_lookup, FrozenConditionLookup)
-        self.assertIsNone(shape.filter_lookup.record_for(Document, 'own'))
+        self.assertEqual(dict(shape.named_filters), {})
         with self.assertNumQueries(0):
             again = registry.compile()
-        self.assertIsNot(again.filter_lookup, shape.filter_lookup)
+        self.assertIsNot(again.named_filters, shape.named_filters)
         with self.assertRaises(TrustsConfigurationError):
             registry.add_named_filter(
                 Document, 'own', lambda u, p, o: o.title == 'keep',
@@ -140,20 +138,22 @@ class ConditionLookupBindTest(TestCase):
             )
             shape = registry.compile()
         self.assertEqual(len(called), 1)
-        lookup = shape.filter_lookup
-        self.assertIs(lookup.record_for(Document, 'named'), record)
-        self.assertIsNone(lookup.record_for(Document, 'missing'))
-        empty = FrozenConditionLookup(())
-        self.assertIsNone(empty.record_for(Document, 'named'))
+        self.assertIs(
+            shape.named_filters[(Document._meta.label, 'named')][1],
+            record,
+        )
+        self.assertNotIn((Document._meta.label, 'missing'), shape.named_filters)
+        empty = compiler()
+        blank = empty.compile()
+        self.assertNotIn((Document._meta.label, 'named'), blank.named_filters)
         with self.assertNumQueries(0):
-            compiled = lookup.compile_q(
-                Document, 'myapp.change_document:named', None,
-            )
-        self.assertIsNotNone(compiled)
+            again = registry.compile()
+        self.assertIsNot(again.named_filters, shape.named_filters)
+        self.assertIs(
+            again.named_filters[(Document._meta.label, 'named')][1],
+            record,
+        )
         self.assertEqual(len(called), 1)
-        with self.assertNumQueries(0):
-            with self.assertRaises(AttributeError):
-                empty.compile_q(Document, 'myapp.change_document:named', None)
 
 
 class AuthorizedQuerySetLiveTest(TestCase):

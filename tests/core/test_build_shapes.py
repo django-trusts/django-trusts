@@ -28,7 +28,6 @@ from trusts.compile.factory import (
 )
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.conditions import ConditionRegistry, FrozenConditionLookup
 from tests.support import built_catalog, forget_models, compiler
 
 
@@ -311,17 +310,15 @@ class BuildCatalogShapeTest(SimpleTestCase):
         self.assertIs(catalog.records[0], record)
         self.assertEqual(catalog.records, registry.records)
         self.assertEqual(catalog.delegations, ())
-        self.assertIsInstance(catalog.conditions, tuple)
-        self.assertNotIsInstance(catalog.conditions, ConditionRegistry)
-        self.assertIsNot(catalog.conditions, registry.conditions)
-        self.assertEqual(catalog.conditions, ((Document, 'owned', condition),))
-        self.assertIs(catalog.conditions[0][2], condition)
-        registry.conditions._records.clear()
-        self.assertEqual(catalog.conditions, ((Document, 'owned', condition),))
-        self.assertIsInstance(catalog.filter_lookup, FrozenConditionLookup)
-        self.assertFalse(hasattr(catalog.filter_lookup, 'conditions'))
+        self.assertEqual(
+            list(catalog.iter_permission_conditions()),
+            [(Document, 'owned', condition)],
+        )
+        again = registry.compile()
+        self.assertIsNot(again.named_filters, catalog.named_filters)
         self.assertIs(
-            catalog.filter_lookup.record_for(Document, 'owned'), condition,
+            again.named_filters[(Document._meta.label, 'owned')][1],
+            condition,
         )
         self.assertEqual(len(catalog.user_rules), 2)
         self.assertTrue(all(isinstance(part, models.Q) for part in catalog.user_rules))
@@ -619,10 +616,9 @@ class CatalogFromShapeTest(TransactionTestCase):
             catalog = Catalog(CatalogShape(
                 records=(record,),
                 delegations=(),
-                conditions=(),
+                named_filters={},
                 user_conditions=None,
                 user_override=None,
-                filter_lookup=FrozenConditionLookup(()),
                 compiler=PlanQueryCompiler(),
                 path='shape-answers',
                 family='relationship',
@@ -652,9 +648,8 @@ class CatalogFromShapeTest(TransactionTestCase):
                 {scope.pk},
             )
             empty = Catalog(CatalogShape(
-                records=(), delegations=(), conditions=(),
+                records=(), delegations=(), named_filters={},
                 user_conditions=None, user_override=None,
-                filter_lookup=FrozenConditionLookup(()),
                 compiler=PlanQueryCompiler(), path='empty-shape',
                 family='relationship', user_model=User,
                 user_rules=(Q(), Q()), override_q=None,

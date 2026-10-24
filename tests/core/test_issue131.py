@@ -5,7 +5,7 @@ builders, ``along=(path, bound)``, ``register(*, trust=...)``, and
 ``add_named_filter``. The earlier positional/strategy
 ``Compiler.register`` forms and
 ``register_permission_condition`` remain removed. ``Ref`` input and
-prebuilt ``All`` / ``Equal`` / ``permission_in`` on the public handle
+a prebuilt condition tree on the public handle
 are TypeError. Registration stays open after a build. Dual backends stay
 isolated. Internal ``Compiler.register_relation(Ref)`` remains for
 compiler tests. OrderedFold registration left Core in #195.
@@ -14,7 +14,7 @@ from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 from tests.myapp.models import Document, DocumentGrant
 from trusts.compile.nodes import Along
-from trusts.compile.nodes import Equal, Ref
+from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from tests.support import built_catalog, compiler
 
@@ -50,7 +50,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
         with self.assertRaises(TypeError):
             handle.register(trust=DocumentGrant, user='user', permission='permission', content=j.document)
         with self.assertRaises(TypeError):
-            handle.register(trust=DocumentGrant, user='user', permission='permission', content='document', condition=Equal(j.user, j.permission))
+            handle.register(trust=DocumentGrant, user='user', permission='permission', content='document', condition=j.user)
         with self.assertRaises(TypeError):
             handle.register(trust=DocumentGrant, user='user', permission='permission', content='document', along=Along(j.document, 8))
         self.assertEqual(built_catalog(handle).records, ())
@@ -67,7 +67,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
         registry = compiler()
         j = Ref(DocumentGrant)
         with self.assertRaises(TrustsConfigurationError):
-            registry.register_relation(content=j.document, user=j.user, permission=j.permission, condition=Equal('user', 'permission'))
+            registry.register_relation(content=j.document, user=j.user, permission=j.permission, condition='user')
         self.assertEqual(registry.records, ())
 
     def test_duplicate_and_conflict_leave_store_unchanged(self):
@@ -226,16 +226,18 @@ class CMethodsNamedFilterLifecycleTest(SimpleTestCase):
     def test_predicate_runs_once_at_registration(self):
         backend = _handle()
         log = _PredicateLog()
-        record = backend.add_named_filter(Document, 'non_confidential', log)
+        backend.add_named_filter(Document, 'non_confidential', log)
         self.assertEqual(len(log.calls), 1)
-        self.assertIs(built_catalog(backend).get_permission_condition_record(Document, 'non_confidential'), record)
+        built_catalog(backend)
         self.assertEqual(len(log.calls), 1)
 
     def test_non_callable_predicate_is_rejected(self):
         backend = _handle()
         with self.assertRaises(TypeError):
             backend.add_named_filter(Document, 'non_confidential', 'not-a-predicate')
-        self.assertIsNone(built_catalog(backend).get_permission_condition_record(Document, 'non_confidential'))
+        backend.add_named_filter(
+            Document, 'non_confidential', lambda u, p, o: o.confidential != True,
+        )
 
 class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
 
@@ -244,8 +246,8 @@ class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
         backend = _handle(registry)
         log = _PredicateLog()
         record = backend.register(trust=DocumentGrant, user='user', permission='permission', content='document')
-        named_record = backend.add_named_filter(Document, 'non_confidential', log)
+        backend.add_named_filter(Document, 'non_confidential', log)
         self.assertEqual(len(log.calls), 1)
         self.assertEqual(registry.records, (record,))
         self.assertEqual(built_catalog(registry).records, (record,))
-        self.assertIs(registry.conditions.get_permission_condition_record(Document, 'non_confidential'), named_record)
+        self.assertEqual(len(log.calls), 1)

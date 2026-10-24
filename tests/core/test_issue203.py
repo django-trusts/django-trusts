@@ -188,8 +188,12 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
                     fresh.add_named_filter(self.Note, 'open', lambda u, p, o: o.title == Decimal('1.5'))
                 with self.assertRaises(PermissionConditionError):
                     fresh.add_named_filter(self.Note, 'partial_203', lambda u, p, o: o.owner == self.Note.objects)
-                self.assertIsNone(fresh.conditions.get_permission_condition_record(self.Note, 'open'))
-                self.assertIsNone(fresh.conditions.get_permission_condition_record(self.Note, 'partial_203'))
+                fresh.add_named_filter(
+                    self.Note, 'open', lambda u, p, o: o.title == 'open',
+                )
+                fresh.add_named_filter(
+                    self.Note, 'partial_203', lambda u, p, o: o.title == 'open',
+                )
             self.assertEqual(len(log.calls), 1)
             with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, OPEN, opened))

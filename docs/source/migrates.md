@@ -8,6 +8,59 @@ development log. New features and changes that require no application action
 belong in [What's new](whats-new.md); development history belongs in
 [development history](../dev/development.md).
 
+## Two fields do not match NULL
+
+A condition that compares two fields no longer treats NULL as a value.
+A field compared with a constant still follows Python: `== None` is
+`IS NULL`, `!= None` is `IS NOT NULL`, and `!= 5` is true when the
+field is NULL (`None != 5`).
+
+| Comparison | When | Old | New |
+| --- | --- | --- | --- |
+| `o.left == o.right` | both NULL | matches | does not match |
+| `o.left != o.right` | exactly one NULL | matches | does not match |
+| `u.manager == o.reviewer` | both NULL | matches | does not match |
+| `u != o.owner` | `owner` is NULL | matches | does not match |
+| `o.left == None` | `left` is NULL | matches | unchanged |
+| `o.left != 5` | `left` is NULL | matches | unchanged |
+
+`has_perm`, a permitted queryset, and `get_permitted_users` use this
+rule. Relation `condition=` equality was already plain `a = b` (NULL
+never matches) and is unchanged. `o.left != o.right` when both are
+NULL already did not match.
+
+## One condition error (#333)
+
+`PermissionConditionError` is now the only condition error, and it is a
+`TrustsConfigurationError`. `register(condition=...)`, named filters, and
+user rules raise it for every unsupported operator, unsupported node, and
+missing field. The messages name the surface, for example
+"'|' is not supported in a relation condition."
+Named filters accept `.contains()`, `~`, and a bare boolean field.
+The predicates compiler and the relation-condition guards raise `PermissionConditionError` directly and do not wrap it.
+`get_permitted_users` reads object-side fields from the saved row. Save first; an in-memory change is ignored, and a never-saved object raises `PermissionConditionError` (`Save the object first.`).
+
+| | Old | New |
+| --- | --- | --- |
+| Python `and` / `or` / `not`, chained comparison | `PermissionConditionBooleanError` | `PermissionConditionError` |
+| Unsupported operator or constant | `PermissionConditionUnsupported` | `PermissionConditionError` |
+| `PermissionConditionNotQueryable` (a `ValueError`, never raised) | importable | removed |
+| Base class of `PermissionConditionError` | `Exception` | `TrustsConfigurationError` |
+| Ordered comparison (`<`, `<=`, `>`, `>=`) | rejected when the builder returned | rejected at the operator, same class |
+| `condition=` or user-rule grammar, missing field, or non-boolean user-rule field | `TrustsConfigurationError` | `PermissionConditionError` (still caught by `except TrustsConfigurationError`) |
+| Missing field in a `user=`, `permission=`, `delegate=`, or `sponsor=` path | `TrustsConfigurationError` | `PermissionConditionError` (still caught by `except TrustsConfigurationError`) |
+| Second `add_named_filter` with the same model and code | replaced the first filter | `PermissionConditionError` at `ready()`; the second builder is not called |
+
+An `except TrustsConfigurationError` block now also catches condition
+errors. Catch `PermissionConditionError` first to tell them apart.
+
+Migration-bot checklist:
+
+- `PermissionConditionBooleanError`
+- `PermissionConditionUnsupported`
+- `PermissionConditionNotQueryable`
+- `except PermissionConditionError`
+
 ## Test-only names removed
 
 These names were importable and unused by the authorization runtime.
@@ -16,7 +69,7 @@ Call the catalog or the condition compiler instead.
 | | Old | New |
 | --- | --- | --- |
 | Permission rows | `RelationPlan.common_permissions(user, content)` | `catalog.permissions_for(user, content)` |
-| Condition object check | `ConditionRegistry.evaluate_permission_condition(...)` | `compile_registered_condition_q` and filter the queryset |
+| Condition object check | `ConditionRegistry.evaluate_permission_condition(...)` | `qs.permitted(permission, user, conditions=(code,))` |
 | Stored-condition object check | `evaluate_stored_condition(...)` | the same compiled `Q` |
 | Compiler failure type | `TrustsCompilerError` | `TrustsConfigurationError` |
 | Exists marker | `LiteralExists(queryset)` | ordinary `Exists`; the renderer writes `SELECT 1` |
