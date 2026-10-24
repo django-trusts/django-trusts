@@ -172,44 +172,36 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
         self.assertEqual(_pks(Document.objects.authorized(self.inactive, self.change)), set())
         self.assertEqual(_pks(Document.objects.authorized(self.inactive, self.change, skip_is_active=True)), {self.open_doc.pk})
         with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError):
-                Document.objects.authorized(self.inactive, 'myapp.change_document')
+            self.assertEqual(list(Document.objects.authorized(self.inactive, 'myapp.change_document')), [])
 
     def test_active_superuser_has_no_shortcut(self):
         self.assertTrue(self.superuser.has_perm('myapp.change_document', self.open_doc))
         self.assertEqual(list(self.docs.permitted('myapp.change_document', self.superuser)), [])
         self.assertEqual(list(self.docs.permitted(self.change, self.superuser)), [])
 
-    def test_malformed_input_raises_before_sql_and_before_the_principal(self):
+    def test_malformed_input_is_empty_before_sql_and_before_the_principal(self):
         anonymous = AnonymousUser()
-        cases = ((TypeError, None), (TypeError, 123), (TypeError, ['myapp.change_document']), (TypeError, self.open_doc), (TrustsConfigurationError, 'change_document'), (TrustsConfigurationError, 'myapp.change_document:non_confidential'), (TrustsConfigurationError, 'myapp.'), (TrustsConfigurationError, '.change_document'), (TrustsConfigurationError, '.'), (TrustsConfigurationError, 'myapp.change.document'), (TrustsConfigurationError, ''))
-        for expected, permission in cases:
+        cases = (None, 123, ['myapp.change_document'], self.open_doc, 'change_document', 'myapp.change_document:non_confidential', 'myapp.', '.change_document', '.', 'myapp.change.document', '')
+        for permission in cases:
             with self.subTest(permission=permission):
                 with self.assertNumQueries(0):
-                    with self.assertRaises(expected):
-                        self.docs.permitted(permission, self.alice)
-                    with self.assertRaises(expected):
-                        self.docs.permitted(permission, anonymous)
+                    self.assertEqual(list(self.docs.permitted(permission, self.alice)), [])
+                    self.assertEqual(list(self.docs.permitted(permission, anonymous)), [])
 
-    def test_unsaved_permission_instance_raises_at_zero_sql(self):
+    def test_unsaved_permission_instance_is_empty_at_zero_sql(self):
         unsaved = Permission(codename='change_document', name='unsaved')
         with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                self.docs.permitted(unsaved, self.alice)
-            self.assertIn('saved', str(ctx.exception))
-            with self.assertRaises(TrustsConfigurationError):
-                self.docs.permitted(unsaved, AnonymousUser())
+            self.assertEqual(list(self.docs.permitted(unsaved, self.alice)), [])
+            self.assertEqual(list(self.docs.permitted(unsaved, AnonymousUser())), [])
 
-    def test_condition_shape_and_missing_names_raise_at_zero_sql(self):
+    def test_condition_shape_and_missing_names_are_empty_at_zero_sql(self):
         anonymous = AnonymousUser()
-        cases = ((TypeError, 'non_confidential'), (TypeError, ['non_confidential']), (TypeError, {'non_confidential'}), (TypeError, frozenset(('non_confidential',))), (TypeError, None), (TrustsConfigurationError, ('',)), (TrustsConfigurationError, (' padded ',)), (TrustsConfigurationError, ('has:colon',)), (TrustsConfigurationError, (None,)), (TrustsConfigurationError, ('non_confidential', 'non_confidential')))
-        for expected, conditions in cases:
+        cases = ('non_confidential', ['non_confidential'], {'non_confidential'}, frozenset(('non_confidential',)), None, ('',), (' padded ',), ('has:colon',), (None,), ('non_confidential', 'non_confidential'))
+        for conditions in cases:
             with self.subTest(conditions=conditions):
                 with self.assertNumQueries(0):
-                    with self.assertRaises(expected):
-                        self.docs.permitted('myapp.change_document', self.alice, conditions=conditions)
-                    with self.assertRaises(expected):
-                        self.docs.permitted(self.change, anonymous, conditions=conditions)
+                    self.assertEqual(list(self.docs.permitted('myapp.change_document', self.alice, conditions=conditions)), [])
+                    self.assertEqual(list(self.docs.permitted(self.change, anonymous, conditions=conditions)), [])
         with self.assertNumQueries(0):
             missing = self.docs.permitted('myapp.change_document', self.alice, conditions=('missing_270',))
             missing_anonymous = self.docs.permitted(self.change, anonymous, conditions=('missing_270',))
@@ -456,6 +448,5 @@ class PermittedPermissionExactnessTest(KernelHostRequiredMixin, TestCase):
     def test_proxy_permission_is_rejected_at_zero_sql(self):
         row = self.proxy_model(pk=self.change.pk, codename='change_document')
         with self.assertNumQueries(0):
-            with self.assertRaises(TypeError):
-                self.docs.permitted(row, self.alice)
+            self.assertEqual(list(self.docs.permitted(row, self.alice)), [])
 

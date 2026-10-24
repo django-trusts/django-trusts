@@ -51,9 +51,8 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
 
     """
     if not isinstance(queryset, QuerySet):
-        raise TrustsConfigurationError(
-            'filter_by_permitted_content requires a QuerySet, not %r.'
-            % (queryset,))
+        model = content if isinstance(content, type) else content.__class__
+        return model._default_manager.none()
     parts = [
         part for item in trusts_backends(backend)
         if not (part := item.filter_by_permitted_content(

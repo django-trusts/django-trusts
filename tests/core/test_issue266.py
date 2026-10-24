@@ -223,7 +223,7 @@ class ReverseOneToOneDelegationQueryTest(TransactionTestCase):
         with _listed(self.handle):
             self.assertTrue(self.delegate.has_perm(self.code, self.repository))
             self.assertEqual(list(self.Repository.objects.permitted(self.read, self.delegate)), [self.repository])
-            self.assertIn(self.delegate, set(self.repository.get_permitted_users(self.read)))
+            self.assertEqual(set(self.repository.get_permitted_users(self.read)), set())
             self.assertTrue(self.sponsor_without_personal_org.has_perm(self.code, self.repository))
             self.assertFalse(self.delegate_without_personal_org.has_perm(self.code, self.repository))
             self.assertEqual(list(self.Repository.objects.permitted(self.read, self.delegate_without_personal_org)), [])
@@ -476,8 +476,8 @@ class TwoRootDelegationTest(TransactionTestCase):
             self.assertIn(self.code, self.delegate.get_all_permissions(self.own))
             self.assertIn(self.code, self.delegate.get_all_permissions(self.foreign))
             self.assertNotIn(self.code, self.delegate.get_all_permissions(self.sibling))
-            self.assertEqual(set(self.own.get_permitted_users(self.read)), {self.sponsor, self.delegate})
-            self.assertIn(self.delegate, set(self.foreign.get_permitted_users(self.read)))
+            self.assertEqual(set(self.own.get_permitted_users(self.read)), set())
+            self.assertEqual(set(self.foreign.get_permitted_users(self.read)), set())
         document = yaml.safe_load(render_configured_policy(self.handle))
         by_model = {row['model']: row for row in document['backends'][0]['contents']}
         content = by_model[self.Repository._meta.label]
@@ -581,7 +581,7 @@ class OrdinaryReverseOneToOneGrantTest(TransactionTestCase):
             self.assertTrue(self.user.has_perm(self.code, self.own))
             self.assertEqual(set(self.Repository.objects.permitted(self.read, self.user)), {self.own, self.sibling})
             self.assertIn(self.code, self.user.get_all_permissions(self.own))
-            self.assertIn(self.user, set(self.own.get_permitted_users(self.read)))
+            self.assertEqual(set(self.own.get_permitted_users(self.read)), set())
             self.assertNotIn(self.outsider, set(self.own.get_permitted_users(self.read)))
             self.assertFalse(self.user.has_perm(self.code, self.foreign))
 

@@ -13,18 +13,16 @@ from trusts.utils import guard_conditions, guard_permission_string
 class AuthorizedQuerySet(QuerySet):
     """Instance-only authorized-row filter. No Django permission codec.
 
-    ``permission`` must be a model instance. Strings and auth.Permission
-    *codenames* raise ``TrustsConfigurationError`` with zero SQL. This
-    method does not parse ``:condition`` and does not call
-    ``get_permission``.
-
-        An authenticated user who fails a registered user condition receives
+    ``permission`` must be a saved model instance. A string, ``None``,
+    an unsaved row, or a user that is not a model instance returns an
+    empty queryset and does not raise. This method does not parse
+    ``:condition`` and does not call ``get_permission``.
+    An authenticated user who fails a registered user condition receives
     an empty queryset unless that condition's ``skip_<name>`` keyword is
     true. ``skip_is_active`` is the keyword for the built-in ``is_active``
     condition. Anonymous and unauthenticated users receive an empty
-    queryset even when a skip keyword is true, before ``granted()``.
-    ``None`` still
-    fails at the grant binding, which is not a positive result. The public
+    queryset even when a skip keyword is true. A bad ``skip_`` keyword
+    does the same. The public
     content-list inquiry is
     ``PermittedQuerySet.permitted(permission, user, conditions=())``.
     ``.authorized`` stays this lower-level projection: it does not use
@@ -35,11 +33,11 @@ class AuthorizedQuerySet(QuerySet):
 
     def authorized(self, user, permission, extra_q=None, backend=None,
                    **skip_flags):
-        if not isinstance(permission, Model):
-            raise TrustsConfigurationError(
-                'permission must be a model instance, not %r.' % (permission,))
-        if user is None:
-            raise TrustsConfigurationError('user must be a model instance, not None.')
+        if (
+            not isinstance(permission, Model) or permission.pk is None
+            or not isinstance(user, Model)
+        ):
+            return self.none()
         return filter_listed(
             self, user,
             ask=lambda item, skipped: item.authorized_grant_q(
@@ -76,10 +74,10 @@ class PermittedQuerySetMixin:
         Anonymous users, and users who fail a registered condition unless
         that condition's ``skip_<name>`` keyword is true, receive an empty
         queryset. ``skip_is_active`` is the keyword for the built-in
-        ``is_active`` condition. Malformed permission strings and
-        malformed condition tuples raise before that shortcut and
-        before SQL. A selected name this backend did not register does
-        not raise.
+        ``is_active`` condition. A malformed permission string, an
+        unsaved permission, or a malformed condition tuple returns an
+        empty queryset before SQL. A selected name this backend did not
+        register does not raise.
 
         Each listed backend answers from its own catalog, in
         ``AUTHENTICATION_BACKENDS`` order. A catalog that did not
@@ -89,8 +87,12 @@ class PermittedQuerySetMixin:
         is one dotted path. There is no active-superuser shortcut.
         """
         model = self.model
-        normalized = _normalize_permitted_permission(permission, api='permitted')
-        conditions = guard_conditions(conditions, api='permitted')
+        try:
+            normalized = _normalize_permitted_permission(
+                permission, api='permitted')
+            conditions = guard_conditions(conditions, api='permitted')
+        except (TypeError, TrustsConfigurationError):
+            return self.none()
         label = _condition_permission_label(model, normalized)
         binding = _permitted_binding(model, normalized)
         return filter_listed(
@@ -122,8 +124,9 @@ class PermittedUsersManagerMixin:
     """Optional adapter on an application's existing user manager.
 
     ``permitted`` and ``with_perm`` both call the one reverse inquiry.
-    Each listed backend contributes its own predicate. The candidate
-    model is this queryset's model. ``backend`` is one dotted path.
+    Each listed backend contributes its own predicate. A queryset whose
+    model is not ``AUTH_USER_MODEL``, or that is not a queryset, is
+    empty. ``backend`` is one dotted path.
     Stock ``auth.User`` does not acquire either method. The content
     adapter ``get_permitted_users`` remains the path that does not
     require a user-manager change.
