@@ -15,12 +15,19 @@ from tests.apps import TestsConfig
 from tests.core import KernelHostRequiredMixin, kernel_host_listed
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.support import configured_catalog, sweep_listed_backends
-from trusts.apps import TrustsConfigMixin, installed_catalogs
+from trusts.apps import TrustsConfigMixin
 from trusts.models import PermittedUsersManagerMixin
 
 
 HOST = 'tests.kernel_host.backends.HostTrustModelBackend'
 OUTSIDE = 'tests.gh_permissions.backends.OutsideBackend'
+
+
+def _app_catalogs():
+    return tuple(
+        config.catalog for config in apps.get_app_configs()
+        if isinstance(config, TrustsConfigMixin)
+    )
 
 
 class ImplementationRoutingTest(KernelHostRequiredMixin, SimpleTestCase):
@@ -45,11 +52,11 @@ class ImplementationRoutingTest(KernelHostRequiredMixin, SimpleTestCase):
 
 class ImplementationReadyTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_empty_authentication_backends_still_build_installed_configs(self):
-        before = [catalog.path for catalog in installed_catalogs()]
+        before = [catalog.path for catalog in _app_catalogs()]
         with override_settings(AUTHENTICATION_BACKENDS=()):
             sweep_listed_backends()
         self.assertEqual(
-            [catalog.path for catalog in installed_catalogs()],
+            [catalog.path for catalog in _app_catalogs()],
             before,
         )
         self.assertIn(
@@ -58,10 +65,10 @@ class ImplementationReadyTest(KernelHostRequiredMixin, SimpleTestCase):
         )
 
     def test_duplicate_backend_listing_does_not_add_a_catalog(self):
-        before = installed_catalogs()
+        before = _app_catalogs()
         with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
             sweep_listed_backends()
-        after = installed_catalogs()
+        after = _app_catalogs()
         self.assertEqual(
             [catalog.path for catalog in after],
             [catalog.path for catalog in before],
@@ -98,7 +105,7 @@ class MixinCatalogResolveTest(SimpleTestCase):
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0].obj.label, 'gh_permissions')
 
-    def test_installed_catalogs_follow_apps_not_backend_duplicates(self):
+    def test_app_catalogs_follow_installed_apps_not_backend_duplicates(self):
         from django.contrib.auth import get_user_model
         from django.db.models.query import QuerySet
 
@@ -119,7 +126,7 @@ class MixinCatalogResolveTest(SimpleTestCase):
         self.assertEqual(backend.get_group_permissions(object(), None), set())
         host = configured_catalog(HOST)
         with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
-            found = installed_catalogs()
+            found = _app_catalogs()
         self.assertIn(host, found)
         self.assertEqual(
             len(found),
@@ -148,7 +155,7 @@ class MixinCatalogResolveTest(SimpleTestCase):
             self.skipTest('kernel-only host path is not listed on the pair')
         catalog = configured_catalog(HOST_BACKEND)
         self.assertIs(catalog, configured_catalog(HOST))
-        self.assertIn(catalog, installed_catalogs())
+        self.assertIn(catalog, _app_catalogs())
 
 
 @isolate_apps(

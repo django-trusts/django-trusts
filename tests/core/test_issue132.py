@@ -94,8 +94,12 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
     def test_unregistered_content_is_rejected_before_sql(self):
         self.assertTrue(self.alice.has_perm(PERM, self.document))
         self.assertIn(PERM, self.alice.get_all_permissions(self.document))
-        from trusts.apps import installed_catalogs
-        handles = installed_catalogs()
+        from django.apps import apps
+        from trusts.apps import TrustsConfigMixin
+        handles = tuple(
+            config.catalog for config in apps.get_app_configs()
+            if isinstance(config, TrustsConfigMixin)
+        )
         self.assertGreaterEqual(len(handles), 2)
         extra = _extra_handle()
         with self.assertNumQueries(0):

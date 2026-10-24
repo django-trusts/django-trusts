@@ -376,11 +376,12 @@ class Catalog(object):
 
     def prepare_has_perm(self, user_obj, permext, obj, *, skipped):
         model = _content_model(obj)
+        try: applabel, modelname, action, cond = parse_perm_code(permext)
+        except ValueError: return PreparedInquiry(model, result=False)
         plan = self.plan_for(obj, user=user_obj)
         if not plan.applicable:
             return PreparedInquiry(model, result=False)
         stored, extra_q = self._condition_overlay(permext, obj, user_obj)
-        applabel, modelname, action, cond = parse_perm_code(permext)
         perm = '%s.%s_%s' % (applabel, action, modelname)
         if cond and stored is None:
             return PreparedInquiry(model, result=False)

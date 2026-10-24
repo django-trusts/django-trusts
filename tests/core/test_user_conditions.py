@@ -964,9 +964,9 @@ def _seal_document_factory(factory):
     from tests.support import (
         config_for_class,
         mixin_configs,
-        snapshot_installed_catalogs,
+        snapshot_config_catalogs,
     )
-    saved = snapshot_installed_catalogs()
+    saved = snapshot_config_catalogs()
     config = config_for_class(DocumentBackend)
     previous = config.catalog
     family = config.family if previous is None else previous.family
@@ -978,9 +978,9 @@ def _seal_document_factory(factory):
     return saved
 
 def _restore_document_catalog(previous):
-    from tests.support import config_for_class, restore_installed_catalogs
+    from tests.support import config_for_class, restore_config_catalogs
     if isinstance(previous, tuple) and previous and isinstance(previous[0], tuple):
-        restore_installed_catalogs(previous)
+        restore_config_catalogs(previous)
         return
     config_for_class(DocumentBackend).catalog = previous
 _CATALOG_UNSET = object()

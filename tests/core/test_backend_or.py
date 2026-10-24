@@ -335,24 +335,31 @@ class ListedBackendOrTest(TestCase):
             self.assertEqual(alpha_only, {self.holder.pk})
             self.assertFalse(users.with_perm(self.note_code).exists())
 
-    def test_unlisted_catalog_with_registrations_is_e010(self):
-        registered = _note_catalog(NoteGrant)
-        restore = push_catalog(PairAlphaBackend, registered)
-        self.addCleanup(restore)
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST, DOCUMENT, BETA)):
-            labels = [
-                message.obj.label for message in run_checks()
-                if getattr(message, 'id', None) == 'trusts.E010'
-            ]
-        self.assertIn('pair_alpha', labels)
-        self.assertNotIn('pair_beta', labels)
-        self.assertNotIn('myapp', labels)
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST, DOCUMENT, ALPHA)):
-            labels = [
-                message.obj.label for message in run_checks()
-                if getattr(message, 'id', None) == 'trusts.E010'
-            ]
-        self.assertNotIn('pair_alpha', labels)
+    def test_unlisted_registrations_raise_from_ready(self):
+        import tests.core.pair_alpha as pair_alpha
+        from trusts.apps import TrustsConfigMixin
+
+        class Unlisted(TrustsConfigMixin):
+            name = 'tests.core.pair_alpha'
+            label = 'pair_alpha_unlisted'
+            default = False
+
+        config = Unlisted('tests.core.pair_alpha', pair_alpha)
+        config.recorder.register(
+            trust=NoteGrant, user='user', permission='permission',
+            content='shelf',
+        )
+        with self.assertRaises(TrustsConfigurationError) as caught:
+            config.ready()
+        message = str(caught.exception)
+        self.assertIn(
+            'Trusts app pair_alpha_unlisted has registrations but no '
+            'AUTHENTICATION_BACKENDS entry resolves to it.',
+            message,
+        )
+        self.assertIn(
+            'List a backend whose module lives in this app.', message,
+        )
 
     def test_each_unbuildable_backend_is_e011(self):
         with override_settings(

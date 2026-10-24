@@ -85,110 +85,111 @@ _ALONG_BOUND_MIN = 1
 _ALONG_BOUND_MAX = 64
 
 
-_INTEGER_IDENTITY_TYPES = frozenset((
-    'AutoField',
-    'BigAutoField',
-    'SmallAutoField',
-    'IntegerField',
-    'BigIntegerField',
-    'SmallIntegerField',
-    'PositiveIntegerField',
-    'PositiveSmallIntegerField',
-    'PositiveBigIntegerField',
+_NO_DEFAULT = object()
+
+
+_IDENTITY_FAMILIES = {
+    'AutoField': 'integer',
+    'BigAutoField': 'integer',
+    'SmallAutoField': 'integer',
+    'IntegerField': 'integer',
+    'BigIntegerField': 'integer',
+    'SmallIntegerField': 'integer',
+    'PositiveIntegerField': 'integer',
+    'PositiveSmallIntegerField': 'integer',
+    'PositiveBigIntegerField': 'integer',
+    'CharField': 'text',
+    'TextField': 'text',
+    'SlugField': 'text',
+    'UUIDField': 'uuid',
+}
+
+
+def _frozen(name, spec, doc):
+    """Frozen slot record. ``spec`` is name, annotation, default."""
+    namespace = {
+        '__annotations__': {}, '__module__': __name__,
+        '__qualname__': name, '__doc__': doc,
+    }
+    for field_name, annotation, default in spec:
+        namespace['__annotations__'][field_name] = annotation
+        if default is not _NO_DEFAULT: namespace[field_name] = default
+    return dataclass(frozen=True, slots=True)(type(name, (), namespace))
+
+
+RegisteredRelation = _frozen('RegisteredRelation', (
+    ('root', type, _NO_DEFAULT),
+    ('content_path', tuple, _NO_DEFAULT),
+    ('content_model', type, _NO_DEFAULT),
+    ('content_field', str, _NO_DEFAULT),
+    ('content_target', str, _NO_DEFAULT),
+    ('user_path', tuple, _NO_DEFAULT),
+    ('user_model', type, _NO_DEFAULT),
+    ('user_field', str, _NO_DEFAULT),
+    ('user_target', str, _NO_DEFAULT),
+    ('permission_path', tuple, _NO_DEFAULT),
+    ('permission_model', type, _NO_DEFAULT),
+    ('permission_field', str, _NO_DEFAULT),
+    ('permission_target', str, _NO_DEFAULT),
+    ('condition', object | None, None),
+    ('along', AlongWalk | None, None),
+    ('via_group', bool, False),
+    ('group_path', tuple, ()),
+    ('group_model', type | None, None),
+    ('group_field', str, ''),
+    ('group_target', str, ''),
+), (
+    'Immutable normalized record for one permission-bearing relation. '
+    '``*_field`` is the complete root-relative Django lookup. '
+    '``*_target`` is the last hop\'s comparison field (``attname``).'
 ))
 
 
-_TEXT_IDENTITY_TYPES = frozenset((
-    'CharField',
-    'TextField',
-    'SlugField',
+RegisteredDelegation = _frozen('RegisteredDelegation', (
+    ('root', type, _NO_DEFAULT),
+    ('content_path', tuple, _NO_DEFAULT),
+    ('content_model', type, _NO_DEFAULT),
+    ('content_field', str, _NO_DEFAULT),
+    ('content_target', str, _NO_DEFAULT),
+    ('delegate_path', tuple, _NO_DEFAULT),
+    ('delegate_model', type, _NO_DEFAULT),
+    ('delegate_field', str, _NO_DEFAULT),
+    ('delegate_target', str, _NO_DEFAULT),
+    ('sponsor_path', tuple, _NO_DEFAULT),
+    ('sponsor_model', type, _NO_DEFAULT),
+    ('sponsor_field', str, _NO_DEFAULT),
+    ('sponsor_target', str, _NO_DEFAULT),
+    ('condition', object | None, None),
+    ('condition_permission_model', type | None, None),
+    ('condition_permission_target', str | None, None),
+    ('along', AlongWalk | None, None),
+    ('sponsor_rules', object | None, field(
+        default=None, compare=False, repr=False,
+    )),
+), (
+    'Immutable normalized bridge to a sponsor\'s ordinary authority. '
+    'A delegation stores no ordinary permission path. '
+    '``condition_permission_model`` is set only when the delegated '
+    'condition refers to the requested permission.'
 ))
 
 
-_UUID_IDENTITY_TYPES = frozenset(('UUIDField',))
-
-
-@dataclass(frozen=True, slots=True)
-class RegisteredRelation:
-    """Immutable normalized record for one permission-bearing relation.
-
-    ``*_field`` is the complete root-relative Django lookup
-    (``'__'.join(path)``). ``*_target`` is the last hop's single
-    comparison field (``attname``), taken from resolved path metadata.
-    """
-
-    root: type
-    content_path: tuple
-    content_model: type
-    content_field: str
-    content_target: str
-    user_path: tuple
-    user_model: type
-    user_field: str
-    user_target: str
-    permission_path: tuple
-    permission_model: type
-    permission_field: str
-    permission_target: str
-    condition: object | None = None
-    along: AlongWalk | None = None
-    via_group: bool = False
-    group_path: tuple = ()
-    group_model: type | None = None
-    group_field: str = ''
-    group_target: str = ''
-
-
-@dataclass(frozen=True, slots=True)
-class RegisteredDelegation:
-    """Immutable normalized bridge to a sponsor's ordinary authority.
-
-    A delegation is not an ordinary grant and therefore stores no ordinary
-    ``permission`` path. ``condition_permission_model`` is present only when
-    the delegated condition refers to the requested permission.
-    """
-
-    root: type
-    content_path: tuple
-    content_model: type
-    content_field: str
-    content_target: str
-    delegate_path: tuple
-    delegate_model: type
-    delegate_field: str
-    delegate_target: str
-    sponsor_path: tuple
-    sponsor_model: type
-    sponsor_field: str
-    sponsor_target: str
-    condition: object | None = None
-    condition_permission_model: type | None = None
-    condition_permission_target: str | None = None
-    along: AlongWalk | None = None
-    sponsor_rules: object | None = field(default=None, compare=False, repr=False)
-
-
-@dataclass(frozen=True, slots=True)
-class PublicRegistration:
-    """Normalized public registration, before it is stored.
-
-    ``build_public_registration`` returns this shape: root-relative refs
-    for exactly one mode (ordinary ``user`` plus ``permission`` or
-    ``group``, or delegated ``delegate`` plus ``sponsor``), the already
-    lowered ``condition``, and the bound ``along``. The unused mode's
-    refs are ``None``. Storing it is ``register``'s job, via
-    ``register_relation`` or ``register_delegation``.
-    """
-
-    trust: type
-    content: object
-    user: object | None = None
-    permission: object | None = None
-    group: object | None = None
-    delegate: object | None = None
-    sponsor: object | None = None
-    condition: object | None = None
-    along: object | None = None
+PublicRegistration = _frozen('PublicRegistration', (
+    ('trust', type, _NO_DEFAULT),
+    ('content', object, _NO_DEFAULT),
+    ('user', object | None, None),
+    ('permission', object | None, None),
+    ('group', object | None, None),
+    ('delegate', object | None, None),
+    ('sponsor', object | None, None),
+    ('condition', object | None, None),
+    ('along', object | None, None),
+), (
+    'Normalized public registration, before it is stored. '
+    '``build_public_registration`` returns this shape. Storing it is '
+    '``register``\'s job, via ``register_relation`` or '
+    '``register_delegation``.'
+))
 
 
 def relation_plan(records, delegations, content, user, permission,
@@ -1336,16 +1337,13 @@ def _target_field(field, role, path):
 
 def _ident_family(field):
     kind = field.get_internal_type()
-    if kind in _INTEGER_IDENTITY_TYPES:
-        return 'integer'
-    if kind in _TEXT_IDENTITY_TYPES:
-        return 'text'
-    if kind in _UUID_IDENTITY_TYPES:
-        return 'uuid'
-    raise TrustsConfigurationError(
-        'Along identity field %s (%s) is not a V1 integer, text, or UUID '
-        'identity.' % (field.attname, kind)
-    )
+    family = _IDENTITY_FAMILIES.get(kind)
+    if family is None:
+        raise TrustsConfigurationError(
+            'Along identity field %s (%s) is not a V1 integer, text, or UUID '
+            'identity.' % (field.attname, kind)
+        )
+    return family
 
 def _concrete_fk(field):
     fk = getattr(field, 'field', None)
@@ -1533,12 +1531,10 @@ def _build_along_walk(root, content_path, content_model, along):
             % (root._meta.label, along_ref._root._meta.label)
         )
     bound = along.bound
-    if isinstance(bound, bool) or not isinstance(bound, int):
-        raise TrustsConfigurationError(
-            'Along bound must be an integer in %s..%s.'
-            % (_ALONG_BOUND_MIN, _ALONG_BOUND_MAX)
-        )
-    if bound < _ALONG_BOUND_MIN or bound > _ALONG_BOUND_MAX:
+    if (
+        isinstance(bound, bool) or not isinstance(bound, int)
+        or bound < _ALONG_BOUND_MIN or bound > _ALONG_BOUND_MAX
+    ):
         raise TrustsConfigurationError(
             'Along bound must be an integer in %s..%s.'
             % (_ALONG_BOUND_MIN, _ALONG_BOUND_MAX)

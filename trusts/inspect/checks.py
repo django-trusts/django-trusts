@@ -2,7 +2,8 @@
 
 ``trusts.E007`` reports the deleted runtime-callback setting still
 being ``True``. That setting never enables callbacks. ``trusts.E001``,
-``trusts.E002``, ``trusts.E006``, ``trusts.E008``, and ``trusts.W001`` are retired.
+``trusts.E002``, ``trusts.E006``, ``trusts.E008``, ``trusts.E010``, and
+``trusts.W001`` are retired.
 OrderedFold vendor diagnostics live in ``django-trusts-ordered-fold`` as
 ``trusts_ordered_fold.E001``.
 """
@@ -18,7 +19,6 @@ from django.db import connections
 
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
-from trusts.apps import TrustsConfigMixin, catalog_of
 from trusts.backends import TrustModelBackendMixin
 from trusts.compile.factory import probe_along_capabilities
 from trusts.errors import (
@@ -32,7 +32,6 @@ from trusts.plan.walk import along_connection_supported
 CHECK_ID_MISSING_DECLARATION = 'trusts.E003'
 CHECK_ID_ALONG_RENDERER = 'trusts.E005'
 CHECK_ID_OBSOLETE_CALLBACK_SETTING = 'trusts.E007'
-CHECK_ID_UNLISTED_CATALOG = 'trusts.E010'
 CHECK_ID_UNBUILDABLE_BACKEND = 'trusts.E011'
 CHECK_ID_MIXIN_REQUIRED = 'trusts.E012'
 
@@ -117,7 +116,7 @@ def _require_mixin(errors, config, path, message):
 
 
 def _load_listed():
-    catalogs, errors, listed = {}, [], set()
+    catalogs, errors = {}, []
     for path in settings.AUTHENTICATION_BACKENDS:
         config = django_apps.get_containing_app_config(path.rpartition('.')[0])
         try:
@@ -134,8 +133,7 @@ def _load_listed():
             continue
         if isinstance(backend, TrustModelBackendMixin):
             catalogs.setdefault(id(backend._catalog()), backend._catalog())
-            listed.add(id(config))
-    return tuple(catalogs.values()), errors, listed
+    return tuple(catalogs.values()), errors
 
 
 def _covered_content_models(catalogs):
@@ -241,23 +239,9 @@ def check_obsolete_legacy_callback_setting(app_configs, **kwargs):
 
 
 @django_checks.register()
-def check_unlisted_catalog(app_configs, **kwargs):
-    """Registrations need a listed backend whose module lives in that app."""
-    _catalogs, messages, listed = _load_listed()
-    for config in django_apps.get_app_configs():
-        if not isinstance(config, TrustsConfigMixin):
-            continue
-        catalog = catalog_of(config)
-        if not (catalog.records or catalog.delegations):
-            continue
-        if id(config) in listed:
-            continue
-        messages.append(django_checks.Error(
-            'Trusts app %s has registrations but no AUTHENTICATION_BACKENDS '
-            'entry resolves to it.' % config.label,
-            hint='List a backend whose module lives in this app.',
-            obj=config, id=CHECK_ID_UNLISTED_CATALOG))
-    return messages
+def check_listed_backends(app_configs, **kwargs):
+    """Report a listed backend that does not construct."""
+    return _load_listed()[1]
 
 
 @django_checks.register(django_checks.Tags.database)

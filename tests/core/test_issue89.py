@@ -111,12 +111,12 @@ class _CatalogRestoreMixin(object):
 
     def setUp(self):
         super().setUp()
-        from tests.support import snapshot_installed_catalogs
-        self._saved_catalogs = snapshot_installed_catalogs()
+        from tests.support import snapshot_config_catalogs
+        self._saved_catalogs = snapshot_config_catalogs()
 
     def tearDown(self):
-        from tests.support import restore_installed_catalogs
-        restore_installed_catalogs(self._saved_catalogs)
+        from tests.support import restore_config_catalogs
+        restore_config_catalogs(self._saved_catalogs)
         super().tearDown()
 
 class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, SimpleTestCase):
@@ -163,8 +163,9 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
         from django.contrib.auth import get_user_model
         from trusts.apps import Recorder
         from trusts.compile.factory import Compiler
+        from trusts.compile.listener import RegistrationListener
 
-        log = Recorder()
+        log = Recorder(RegistrationListener())
         _contribute_recorder(log)
         built_from = Compiler(
             user_model=get_user_model(),
