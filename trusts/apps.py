@@ -11,18 +11,8 @@ from trusts.errors import TrustsConfigurationError
 T = TypeVar('T', bound=Model)
 
 
-class Recorder(object):
-    """Ordered log of registration calls for one app config.
-
-    ``play`` replays each call, in order, as the same method on
-    ``target``. The log must already be frozen. A later ``play``
-    replays those same calls onto the new target.
-    """
-
-    def __init__(self, listener):
-        self._rows = []
-        self.frozen = False
-        self._listener = listener
+class Registry(object):
+    """Registration calls returned by ``get_registry()``."""
 
     def register(
         self, *,
@@ -59,6 +49,20 @@ class Recorder(object):
 
     def set_user_override(self, name, expr, on='user'):
         self._accept('set_user_override', (name, expr), {'on': on})
+
+
+class Recorder(Registry):
+    """Ordered log of registration calls for one app config.
+
+    ``play`` replays each call, in order, as the same method on
+    ``target``. The log must already be frozen. A later ``play``
+    replays those same calls onto the new target.
+    """
+
+    def __init__(self, listener):
+        self._rows = []
+        self.frozen = False
+        self._listener = listener
 
     def _accept(self, name, args, kwargs):
         self._open(name)

@@ -12,7 +12,7 @@ from django.contrib.auth import get_backends, get_user_model, load_backend
 from django.contrib.auth.models import Permission
 from django.db.models import Model, QuerySet, Subquery
 
-from trusts.apps import Recorder, TrustsConfigMixin
+from trusts.apps import Registry, TrustsConfigMixin
 from trusts.compile.catalogs import compile_catalog_users, filter_catalogs
 from trusts.errors import TrustsConfigurationError, TrustsMixinRequired
 from trusts.inspect.snapshot import (
@@ -35,7 +35,7 @@ class TrustModelBackendMixin(object):
             ))
         self._config = config
 
-    def get_registry(self) -> Recorder:
+    def get_registry(self) -> Registry:
         """Open registration log for this backend's app.
 
         Not the built catalog. Registration does not resolve the user
