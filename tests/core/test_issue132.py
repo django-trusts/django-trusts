@@ -17,8 +17,10 @@ from tests.support import (
     live_config,
     replay_recorder,
     bound_handle,
+    built_catalog,
+    compiler,
 )
-from tests.backends import HostTrustModelBackend
+from tests.kernel_host.backends import HostTrustModelBackend
 from tests.core import KernelHostRequiredMixin
 from tests.gh_permissions.models import Repository
 from tests.kernel_host.apps import HOST_BACKEND
@@ -27,8 +29,8 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.compile.factory import RegistryFactory
-from trusts.query import AuthorizedQuerySet
+from trusts.compile.factory import Compiler
+from trusts.models import AuthorizedQuerySet
 PERM = 'myapp.change_document'
 
 def _change_document():
@@ -41,19 +43,25 @@ def _replay_listed(path):
     from django.utils.module_loading import import_string
 
     cls = import_string(path)
-    factory = RegistryFactory(
+    from tests.support import config_for_class
+    from trusts.compile.factory import Compiler
+
+    factory = compiler(
         path=path,
-        family=cls.family,
-        compiler=cls.query_compiler,
+        family=config_for_class(cls).family,
+        query_compiler=(
+            getattr(cls, 'query_compiler', None)
+            or Compiler.default_query_compiler()
+        ),
         user_model=get_user_model(),
     )
     return replay_recorder(factory, cls)
 
 def _extra_handle():
     """Second complete Document path plus an always-true filter on B."""
-    handle = RegistryFactory(path='tests.core.issue132-extra')
-    handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-    handle.register_permission_condition(Repository, 'always', lambda u, p, o: o.name != '')
+    handle = compiler(path='tests.core.issue132-extra')
+    handle.register(trust=DocumentGrant, user='user', permission='permission', content='document')
+    handle.add_named_filter(Repository, 'always', lambda u, p, o: o.name != '')
     return handle
 
 class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
@@ -91,26 +99,14 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
     def test_unregistered_content_is_rejected_before_sql(self):
         self.assertTrue(self.alice.has_perm(PERM, self.document))
         self.assertIn(PERM, self.alice.get_all_permissions(self.document))
-        from trusts.backends import configured_catalogs
-        handles = configured_catalogs()
+        from trusts.apps import installed_catalogs
+        handles = installed_catalogs()
         self.assertGreaterEqual(len(handles), 2)
         extra = _extra_handle()
         with self.assertNumQueries(0):
             self._assert_public_deny()
-            from trusts.backends import catalogs
-            from trusts.compile.catalogs import Catalog
-            cls = type(self.document_backend)
-            saved = catalogs.get(cls)
-            factory = extra
-            catalogs[cls] = Catalog(cls=cls, path=extra.path, family=cls.family if saved is None else saved.family, registry=factory.build_registry())
-            try:
-                with bound_handle(self.document_backend, extra):
-                    self.assertFalse(self.document_backend.has_perm(self.alice, '%s:always' % PERM, self.report))
-            finally:
-                if saved is None:
-                    catalogs.pop(cls, None)
-                else:
-                    catalogs[cls] = saved
+            with bound_handle(self.document_backend, extra):
+                self.assertFalse(self.document_backend.has_perm(self.alice, '%s:always' % PERM, self.report))
             host_factory = _replay_listed(HOST_BACKEND)
             document_factory = _replay_listed(DOCUMENT_BACKEND)
             for bundled in ((host_factory, document_factory, extra), (extra, host_factory, document_factory)):

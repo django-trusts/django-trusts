@@ -5,15 +5,16 @@ Generic multi-path contracts use KernelHost + DocumentConfig.
 """
 from unittest.mock import patch
 from django.contrib.auth import get_user_model
+from django.core.checks import run_checks
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
-from django.core.checks import Error, run_checks
 from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.test.utils import isolate_apps
 from tests.core import KernelHostRequiredMixin
 from tests.apps import TestsConfig
 from tests.support import (
+    built_catalog,
     configured_catalog,
     install_writable_registry,
     isolate_live_registry,
@@ -21,27 +22,21 @@ from tests.support import (
     override_apps_ready,
     empty_catalogs,
     sweep_listed_backends,
+    compiler,
 )
-from tests.backends import HostTrustModelBackend, MalformedCompilerBackend, MixinOnlyBackend, MissingCompilerBackend, RaisingCompilerBackend
+from tests.kernel_host.backends import HostTrustModelBackend
+from tests.backends import RaisingCompilerBackend
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 
-from trusts.plan.aggregates import compiler_for_class
-from trusts.backends import catalogs
-from trusts.backends import TrustModelBackendMixin
-from trusts.inspect.checks import CHECK_ID_MISSING_COMPILER, check_query_compilers
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.errors import TrustsCompilerError, TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
 import tests as tests_module
 HOST = HOST_BACKEND
 DOCUMENT = DOCUMENT_BACKEND
 MIXIN = 'tests.backends.MixinOnlyBackend'
-ALIASED = 'tests.backends.AliasedTrustModelBackend'
-MISSING = 'tests.backends.MissingCompilerBackend'
-MALFORMED = 'tests.backends.MalformedCompilerBackend'
+OUTSIDE = 'tests.gh_permissions.backends.OutsideBackend'
 RAISING = 'tests.backends.RaisingCompilerBackend'
 
 def _pks(qs):
@@ -55,77 +50,88 @@ def _change_document():
 def _contribute_document(registry):
     from trusts.compile.nodes import Ref
     j = Ref(DocumentGrant)
-    registry.register(content=j.document, user=j.user, permission=j.permission)
+    registry.register_relation(content=j.document, user=j.user, permission=j.permission)
 
 def _evaluate(handle, queryset, user, permission):
     plan = handle.plan_for(queryset, user=user, permission=permission)
-    compiler = handle.compiler if handle.compiler is not None else PlanQueryCompiler()
+    compiler = handle.compiler
     return compiler.complete_exists(plan, queryset, user, permission)
 
 class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
 
     def test_one_path_registry_alias_is_exact_store(self):
+        from django.apps import apps
+
         catalog = configured_catalog(HOST)
-        self.assertEqual(catalog.path, HOST)
-        self.assertIs(catalog, catalogs[HostTrustModelBackend])
-        self.assertIs(catalog.compiler, HostTrustModelBackend.query_compiler)
+        self.assertEqual(
+            catalog.path,
+            apps.get_app_config('trusts_kernel_host').catalog_path(),
+        )
+        self.assertIs(catalog, HostTrustModelBackend().catalog)
         self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
 
-    def test_duplicate_identical_paths_dedupe(self):
-        with empty_catalogs():
-            with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    sweep_listed_backends()
-        self.assertIn('multiple paths', str(ctx.exception))
-        self.assertEqual(configured_catalog(HOST).path, HOST)
+    def test_duplicate_identical_paths_do_not_raise(self):
+        from django.apps import apps
 
-    def test_same_class_alias_is_ambiguity_error(self):
-        with empty_catalogs():
-            with override_settings(AUTHENTICATION_BACKENDS=(HOST, ALIASED)):
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    sweep_listed_backends()
-        self.assertIn('multiple paths', str(ctx.exception))
-        self.assertIsNone(MixinOnlyBackend().get_catalog())
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
+            sweep_listed_backends()
+        self.assertEqual(
+            configured_catalog(HOST).path,
+            apps.get_app_config('trusts_kernel_host').catalog_path(),
+        )
 
-    def test_unconfigured_path_fails_loud(self):
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            configured_catalog(MIXIN)
-        self.assertIn(MIXIN, str(ctx.exception))
-        self.assertIsNone(MixinOnlyBackend().get_catalog())
+    def test_backend_outside_a_mixin_app_fails_loud(self):
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, OUTSIDE)):
+            messages = [
+                message for message in run_checks()
+                if getattr(message, 'id', None) == 'trusts.E012'
+            ]
+        self.assertEqual(
+            [message.obj.label for message in messages],
+            ['gh_permissions'],
+        )
 
-    def test_zero_and_multiple_alias_access_fail(self):
-        self.assertEqual(configured_catalog(HOST).path, HOST)
-        handle_doc = configured_catalog(DOCUMENT)
-        self.assertEqual(handle_doc.path, DOCUMENT)
+    def test_document_and_host_catalogs_use_config_paths(self):
+        from django.apps import apps
         from tests.myapp.backends import DocumentBackend
-        self.assertIs(handle_doc, catalogs[DocumentBackend])
+
+        self.assertEqual(
+            configured_catalog(HOST).path,
+            apps.get_app_config('trusts_kernel_host').catalog_path(),
+        )
+        handle_doc = configured_catalog(DOCUMENT)
+        self.assertEqual(
+            handle_doc.path,
+            apps.get_app_config('myapp').catalog_path(),
+        )
+        self.assertIs(handle_doc, DocumentBackend().catalog)
 
     def test_ready_does_not_replace_store_or_registry(self):
-        live = live_config()
-        first = catalogs[HostTrustModelBackend]
-        live.ready()
-        self.assertIs(catalogs[HostTrustModelBackend], first)
+        from django.apps import apps
 
-    def test_compiler_is_class_owned_not_instance_state(self):
-        first = HostTrustModelBackend()
-        second = HostTrustModelBackend()
-        self.assertIs(first.query_compiler, HostTrustModelBackend.query_compiler)
-        self.assertIs(second.query_compiler, first.query_compiler)
-        self.assertIs(MixinOnlyBackend.query_compiler, TrustModelBackendMixin.query_compiler)
-        self.assertIsInstance(TrustModelBackendMixin.query_compiler, PlanQueryCompiler)
-        self.assertIs(compiler_for_class(HostTrustModelBackend), HostTrustModelBackend.query_compiler)
-        self.assertIs(compiler_for_class(MixinOnlyBackend), MixinOnlyBackend.query_compiler)
+        live = apps.get_app_config('trusts_kernel_host')
+        first = HostTrustModelBackend().catalog
+        live.ready()
+        rebuilt = HostTrustModelBackend().catalog
+        self.assertEqual(rebuilt.records, first.records)
+        self.assertEqual(rebuilt.path, first.path)
+        self.assertIsNot(rebuilt, first)
+
+    def test_live_catalog_stores_an_explicit_plan_compiler(self):
+        catalog = HostTrustModelBackend().catalog
+        self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
+        self.assertFalse(catalog.compiler.historical_fallback)
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes', attr_name='isolated_apps')
 class IsolatedAppsPathStoreTest(SimpleTestCase):
 
     def test_isolate_apps_without_owner_does_not_donate(self):
-        before = catalogs[HostTrustModelBackend].records
+        before = HostTrustModelBackend().catalog.records
         contributor = TestsConfig('tests', tests_module)
         contributor.apps = self.isolated_apps
         contributor.ready()
         self.assertIsNone(getattr(contributor, '_trusts_tup_category_registry_id', None))
-        self.assertEqual(catalogs[HostTrustModelBackend].records, before)
+        self.assertEqual(HostTrustModelBackend().catalog.records, before)
 
 class ContributionPathTest(KernelHostRequiredMixin, SimpleTestCase):
 
@@ -134,13 +140,19 @@ class ContributionPathTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertFalse(configured_catalog(HOST).plan_for(Document).records)
 
     def test_omitted_ambiguous_path_fails_before_writing(self):
-        with self.assertRaises(TrustsConfigurationError):
-            configured_catalog(MIXIN)
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, OUTSIDE)):
+            messages = run_checks()
+        self.assertTrue(any(
+            getattr(message, 'id', None) == 'trusts.E012'
+            for message in messages
+        ))
 
     def test_no_mixin_fan_out(self):
-        live = live_config()
-        with self.assertRaises(TrustsConfigurationError):
-            configured_catalog(MIXIN)
+        from django.apps import apps
+
+        live = apps.get_app_config('trusts_kernel_host')
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, OUTSIDE)):
+            run_checks()
         self.assertFalse(hasattr(live, 'registries'))
         self.assertFalse(hasattr(live, 'trusts_backend_paths'))
 
@@ -154,51 +166,15 @@ class _LiveRegistryRestoreMixin(object):
 
 class CompilerProtocolTest(KernelHostRequiredMixin, _LiveRegistryRestoreMixin, SimpleTestCase):
 
-    def test_malformed_compiler_is_e004(self):
-        with override_settings(AUTHENTICATION_BACKENDS=(MISSING,)):
-            messages = check_query_compilers(None)
-            errors = [m for m in messages if m.id == CHECK_ID_MISSING_COMPILER]
-            self.assertEqual(len(errors), 1)
-            self.assertIsInstance(errors[0], Error)
-            self.assertIn('not query-capable', errors[0].msg)
-        with override_settings(AUTHENTICATION_BACKENDS=(MALFORMED,)):
-            messages = check_query_compilers(None)
-            errors = [m for m in messages if m.id == CHECK_ID_MISSING_COMPILER]
-            self.assertEqual(len(errors), 1)
-
-    def test_valid_compilers_emit_no_e004(self):
-        messages = [m for m in run_checks() if m.id == CHECK_ID_MISSING_COMPILER]
-        self.assertEqual(messages, [])
-
-    def test_silenced_e004_still_fails_at_runtime(self):
-        with override_settings(AUTHENTICATION_BACKENDS=(MISSING,), SILENCED_SYSTEM_CHECKS=['trusts.E004', 'fields.W342']):
-            messages = check_query_compilers(None)
-            self.assertTrue(messages)
-            self.assertTrue(all((m.is_silenced() for m in messages)))
-            with self.assertRaises(TrustsCompilerError):
-                compiler_for_class(MissingCompilerBackend)
-
-    def test_broken_second_path_is_not_omitted(self):
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST, MISSING)):
-            errors = [m for m in check_query_compilers(None) if m.id == CHECK_ID_MISSING_COMPILER]
-            self.assertEqual(len(errors), 1)
-
     def test_raising_compiler_propagates(self):
         User = get_user_model()
-        registry = RegistryFactory(compiler=RaisingCompilerBackend.query_compiler)
+        registry = compiler(query_compiler=RaisingCompilerBackend.query_compiler)
         registry.path = RAISING
         handle = registry
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
-            granted(handle.build_registry(), Document, User(), Permission(), kind='complete')
+            granted(built_catalog(handle), Document, User(), Permission(), kind='complete')
         self.assertIn('compiler exploded', str(ctx.exception))
-
-class CompilerCheckQueryCountTest(TestCase):
-
-    def test_e004_check_issues_zero_sql(self):
-        with override_settings(AUTHENTICATION_BACKENDS=(MISSING, HOST)):
-            with self.assertNumQueries(0):
-                check_query_compilers(None)
 
 class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
 
@@ -233,14 +209,14 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
         self.assertFalse(Document.objects.authorized(self.bob, self.change).exists())
 
     def test_aggregate_ors_both_complete_proofs_in_one_statement(self):
-        isolated = RegistryFactory()
+        isolated = compiler()
         _contribute_document(isolated)
         isolated.path = MIXIN
         extra = isolated
         qs = Document.objects.all()
         parts = [
             granted(registry, qs, self.alice, self.change, kind='complete')
-            for registry in (self.host, self.document, extra.build_registry())
+            for registry in (self.host, self.document, built_catalog(extra))
         ]
         pred = None
         for part in parts:
@@ -270,14 +246,13 @@ class CompilerIsolationTest(KernelHostRequiredMixin, TestCase):
 
     def test_raising_compiler_is_not_caught_by_aggregate(self):
         User = get_user_model()
-        live = live_config()
-        registry = RegistryFactory(compiler=RaisingCompilerBackend.query_compiler)
+        registry = compiler(query_compiler=RaisingCompilerBackend.query_compiler)
         registry.path = RAISING
         handle = registry
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
             granted(configured_catalog(HOST), Document, User(), Permission(), kind='complete')
-            granted(handle.build_registry(), Document, User(), Permission(), kind='complete')
+            granted(built_catalog(handle), Document, User(), Permission(), kind='complete')
         self.assertIn('compiler exploded', str(ctx.exception))
 
     def test_mixin_only_alone_does_not_inherit_document_plan(self):

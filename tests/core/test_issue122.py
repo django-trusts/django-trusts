@@ -27,7 +27,6 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertEqual([needle for needle in forbidden if needle in rst], [])
         self.assertIn('Django permission system for object-level', rst)
         self.assertIn('permission is a persisted relationship', rst)
-        self.assertIn('TrustsImplementationConfig', rst)
         self.assertIn('TrustModelBackendMixin', rst)
         self.assertIn('class DocumentPermission(models.Model)', rst)
         self.assertIn('Document.objects.permitted(', rst)

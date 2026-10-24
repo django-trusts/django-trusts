@@ -12,34 +12,30 @@ from tests.support import (
     isolate_live_registry,
     live_config,
     override_apps_ready,
+    compiler,
 )
 from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.models import Document, DocumentGrant
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 
 
 class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
     def setUp(self):
         super().setUp()
         from tests.myapp.backends import DocumentBackend
-        from trusts.backends import catalogs
+        from tests.support import config_for_class
 
         self.contributor = apps.get_app_config('myapp')
         self.assertIsInstance(self.contributor, DocumentConfig)
-        self._document_cls = DocumentBackend
-        self.saved_catalog = catalogs.get(DocumentBackend)
+        self._document_config = config_for_class(DocumentBackend)
+        self.saved_catalog = self._document_config.catalog
         self.live_catalog = configured_catalog(DOCUMENT_BACKEND)
 
     def tearDown(self):
-        from trusts.backends import catalogs
-
-        if self.saved_catalog is None:
-            catalogs.pop(self._document_cls, None)
-        else:
-            catalogs[self._document_cls] = self.saved_catalog
+        self._document_config.catalog = self.saved_catalog
 
     def test_reenter_same_contributor_ready_is_noop(self):
         before = self.live_catalog.records
@@ -54,18 +50,18 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
     def test_frozen_recorder_is_not_rewritten(self):
         from tests.myapp.backends import DocumentBackend
 
-        isolated = RegistryFactory()
+        isolated = compiler()
         isolate_live_registry(self.contributor, isolated, DOCUMENT_BACKEND)
-        recorder = DocumentBackend().get_registry()
+        recorder = DocumentBackend().recorder
         self.contributor.ready()
         self.assertTrue(recorder.frozen)
         self.assertEqual(isolated.records, ())
         self.assertTrue(self.live_catalog.plan_for(Document).records)
 
     def test_conflicting_contribution_does_not_reach_the_frozen_recorder(self):
-        isolated = RegistryFactory()
+        isolated = compiler()
         j = Ref(DocumentGrant)
-        isolated.register(
+        isolated.register_relation(
             content=j.document,
             user=j.permission,
             permission=j.user,

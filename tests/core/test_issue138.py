@@ -1,4 +1,4 @@
-from tests.support import listed_relationship, configured_catalog, replay_recorder
+from tests.support import listed_relationship, configured_catalog, replay_recorder, compiler
 """#138: authorization_required Trusts-only pk guard."""
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -17,7 +17,7 @@ from tests.myapp.models import Document, DocumentGrant
 from tests.myapp.settings import AUTHENTICATION_BACKENDS, INSTALLED_APPS
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.decorators import _declared_authorization_guards, authorization_required
 
 
@@ -187,10 +187,11 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
         @authorization_required(DocumentGrant, 'myapp.change_documentgrant')
         def _unsupported(request, pk):
             return 'no'
+        granted = DocumentGrant.objects.order_by('pk').first()
         for user in (self.alice, self.superuser):
-            with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError):
-                    _unsupported(_request(user), pk=1)
+            with self.assertNumQueries(1):
+                with self.assertRaises(PermissionDenied):
+                    _unsupported(_request(user), pk=granted.pk)
 
     def test_system_check_reports_unknown_guard_condition(self):
         entry = (Document, 'myapp.change_document', ('missing_check_138',))
@@ -248,16 +249,19 @@ def _document_backend():
 
     from tests.myapp.backends import DocumentBackend
 
-    factory = RegistryFactory(
+    from tests.support import config_for_class
+    from trusts.compile.factory import Compiler
+
+    factory = compiler(
         path=DOCUMENT_BACKEND,
-        family=DocumentBackend.family,
-        compiler=DocumentBackend.query_compiler,
+        family=config_for_class(DocumentBackend).family,
+        query_compiler=Compiler.default_query_compiler(),
         user_model=get_user_model(),
     )
     return replay_recorder(factory, DocumentBackend)
 
 def _extra_handle(path='tests.core.issue138-extra'):
-    return RegistryFactory(path=path)
+    return compiler(path=path)
 
 def _extra_grant_models():
     User = get_user_model()
@@ -324,52 +328,57 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
     def _e008_messages(self, *needles):
         return [message for message in run_checks() if getattr(message, 'id', None) == 'trusts.E008' and all((needle in message.msg for needle in needles))]
 
-    def _assert_both_orders(self, primary, extra, view, pk, expect_ok):
-        for handles in ((primary, extra), (extra, primary)):
-            with listed_relationship(handles):
-                if expect_ok:
-                    self.assertEqual(view(_request(self.alice), pk=pk), 'ok')
-                else:
-                    with self.assertRaises(PermissionDenied):
-                        view(_request(self.alice), pk=pk)
-
     def test_dual_backend_condition_order_does_not_broaden(self):
         primary = _document_backend()
         extra = _extra_handle()
-        extra.register_public(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
-        extra.register_permission_condition(Document, 'non_confidential', lambda u, p, o: o.title != 'nope')
+        extra.register(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
+        extra.add_named_filter(Document, 'non_confidential', lambda u, p, o: o.title != 'nope')
         with _tables(self.ExtraDocumentGrant):
-            self._assert_both_orders(primary, extra, _edit_non_confidential, self.secret.pk, False)
-            self._assert_both_orders(primary, extra, _edit_non_confidential, self.open_doc.pk, True)
+            with listed_relationship((primary,)):
+                with self.assertRaises(PermissionDenied):
+                    _edit_non_confidential(_request(self.alice), pk=self.secret.pk)
+                self.assertEqual(_edit_non_confidential(_request(self.alice), pk=self.open_doc.pk), 'ok')
+            with listed_relationship((extra,)):
+                with self.assertRaises(PermissionDenied):
+                    _edit_non_confidential(_request(self.alice), pk=self.open_doc.pk)
+                with self.assertRaises(PermissionDenied):
+                    _edit_non_confidential(_request(self.alice), pk=self.secret.pk)
 
     def test_incomplete_second_backend_grant_is_omitted(self):
         primary = _document_backend()
         extra = _extra_handle()
-        extra.register_public(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
+        extra.register(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
         with _tables(self.ExtraDocumentGrant):
             self.ExtraDocumentGrant.objects.create(document=self.secret, user=self.alice, permission=self.change)
-            self._assert_both_orders(primary, extra, _edit_non_confidential, self.secret.pk, False)
+            with listed_relationship((primary,)):
+                with self.assertRaises(PermissionDenied):
+                    _edit_non_confidential(_request(self.alice), pk=self.secret.pk)
+            with listed_relationship((extra,)):
+                with self.assertRaises(TrustsConfigurationError):
+                    _edit_non_confidential(_request(self.alice), pk=self.secret.pk)
 
     def test_incompatible_permission_terminal_cannot_collide(self):
         primary = _document_backend()
         extra = _extra_handle(path='tests.core.issue138-other-perm')
-        extra.register_public(trust=self.OtherPermissionGrant, user='user', permission='permission', content='document')
+        extra.register(trust=self.OtherPermissionGrant, user='user', permission='permission', content='document')
         with _tables(self.OtherPermission, self.OtherPermissionGrant):
             self.OtherPermission.objects.create(pk=self.change.pk, label='collide')
             self.OtherPermissionGrant.objects.create(document=self.open_doc, user=self.bob, permission_id=self.change.pk)
-            for handles in ((primary, extra), (extra, primary)):
-                with listed_relationship(handles):
-                    with self.assertRaises(PermissionDenied):
-                        _edit(_request(self.bob), pk=self.open_doc.pk)
-                    self.assertEqual(_edit(_request(self.alice), pk=self.open_doc.pk), 'ok')
+            with listed_relationship((primary,)):
+                with self.assertRaises(PermissionDenied):
+                    _edit(_request(self.bob), pk=self.open_doc.pk)
+                self.assertEqual(_edit(_request(self.alice), pk=self.open_doc.pk), 'ok')
+            with listed_relationship((extra,)):
+                with self.assertRaises(PermissionDenied):
+                    _edit(_request(self.bob), pk=self.open_doc.pk)
 
     def test_e008_split_names_across_backends_fail_closed(self):
         handle_a = _extra_handle(path='tests.core.issue138-split-a')
         handle_b = _extra_handle(path='tests.core.issue138-split-b')
         for handle in (handle_a, handle_b):
-            handle.register_public(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
-        handle_a.register_permission_condition(Document, 'split_a_138', lambda u, p, o: o.confidential != True)
-        handle_b.register_permission_condition(Document, 'split_b_138', lambda u, p, o: o.confidential != True)
+            handle.register(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
+        handle_a.add_named_filter(Document, 'split_a_138', lambda u, p, o: o.confidential != True)
+        handle_b.add_named_filter(Document, 'split_b_138', lambda u, p, o: o.confidential != True)
         names = ('split_a_138', 'split_b_138')
         entry = (Document, 'myapp.change_document', names)
         self.addCleanup(self._forget_guard, entry)
@@ -394,8 +403,8 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
     def test_e008_name_only_on_incompatible_permission_terminal(self):
         primary = _document_backend()
         extra = _extra_handle(path='tests.core.issue138-other-e008')
-        extra.register_public(trust=self.OtherPermissionGrant, user='user', permission='permission', content='document')
-        extra.register_permission_condition(Document, 'only_other_138', lambda u, p, o: o.confidential != True)
+        extra.register(trust=self.OtherPermissionGrant, user='user', permission='permission', content='document')
+        extra.add_named_filter(Document, 'only_other_138', lambda u, p, o: o.confidential != True)
         entry = (Document, 'myapp.change_document', ('only_other_138',))
         self.addCleanup(self._forget_guard, entry)
 

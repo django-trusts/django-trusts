@@ -27,7 +27,8 @@ from trusts.plan.conditions import (
     principal_ref,
     validate_expression,
 )
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
+from tests.support import compiler
 
 
 u, p, o = condition_refs()
@@ -121,7 +122,7 @@ class ConditionGrammarTest(SimpleTestCase):
         self.assertIsInstance(ordering, Expr)
         self.assertFalse(is_predicate(ordering))
         with self.assertRaises(TypeError):
-            RegistryFactory().register_permission_condition(
+            compiler().add_named_filter(
                 object, 'range', ordering,
             )
 
@@ -160,16 +161,16 @@ class ConditionGrammarTest(SimpleTestCase):
 
     def test_non_predicate_and_non_callable_rejected_at_register(self):
         u, p, o = condition_refs()
-        registry = RegistryFactory()
+        registry = compiler()
         with self.assertRaises(TypeError):
-            registry.register_permission_condition(object, 'bare', o.owner)
+            registry.add_named_filter(object, 'bare', o.owner)
         with self.assertRaises(TypeError):
-            registry.register_permission_condition(object, 'bad', 'not-a-condition')
+            registry.add_named_filter(object, 'bad', 'not-a-condition')
         with self.assertRaises(TypeError):
-            registry.register_permission_condition(object, 'expr', u == o.owner)
-        self.assertIsNone(registry.get_permission_condition_record(object, 'expr'))
+            registry.add_named_filter(object, 'expr', u == o.owner)
+        self.assertIsNone(registry.conditions.get_permission_condition_record(object, 'expr'))
         with self.assertRaises(PermissionConditionError):
-            registry.register_permission_condition(
+            registry.add_named_filter(
                 object, 'truth', lambda u, p, o: True,
             )
 
@@ -187,7 +188,7 @@ class ConditionGrammarTest(SimpleTestCase):
         with self.assertRaises(PermissionConditionError):
             validate_expression(o.owner != 1, Ticket)
         validate_expression(o.status == 'open', Ticket)
-        validate_expression(u == o.owner, Ticket)
+        validate_expression(u == o.owner, Ticket, get_user_model())
         validate_expression(o.region == None, Ticket)
 
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -199,10 +200,10 @@ class ConditionGrammarTest(SimpleTestCase):
             calls.append((u, p, o))
             return u == o.owner
 
-        registry = RegistryFactory()
-        record = registry.register_permission_condition(Ticket, 'own', owned)
+        registry = compiler()
+        record = registry.add_named_filter(Ticket, 'own', owned)
         self.assertEqual(len(calls), 1)
-        validate_expression(record.expr, Ticket)
+        validate_expression(record.expr, Ticket, get_user_model())
         self.assertEqual(len(calls), 1)
         self.assertEqual(
             record.expr.to_tuple(),

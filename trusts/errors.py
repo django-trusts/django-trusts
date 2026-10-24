@@ -1,5 +1,7 @@
 """Configuration and permission-condition errors."""
 
+from django.core.exceptions import ImproperlyConfigured
+
 
 class TrustsConfigurationError(Exception):
     """Malformed or unsupported registration."""
@@ -7,6 +9,10 @@ class TrustsConfigurationError(Exception):
 
 class TrustsCompilerError(TrustsConfigurationError):
     """Configured Trusts backend is missing or has a malformed query compiler."""
+
+
+class TrustsMixinRequired(ImproperlyConfigured):
+    """The backend's app config does not extend TrustsConfigMixin."""
 
 
 class PermissionConditionError(Exception):

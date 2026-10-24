@@ -6,7 +6,7 @@ import unittest
 def kernel_host_listed():
     from django.conf import settings
 
-    return 'tests.backends.HostTrustModelBackend' in (
+    return 'tests.kernel_host.backends.HostTrustModelBackend' in (
         getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ()
     )
 

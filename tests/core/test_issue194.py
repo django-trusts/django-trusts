@@ -3,43 +3,40 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
+from django.core.checks import run_checks
 from django.core.exceptions import PermissionDenied
 from django.http import HttpRequest
 from django.test import SimpleTestCase, TestCase, override_settings
 import tests as tests_module
-from tests.support import live_config, override_apps_ready, built_catalog, bound_handle, replay_recorder, configured_catalog
+from tests.support import built_catalog, bound_handle, replay_recorder, config_for_class, compiler
 from tests.backends import MixinOnlyBackend
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
-from trusts.apps import TrustsImplementationConfig
-from trusts.backends import catalogs
-from trusts.plan.contents import relationship_family
+from trusts.apps import TrustsConfigMixin, installed_catalogs
+from trusts.backends import TrustModelBackendMixin
 from tests.support import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import QueryCompiler
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
-from trusts.plan.registry import Registry
+from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
 from trusts.plan.aggregates import _compiler_applies
 from trusts.decorators import _declared_authorization_guards, authorization_required
-from trusts.compile.catalogs import Catalog
 HOST = HOST_BACKEND
 DOCUMENT = DOCUMENT_BACKEND
 MIXIN = 'tests.backends.MixinOnlyBackend'
 PERM = 'myapp.change_document'
 
-class FoldFamilyConfig(TrustsImplementationConfig):
+class FoldFamilyConfig(TrustsConfigMixin):
     name = 'tests'
     label = 'trusts_impl_194_fold'
 
-class RecordingRegistry(RegistryFactory):
+class RecordingRegistry(Compiler):
     created = True
 
-class RecordingConfig(TrustsImplementationConfig):
+class RecordingConfig(TrustsConfigMixin):
     name = 'tests'
     label = 'trusts_impl_194_record'
 
@@ -80,12 +77,11 @@ def _request(user):
 class ProtectedFactorySurfaceTest(SimpleTestCase):
 
     def test_default_family_and_factories_are_protected(self):
-        from trusts.backends import TrustModelBackendMixin
-        self.assertEqual(TrustModelBackendMixin.family, 'relationship')
-        self.assertFalse(hasattr(TrustsImplementationConfig, '_authorization_family'))
-        self.assertFalse(hasattr(TrustsImplementationConfig, 'authorization_family'))
-        self.assertFalse(hasattr(TrustsImplementationConfig, '_create_registry'))
-        self.assertFalse(hasattr(TrustsImplementationConfig, '_create_handle'))
+        self.assertEqual(TrustsConfigMixin.family, 'relationship')
+        self.assertFalse(hasattr(TrustsConfigMixin, '_authorization_family'))
+        self.assertFalse(hasattr(TrustsConfigMixin, 'authorization_family'))
+        self.assertFalse(hasattr(TrustsConfigMixin, '_create_registry'))
+        self.assertFalse(hasattr(TrustsConfigMixin, '_create_handle'))
         self.assertTrue(callable(QueryCompiler().applies))
         self.assertTrue(callable(PlanQueryCompiler().applies))
 
@@ -104,15 +100,14 @@ class ProtectedFactorySurfaceTest(SimpleTestCase):
         self.assertFalse(_compiler_applies(compiler, strategy_only))
 
     def test_ready_stores_the_built_registry_on_the_catalog(self):
-        from tests.backends import HostTrustModelBackend
+        from tests.kernel_host.backends import HostTrustModelBackend
         catalog = HostTrustModelBackend().get_catalog()
-        self.assertIs(catalogs[HostTrustModelBackend], catalog)
+        self.assertIs(HostTrustModelBackend().catalog, catalog)
         self.assertIsInstance(catalog.records, tuple)
 
     def test_unowned_factory_defaults_to_relationship_family(self):
-        built = RegistryFactory(path=MIXIN).build_registry()
+        built = built_catalog(compiler(path=MIXIN))
         self.assertEqual(built.family, 'relationship')
-        self.assertEqual(relationship_family((built,)), (built,))
 
 class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
 
@@ -125,26 +120,20 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         self.fold_doc = Document.objects.create(title='fold-194')
         DocumentGrant.objects.create(document=self.rel_doc, user=self.alice, permission=self.change)
         DocumentAltGrant.objects.create(document=self.fold_doc, user=self.alice, permission=self.change)
-        self.rel_handle = catalogs[DocumentBackend]
-        self.fold_registry = RegistryFactory(path=MIXIN, family='ordered_fold')
+        self.rel_handle = DocumentBackend().catalog
+        self.fold_registry = compiler(path=MIXIN, family='ordered_fold')
         self.fold_handle = self.fold_registry
-        self.fold_handle.register_public(trust=DocumentAltGrant, user='user', permission='permission', content='document')
+        self.fold_handle.register(trust=DocumentAltGrant, user='user', permission='permission', content='document')
         self.fold_owner = _bind(FoldFamilyConfig, ready=False)
-        from tests.backends import MixinOnlyBackend
-        self._saved_fold_catalog = catalogs.get(MixinOnlyBackend)
-        built_fold = self.fold_registry.build_registry()
-        catalogs[MixinOnlyBackend] = Catalog(cls=MixinOnlyBackend, path=MIXIN, family='ordered_fold', registry=built_fold)
-        self.fold_handle = built_fold
+        self._fold_config = config_for_class(MixinOnlyBackend)
+        self._saved_fold_catalog = self._fold_config.catalog
+        self.fold_handle = built_catalog(self.fold_registry)
+        self._fold_config.catalog = self.fold_handle
         self.mixin = MixinOnlyBackend()
         self.document_backend = DocumentBackend()
 
     def tearDown(self):
-        from tests.backends import MixinOnlyBackend
-        from trusts.backends import catalogs
-        if self._saved_fold_catalog is None:
-            catalogs.pop(MixinOnlyBackend, None)
-        else:
-            catalogs[MixinOnlyBackend] = self._saved_fold_catalog
+        self._fold_config.catalog = self._saved_fold_catalog
         super().tearDown()
 
     def _family_patches(self):
@@ -154,7 +143,7 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         settings = self._family_patches()
         with settings:
             rel_only = granted(self.rel_handle, Document.objects.all(), self.alice, self.change)
-            fold_only = granted(self.fold_handle.build_registry(), Document.objects.all(), self.alice, self.change)
+            fold_only = granted(self.fold_handle, Document.objects.all(), self.alice, self.change)
             self.assertIsNotNone(rel_only)
             self.assertIsNone(fold_only)
             mixed = rel_only if fold_only is None else rel_only | fold_only
@@ -162,15 +151,14 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
             with self.assertNumQueries(1):
                 self.assertEqual(set(Document.objects.filter(mixed).values_list('pk', flat=True)), {self.rel_doc.pk})
             rel_scopes = filter_by_permitted_content(Document.objects.all(), self.alice, self.change, content=self.rel_doc, registry=self.rel_handle)
-            fold_scopes = filter_by_permitted_content(Document.objects.all(), self.alice, self.change, content=self.fold_doc, registry=self.fold_handle.build_registry())
+            fold_scopes = filter_by_permitted_content(Document.objects.all(), self.alice, self.change, content=self.fold_doc, registry=self.fold_handle)
             self.assertEqual(list(rel_scopes), [])
             self.assertEqual(list(fold_scopes), [])
-            from trusts.query import relationship_catalogs
-            listed = relationship_catalogs()
-            self.assertIn(catalogs[DocumentBackend], listed)
-            self.assertNotIn(catalogs[MixinOnlyBackend], listed)
-            self.assertEqual(catalogs[MixinOnlyBackend].path, MIXIN)
-            self.assertEqual(catalogs[MixinOnlyBackend].family, 'ordered_fold')
+            listed = installed_catalogs()
+            self.assertIn(DocumentBackend().catalog, listed)
+            self.assertIn(self.fold_handle, listed)
+            self.assertEqual(self.fold_handle.path, MIXIN)
+            self.assertEqual(self.fold_handle.family, 'ordered_fold')
             with self.assertNumQueries(1):
                 authorized = set(Document.objects.authorized(self.alice, self.change).values_list('pk', flat=True))
             self.assertEqual(authorized, {self.rel_doc.pk})
@@ -209,14 +197,14 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
         self.backend = DocumentBackend()
 
     def test_inapplicable_compiler_is_zero_sql(self):
+        from django.contrib.auth import get_user_model
         from tests.myapp.apps import DOCUMENT_BACKEND
-        import trusts.plan.standards as standards
 
-        factory = RegistryFactory(
-            compiler=_NeverAppliesCompiler(),
+        factory = compiler(
+            query_compiler=_NeverAppliesCompiler(),
             path=DOCUMENT_BACKEND,
-            family=DocumentBackend.family,
-            user_model=standards.user_model,
+            family=TrustsConfigMixin.family,
+            user_model=get_user_model(),
         )
         replay_recorder(factory, DocumentBackend)
         with bound_handle(self.backend, factory):
@@ -231,21 +219,28 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
 class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
 
     def test_standalone_factory_rebuilds_and_a_published_registry_does_not(self):
-        from tests.backends import HostTrustModelBackend
-        isolated = RegistryFactory()
-        first_build = isolated.build_registry()
-        second_build = isolated.build_registry()
+        from tests.kernel_host.backends import HostTrustModelBackend
+        isolated = compiler()
+        first_build = built_catalog(isolated)
+        second_build = built_catalog(isolated)
         self.assertIsNot(first_build, second_build)
         from tests.myapp.models import DocumentGrant
         from trusts.compile.nodes import Ref
-        fresh = RegistryFactory()
+        fresh = compiler()
         j = Ref(DocumentGrant)
-        fresh.register(content=j.document, user=j.user, permission=j.permission)
+        fresh.register_relation(content=j.document, user=j.user, permission=j.permission)
         self.assertEqual(built_catalog(fresh).records, fresh.records)
-        published = catalogs[HostTrustModelBackend]
+        published = HostTrustModelBackend().catalog
         self.assertIsInstance(published.records, tuple)
 
     def test_unconfigured_path_still_fails_loud(self):
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            configured_catalog(MIXIN)
-        self.assertIn(MIXIN, str(ctx.exception))
+        outside = 'tests.gh_permissions.backends.OutsideBackend'
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST_BACKEND, outside)):
+            messages = [
+                message for message in run_checks()
+                if getattr(message, 'id', None) == 'trusts.E012'
+            ]
+        self.assertEqual(
+            [message.msg for message in messages],
+            ['App gh_permissions must extend TrustsConfigMixin.'],
+        )

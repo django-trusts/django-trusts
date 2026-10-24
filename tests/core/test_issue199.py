@@ -1,8 +1,8 @@
 from tests.support import configured_catalog, unbound_named_filters
 """#199 / #189 B1: backend principal, object, and ownership fail-closed.
 
-Public ``TrustModelBackendMixin`` methods, ``set_filter_lookup``,
-and ``TrustsImplementationConfig.ready()`` only. Does not invent a
+Public ``TrustModelBackendMixin`` methods and
+``TrustsConfigMixin.ready()`` only. Does not invent a
 ``Permission``-instance ``has_perm`` contract, assert
 ``_trust_perm_cache`` shape, or patch private match/compiler helpers.
 """
@@ -15,20 +15,21 @@ from django.contrib.contenttypes.models import ContentType
 from django.test import SimpleTestCase, TestCase, override_settings
 
 import tests as tests_module
-from tests.backends import HostTrustModelBackend, MixinOnlyBackend
+from tests.kernel_host.backends import HostTrustModelBackend
+from tests.backends import MixinOnlyBackend
 from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.apps import TrustsImplementationConfig
+from trusts.apps import TrustsConfigMixin
 from trusts.errors import TrustsConfigurationError
 
 
 PERM = 'myapp.change_document'
 FILTERED = 'myapp.change_document:non_confidential'
 MODEL_BACKEND = 'django.contrib.auth.backends.ModelBackend'
-HOST = 'tests.backends.HostTrustModelBackend'
+HOST = 'tests.kernel_host.backends.HostTrustModelBackend'
 
 
 class _UnauthenticatedPrincipal(object):
@@ -39,7 +40,7 @@ class _UnauthenticatedPrincipal(object):
     is_active = True
 
 
-class NonMixinOwnerConfig(TrustsImplementationConfig):
+class NonMixinOwnerConfig(TrustsConfigMixin):
     name = 'tests'
     label = 'trusts_impl_199_nonmixin'
 
@@ -113,10 +114,13 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
         )
 
     def test_unowned_backend_rejects_identity_before_registry(self):
+        from django.apps import apps
+
         backend = MixinOnlyBackend()
         anonymous = AnonymousUser()
         unauthenticated = _UnauthenticatedPrincipal()
-        self.assertIsNone(backend.get_catalog())
+        self.assertIs(backend.get_catalog(), apps.get_app_config('trusts_tests').get_catalog())
+        self.assertFalse(backend.get_catalog().plan_for(self.document).records)
         with self.assertNumQueries(0):
                 self.assertFalse(
                     backend.has_perm(None, PERM, self.document),
@@ -172,25 +176,24 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
                 self.document_backend.has_perm(self.alice, PERM, mapping),
             )
 
-    def test_owned_unbound_named_condition_raises_on_instance_at_zero_sql(self):
+    def test_missing_named_condition_denies_on_instance_at_zero_sql(self):
         from tests.myapp.backends import DocumentBackend
 
         qs = Document.objects.filter(pk=self.document.pk)
         with unbound_named_filters(DocumentBackend):
+            document_backend = DocumentBackend()
             with self.assertNumQueries(0):
-                with self.assertRaises(AttributeError) as ctx:
-                    self.document_backend.has_perm(
+                self.assertFalse(
+                    document_backend.has_perm(
                         self.alice, FILTERED, self.document,
-                    )
-                self.assertIn('not associate', str(ctx.exception))
-                self.assertIn('non_confidential', str(ctx.exception))
+                    ),
+                )
                 self.assertFalse(
                     self.host.has_perm(self.alice, FILTERED, self.document),
                 )
-                with self.assertRaises(AttributeError):
-                    self.alice.has_perm(FILTERED, self.document)
+                self.assertFalse(self.alice.has_perm(FILTERED, self.document))
                 self.assertFalse(
-                    self.document_backend.has_perm(self.alice, FILTERED, qs),
+                    document_backend.has_perm(self.alice, FILTERED, qs),
                 )
 
         with self.assertNumQueries(1):
@@ -217,17 +220,19 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
 
 class ImplementationOwnershipReadyTest(TestCase):
     def test_non_mixin_path_is_skipped_at_ready_with_zero_sql(self):
-        from tests.backends import HostTrustModelBackend
-        from trusts.backends import catalogs
+        from tests.kernel_host.backends import HostTrustModelBackend
+        from trusts.apps import installed_catalogs
 
         config = _bind(NonMixinOwnerConfig, ready=False)
-        before = catalogs[HostTrustModelBackend]
+        before = HostTrustModelBackend().catalog
         self.assertFalse(hasattr(config, 'registries'))
         with override_settings(AUTHENTICATION_BACKENDS=(MODEL_BACKEND, HOST)):
             with self.assertNumQueries(0):
                 config.ready()
-        self.assertIs(catalogs[HostTrustModelBackend], before)
-        self.assertNotIn(MODEL_BACKEND, [catalog.path for catalog in catalogs.values()])
+        self.assertIs(HostTrustModelBackend().catalog, before)
+        paths = [catalog.path for catalog in installed_catalogs()]
+        paths.append(config.catalog.path)
+        self.assertNotIn(MODEL_BACKEND, paths)
         self.assertFalse(hasattr(config, 'registries'))
         self.assertFalse(hasattr(config, 'trusts_backend_paths'))
 

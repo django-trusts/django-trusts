@@ -1,36 +1,34 @@
-from django.apps import AppConfig
+import trusts.apps as trusts_apps
 
 DOCUMENT_BACKEND = 'tests.myapp.backends.DocumentBackend'
 
 
-class DocumentConfig(AppConfig):
+class DocumentConfig(trusts_apps.TrustsConfigMixin):
     name = 'tests.myapp'
     label = 'myapp'
     default = False
     default_auto_field = 'django.db.models.AutoField'
 
     def ready(self):
-        from tests.myapp.backends import DocumentBackend
+        # Models import after the app registry has started populate.
+        # Phase 1 loads this module before models, so the import stays
+        # in ready(). Re-entry finds the recorder frozen and stops
+        # before register.
+        if self.recorder.frozen:
+            return
         from tests.myapp.models import (
             Document,
             DocumentDelegation,
             DocumentGrant,
         )
 
-        target = DocumentBackend().get_registry()
-        register = target.register
-        add_filter = target.add_named_filter
-        if target.frozen:
-            # set_installed_apps() builds a new config against a recorder
-            # the sweep already froze.
-            return
-        register(
+        self.recorder.register(
             trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        register(
+        self.recorder.register(
             trust=DocumentDelegation,
             delegate='delegate',
             sponsor='sponsor',
@@ -39,8 +37,9 @@ class DocumentConfig(AppConfig):
                 relationship.allowed_permissions.contains(permission)
             ),
         )
-        add_filter(
+        self.recorder.add_named_filter(
             Document,
             'non_confidential',
             lambda u, p, o: o.confidential != True,
         )
+        super().ready()

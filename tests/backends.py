@@ -3,18 +3,11 @@
 from django.contrib.auth.backends import ModelBackend
 
 from trusts.backends import TrustModelBackendMixin
+from trusts.plan.relations import PlanQueryCompiler
 
 
 class MixinOnlyBackend(TrustModelBackendMixin, ModelBackend):
     """Listed mixin-only path: plan compiler, no package Trust-as-content."""
-
-
-class HostTrustModelBackend(TrustModelBackendMixin, ModelBackend):
-    """Kernel-only host backend. Pair historical SQL lives on Zero."""
-
-
-# Same class under a second import path (alias-ambiguity tests).
-AliasedTrustModelBackend = HostTrustModelBackend
 
 
 class MissingCompilerBackend(TrustModelBackendMixin, ModelBackend):
@@ -25,7 +18,7 @@ class MalformedCompilerBackend(TrustModelBackendMixin, ModelBackend):
     query_compiler = object()
 
 
-class _RaisingQueryCompiler(object):
+class _RaisingQueryCompiler(PlanQueryCompiler):
     def complete_exists(self, plan, candidates, user, permission):
         raise RuntimeError('compiler exploded')
 

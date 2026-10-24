@@ -23,37 +23,25 @@ from trusts.backends import TrustModelBackendMixin
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
-from trusts.query import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
+from trusts.models import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import (
     render_configured_policy,
     listed_relationship,
     built_catalog,
     install_class_handle,
+    compiler,
 )
-from trusts.compile.catalogs import Catalog
-
-
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
     """Settings-listed probe. The test installs a registry for one block."""
 
-def _seal_factory(backend_cls, factory):
-    from trusts.backends import catalogs
-    built = factory.build_registry()
-    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built)
-
 @contextmanager
 def _listed(handle):
-    from trusts.backends import catalogs
-    install_class_handle(_ListedBackend, handle)
-    _seal_factory(_ListedBackend, handle)
-    with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue263._ListedBackend',)):
-        try:
+    from tests.support import published_class_catalog
+    with published_class_catalog(_ListedBackend, handle):
+        with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue263._ListedBackend',)):
             yield
-        finally:
-            install_class_handle(_ListedBackend, None)
-            catalogs.pop(_ListedBackend, None)
 
 @contextmanager
 def _tables(*model_classes):
@@ -81,7 +69,7 @@ def _code(permission):
 
 def _handle(registry=None, path='tests.core.issue263'):
     if registry is None:
-        registry = RegistryFactory()
+        registry = compiler()
     registry.path = path
     return registry
 
@@ -164,14 +152,14 @@ class PermissionCollectionRegistrationTest(TestCase):
         Access = models_['TeamRepositoryAccess']
         Repository = models_['Repository']
         User = get_user_model()
-        registry = RegistryFactory()
+        registry = compiler()
         team = Ref(Team)
         access = Ref(Access)
         with self.assertNumQueries(0):
-            direct = registry.register(content=team.organization.repositories, user=team.members, permission=team.permissions)
-            prefixed = registry.register(content=access.repository, user=access.team.members, permission=access.team.permissions)
-            strings = _handle().register_public(trust=Team, user='members', permission='permissions', content='organization__repositories')
-            calls = _handle(path='tests.core.issue263-call').register_public(trust=Access, user=lambda row: row.team.members, permission=lambda row: row.team.permissions, content=lambda row: row.repository)
+            direct = registry.register_relation(content=team.organization.repositories, user=team.members, permission=team.permissions)
+            prefixed = registry.register_relation(content=access.repository, user=access.team.members, permission=access.team.permissions)
+            strings = _handle().register(trust=Team, user='members', permission='permissions', content='organization__repositories')
+            calls = _handle(path='tests.core.issue263-call').register(trust=Access, user=lambda row: row.team.members, permission=lambda row: row.team.permissions, content=lambda row: row.repository)
         self.assertFalse(direct.via_group)
         self.assertEqual(direct.group_path, ())
         self.assertIs(direct.permission_model, Permission)
@@ -206,7 +194,7 @@ class PermissionCollectionRegistrationTest(TestCase):
                 app_label = 'trusts_tests'
         link = Ref(DeskLink)
         with self.assertNumQueries(0):
-            two_hops = RegistryFactory().register(content=link.repository, user=link.desk.team.members, permission=link.desk.team.permissions)
+            two_hops = compiler().register_relation(content=link.repository, user=link.desk.team.members, permission=link.desk.team.permissions)
         self.assertEqual(two_hops.permission_path, ('desk', 'team', 'permissions'))
         self.assertEqual(two_hops.permission_field, 'desk__team__permissions')
         self.assertEqual(two_hops.user_path, ('desk', 'team', 'members'))
@@ -219,8 +207,8 @@ class PermissionCollectionRegistrationTest(TestCase):
         direct_ref = Ref(DirectGrant)
         group_ref = Ref(GroupGrant)
         with self.assertNumQueries(0):
-            direct = RegistryFactory().register(content=direct_ref.repository, user=direct_ref.user, permission=direct_ref.permission)
-            grouped = RegistryFactory().register(content=group_ref.repository, user=group_ref.group.user, group=group_ref.group)
+            direct = compiler().register_relation(content=direct_ref.repository, user=direct_ref.user, permission=direct_ref.permission)
+            grouped = compiler().register_relation(content=group_ref.repository, user=group_ref.group.user, group=group_ref.group)
         self.assertFalse(direct.via_group)
         self.assertEqual(direct.permission_path, ('permission',))
         self.assertEqual(direct.permission_field, 'permission')
@@ -239,10 +227,10 @@ class PermissionCollectionRegistrationTest(TestCase):
         Team = models_['Team']
         Access = models_['TeamRepositoryAccess']
         Repository = models_['Repository']
-        kept = RegistryFactory()
+        kept = compiler()
         team = Ref(Team)
         with self.assertNumQueries(0):
-            existing = kept.register(content=team.organization.repositories, user=team.members, permission=team.permissions)
+            existing = kept.register_relation(content=team.organization.repositories, user=team.members, permission=team.permissions)
 
         class Bundle(models.Model):
             permissions = models.ManyToManyField(Permission, related_name='+', blank=True)
@@ -300,27 +288,27 @@ class PermissionCollectionRegistrationTest(TestCase):
         grant = Ref(models_['GroupGrant'])
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'intermediate multi-valued'):
-                kept.register(content=holder.repository, user=holder.user, permission=holder.bundles.permissions)
+                kept.register_relation(content=holder.repository, user=holder.user, permission=holder.bundles.permissions)
             with self.assertRaisesRegex(TrustsConfigurationError, 'intermediate multi-valued'):
-                kept.register(content=holder.repository, user=holder.user, permission=holder.permissions.content_type)
+                kept.register_relation(content=holder.repository, user=holder.user, permission=holder.permissions.content_type)
             with self.assertRaisesRegex(TrustsConfigurationError, 'not auth\\.Permission'):
-                kept.register(content=tagged.repository, user=tagged.user, permission=tagged.tags)
+                kept.register_relation(content=tagged.repository, user=tagged.user, permission=tagged.tags)
             with self.assertRaisesRegex(TrustsConfigurationError, 'reverse'):
-                kept.register(content=grant.repository, user=grant.group.user, permission=grant.group.user)
+                kept.register_relation(content=grant.repository, user=grant.group.user, permission=grant.group.user)
             with self.assertRaisesRegex(TrustsConfigurationError, 'resolved comparison field'):
-                kept.register(content=crew.repository, user=crew.user, permission=crew.slips)
+                kept.register_relation(content=crew.repository, user=crew.user, permission=crew.slips)
             with self.assertRaisesRegex(TrustsConfigurationError, 'direct single-valued'):
-                kept.register(content=access.repository, user=access.team.members, permission=access.team.organization)
+                kept.register_relation(content=access.repository, user=access.team.members, permission=access.team.organization)
         self.assertEqual(kept.records, (existing,))
 
     def test_duplicate_collection_registration_does_not_mutate(self):
         Team = _collection_models()['Team']
-        registry = RegistryFactory()
+        registry = compiler()
         team = Ref(Team)
         with self.assertNumQueries(0):
-            first = registry.register(content=team.organization.repositories, user=team.members, permission=team.permissions)
+            first = registry.register_relation(content=team.organization.repositories, user=team.members, permission=team.permissions)
             with self.assertRaisesRegex(TrustsConfigurationError, 'Duplicate'):
-                registry.register(content=team.organization.repositories, user=team.members, permission=team.permissions)
+                registry.register_relation(content=team.organization.repositories, user=team.members, permission=team.permissions)
         self.assertEqual(registry.records, (first,))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -373,13 +361,13 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         self._link(self.removers, self.delete, 'bob')
         self.access_spec = self.Access.objects.create(team=self.writers, repository=self.spec)
         self.Access.objects.create(team=self.writers, repository=self.spec)
-        self.org_handle = _handle(RegistryFactory(), path='tests.core.issue263-org')
-        self.org_handle.register_public(trust=self.Team, user='members', permission='permissions', content='organization__repositories')
-        self.access_handle = _handle(RegistryFactory(), path='tests.core.issue263-access')
-        self.access_handle.register_public(trust=self.Access, user='team__members', permission='team__permissions', content='repository')
-        self.classic = _handle(RegistryFactory(), path='tests.core.issue263-classic')
-        self.classic.register_public(trust=self.DirectGrant, user='user', permission='permission', content='repository')
-        self.classic.register_public(trust=self.GroupGrant, user='group__user', group='group', content='repository')
+        self.org_handle = _handle(compiler(), path='tests.core.issue263-org')
+        self.org_handle.register(trust=self.Team, user='members', permission='permissions', content='organization__repositories')
+        self.access_handle = _handle(compiler(), path='tests.core.issue263-access')
+        self.access_handle.register(trust=self.Access, user='team__members', permission='team__permissions', content='repository')
+        self.classic = _handle(compiler(), path='tests.core.issue263-classic')
+        self.classic.register(trust=self.DirectGrant, user='user', permission='permission', content='repository')
+        self.classic.register(trust=self.GroupGrant, user='group__user', group='group', content='repository')
         self.DirectGrant.objects.create(user=self.alice, repository=self.secret, permission=self.read)
         self.editors = Group.objects.create(name='editors-263')
         self.editors.permissions.add(self.add)

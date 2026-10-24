@@ -1,6 +1,5 @@
 """Path and model identity from Django ``_meta``. No registry and no ``Q``."""
 
-from django.apps import apps as django_apps
 from django.db.models import Model
 from django.db.models.base import ModelBase
 from django.db.models.query import QuerySet
@@ -13,7 +12,6 @@ __all__ = [
     'concrete_model',
     'content_model',
     'require_instance',
-    'materialize_related_model',
     'resolved_hop',
 ]
 
@@ -56,41 +54,12 @@ def require_instance(value, role):
     return value
 
 
-def materialize_related_model(field):
-    """Resolve a still-string ``remote_field.model`` through the app registry.
-
-    Isolated ``ForeignKey(settings.AUTH_USER_MODEL)`` fields keep a string
-    until Django's lazy related-class hook runs. Path information needs the
-    model class. ``apps.get_model`` is metadata only (zero SQL).
-    """
-    remote = getattr(field, 'remote_field', None)
-    if remote is None:
-        return
-    model = getattr(remote, 'model', None)
-    if isinstance(model, ModelBase):
-        return
-    related = getattr(field, 'related_model', None)
-    if isinstance(related, str) or related is None:
-        label = related if isinstance(related, str) else model
-        if isinstance(label, str):
-            try:
-                related = django_apps.get_model(label)
-            except (LookupError, ValueError):
-                return
-    if isinstance(related, ModelBase):
-        try:
-            remote.model = related
-        except (AttributeError, TypeError):
-            return
-
-
 def resolved_hop(field, role, path):
     """Resolve one hop from Django path information.
 
     Requires exactly one ``PathInfo`` and exactly one target field.
     Terminal model and outer comparison field come from that metadata.
     """
-    materialize_related_model(field)
     getter = getattr(field, 'get_path_info', None)
     if not callable(getter):
         raise TrustsConfigurationError(

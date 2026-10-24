@@ -1,5 +1,5 @@
 """Django system checks for permission conditions, missing declarations,
-query compilers, and Along renderer support.
+and Along renderer support.
 
 Model-aware semantic validation (field names, traversal, multi-valued
 relations, operand types) is reported as ``CheckMessage`` objects with
@@ -18,33 +18,38 @@ diagnostics live in ``django-trusts-ordered-fold`` as
 __all__ = []
 
 from django.apps import apps as django_apps
+from django.conf import settings
 from django.core import checks as django_checks
+from django.core.exceptions import ImproperlyConfigured
+from django.utils.module_loading import import_string
+from django.db import connections
 
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
-from trusts.backends import TrustModelBackendMixin, configured_catalogs
-from trusts.compile.catalogs import relationship_catalogs
+from trusts.apps import TrustsConfigMixin
+from trusts.backends import TrustModelBackendMixin
+from trusts.compile.factory import probe_along_capabilities
 from trusts.decorators import _declared_authorization_guards
-from trusts.errors import PermissionConditionError, TrustsCompilerError
+from trusts.errors import (
+    PermissionConditionError,
+    TrustsConfigurationError,
+    TrustsMixinRequired,
+)
 from trusts.plan.conditions import (
     obsolete_legacy_callback_setting_enabled,
     validate_expression,
 )
-from django.conf import settings
-from django.utils.module_loading import import_string
-from trusts.plan.aggregates import compiler_for_class
-from django.db import connections
-from django.db.utils import OperationalError
-from trusts.compile.factory import probe_along_capabilities
 from trusts.plan.walk import along_connection_supported
 
 
 CHECK_ID_INVALID_EXPR = 'trusts.E001'
 CHECK_ID_MISSING_DECLARATION = 'trusts.E003'
-CHECK_ID_MISSING_COMPILER = 'trusts.E004'
 CHECK_ID_ALONG_RENDERER = 'trusts.E005'
 CHECK_ID_OBSOLETE_CALLBACK_SETTING = 'trusts.E007'
 CHECK_ID_AUTHORIZATION_REQUIRED = 'trusts.E008'
+CHECK_ID_UNLISTED_CATALOG = 'trusts.E010'
+CHECK_ID_UNBUILDABLE_BACKEND = 'trusts.E011'
+CHECK_ID_MIXIN_REQUIRED = 'trusts.E012'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
     'Silencing this check ID suppresses only the early diagnostic. '
@@ -89,9 +94,9 @@ def _model_label(model):
     return repr(model)
 
 
-def _messages_for_expr(model, cond_code, expr):
+def _messages_for_expr(model, cond_code, expr, user_model=None):
     try:
-        validate_expression(expr, model)
+        validate_expression(expr, model, user_model)
     except PermissionConditionError as exc:
         return [django_checks.Error(
             'Permission condition %r on %s is invalid: %s' % (
@@ -123,46 +128,6 @@ def _messages_for_obsolete_callback_setting():
     )]
 
 
-@django_checks.register()
-def check_query_compilers(app_configs, **kwargs):
-    """Every Trusts-derived AUTHENTICATION_BACKENDS path must be query-capable.
-
-    Imports listed mixin classes and resolves ``query_compiler`` without
-    constructing a backend instance. Zero SQL. Silencing ``trusts.E004``
-    hides only this diagnostic; ``ContentQuerySet.permitted()`` still
-    raises and does not fall back or omit the broken route.
-    """
-
-
-    messages = []
-    seen = []
-    listed = settings.AUTHENTICATION_BACKENDS
-    for path in listed:
-        if path in seen:
-            continue
-        seen.append(path)
-        try:
-            cls = import_string(path)
-        except ImportError:
-            continue
-        if not isinstance(cls, type) or not issubclass(cls, TrustModelBackendMixin):
-            continue
-        try:
-            compiler_for_class(cls)
-        except TrustsCompilerError as exc:
-            messages.append(django_checks.Error(
-                str(exc),
-                hint=(
-                    'Silencing this check ID suppresses only the early '
-                    'diagnostic. ContentQuerySet.permitted() still requires '
-                    'a valid query compiler; there is no fallback or omission.'
-                ),
-                obj=cls,
-                id=CHECK_ID_MISSING_COMPILER,
-            ))
-    return messages
-
-
 def _is_concrete_model(model):
     opts = getattr(model, '_meta', None)
     if opts is None:
@@ -170,15 +135,51 @@ def _is_concrete_model(model):
     return not opts.abstract and not opts.proxy
 
 
-def _covered_content_models():
-    """Content terminals that already have a plan record on a built catalog.
+def _require_mixin(errors, config, path, message):
+    key = config if config is not None else path
+    if any(
+        message_row.id == CHECK_ID_MIXIN_REQUIRED and message_row.obj == key
+        for message_row in errors
+    ):
+        return
+    errors.append(django_checks.Error(
+        message,
+        hint=(
+            'Move the backend into an app whose config extends '
+            'TrustsConfigMixin.'
+            if config is None else
+            'Extend TrustsConfigMixin on the app config.'
+        ),
+        obj=key, id=CHECK_ID_MIXIN_REQUIRED,
+    ))
 
-    Coverage on one configured catalog is enough. Does not register,
-    does not invent union authority, and does not require every backend
-    to hold the declaration.
-    """
+
+def _load_listed():
+    catalogs, errors, listed = {}, [], set()
+    for path in settings.AUTHENTICATION_BACKENDS:
+        config = django_apps.get_containing_app_config(path.rpartition('.')[0])
+        try:
+            backend = import_string(path)()
+        except TrustsMixinRequired as exc:
+            _require_mixin(errors, config, path, str(exc))
+            continue
+        except (ImportError, ImproperlyConfigured, TrustsConfigurationError) as exc:
+            errors.append(django_checks.Error(
+                'Authentication backend %s could not be built: %s' % (path, exc),
+                hint='Fix AUTHENTICATION_BACKENDS so the backend constructs.',
+                id=CHECK_ID_UNBUILDABLE_BACKEND,
+            ))
+            continue
+        if isinstance(backend, TrustModelBackendMixin):
+            catalogs.setdefault(id(backend.get_catalog()), backend.get_catalog())
+            listed.add(id(config))
+    return tuple(catalogs.values()), errors, listed
+
+
+def _covered_content_models(catalogs):
+    """Content terminals that a listed backend's catalog already records."""
     covered = set()
-    for catalog in configured_catalogs():
+    for catalog in catalogs:
         for record in catalog.records:
             covered.add(record.content_model)
         for record in catalog.delegations:
@@ -226,12 +227,12 @@ def check_missing_declarations(app_configs, **kwargs):
     terminals still fail closed at runtime.
     """
 
-    if not configured_catalogs():
+    catalogs = _load_listed()[0]
+    if not catalogs:
         return []
 
-    covered = _covered_content_models()
+    covered = _covered_content_models(catalogs)
     messages = []
-    seen = set()
 
     for model in django_apps.get_models():
         if not _is_concrete_model(model):
@@ -240,13 +241,9 @@ def check_missing_declarations(app_configs, **kwargs):
             terminal = model._meta.concrete_model
             if terminal in covered:
                 continue
-            key = ('content', model)
-            if key in seen:
-                continue
-            seen.add(key)
             messages.append(django_checks.Error(
                 'Content model %s has no covering relation-plan record '
-                'on any configured Trusts catalog.' % _model_label(model),
+                'on any listed Trusts catalog.' % _model_label(model),
                 hint=_E003_HINT,
                 obj=model,
                 id=CHECK_ID_MISSING_DECLARATION,
@@ -255,21 +252,13 @@ def check_missing_declarations(app_configs, **kwargs):
         if _trusts_abstract_base(model, 'trusts.Junction') is not None:
             content_model, error = _junction_content_model(model)
             if error is not None:
-                key = ('junction-malformed', model)
-                if key in seen:
-                    continue
-                seen.add(key)
                 messages.append(error)
                 continue
             if content_model in covered:
                 continue
-            key = ('junction', model)
-            if key in seen:
-                continue
-            seen.add(key)
             messages.append(django_checks.Error(
                 'Junction %s targets %s, which has no covering '
-                'relation-plan record on any configured Trusts catalog.'
+                'relation-plan record on any listed Trusts catalog.'
                 % (_model_label(model), _model_label(content_model)),
                 hint=_E003_HINT,
                 obj=model,
@@ -283,13 +272,13 @@ def check_missing_declarations(app_configs, **kwargs):
     return messages
 
 
-def _iter_catalog_permission_conditions():
-    """Yield condition records from built catalogs."""
-    for catalog in configured_catalogs():
+def _iter_catalog_permission_conditions(catalogs):
+    """Yield condition records from the listed catalogs."""
+    for catalog in catalogs:
         yield from catalog.iter_permission_conditions()
 
 
-def iter_live_permission_conditions(apps_registry=None):
+def iter_live_permission_conditions(apps_registry=None, catalogs=None):
     """Yield ``(model, cond_code, record)`` from configured registries.
 
     Implementation-owned catalog registries are the source of truth.
@@ -301,8 +290,10 @@ def iter_live_permission_conditions(apps_registry=None):
     model/code).
     """
 
+    if catalogs is None:
+        catalogs = _load_listed()[0]
     seen_records = set()
-    for model, cond_code, record in _iter_catalog_permission_conditions():
+    for model, cond_code, record in _iter_catalog_permission_conditions(catalogs):
         marker = id(record)
         if marker in seen_records:
             continue
@@ -322,15 +313,18 @@ def iter_live_permission_conditions(apps_registry=None):
         yield model, cond_code, record
 
 
-def permission_condition_check_messages(entries):
+def permission_condition_check_messages(entries, user_model=None):
     """Build check messages for ``(model, cond_code, record)`` entries.
 
     Builders are never invoked here; only stored IR is validated.
+    ``user_model`` is the catalog user model principal paths resolve against.
     """
     messages = []
     for model, cond_code, record in entries:
         if getattr(record, 'expr', None) is not None:
-            messages.extend(_messages_for_expr(model, cond_code, record.expr))
+            messages.extend(_messages_for_expr(
+                model, cond_code, record.expr, user_model,
+            ))
     return messages
 
 
@@ -355,7 +349,7 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     the superuser shortcut and never falls back to an unconditioned
     grant.
     """
-    catalogs = relationship_catalogs()
+    catalogs = _load_listed()[0]
     messages = []
     seen = set()
     for model, _permission, conditions in _declared_authorization_guards:
@@ -414,6 +408,26 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     return messages
 
 
+@django_checks.register()
+def check_unlisted_catalog(app_configs, **kwargs):
+    """Registrations need a listed backend whose module lives in that app."""
+    _catalogs, messages, listed = _load_listed()
+    for config in django_apps.get_app_configs():
+        if not isinstance(config, TrustsConfigMixin):
+            continue
+        catalog = config.catalog
+        if not (catalog.records or catalog.delegations):
+            continue
+        if id(config) in listed:
+            continue
+        messages.append(django_checks.Error(
+            'Trusts app %s has registrations but no AUTHENTICATION_BACKENDS '
+            'entry resolves to it.' % config.label,
+            hint='List a backend whose module lives in this app.',
+            obj=config, id=CHECK_ID_UNLISTED_CATALOG))
+    return messages
+
+
 @django_checks.register(django_checks.Tags.models)
 def check_permission_conditions(app_configs, **kwargs):
     """Validate every registered condition after models are loaded.
@@ -423,22 +437,11 @@ def check_permission_conditions(app_configs, **kwargs):
     ``manage.py check trusts`` still reports project-model conditions.
     Builders are never invoked. No database queries.
     """
+    catalogs = _load_listed()[0]
+    user_model = catalogs[0].user_model if catalogs else None
     return permission_condition_check_messages(
-        iter_live_permission_conditions()
+        iter_live_permission_conditions(catalogs=catalogs), user_model,
     )
-
-
-def _live_along_records():
-    found = []
-    for catalog in configured_catalogs():
-        for record in catalog.records:
-            if record.along is not None:
-                found.append(record)
-    return found
-
-
-def _along_engine(connection):
-    return (getattr(connection, 'settings_dict', None) or {}).get('ENGINE')
 
 
 @django_checks.register(django_checks.Tags.database)
@@ -452,19 +455,19 @@ def check_along_renderer(app_configs, **kwargs):
     databases = kwargs.get('databases')
     if not databases:
         return []
-
-
-
-    if not configured_catalogs():
+    catalogs = _load_listed()[0]
+    if not catalogs:
         return []
-    along_records = _live_along_records()
+    along_records = [
+        record for catalog in catalogs for record in catalog.records
+        if record.along is not None]
     if not along_records:
         return []
 
     messages = []
     for alias in databases:
         connection = connections[alias]
-        engine = _along_engine(connection)
+        engine = (getattr(connection, 'settings_dict', None) or {}).get('ENGINE')
         vendor = getattr(connection, 'vendor', None)
         if not along_connection_supported(connection):
             messages.append(django_checks.Error(
@@ -479,15 +482,6 @@ def check_along_renderer(app_configs, **kwargs):
             continue
         try:
             probe_along_capabilities(connection)
-        except OperationalError as exc:
-            messages.append(django_checks.Error(
-                'Database alias %r (ENGINE=%s, vendor=%s) cannot render '
-                'Along reachability: recursive CTE probe '
-                'failed (%s).' % (alias, engine, vendor, exc),
-                hint=_E005_HINT,
-                obj=None,
-                id=CHECK_ID_ALONG_RENDERER,
-            ))
         except Exception as exc:
             messages.append(django_checks.Error(
                 'Database alias %r (ENGINE=%s, vendor=%s) cannot render '

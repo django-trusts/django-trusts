@@ -39,63 +39,7 @@ def _reverse_checked(plan, exists, user_model, permission, content, values,
     return _trusts_eligibility_q(user_model) & checked.predicate
 
 
-def permitted_users_predicate_for_registry(registry, content, perm, *,
-                                           skipped=(),
-                                           filter_lookup=None,
-                                           accepts_permission=None):
-    """Reverse predicate for one built registry.
-
-    ``filter_lookup`` is that registry's named-filter lookup.
-    ``accepts_permission`` is the backend's singular-permission
-    callable; omitted means the mixin default (``auth.Permission``).
-    Ordinary rows come from this registry.
-    """
-    plan = registry.plan_for(content)
-    if not plan.records and not plan.delegations:
-        return None
-    if filter_lookup is None:
-        filter_lookup = registry.filter_lookup
-    binding, condition = _permission_binding_for_plan(
-        accepts_permission, content, perm, plan,
-    )
-    exists = plan.user_exists(content, binding) if plan.records else None
-    if plan.delegations:
-        permission_model = (
-            binding._meta.concrete_model
-            if isinstance(binding, Model) else Permission
-        )
-        sponsor_records = _ordinary_records(
-            registry, content, permission_model,
-        )
-        delegated = _delegated_user_exists(
-            plan.delegations, sponsor_records, content, binding,
-            content_identity=plan.content_identity,
-            skipped=skipped,
-        )
-        if delegated is not None:
-            exists = delegated if exists is None else (_as_q(exists) | delegated)
-    user_model = _plan_user_model(plan, content)
-    permission_model = plan.permission_model
-    if permission_model is None and not isinstance(binding, Model):
-        permission_model = Permission
-    predicate = _reverse_checked(
-        plan, exists, user_model, binding, content, skipped, permission_model,
-    )
-    if predicate is None:
-        return None
-    if condition:
-        overlay = _named_filter_q(
-            filter_lookup, content, condition[1], condition[0], user_model,
-        )
-        if overlay is None:
-            return None
-        if overlay is not True:
-            predicate &= overlay
-    return predicate
-
-
-
-def lock_permitted_users_queryset(registry, content, permission):
+def lock_permitted_users_queryset(catalog, content, permission):
     """Backend-local reverse queryset compiled into the policy lock.
 
     This is the backend branch (eligibility and complete grants), not
@@ -103,7 +47,7 @@ def lock_permitted_users_queryset(registry, content, permission):
     is the permission-row sentinel, classified as ``permission.<target>``.
     Content is classified as ``content.<target>``.
     """
-    plan = registry.plan_for(content)
+    plan = catalog.plan_for(content)
     if not plan.records and not plan.delegations:
         raise TrustsConfigurationError(
             'Policy SQL found no permitted-users query for %s.'
@@ -119,7 +63,7 @@ def lock_permitted_users_queryset(registry, content, permission):
         delegated = _delegated_user_exists(
             plan.delegations,
             _ordinary_records(
-                registry, content, permission_model,
+                catalog, content, permission_model,
             ),
             content,
             permission,
@@ -142,6 +86,7 @@ def lock_permitted_users_queryset(registry, content, permission):
         )
     return bind_once(
         user_model._default_manager.all().filter(predicate).distinct(),
+        user_model=catalog.user_model,
     )
 
 
@@ -227,8 +172,6 @@ def _named_filter_q(filter_lookup, content, code, singular, user_model):
     a singular object check that returns false. Construction reads only
     values already loaded on ``content``.
     """
-    if filter_lookup is None:
-        return None
     record = filter_lookup.record_for(content.__class__, code)
     if record is None:
         return None

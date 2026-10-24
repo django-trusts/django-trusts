@@ -1,8 +1,7 @@
 """Relation plans and the compiler protocol they implement.
 
-``QueryCompiler``, ``PlanQueryCompiler``, ``ConditionLookup``, and
-``RelationPlan`` live here with the user-binding and candidate helpers
-they close over.
+``QueryCompiler``, ``PlanQueryCompiler``, and ``RelationPlan`` live here
+with the user-binding and candidate helpers they close over.
 """
 
 __all__ = []
@@ -23,7 +22,7 @@ from trusts.plan.predicates import (
     permission_terminal_is_auth_permission,
 )
 from trusts.plan.recursions import GrantReach
-from trusts.errors import TrustsCompilerError, TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 from trusts.plan.standards import (
     BUILTIN_USER_CONDITIONS,
     bind_skip_flags,
@@ -85,17 +84,9 @@ class PlanQueryCompiler(object):
             records=grouped,
             permission_model=plan.permission_model,
             content_identity=getattr(plan, 'content_identity', None),
+            user_model=plan.user_model,
+            permission_column=plan.permission_column,
         ).content_exists(user, permission)
-
-
-def answering_compiler(registry):
-    """Compiler bound when ``registry`` was built."""
-    compiler = registry.compiler
-    complete = getattr(compiler, 'complete_exists', None)
-    group = getattr(compiler, 'group_exists', None)
-    if not callable(complete) or not callable(group):
-        raise TrustsCompilerError('%r is not query-capable' % (compiler,))
-    return compiler
 
 
 def candidate_queryset(content):
@@ -110,21 +101,6 @@ def candidate_queryset(content):
     raise TrustsConfigurationError(
         'content must be a model instance or QuerySet, not %r.' % (content,)
     )
-
-
-class ConditionLookup(object):
-    """Duck-typed ``:condition`` overlay protocol. Not a registry or store.
-
-    ``record_for`` returns the registered record or ``None`` (unregistered
-    codes fail closed as ``AttributeError`` at the caller). ``compile_q``
-    compiles stored condition IR to ``Q``.
-    """
-
-    def record_for(self, model, cond_code):
-        raise NotImplementedError
-
-    def compile_q(self, model, perm_string, user):
-        raise NotImplementedError
 
 
 class SkipParams(object):
@@ -157,7 +133,7 @@ def known_skip_names(subjects):
     return frozenset(names)
 
 
-def user_skip_params(user, skip_flags, *, subjects=None, registry=None,
+def user_skip_params(user, skip_flags, *, subjects=None, catalog=None,
                      require_user=True, skip_names=None):
     """Validate ``skip_*`` keywords and return their bound values.
 
@@ -178,8 +154,8 @@ def user_skip_params(user, skip_flags, *, subjects=None, registry=None,
         return SkipParams(True, {})
     if skip_names is not None:
         known = frozenset(skip_names)
-    elif registry is not None:
-        known = known_skip_names((registry,))
+    elif catalog is not None:
+        known = known_skip_names((catalog,))
     else:
         known = known_skip_names(subjects or ())
     unknown = next((name for name in selected if name not in known), None)
@@ -260,7 +236,7 @@ def _user_identity_denied(user):
 def bind_checked_user(subject, grant=None, *, rules=None, override=None,
                       identity=None, values=None, plan=None, closed=False,
                       with_override=True, skip_flags=None, require_user=True,
-                      registry=None, subjects=None, skip_names=None):
+                      catalog=None, subjects=None, skip_names=None):
     """Validate ``skip_*``, deny before SQL, and bind one registration fragment.
 
     ``skip_flags`` is a public inquiry. ``values`` means that inquiry
@@ -269,7 +245,7 @@ def bind_checked_user(subject, grant=None, *, rules=None, override=None,
     """
     if skip_flags is not None:
         inquiry = user_skip_params(
-            subject, skip_flags, subjects=subjects, registry=registry,
+            subject, skip_flags, subjects=subjects, catalog=catalog,
             require_user=require_user, skip_names=skip_names,
         )
         if inquiry.denied:
@@ -351,6 +327,8 @@ class RelationPlan:
     user_rules: object | None = None
     user_rules_closed: object | None = None
     user_override_q: object | None = None
+    user_model: object = None
+    permission_column: str = 'pk'
 
     def _bound_root_qs(self, record, **bindings):
         return bind_record_qs(
@@ -446,7 +424,10 @@ class RelationPlan:
         if checked.predicate is None:
             return empty
         filtered = queryset.filter(checked.predicate)
-        return bind_once(filtered.distinct() if distinct else filtered)
+        return bind_once(
+            filtered.distinct() if distinct else filtered,
+            user_model=self.user_model,
+        )
 
     def common_permissions(self, user, content, *,
                            skipped=()):

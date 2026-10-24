@@ -1,5 +1,6 @@
-from django.apps import AppConfig
+from django.apps import AppConfig, apps as django_apps
 
+import trusts.apps as trusts_apps
 from trusts.errors import TrustsConfigurationError
 
 
@@ -23,84 +24,67 @@ def junction_content_field(junction_model):
     return matches[0]
 
 
-class TestsConfig(AppConfig):
+class TestsConfig(trusts_apps.TrustsConfigMixin):
     name = 'tests'
     label = 'trusts_tests'
     default_auto_field = 'django.db.models.AutoField'
 
     def ready(self):
-        # Contribute TUP→Trust←Category, TUP→Trust←Ticket, and the
-        # Junction-backed Group terminal to the implementation-owned
-        # recorder when this Apps instance has exactly one owner.
-        # isolate_apps() constructs a second TestsConfig whose apps
-        # registry has no implementation owner; that instance must not
-        # donate or seal the live recorders.
-        if getattr(self, 'apps', None) is None:
+        # Zero's TrustUserPermission is absent from kernel settings.
+        # Register those rows on this config when the model is installed.
+        # Re-entry finds the recorder frozen and stops before register.
+        # isolate_apps() builds another Apps registry. Importing the check
+        # stack from that registry's ready() breaks reverse relations on
+        # models created in the test, so only the process registry builds.
+        if self.recorder.frozen:
             return
-
-        from django.apps import apps as django_apps
-        from django.contrib.auth import get_backends
-
-        from trusts.backends import TrustModelBackendMixin
-
         if self.apps is not django_apps:
-            return
-        classes = []
-        for backend in get_backends():
-            if isinstance(backend, TrustModelBackendMixin):
-                cls = type(backend)
-                if cls not in classes:
-                    classes.append(cls)
-        if len(classes) != 1:
             return
         try:
             TrustUserPermission = self.apps.get_model(
                 'trusts', 'TrustUserPermission',
             )
-            from tests.models import Category, TestGroupJunction, Ticket
-        except (LookupError, ImportError):
+            Category = self.get_model('Category')
+            Ticket = self.get_model('Ticket')
+            TestGroupJunction = self.get_model('TestGroupJunction')
+        except LookupError:
+            super().ready()
             return
         self._donate_tup(
-            classes[0], TrustUserPermission, Category, Ticket,
-            TestGroupJunction,
+            TrustUserPermission, Category, Ticket, TestGroupJunction,
         )
+        super().ready()
 
-    def _donate_tup(self, backend_cls, TrustUserPermission, Category, Ticket,
+    def _donate_tup(self, TrustUserPermission, Category, Ticket,
                     TestGroupJunction):
-        recorder = backend_cls().get_registry()
-        if not getattr(self, '_trusts_tup_category_done', False):
-            rev = Category._meta.get_field('trust').remote_field.get_accessor_name()
-            recorder.register(
-                trust=TrustUserPermission,
-                user='entity',
-                permission='permission',
-                content=lambda relationship, _rev=rev: (
-                    getattr(relationship.trust, _rev)
-                ),
-            )
-            self._trusts_tup_category_done = True
-        if not getattr(self, '_trusts_tup_ticket_done', False):
-            rev = Ticket._meta.get_field('trust').remote_field.get_accessor_name()
-            recorder.register(
-                trust=TrustUserPermission,
-                user='entity',
-                permission='permission',
-                content=lambda relationship, _rev=rev: (
-                    getattr(relationship.trust, _rev)
-                ),
-            )
-            self._trusts_tup_ticket_done = True
-        if not getattr(self, '_trusts_tup_group_done', False):
-            content_name = junction_content_field(TestGroupJunction).name
-            rev = TestGroupJunction._meta.get_field(
-                'trust',
-            ).remote_field.get_accessor_name()
-            recorder.register(
-                trust=TrustUserPermission,
-                user='entity',
-                permission='permission',
-                content=lambda relationship, _rev=rev, _name=content_name: (
-                    getattr(getattr(relationship.trust, _rev), _name)
-                ),
-            )
-            self._trusts_tup_group_done = True
+        recorder = self.recorder
+        rev = Category._meta.get_field('trust').remote_field.get_accessor_name()
+        recorder.register(
+            trust=TrustUserPermission,
+            user='entity',
+            permission='permission',
+            content=lambda relationship, _rev=rev: (
+                getattr(relationship.trust, _rev)
+            ),
+        )
+        rev = Ticket._meta.get_field('trust').remote_field.get_accessor_name()
+        recorder.register(
+            trust=TrustUserPermission,
+            user='entity',
+            permission='permission',
+            content=lambda relationship, _rev=rev: (
+                getattr(relationship.trust, _rev)
+            ),
+        )
+        content_name = junction_content_field(TestGroupJunction).name
+        rev = TestGroupJunction._meta.get_field(
+            'trust',
+        ).remote_field.get_accessor_name()
+        recorder.register(
+            trust=TrustUserPermission,
+            user='entity',
+            permission='permission',
+            content=lambda relationship, _rev=rev, _name=content_name: (
+                getattr(getattr(relationship.trust, _rev), _name)
+            ),
+        )

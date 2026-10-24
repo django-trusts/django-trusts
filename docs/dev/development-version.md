@@ -10,6 +10,8 @@ validated. `1.0.0.dev3` identifies the library cutover (#111). `1.0.0.dev2`
 remains the merged implementation-owned registry bridge (#108). `1.0.0.dev1`
 remains the merged transitional backend-module checkpoint (#103 / #106).
 
+1.0.0rc1 is not considered a proper release; migrates.md stays the change record.
+
 ## Why a new major version
 
 The last published package was **0.10.3** (`v0.10.3`). The Python 3 and
@@ -41,8 +43,7 @@ recorded in [../migrates.md](../source/migrates.md).
 ## Internal registration and projection primitive
 
 Registration and projection internals remain behind the configured backend
-API. Live registries are owned by installed `TrustsImplementationConfig`
-subclasses. django-trusts ships no AppConfig and no `kernel_config()`. The
+API. django-trusts ships no AppConfig and no `kernel_config()`. The
 generic mixin lives only at
 `from trusts.backends import TrustModelBackendMixin`. The transitional backend
 module is gone. Historical concrete models and `TrustModelBackend` live under

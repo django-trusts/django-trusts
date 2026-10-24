@@ -11,7 +11,6 @@ import types
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar, get_args, get_origin, get_type_hints
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
@@ -21,19 +20,18 @@ from django.test import SimpleTestCase, TestCase
 from django.test.utils import isolate_apps
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.compile.resolution import _resolve_path
-from trusts.compile.factory import RegisteredDelegation, RegisteredRelation, _public_path_segments, _validate_condition
+from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
 from trusts.compile.nodes import Along
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
-from tests.support import built_catalog
+from trusts.compile.factory import Compiler
+from tests.support import built_catalog, compiler
 ROOT = Path(__file__).resolve().parents[2]
 
 def _handle(registry=None, path='tests.core.issue207'):
     if registry is None:
-        registry = RegistryFactory()
+        registry = compiler()
     registry.path = path
     return registry
 
@@ -56,17 +54,18 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
     def test_register_relationship_is_absent(self):
         handle = _handle()
         self.assertFalse(hasattr(handle, 'register_relationship'))
-        self.assertTrue(callable(handle.register_public))
+        self.assertTrue(callable(handle.register))
+        self.assertFalse(hasattr(handle, 'register_public'))
         self.assertFalse(hasattr(handle, 'register_ordered_fold'))
 
     def test_positional_trust_is_type_error(self):
         handle = _handle()
         with self.assertRaises(TypeError):
-            handle.register_public(DocumentGrant, user='user', permission='permission', content='document')
+            handle.register(DocumentGrant, user='user', permission='permission', content='document')
         self.assertEqual(built_catalog(handle).records, ())
 
     def test_honest_contextual_typing_does_not_prove_attributes(self):
-        hints = get_type_hints(RegistryFactory.register_public)
+        hints = get_type_hints(Compiler.register)
         trust_hint = hints['trust']
         self.assertIs(get_origin(trust_hint), type)
         type_args = get_args(trust_hint)
@@ -91,7 +90,7 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         self.assertEqual(len(condition_callables), 2)
         self.assertIn(([type_args[0]], object), [get_args(part) for part in condition_callables])
         self.assertEqual(set(get_args(hints['return'])), {RegisteredRelation, RegisteredDelegation})
-        self.assertNotIn('document', RegistryFactory.register_public.__annotations__)
+        self.assertNotIn('document', Compiler.register.__annotations__)
 
     def test_py_typed_marker_is_present(self):
         import trusts
@@ -107,14 +106,14 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         pyright = (ROOT / 'scripts' / 'verify-wheel-pyright.py').read_text()
         self.assertIn('not_a_field', pyright)
         self.assertIn('AnnotatedGrant', pyright)
-        self.assertIn('TrustsImplementationConfig', pyright)
-        self.assertIn('get_registry().register', pyright)
+        self.assertIn('TrustsConfigMixin', pyright)
+        self.assertIn('self.recorder.register', pyright)
         self.assertIn('condition=', pyright)
         self.assertIn('t.team == t.document', pyright)
         self.assertNotIn('import BackendHandle', pyright)
 
     def test_keyword_only_signature(self):
-        signature = inspect.signature(RegistryFactory.register_public)
+        signature = inspect.signature(Compiler.register)
         names = [name for name in signature.parameters if name != 'self']
         self.assertEqual(names, ['trust', 'user', 'permission', 'content', 'group', 'delegate', 'sponsor', 'condition', 'along'])
         for name in names:
@@ -149,7 +148,7 @@ class RegisterWheelSignatureTest(SimpleTestCase):
 
     def setUp(self):
         self.wheel = _wheel_install_module()
-        self.hints = dict(get_type_hints(RegistryFactory.register_public))
+        self.hints = dict(get_type_hints(Compiler.register))
 
     def _check(self, names=_REGISTER_NAMES, *, keyword_only=True, **updates):
         annotations = dict(self.hints)
@@ -158,7 +157,7 @@ class RegisterWheelSignatureTest(SimpleTestCase):
         self.wheel.assert_register_signature(register)
 
     def test_installed_contract_accepts_backend_handle_register(self):
-        self.wheel.assert_register_signature(RegistryFactory.register_public)
+        self.wheel.assert_register_signature(Compiler.register)
 
     def test_error_branches_fail_closed(self):
         trust_var = get_args(self.hints['trust'])[0]
@@ -183,11 +182,11 @@ class RegisterWheelSignatureTest(SimpleTestCase):
 class RegisterNormalizeTest(SimpleTestCase):
 
     def test_strings_callables_and_mixed_normalize_equivalently(self):
-        via_ref = RegistryFactory()
-        expected = via_ref.register(content=Ref(DocumentGrant).document, user=Ref(DocumentGrant).user, permission=Ref(DocumentGrant).permission)
-        strings = _handle(path='tests.core.issue207-strings').register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-        callables = _handle(path='tests.core.issue207-callables').register_public(trust=DocumentGrant, user=lambda t: t.user, permission=lambda t: t.permission, content=lambda t: t.document)
-        mixed = _handle(path='tests.core.issue207-mixed').register_public(trust=DocumentGrant, user=lambda t: t.user, permission='permission', content=lambda t: t.document)
+        via_ref = compiler()
+        expected = via_ref.register_relation(content=Ref(DocumentGrant).document, user=Ref(DocumentGrant).user, permission=Ref(DocumentGrant).permission)
+        strings = _handle(path='tests.core.issue207-strings').register(trust=DocumentGrant, user='user', permission='permission', content='document')
+        callables = _handle(path='tests.core.issue207-callables').register(trust=DocumentGrant, user=lambda t: t.user, permission=lambda t: t.permission, content=lambda t: t.document)
+        mixed = _handle(path='tests.core.issue207-mixed').register(trust=DocumentGrant, user=lambda t: t.user, permission='permission', content=lambda t: t.document)
         self.assertEqual(strings, expected)
         self.assertEqual(callables, expected)
         self.assertEqual(mixed, expected)
@@ -197,9 +196,9 @@ class RegisterNormalizeTest(SimpleTestCase):
         from tests.core.test_issue98 import _gh_models, _register_team
         models_ = _gh_models()
         TeamRepoGrant = models_[6]
-        expected = _register_team(RegistryFactory(), TeamRepoGrant)
-        record = _handle().register_public(trust=TeamRepoGrant, user=lambda t: t.team.members, permission=lambda t: t.operation, content=lambda t: t.repository, condition=lambda t: t.team.permission_bundles.operations.contains(t.operation) & (t.team.organization == t.repository.organization))
-        mixed = _handle(path='tests.core.issue207-m2m-mixed').register_public(trust=TeamRepoGrant, user='team__members', permission=lambda t: t.operation, content='repository', condition=lambda t: t.team.permission_bundles.operations.contains(t.operation) & (t.team.organization == t.repository.organization))
+        expected = _register_team(compiler(), TeamRepoGrant)
+        record = _handle().register(trust=TeamRepoGrant, user=lambda t: t.team.members, permission=lambda t: t.operation, content=lambda t: t.repository, condition=lambda t: t.team.permission_bundles.operations.contains(t.operation) & (t.team.organization == t.repository.organization))
+        mixed = _handle(path='tests.core.issue207-m2m-mixed').register(trust=TeamRepoGrant, user='team__members', permission=lambda t: t.operation, content='repository', condition=lambda t: t.team.permission_bundles.operations.contains(t.operation) & (t.team.organization == t.repository.organization))
         self.assertEqual(record, expected)
         self.assertEqual(mixed, expected)
         self.assertEqual(record.user_path, ('team', 'members'))
@@ -208,10 +207,10 @@ class RegisterNormalizeTest(SimpleTestCase):
     def test_along_and_builders_match_internal_ref(self):
         from tests.core.test_issue92 import _node_graph_models
         _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = _node_graph_models()
-        via_ref = RegistryFactory()
+        via_ref = compiler()
         j = Ref(Grant)
-        expected = via_ref.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=8))
-        record = _handle().register_public(trust=Grant, user=lambda t: t.user, permission='permission', content=lambda t: t.node, along=('node__parent', 8))
+        expected = via_ref.register_relation(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=8))
+        record = _handle().register(trust=Grant, user=lambda t: t.user, permission='permission', content=lambda t: t.node, along=('node__parent', 8))
         self.assertEqual(record, expected)
         self.assertEqual(record.along.shape, 'S')
 
@@ -221,7 +220,7 @@ class RegisterNormalizeTest(SimpleTestCase):
         TeamRepoGrant = _gh_models()[6]
         handle = _handle()
         with self.assertRaises(TrustsConfigurationError):
-            handle.register_public(trust=TeamRepoGrant, user=lambda t: t.team.organization, permission=lambda t: t.operation, content=lambda t: t.repository)
+            handle.register(trust=TeamRepoGrant, user=lambda t: t.team.organization, permission=lambda t: t.operation, content=lambda t: t.repository)
         self.assertEqual(built_catalog(handle).records, ())
 
 class RegisterOnceAtRegistrationTest(TestCase):
@@ -229,12 +228,12 @@ class RegisterOnceAtRegistrationTest(TestCase):
     def test_builders_run_once_and_never_during_projections(self):
         if 'myapp_document' not in connection.introspection.table_names():
             self.skipTest('myapp tables exist only on the kernel host')
-        registry = RegistryFactory()
+        registry = compiler()
         handle = _handle(registry)
         user = _Count('user')
         permission = _Count('permission')
         content = _Count('document')
-        handle.register_public(trust=DocumentGrant, user=user, permission=permission, content=content)
+        handle.register(trust=DocumentGrant, user=user, permission=permission, content=content)
         self.assertEqual((user.calls, permission.calls, content.calls), (1, 1, 1))
         User = get_user_model()
         alice = User.objects.create_user('alice-207', password='x')
@@ -244,7 +243,7 @@ class RegisterOnceAtRegistrationTest(TestCase):
         DocumentGrant.objects.create(document=document, user=alice, permission=perm)
         self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (perm.content_type.app_label, perm.codename), document))
         list(built_catalog(registry).permissions_for(alice, document))
-        list(registry.build_registry().filter_authorized(Document.objects.all(), alice, perm))
+        list(built_catalog(registry).filter_authorized(Document.objects.all(), alice, perm))
         self.assertEqual((user.calls, permission.calls, content.calls), (1, 1, 1))
         self.assertEqual(registry.records[0].user_path, ('user',))
         self.assertIsInstance(registry.records[0].user_field, str)
@@ -258,7 +257,7 @@ class RegisterFailClosedTest(TestCase):
             captured.append(trust)
             return trust.user
         first = _handle(path='tests.core.issue207-capture')
-        first.register_public(trust=DocumentGrant, user=capture, permission=lambda t: t.permission, content=lambda t: t.document)
+        first.register(trust=DocumentGrant, user=capture, permission=lambda t: t.permission, content=lambda t: t.document)
 
         def boom(_trust):
             raise RuntimeError('builder exploded')
@@ -268,31 +267,26 @@ class RegisterFailClosedTest(TestCase):
             with self.subTest(name=name):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
-                        handle.register_public(trust=DocumentGrant, user=builder, permission=lambda t: t.permission, content=lambda t: t.document)
+                        handle.register(trust=DocumentGrant, user=builder, permission=lambda t: t.permission, content=lambda t: t.document)
                 self.assertEqual(handle.records, ())
 
     def test_failed_third_role_does_not_partially_mutate(self):
         handle = _handle()
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError):
-                handle.register_public(trust=DocumentGrant, user=lambda t: t.user, permission=lambda t: t.permission, content=lambda t: t.not_a_field)
+                handle.register(trust=DocumentGrant, user=lambda t: t.user, permission=lambda t: t.permission, content=lambda t: t.not_a_field)
         self.assertEqual(built_catalog(handle).records, ())
 
     def test_register_after_build_invokes_builder(self):
-        registry = RegistryFactory()
+        registry = compiler()
         handle = _handle(registry)
         calls = []
 
         def user(trust):
             calls.append(trust)
             return trust.user
-        with patch('trusts.compile.factory._public_path_segments', wraps=_public_path_segments) as segments:
-            with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
-                with patch('trusts.compile.factory._validate_condition', wraps=_validate_condition) as validate:
-                    record = handle.register_public(trust=DocumentGrant, user=user, permission=lambda t: t.permission, content=lambda t: t.document)
+        record = handle.register(trust=DocumentGrant, user=user, permission=lambda t: t.permission, content=lambda t: t.document)
         self.assertEqual(len(calls), 1)
-        segments.assert_called()
-        resolve.assert_called()
-        validate.assert_called()
-        self.assertEqual(registry.records, (record,))
-        self.assertEqual(built_catalog(registry).records, (record,))
+        shape = registry.compile()
+        self.assertEqual(shape.records, (record,))
+        self.assertEqual(record.user_path, ('user',))

@@ -9,7 +9,7 @@ from django.db.models import Count, Exists, OuterRef, Q
 
 from trusts.plan.rewrites import bind_once
 from trusts.plan.hops import require_instance
-from trusts.errors import TrustsCompilerError, TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import (
     _apply_checked_user,
     _as_q,
@@ -26,41 +26,25 @@ from trusts.plan.delegations import (
 from trusts.plan.relations import (
     _candidate_model,
     _or_q,
-    answering_compiler,
     candidate_queryset,
 )
 
 
-def compiler_for_class(cls):
-    """Resolve the class-owned compiler. Does not construct a backend instance."""
-    compiler = getattr(cls, 'query_compiler', None)
-    if compiler is None:
-        raise TrustsCompilerError('%r is not query-capable' % (cls,))
-    complete = getattr(compiler, 'complete_exists', None)
-    group = getattr(compiler, 'group_exists', None)
-    if not callable(complete) or not callable(group):
-        raise TrustsCompilerError('%r is not query-capable' % (cls,))
-    return compiler
-
-
 def _compiler_applies(compiler, plan):
-    """Route applicability through ``compiler.applies`` when present."""
-    applies = getattr(compiler, 'applies', None)
-    if callable(applies):
-        return bool(applies(plan))
-    return bool(plan.records)
+    """Applicability is ``compiler.applies``."""
+    return bool(compiler.applies(plan))
 
 
-def all_match(registry, candidates, user, permission, *, kind='complete',
+def all_match(catalog, candidates, user, permission, *, kind='complete',
               extra_q=None, permission_model=None, skipped=()):
     """True iff candidates are nonempty and no row lacks the aggregate proof.
 
-    One SQL. ``None`` when the registry does not apply so the caller may
+    One SQL. ``None`` when the catalog does not apply so the caller may
     use the undeclared fallback. ``extra_q`` is an optional overlay (AND);
     it never creates a grant.
     """
     granted_q = _compile_granted(
-        registry, candidates, user, permission, kind=kind,
+        catalog, candidates, user, permission, kind=kind,
         permission_model=permission_model,
         skipped=skipped,
     )
@@ -68,7 +52,9 @@ def all_match(registry, candidates, user, permission, *, kind='complete',
         return None
     if extra_q is not None:
         granted_q = granted_q & extra_q
-    qs, granted_q = bind_once(candidate_queryset(candidates), granted_q)
+    qs, granted_q = bind_once(
+        candidate_queryset(candidates), granted_q, user_model=catalog.user_model,
+    )
     stats = qs.aggregate(
         total=Count('pk', distinct=True),
         lacking=Count('pk', distinct=True, filter=~granted_q),
@@ -76,15 +62,15 @@ def all_match(registry, candidates, user, permission, *, kind='complete',
     return stats['total'] > 0 and stats['lacking'] == 0
 
 
-def instance_match(registry, obj, user, permission, *, kind='complete', extra_q=None,
+def instance_match(catalog, obj, user, permission, *, kind='complete', extra_q=None,
                    permission_model=None, skipped=()):
-    """One grant EXISTS for ``obj`` through ``registry`` only.
+    """One grant EXISTS for ``obj`` through ``catalog`` only.
 
-    ``None`` when the registry is inapplicable. ``extra_q`` is an optional
+    ``None`` when the catalog is inapplicable. ``extra_q`` is an optional
     overlay (AND); it never creates a grant.
     """
     granted_q = _compile_granted(
-        registry, obj, user, permission, kind=kind,
+        catalog, obj, user, permission, kind=kind,
         permission_model=permission_model,
         skipped=skipped,
     )
@@ -94,18 +80,18 @@ def instance_match(registry, obj, user, permission, *, kind='complete', extra_q=
         granted_q = granted_q & extra_q
     return bind_once(obj._meta.concrete_model._default_manager.filter(
         pk=obj.pk,
-    ).filter(granted_q)).exists()
+    ).filter(granted_q), user_model=catalog.user_model).exists()
 
 
-def _compile_common_permissions(registry, candidates, user, *, kind='complete',
+def _compile_common_permissions(catalog, candidates, user, *, kind='complete',
                                 skipped=()):
-    """Permission queryset for ``registry``. It sponsors itself."""
+    """Permission queryset for ``catalog``. It sponsors itself."""
     qs = candidate_queryset(candidates)
-    perm_expr = OuterRef(OuterRef('pk'))
-    compiler = answering_compiler(registry)
-    plan = registry.plan_for(candidates, user=user)
+    compiler = catalog.compiler
+    plan = catalog.plan_for(candidates, user=user)
     if not _compiler_applies(compiler, plan):
         return None
+    perm_expr = OuterRef(OuterRef(plan.permission_column))
     permission_model = plan.permission_model
     if kind == 'complete':
         fn = compiler.complete_exists
@@ -114,7 +100,7 @@ def _compile_common_permissions(registry, candidates, user, *, kind='complete',
     part = _as_q(fn(plan, qs, user, perm_expr))
     delegated = None
     if kind == 'complete' and plan.delegations:
-        sponsor_records = _ordinary_records(registry, candidates)
+        sponsor_records = _ordinary_records(catalog, candidates)
         compatible_records = _compatible_sponsor_records(
             plan.delegations, sponsor_records,
         )
@@ -154,7 +140,7 @@ def _compile_common_permissions(registry, candidates, user, *, kind='complete',
         Exists(qs),
     ).exclude(
         Exists(qs.filter(~wrapped)),
-    ).distinct())
+    ).distinct(), user_model=catalog.user_model)
 
 
 def _delegated_user_exists(delegations, sponsor_records, content, permission,

@@ -1,80 +1,66 @@
 """Generic Trusts backend mixin.
 
-Registration is a per-class ``Recorder``. Inquiry reads the catalog
-``TrustsImplementationConfig.ready`` stored for this class. A class with no catalog
-denies: ``has_perm`` is false and permission or user queries are empty.
+The backend borrows the recorder and catalog of the app config that
+contains its class. That config is a ``TrustsConfigMixin``. Inquiry
+reads ``self.catalog``. Each listed backend answers from that catalog
+only. A miss returns nothing. Callers OR the grant ``Q`` objects.
 """
 
-from collections.abc import Callable
-from typing import TypeVar
-
-from django.conf import settings
-from django.contrib.auth import get_backends
+from django.apps import apps
+from django.contrib.auth import get_backends, load_backend
 from django.contrib.auth.models import Permission
-from django.db.models import Model, QuerySet
+from django.db.models import Model, Q, QuerySet
 
-from trusts.errors import TrustsConfigurationError
-import trusts.plan.standards as standards
-from trusts.plan.relations import PlanQueryCompiler
-
-catalogs = {}
-recorders = {}
-
-T = TypeVar('T', bound=Model)
+from trusts.apps import TrustsConfigMixin
+from trusts.compile.catalogs import (
+    assert_same_database,
+    catalog_models,
+    database_alias,
+    reject_permission_shape,
+    require_saved_content,
+)
+from trusts.errors import TrustsConfigurationError, TrustsMixinRequired
+from trusts.plan.contents import permitted_content_q
+from trusts.plan.relations import bind_checked_user, known_skip_names
+from trusts.plan.rewrites import bind_once
+from trusts.plan.users import assert_persisted_principal
 
 
 class TrustModelBackendMixin(object):
-    """Object-permission backend. One recorder per class; one catalog after ready."""
+    """Object-permission backend. The catalog belongs to the app config."""
 
-    query_compiler = PlanQueryCompiler()
-    family = 'relationship'
-
-    def __init__(self):
-        cls = type(self)
-        if cls not in recorders:
-            recorders[cls] = Recorder()
-
-    def get_registry(self):
-        """Open recorder for registration. Not the built catalog."""
-        return recorders[type(self)]
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        config = apps.get_containing_app_config(type(self).__module__)
+        if not isinstance(config, TrustsConfigMixin):
+            raise TrustsMixinRequired(_mixin_required_message(
+                config,
+                '%s.%s' % (type(self).__module__, type(self).__qualname__),
+            ))
+        self.catalog = config.catalog
+        self.recorder = config.recorder
 
     def get_catalog(self):
-        """Catalog stored at ready, or ``None`` when this class was not built."""
-        return catalogs.get(type(self))
+        """Catalog taken from the containing app config at construction."""
+        return self.catalog
 
     def has_perm(self, user_obj, permext, obj=None, **skip_flags):
-        """Object check. No catalog, or no object, denies."""
-        catalog = self.get_catalog()
-        if catalog is None or obj is None:
+        """Object check. No object denies."""
+        if obj is None or not isinstance(obj, (QuerySet, Model)):
             return False
-        if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
-            return False
-        return catalog.has_perm(user_obj, permext, obj, **skip_flags)
+        return self.catalog.has_perm(user_obj, permext, obj, **skip_flags)
 
     def get_all_permissions(self, user_obj, obj=None, **skip_flags):
-        return self._permission_codes(
-            user_obj, obj, skip_flags, kind='complete',
-        )
+        """Permissions this catalog grants on the object."""
+        if obj is None or not isinstance(obj, (QuerySet, Model)):
+            return set()
+        return self.catalog.get_all_permissions(user_obj, obj, **skip_flags)
 
     def get_group_permissions(self, user_obj, obj=None, **skip_flags):
-        return self._permission_codes(
-            user_obj, obj, skip_flags, kind='group',
-        )
-
-    def get_permitted_users(self, content, perm, **skip_flags):
-        """Users permitted on ``content``. No catalog yields no users."""
-        catalog = self.get_catalog()
-        if catalog is None:
-            return _no_users()
-        return catalog.permitted_users(content, perm, **skip_flags)
-
-    def with_perm(self, perm, is_active=True, include_superusers=True, obj=None):
-        """Users holding ``perm`` on ``obj``. No catalog or no object yields no users."""
-        del is_active, include_superusers
-        catalog = self.get_catalog()
-        if catalog is None or obj is None:
-            return _no_users()
-        return catalog.permitted_users(obj, perm)
+        """Group permissions this catalog grants on the object."""
+        if obj is None or not isinstance(obj, (QuerySet, Model)):
+            return set()
+        return self.catalog.get_group_permissions(user_obj, obj, **skip_flags)
 
     def singular_permission_accepted(self, perm):
         """``auth.Permission`` only, unless a backend overrides this."""
@@ -82,120 +68,194 @@ class TrustModelBackendMixin(object):
 
     def permitted_users_predicate(self, content, perm, *, skipped=()):
         """``Q`` over candidate users, or ``None`` when this path does not apply."""
-        catalog = self.get_catalog()
-        if catalog is None:
-            return None
-        return catalog.permitted_users_predicate(
+        return self.catalog.permitted_users_predicate(
             content, perm, skipped=skipped,
             accepts_permission=self.singular_permission_accepted,
         )
 
-    def _permission_codes(self, user_obj, obj, skip_flags, *, kind):
-        catalog = self.get_catalog()
-        if catalog is None or obj is None:
-            return set()
-        if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
-            return set()
-        if kind == 'group':
-            return catalog.get_group_permissions(user_obj, obj, **skip_flags)
-        return catalog.get_all_permissions(user_obj, obj, **skip_flags)
+    def authorized_grant_q(self, subject, user, permission, *, skipped=()):
+        """Grant for an authorized-row filter."""
+        return self.catalog.complete_grant_q(
+            subject, user, permission, skipped=skipped)
+
+    def permitted_grant_q(self, subject, user, permission, *, skipped=(),
+                          conditions=(), binding=None, api=None):
+        """Grant for a permitted-row filter."""
+        model = subject.model if isinstance(subject, QuerySet) else subject
+        predicate, _owned = self.catalog.authorization_grant(
+            subject, user, model, permission, conditions, binding,
+            api=api, skipped=skipped)
+        return predicate
+
+    def content_prefix_q(self, subject, user, permission, *, skipped=(),
+                         content=None):
+        """Grant for a permitted-content prefix."""
+        return permitted_content_q(
+            subject.model, user, permission, content=content,
+            catalog=self.catalog, skipped=skipped)
 
 
-class Recorder(object):
-    """Ordered log of registration calls for one backend class.
+def grant_users(item, skipped, subject, permission):
+    """User predicate from this backend's catalog."""
+    return item.permitted_users_predicate(
+        subject, permission, skipped=skipped)
 
-    The log stores the call arguments. The ready-time sweep is the only
-    validation and the only build.
+
+def grant_authorized(item, skipped, subject, user, permission):
+    """Authorized-row grant from this backend's catalog."""
+    return item.authorized_grant_q(
+        subject, user, permission, skipped=skipped)
+
+
+def grant_prefix(item, skipped, subject, user, permission, *, content):
+    """Permitted-content prefix grant from this backend's catalog."""
+    return item.content_prefix_q(
+        subject, user, permission, skipped=skipped, content=content)
+
+
+def grant_permitted(item, skipped, subject, user, permission, *,
+                    conditions=(), binding=None, api=None):
+    """Permitted-row grant from this backend's catalog."""
+    return item.permitted_grant_q(
+        subject, user, permission, skipped=skipped,
+        conditions=conditions, binding=binding, api=api)
+
+
+def permission_backends(backend=None):
+    """Listed backends, or the one ``backend`` dotted path."""
+    if backend is None:
+        return get_backends()
+    if not isinstance(backend, str):
+        raise TypeError(
+            'backend must be a dotted import path string (got %r).' % backend)
+    return (load_backend(backend),)
+
+
+def trusts_backends(backend=None):
+    """Listed Trusts backends. Each answers from its own catalog."""
+    return tuple(
+        item for item in permission_backends(backend)
+        if isinstance(item, TrustModelBackendMixin))
+
+
+def filter_listed(queryset, user, *, ask, backend=None,
+                  skip_flags, require_user=True, preflight=False,
+                  extra_q=None, model=None, conditions=(), api=None):
+    """OR the listed grant, then filter, distinct, and bind once."""
+    _inquiry, granted_q, user_model, _chosen = open_grant(
+        ask, user, backend=backend, skip_flags=skip_flags,
+        require_user=require_user, preflight=preflight, model=model,
+        conditions=conditions, api=api)
+    if granted_q is None:
+        return queryset.none()
+    if extra_q is not None:
+        granted_q &= extra_q
+    return bind_once(
+        queryset.filter(granted_q).distinct(), user_model=user_model)
+
+
+def open_grant(ask, user, *, backend=None, skip_flags=None,
+               require_user=True, preflight=False, model=None,
+               conditions=(), api=None):
+    """Preflight names, then OR. A denied user does not compile the grant."""
+    chosen = trusts_backends(backend)
+    inquiry = bind_checked_user(
+        user, skip_flags=skip_flags, require_user=require_user,
+        skip_names=known_skip_names(item.get_catalog() for item in chosen))
+    if preflight:
+        _selected_conditions_owned(model, conditions, chosen, api)
+    if inquiry.denied:
+        return inquiry, None, None, chosen
+    granted, user_model = _combine(
+        lambda item: ask(item, inquiry.values), chosen)
+    return inquiry, granted, user_model, chosen
+
+
+def compile_permitted_users(content, perm, *, user_queryset=None,
+                            backend=None, **skip_flags):
+    """Lazy user queryset for one saved content object and one permission.
+
+    Listed backends are asked once, in order. Each catalog that
+    registered the content contributes its user predicate, including
+    that catalog's override. The predicates are OR'd. ``backend`` is
+    one dotted path. ``skip_<name>`` is a bound parameter on that
+    predicate. The user queryset's model is the principal that is bound.
     """
-
-    def __init__(self):
-        self._rows = []
-        self.frozen = False
-
-    @property
-    def rows(self):
-        """Recorded calls, in registration order."""
-        return self._rows
-
-    def register(
-        self, *,
-        trust: type[T],
-        user: str | Callable[[T], object] | None = None,
-        permission: str | Callable[[T], object] | None = None,
-        content: str | Callable[[T], object],
-        group: str | Callable[[T], object] | None = None,
-        delegate: str | Callable[[T], object] | None = None,
-        sponsor: str | Callable[[T], object] | None = None,
-        condition: (
-            Callable[[T], object] | Callable[[T, object], object] | None
-        ) = None,
-        along=None,
-    ):
-        self._open()
-        self._rows.append(('register', {
-            'trust': trust,
-            'user': user,
-            'permission': permission,
-            'content': content,
-            'group': group,
-            'delegate': delegate,
-            'sponsor': sponsor,
-            'condition': condition,
-            'along': along,
-        }))
-
-    def add_named_filter(self, model, code, predicate):
-        """Record a named-filter builder for the ready-time sweep."""
-        self._open()
-        self._rows.append(('filter', model, code, predicate))
-
-    def set_user_condition(self, name, expr, on='*'):
-        self._open()
-        self._rows.append(('condition', name, expr, on))
-
-    def set_user_override(self, name, expr, on='user'):
-        self._open()
-        self._rows.append(('override', name, expr, on))
-
-    def freeze(self):
-        self.frozen = True
-
-    def _open(self):
-        if self.frozen:
+    require_saved_content(content)
+    reject_permission_shape(perm)
+    _inquiry, combined, _, chosen = open_grant(
+        lambda item, skipped: grant_users(item, skipped, content, perm),
+        None, backend=backend, skip_flags=skip_flags,
+        require_user=False)
+    if user_queryset is None:
+        if not chosen:
             raise TrustsConfigurationError(
-                'register refused: this recorder is frozen.'
-            )
+                'No Trusts backend is listed in AUTHENTICATION_BACKENDS.')
+        user_model = chosen[0].get_catalog().user_model
+        user_queryset = user_model._default_manager.get_queryset()
+    elif not isinstance(user_queryset, QuerySet):
+        raise TrustsConfigurationError(
+            'user queryset must be a QuerySet, not %r.' % (user_queryset,))
+    principal_model = user_queryset.model
+    assert_persisted_principal(principal_model)
+    involved = [principal_model, type(content)]
+    if isinstance(perm, (str, Permission)):
+        involved.append(Permission)
+    if combined is None:
+        combined = Q(pk__isnull=True)
+    else:
+        for item in chosen:
+            involved.extend(
+                catalog_models(item.get_catalog(), content, principal_model))
+    alias = database_alias(content, user_queryset)
+    assert_same_database(alias, involved)
+    if user_queryset.db != alias:
+        user_queryset = user_queryset.using(alias)
+    return bind_once(
+        user_queryset.filter(combined).distinct(), user_model=principal_model)
 
 
-def configured_catalogs():
-    """Catalogs of listed mixin backends, in ``get_backends()`` order.
+def _mixin_required_message(config, backend_path):
+    return (
+        'Backend %s is not inside an app whose config extends '
+        'TrustsConfigMixin.' % backend_path
+        if config is None else
+        'App %s must extend TrustsConfigMixin.' % config.label)
 
-    An empty ``AUTHENTICATION_BACKENDS`` is no catalogs. Django's
-    ``get_backends()`` raises in that case; this inquiry does not.
-    A class that was not built contributes nothing. Callers treat a
-    missing catalog as no grants.
-    """
-    if not tuple(settings.AUTHENTICATION_BACKENDS):
-        return ()
-    found = []
+
+def _missing_condition(api, conditions, model):
+    raise TrustsConfigurationError(
+        '%s condition %r is not registered on %s.'
+        % (api, conditions[0], model._meta.label))
+
+
+def _selected_conditions_owned(model, conditions, chosen, api):
+    if not conditions:
+        return
+    incomplete = False
+    for item in chosen:
+        has_plan, owns = item.get_catalog().authorization_preflight(
+            model, conditions)
+        if owns:
+            return
+        incomplete = incomplete or has_plan
+    if incomplete:
+        _missing_condition(api, conditions, model)
+
+
+def _combine(ask, chosen):
+    combined = user_model = None
     seen = set()
-    for backend in get_backends():
-        if not isinstance(backend, TrustModelBackendMixin):
+    for item in chosen:
+        catalog = item.get_catalog()
+        marker = id(catalog)
+        if marker in seen:
             continue
-        cls = type(backend)
-        if cls in seen:
+        seen.add(marker)
+        part = ask(item)
+        if part is None:
             continue
-        seen.add(cls)
-        catalog = backend.get_catalog()
-        if catalog is None:
-            continue
-        found.append(catalog)
-    return tuple(found)
-
-
-def _no_users():
-    """Empty user queryset after ready, or an empty tuple before it."""
-    model = standards.user_model
-    if model is None:
-        return ()
-    return model._default_manager.none()
+        combined = part if combined is None else combined | part
+        if user_model is None:
+            user_model = catalog.user_model
+    return combined, user_model

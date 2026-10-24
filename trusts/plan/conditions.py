@@ -67,14 +67,12 @@ from django.db.models.fields import GenericIPAddressField
 from django.http import HttpRequest
 from django.utils.functional import Promise, SimpleLazyObject
 
-import trusts.plan.standards as standards
 from trusts.errors import (
     PermissionConditionBooleanError,
     PermissionConditionError,
     PermissionConditionNotQueryable,
     PermissionConditionUnsupported,
 )
-from trusts.plan.relations import ConditionLookup
 
 
 def get_short_model_name_lower(klass):
@@ -557,16 +555,6 @@ Query = _QueryNamespace()
 TQ = Query
 
 
-def _entity_model():
-    """User model stored by ``TrustsImplementationConfig.ready``."""
-    model = standards.user_model
-    if model is None:
-        raise PermissionConditionError(
-            'Principal references need the user model stored at ready().'
-        )
-    return model
-
-
 def resolve_field_path(model, path, ref_kind='object'):
     """Validate ``path`` against ``model`` and return the Django lookup string.
 
@@ -725,18 +713,18 @@ def _spec_from_const(value):
     return ('scalar', (type(value),), type(value).__name__)
 
 
-def _operand_spec(node, model):
+def _operand_spec(node, model, user_model):
     if isinstance(node, Const):
         return _spec_from_const(node.value)
     if isinstance(node, Ref):
         if node.source == 'object':
             return _spec_from_field(_terminal_field(model, node.path, 'object'))
         if node.source == 'principal':
+            entity = user_model
             if not node.path:
-                entity = _entity_model()
                 return ('instance', entity, entity._meta.label)
             return _spec_from_field(
-                _terminal_field(_entity_model(), node.path, 'principal')
+                _terminal_field(entity, node.path, 'principal')
             )
         if node.source == 'permission':
             return ('scalar', (str,), 'permission')
@@ -755,9 +743,9 @@ def _specs_compatible(left, right):
     return False
 
 
-def _check_comparison_types(node, model):
-    left = _operand_spec(node.left, model)
-    right = _operand_spec(node.right, model)
+def _check_comparison_types(node, model, user_model):
+    left = _operand_spec(node.left, model, user_model)
+    right = _operand_spec(node.right, model, user_model)
     if _specs_compatible(left, right):
         return
     raise PermissionConditionError(
@@ -768,7 +756,7 @@ def _check_comparison_types(node, model):
     )
 
 
-def validate_expression(node, model):
+def validate_expression(node, model, user_model=None):
     """Resolve paths and require comparable operand types on ``Eq`` / ``Ne``.
 
     Object paths are validated against ``model``; principal paths against
@@ -781,18 +769,18 @@ def validate_expression(node, model):
         raise PermissionConditionError(
             'Permission condition did not produce a comparison expression.'
         )
-    _validate_node(node, model)
+    _validate_node(node, model, user_model)
 
 
-def _validate_node(node, model):
+def _validate_node(node, model, user_model):
     if isinstance(node, (And, Or)):
-        _validate_node(node.left, model)
-        _validate_node(node.right, model)
+        _validate_node(node.left, model, user_model)
+        _validate_node(node.right, model, user_model)
         return
     if isinstance(node, (Eq, Ne)):
-        _validate_node(node.left, model)
-        _validate_node(node.right, model)
-        _check_comparison_types(node, model)
+        _validate_node(node.left, model, user_model)
+        _validate_node(node.right, model, user_model)
+        _check_comparison_types(node, model, user_model)
         return
     if isinstance(node, Const):
         return
@@ -801,7 +789,9 @@ def _validate_node(node, model):
             resolve_field_path(model, node.path, ref_kind='object')
         elif node.source == 'principal':
             if node.path:
-                resolve_field_path(_entity_model(), node.path, ref_kind='principal')
+                resolve_field_path(
+                    user_model, node.path, ref_kind='principal',
+                )
         elif node.source == 'permission':
             if node.path:
                 raise PermissionConditionError(
@@ -868,14 +858,14 @@ def _walk_model_path(instance, model, path):
     return current
 
 
-def _resolve_runtime(node, user, perm, obj, model):
+def _resolve_runtime(node, user, perm, obj, model, user_model):
     if isinstance(node, Const):
         return node.value
     if isinstance(node, Ref):
         if node.source == 'principal':
             if not node.path:
                 return user
-            return _walk_model_path(user, _entity_model(), node.path)
+            return _walk_model_path(user, user_model, node.path)
         if node.source == 'permission':
             if node.path:
                 raise PermissionConditionError(
@@ -889,25 +879,29 @@ def _resolve_runtime(node, user, perm, obj, model):
     )
 
 
-def evaluate_expression(node, user, perm, obj, model=None):
+def evaluate_expression(node, user, perm, obj, model=None, user_model=None):
     """Evaluate a captured expression against a real principal/permission/object."""
     if model is None:
         model = obj.__class__
     if isinstance(node, And):
-        return evaluate_expression(node.left, user, perm, obj, model) and (
-            evaluate_expression(node.right, user, perm, obj, model)
+        return evaluate_expression(
+            node.left, user, perm, obj, model, user_model,
+        ) and evaluate_expression(
+            node.right, user, perm, obj, model, user_model,
         )
     if isinstance(node, Or):
-        return evaluate_expression(node.left, user, perm, obj, model) or (
-            evaluate_expression(node.right, user, perm, obj, model)
+        return evaluate_expression(
+            node.left, user, perm, obj, model, user_model,
+        ) or evaluate_expression(
+            node.right, user, perm, obj, model, user_model,
         )
     if isinstance(node, Eq):
-        return _resolve_runtime(node.left, user, perm, obj, model) == (
-            _resolve_runtime(node.right, user, perm, obj, model)
+        return _resolve_runtime(node.left, user, perm, obj, model, user_model) == (
+            _resolve_runtime(node.right, user, perm, obj, model, user_model)
         )
     if isinstance(node, Ne):
-        return _resolve_runtime(node.left, user, perm, obj, model) != (
-            _resolve_runtime(node.right, user, perm, obj, model)
+        return _resolve_runtime(node.left, user, perm, obj, model, user_model) != (
+            _resolve_runtime(node.right, user, perm, obj, model, user_model)
         )
     raise PermissionConditionError(
         'Permission condition did not produce a comparison expression.'
@@ -924,7 +918,7 @@ class _Unbound(object):
         self.lookup = lookup
 
 
-def _classify(node, model, user, perm):
+def _classify(node, model, user, perm, user_model):
     if isinstance(node, Const):
         return _Bound(node.value)
     if isinstance(node, Ref):
@@ -933,7 +927,7 @@ def _classify(node, model, user, perm):
         if node.source == 'principal':
             if not node.path:
                 return _Bound(user)
-            return _Bound(_walk_model_path(user, _entity_model(), node.path))
+            return _Bound(_walk_model_path(user, user_model, node.path))
         if node.source == 'permission':
             if node.path:
                 raise PermissionConditionError(
@@ -996,9 +990,9 @@ def _sql_constant(value):
     return value
 
 
-def _compile_comparison(node, model, user, perm):
-    left = _classify(node.left, model, user, perm)
-    right = _classify(node.right, model, user, perm)
+def _compile_comparison(node, model, user, perm, user_model):
+    left = _classify(node.left, model, user, perm, user_model)
+    right = _classify(node.right, model, user, perm, user_model)
     equal = isinstance(node, Eq)
     if isinstance(left, _Bound) and isinstance(right, _Bound):
         matches = (left.value == right.value) if equal else (left.value != right.value)
@@ -1013,35 +1007,35 @@ def _compile_comparison(node, model, user, perm):
     return _q_eq_lookup(lookup, value) if equal else _q_ne_lookup(lookup, value)
 
 
-def compile_to_q(node, model, user, perm):
+def compile_to_q(node, model, user, perm, user_model=None):
     """Compile an expression tree to a Django ``Q`` for ``model`` rows."""
     if isinstance(node, And):
-        return compile_to_q(node.left, model, user, perm) & compile_to_q(
-            node.right, model, user, perm
+        return compile_to_q(node.left, model, user, perm, user_model) & compile_to_q(
+            node.right, model, user, perm, user_model
         )
     if isinstance(node, Or):
-        return compile_to_q(node.left, model, user, perm) | compile_to_q(
-            node.right, model, user, perm
+        return compile_to_q(node.left, model, user, perm, user_model) | compile_to_q(
+            node.right, model, user, perm, user_model
         )
     if isinstance(node, (Eq, Ne)):
-        return _compile_comparison(node, model, user, perm)
+        return _compile_comparison(node, model, user, perm, user_model)
     raise PermissionConditionError(
         'Permission condition did not produce a comparison expression.'
     )
 
 
-def compile_expression_q(expr, model, user, perm):
+def compile_expression_q(expr, model, user, perm, user_model=None):
     """Compile a registered ``Expr`` to ``Q``. Fail closed if invalid."""
     if not is_predicate(expr):
         raise PermissionConditionError(
             'Permission condition did not produce a V1 comparison '
             'expression (==, !=, &, | over principal and object fields).'
         )
-    validate_expression(expr, model)
-    return compile_to_q(expr, model, user, perm)
+    validate_expression(expr, model, user_model)
+    return compile_to_q(expr, model, user, perm, user_model)
 
 
-def evaluate_registered_expression(expr, user, perm, obj, model=None):
+def evaluate_registered_expression(expr, user, perm, obj, model=None, user_model=None):
     """Evaluate a registered ``Expr`` against a real principal/object."""
     if not is_predicate(expr):
         raise PermissionConditionError(
@@ -1050,9 +1044,14 @@ def evaluate_registered_expression(expr, user, perm, obj, model=None):
         )
     klass = model
     if klass is None:
-        klass = obj.model if hasattr(obj, 'model') and not isinstance(obj, Model) else obj.__class__
-    validate_expression(expr, klass)
-    return evaluate_expression(expr, user, perm, obj, model=klass)
+        klass = (
+            obj.model if hasattr(obj, 'model') and not isinstance(obj, Model)
+            else obj.__class__
+        )
+    validate_expression(expr, klass, user_model)
+    return evaluate_expression(
+        expr, user, perm, obj, model=klass, user_model=user_model,
+    )
 
 
 def _condition_model_key(model):
@@ -1138,10 +1137,11 @@ class ConditionRegistry(object):
     ``TypeError`` before this store is mutated.
     """
 
-    def __init__(self):
+    def __init__(self, user_model=None):
+        self.user_model = user_model
         self._records = {}
 
-    def register_permission_condition(self, model, cond_code, condition):
+    def register_permission_condition(self, model, cond_code, condition, user_model=None):
         """Register a ``:cond_code`` condition on ``model``.
 
         Pass a builder ``callable(u, p, o)`` that returns a V1
@@ -1159,7 +1159,7 @@ class ConditionRegistry(object):
         expr = _invoke_condition_builder(condition, model, cond_code)
         normalize_expression(expr)
         if getattr(model, '_meta', None) is not None:
-            validate_expression(expr, model)
+            validate_expression(expr, model, user_model)
         record = ConditionRecord(expr=expr, model=model)
         self._records[(_condition_model_key(model), cond_code)] = record
         return record
@@ -1184,16 +1184,10 @@ class ConditionRegistry(object):
         registered trees that are not valid V1 fail closed.
         """
         cond = permission_condition_code(perm)
-        record = self.get_permission_condition_record(model, cond)
-        if record is None:
-            raise _unknown_condition_error(model, cond)
-        if record.expr is None:
-            raise PermissionConditionError(
-                'Permission condition %r on %s is unbound.'
-                % (cond, _condition_model_label(model))
-            )
-        grant = perm.split(':', 1)[0] if isinstance(perm, str) else perm
-        return compile_expression_q(record.expr, model, user, grant)
+        return compile_stored_condition_q(
+            self.get_permission_condition_record(model, cond),
+            model, perm, user, self.user_model,
+        )
 
     def evaluate_permission_condition(self, model, cond_code, user, perm, obj):
         """Evaluate one registered condition against a real object.
@@ -1201,33 +1195,61 @@ class ConditionRegistry(object):
         Unregistered codes raise ``AttributeError``. Unbound records
         fail closed. The builder is never invoked here.
         """
-        record = self.get_permission_condition_record(model, cond_code)
-        if record is None:
-            raise _unknown_condition_error(model, cond_code)
-        if record.expr is None:
-            raise PermissionConditionError(
-                'Permission condition %r on %s is unbound.'
-                % (cond_code, _condition_model_label(model))
-            )
-        return evaluate_registered_expression(
-            record.expr, user, perm, obj, model=model,
+        return evaluate_stored_condition(
+            self.get_permission_condition_record(model, cond_code),
+            model, cond_code, user, perm, obj, self.user_model,
         )
 
 
-class RegistryConditionLookup(ConditionLookup):
-    """Generic ``ConditionLookup`` over a ``ConditionRegistry``.
+def compile_stored_condition_q(record, model, perm, user, user_model=None):
+    """Compile one stored condition record, or raise fail-closed."""
+    cond = permission_condition_code(perm)
+    if record is None:
+        raise _unknown_condition_error(model, cond)
+    if record.expr is None:
+        raise PermissionConditionError(
+            'Permission condition %r on %s is unbound.'
+            % (cond, _condition_model_label(model))
+        )
+    grant = perm.split(':', 1)[0] if isinstance(perm, str) else perm
+    return compile_expression_q(record.expr, model, user, grant, user_model)
 
-    The factory binds this adapter to its condition registry at construct.
-    Applications register builders; they do not import or construct this type.
+
+def evaluate_stored_condition(record, model, cond_code, user, perm, obj, user_model=None):
+    """Evaluate one stored condition record, or raise fail-closed."""
+    if record is None:
+        raise _unknown_condition_error(model, cond_code)
+    if record.expr is None:
+        raise PermissionConditionError(
+            'Permission condition %r on %s is unbound.'
+            % (cond_code, _condition_model_label(model))
+        )
+    return evaluate_registered_expression(
+        record.expr, user, perm, obj, model=model, user_model=user_model,
+    )
+
+
+class FrozenConditionLookup(object):
+    """Condition rows frozen at ``build()``.
+
+    The rows are a tuple taken once from the factory store. This lookup
+    does not share that mutable store.
     """
 
-    def __init__(self, conditions):
-        self.conditions = conditions
+    __slots__ = ('_index',)
+
+    def __init__(self, rows):
+        self._index = {
+            (_condition_model_key(model), code): record
+            for model, code, record in rows
+        }
 
     def record_for(self, model, cond_code):
-        return self.conditions.get_permission_condition_record(model, cond_code)
+        return self._index.get((_condition_model_key(model), cond_code))
 
-    def compile_q(self, model, perm_string, user):
-        return self.conditions.compile_registered_condition_q(
-            model, perm_string, user,
+    def compile_q(self, model, perm_string, user, user_model=None):
+        cond = permission_condition_code(perm_string)
+        return compile_stored_condition_q(
+            self.record_for(model, cond), model, perm_string, user,
+            user_model,
         )

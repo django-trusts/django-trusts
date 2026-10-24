@@ -1,6 +1,6 @@
 from django.db import models
 
-from trusts.query import AuthorizedManager
+from trusts.models import AuthorizedManager
 
 
 class Repository(models.Model):

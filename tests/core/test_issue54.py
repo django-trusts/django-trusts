@@ -16,23 +16,25 @@ from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
 from tests.support import (
+    built_catalog,
     listed_relationship,
     live_config,
     scoped_permitted_content,
+    compiler,
 )
 from tests.core import kernel_host_listed
 from tests.kernel_host.apps import KernelHostConfig
 from tests.myapp.models import Document, DocumentGrant
-from trusts.apps import TrustsImplementationConfig
+from trusts.apps import TrustsConfigMixin
 from trusts.decorators import filter_by_permitted_content
-from trusts.plan.relations import (
-    ConditionLookup,
-    PlanQueryCompiler,
-)
+from trusts.plan.conditions import FrozenConditionLookup
+from trusts.compile.catalogs import Catalog
+from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
-from trusts.query import (
+import trusts.models as models_mod
+from trusts.compile.factory import Compiler
+from trusts.models import (
     AuthorizedManager,
     AuthorizedManagerMixin,
     AuthorizedQuerySet,
@@ -111,7 +113,7 @@ def _scope_models():
 
 def _register_payload(registry, grant):
     j = Ref(grant)
-    return registry.register(
+    return registry.register_relation(
         content=j.folder.rows.content,
         user=j.user,
         permission=j.permission,
@@ -124,114 +126,65 @@ class KernelConfigTest(SimpleTestCase):
             self.skipTest('kernel-only host path is not listed on the pair')
         import trusts.apps as apps_mod
 
-        config = live_config()
-        self.assertIs(type(config), TrustsImplementationConfig)
-        self.assertNotIsInstance(
-            __import__('django.apps', fromlist=['apps']).apps.get_app_config(
-                'trusts_kernel_host',
-            ),
-            TrustsImplementationConfig,
-        )
+        from django.apps import apps as django_apps
+
+        config = django_apps.get_app_config('trusts_kernel_host')
+        self.assertIsInstance(config, TrustsConfigMixin)
+        self.assertIsNot(type(config), TrustsConfigMixin)
         self.assertFalse(hasattr(apps_mod, 'kernel_config'))
         self.assertFalse(hasattr(apps_mod, 'AppConfig'))
 
     def test_legacy_query_helpers_are_removed(self):
-        import trusts.query as query
-
-        self.assertFalse(hasattr(query, 'trust_grant_q'))
-        self.assertFalse(hasattr(query, 'historical_group_grant_exists'))
-        self.assertFalse(hasattr(query, 'group_local_grant_exists'))
-        self.assertFalse(hasattr(query, 'permission_granted_via_group_exists'))
+        self.assertFalse(hasattr(models_mod, 'trust_grant_q'))
+        self.assertFalse(hasattr(models_mod, 'historical_group_grant_exists'))
+        self.assertFalse(hasattr(models_mod, 'group_local_grant_exists'))
+        self.assertFalse(hasattr(models_mod, 'permission_granted_via_group_exists'))
         self.assertTrue(callable(filter_by_permitted_content))
 
 
 class ConditionLookupBindTest(TestCase):
-    def test_construct_self_binds_and_unbind_is_zero_sql(self):
+    def test_build_freezes_one_lookup_at_zero_sql(self):
+        registry = compiler()
         with self.assertNumQueries(0):
-            registry = RegistryFactory()
-            lookup = registry.filter_lookup
-        self.assertIsNotNone(lookup)
-        self.assertIs(lookup.conditions, registry.conditions)
-
-        class Bound(ConditionLookup):
-            def record_for(self, model, cond_code):
-                raise AssertionError('must not invoke at bind')
-
-            def compile_q(self, model, perm_string, user):
-                raise AssertionError('must not invoke at bind')
-
-        override = Bound()
+            shape = registry.compile()
+        self.assertIsInstance(shape.filter_lookup, FrozenConditionLookup)
+        self.assertIsNone(shape.filter_lookup.record_for(Document, 'own'))
         with self.assertNumQueries(0):
-            registry.set_filter_lookup(override)
-        self.assertIs(registry.filter_lookup, override)
-        with self.assertNumQueries(0):
-            registry.set_filter_lookup(None)
-        self.assertIsNone(registry.filter_lookup)
-        registry.build_registry()
+            again = registry.compile()
+        self.assertIsNot(again.filter_lookup, shape.filter_lookup)
         with self.assertRaises(TrustsConfigurationError):
-            registry.set_filter_lookup(override)
+            registry.add_named_filter(
+                Document, 'own', lambda u, p, o: o.title == 'keep',
+            )
 
-    def test_missing_methods_raise_and_do_not_partial_bind(self):
-        registry = RegistryFactory()
-        default = registry.filter_lookup
-        self.assertIs(default.conditions, registry.conditions)
-
-        class Complete(object):
-            def record_for(self, model, cond_code):
-                return None
-
-            def compile_q(self, model, perm_string, user):
-                return Q(pk__isnull=True)
-
-        class OnlyRecord(object):
-            def record_for(self, model, cond_code):
-                return None
-
-        class OnlyCompile(object):
-            def compile_q(self, model, perm_string, user):
-                return Q()
-
-        with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError):
-                registry.set_filter_lookup(OnlyRecord())
-            with self.assertRaises(TrustsConfigurationError):
-                registry.set_filter_lookup(OnlyCompile())
-            with self.assertRaises(TrustsConfigurationError):
-                registry.set_filter_lookup(object())
-        self.assertIs(registry.filter_lookup, default)
-        self.assertIs(default.conditions, registry.conditions)
-
-        complete = Complete()
-        with self.assertNumQueries(0):
-            registry.set_filter_lookup(complete)
-        with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError):
-                registry.set_filter_lookup(OnlyRecord())
-            with self.assertRaises(TrustsConfigurationError):
-                registry.set_filter_lookup(OnlyCompile())
-            with self.assertRaises(TrustsConfigurationError):
-                registry.set_filter_lookup(object())
-        self.assertIs(registry.filter_lookup, complete)
-
-    def test_callable_policy_is_not_invoked_by_the_protocol(self):
+    def test_lookup_answers_only_the_frozen_rows(self):
         called = []
 
-        def callback(user, perm, obj):
+        def builder(user, perm, obj):
             called.append((user, perm, obj))
-            return True
+            return obj.title == 'keep'
 
-        class Refusing(ConditionLookup):
-            def record_for(self, model, cond_code):
-                return type('Rec', (), {'expr': None, 'func': callback})()
-
-            def compile_q(self, model, perm_string, user):
-                raise PermissionError('lookup compile_q must not invoke builders')
-
-        lookup = Refusing()
+        registry = compiler()
         with self.assertNumQueries(0):
-            with self.assertRaises(PermissionError):
-                lookup.compile_q(Document, 'myapp.change_document:own', None)
-        self.assertEqual(called, [])
+            record = registry.add_named_filter(
+                Document, 'named', builder,
+            )
+            shape = registry.compile()
+        self.assertEqual(len(called), 1)
+        lookup = shape.filter_lookup
+        self.assertIs(lookup.record_for(Document, 'named'), record)
+        self.assertIsNone(lookup.record_for(Document, 'missing'))
+        empty = FrozenConditionLookup(())
+        self.assertIsNone(empty.record_for(Document, 'named'))
+        with self.assertNumQueries(0):
+            compiled = lookup.compile_q(
+                Document, 'myapp.change_document:named', None,
+            )
+        self.assertIsNotNone(compiled)
+        self.assertEqual(len(called), 1)
+        with self.assertNumQueries(0):
+            with self.assertRaises(AttributeError):
+                empty.compile_q(Document, 'myapp.change_document:named', None)
 
 
 class AuthorizedQuerySetSurfaceTest(SimpleTestCase):
@@ -387,7 +340,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
         self.FolderGrant.objects.create(
             folder=self.folder_a, user=self.alice, permission=self.add,
         )
-        registry = RegistryFactory()
+        registry = compiler()
         _register_payload(registry, self.FolderGrant)
         self.handle = registry
 
@@ -396,7 +349,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
 
     def _filter(self, queryset, user=None, permission=None, content=None, registry=None):
         if registry is None:
-            registry = self.handle.build_registry()
+            registry = built_catalog(self.handle)
         return scoped_permitted_content(
             queryset,
             self.alice if user is None else user,
@@ -406,7 +359,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
         )
 
     def test_prefix_folder_is_create_under_scope_without_naming_zero(self):
-        qs = self._filter(self.Folder.objects.all(), registry=self.handle.build_registry())
+        qs = self._filter(self.Folder.objects.all(), registry=built_catalog(self.handle))
         self.assertIsInstance(qs, QuerySet)
         self.assertIsNone(qs._result_cache)
         with self.assertNumQueries(1):
@@ -416,21 +369,21 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
 
     def test_prefix_row_correlates_and_terminal_is_none(self):
         self.assertEqual(
-            _pks(self._filter(self.Row.objects.all(), registry=self.handle.build_registry())),
+            _pks(self._filter(self.Row.objects.all(), registry=built_catalog(self.handle))),
             {self.row.pk},
         )
-        qs = self._filter(self.Payload.objects.all(), registry=self.handle.build_registry())
+        qs = self._filter(self.Payload.objects.all(), registry=built_catalog(self.handle))
         with self.assertNumQueries(0):
             self.assertFalse(qs.exists())
 
     def test_unknown_terminal_empty_handles_and_off_path_are_none(self):
         cases = (
             self._filter(
-                self.Folder.objects.all(), content=self.Other, registry=self.handle.build_registry(),
+                self.Folder.objects.all(), content=self.Other, registry=built_catalog(self.handle),
             ),
-            self._filter(self.Folder.objects.all(), registry=RegistryFactory(family='ordered_fold').build_registry()),
+            self._filter(self.Folder.objects.all(), registry=built_catalog(compiler(family='ordered_fold'))),
             self._filter(
-                self.Other.objects.all(), content=self.Payload, registry=self.handle.build_registry(),
+                self.Other.objects.all(), content=self.Payload, registry=built_catalog(self.handle),
             ),
         )
         for qs in cases:
@@ -447,7 +400,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
                     self.alice,
                     'add_payload',
                     content=self.Payload,
-                    registry=self.handle.build_registry(),
+                    registry=built_catalog(self.handle),
                 )
             with self.assertRaises(TrustsConfigurationError):
                 scoped_permitted_content(
@@ -455,20 +408,20 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
                     self.alice,
                     None,
                     content=self.Payload,
-                    registry=self.handle.build_registry(),
+                    registry=built_catalog(self.handle),
                 )
 
     def test_wrong_user_and_wrong_permission_deny(self):
         self.assertFalse(
             self._filter(
-                self.Folder.objects.all(), user=self.bob, registry=self.handle.build_registry(),
+                self.Folder.objects.all(), user=self.bob, registry=built_catalog(self.handle),
             ).exists()
         )
         self.assertFalse(
             self._filter(
                 self.Folder.objects.all(),
                 permission=self.change,
-                registry=self.handle.build_registry(),
+                registry=built_catalog(self.handle),
             ).exists()
         )
 
@@ -509,7 +462,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
 
         ghost = Ghost()
         ghost.is_anonymous = True
-        with listed_relationship((self.handle, self.handle)):
+        with listed_relationship((self.handle,)):
             with self.assertNumQueries(0):
                 denied = filter_by_permitted_content(
                     self.Folder.objects.all(),
@@ -586,9 +539,9 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         with _tables(Scope, Payload, Row, Grant):
-            registry = RegistryFactory()
+            registry = compiler()
             j = Ref(Grant)
-            record = registry.register(
+            record = registry.register_relation(
                 content=j.scope.rows.content,
                 user=j.user,
                 permission=j.permission,
@@ -616,7 +569,7 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
             handle = registry
             qs = scoped_permitted_content(
                 Scope.objects.order_by('pk'), alice, add,
-                content=Payload, registry=handle.build_registry(),
+                content=Payload, registry=built_catalog(handle),
             )
             self.assertIsInstance(qs, QuerySet)
             self.assertIsNone(qs._result_cache)
@@ -630,6 +583,6 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
             self.assertFalse(
                 scoped_permitted_content(
                     Scope.objects.all(), bob, add,
-                    content=Payload, registry=handle.build_registry(),
+                    content=Payload, registry=built_catalog(handle),
                 ).exists()
             )

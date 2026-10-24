@@ -39,9 +39,7 @@ from django.core import checks as django_checks
 from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
-import trusts.plan.standards as standards
-from trusts.backends import configured_catalogs
-from trusts.plan.hops import resolved_hop
+from trusts.apps import installed_catalogs
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.format import _format_policy_sql
@@ -73,6 +71,7 @@ from trusts.plan.aggregates import _compile_common_permissions
 from trusts.plan.users import lock_permitted_users_queryset
 from trusts.plan.contents import _compile_permitted_content_queryset
 from trusts.plan.rewrites import _AlongOnce
+
 
 SCHEMA_VERSION = 1
 CHECK_ID_POLICY_LOCK = 'trusts.E009'
@@ -140,7 +139,6 @@ class PolicyLockLocation(object):
 
 class _Symbol(object):
     """One classified placeholder. Not a runtime value."""
-
     __slots__ = ('payload',)
 
     def __init__(self, payload):
@@ -199,7 +197,7 @@ def render_policy_sql_bytes(*, alias=None):
     A failure raises before a partial document is returned.
     """
     resolved = resolve_policy_database(alias)
-    document = _build_document(tuple(configured_catalogs()), resolved)
+    document = _build_document(installed_catalogs(), resolved)
     return _dump_document(document)
 
 
@@ -261,16 +259,14 @@ class _PolicyVisitor(object):
     """Snapshot visitor: renders each walked question to policy SQL.
 
     Supplies the alias and the user/permission/content sentinels for one
-    catalog. ``subject`` is that catalog. ``visit(question)`` is the
-    single visitor method :meth:`Registry.walk_questions` calls; it
-    accumulates the same document structure (and key order) the
-    hard-coded projection produced. The six ``_compile_*`` methods
+    catalog. ``visit(question)`` is the single visitor method
+    :meth:`Catalog.walk_questions` calls. The six ``_compile_*`` methods
     below are its per-question bodies.
     """
 
     def __init__(self, catalog, alias, *, trust_ids=None):
         self.alias = alias
-        self.subject = catalog
+        self.catalog = catalog
         self._trust_ids = dict(trust_ids or {})
         self._contents = {}
         self._classifier_records = {}
@@ -403,33 +399,36 @@ class _PolicyVisitor(object):
 
     def _compile_content_grant(self, records, model):
 
-        subject, alias = self.subject, self.alias
+        catalog, alias = self.catalog, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         queryset = _content_manager(model).all()
-        predicate = subject.complete_grant_q(queryset, user, permission)
+        predicate = catalog.complete_grant_q(queryset, user, permission)
         if predicate is None:
             raise TrustsConfigurationError(
                 'Policy SQL found no grant for %s.' % _model_label(model)
             )
-        queryset = bind_once(queryset.filter(predicate).distinct())
+        queryset = bind_once(
+            queryset.filter(predicate).distinct(),
+            user_model=catalog.user_model,
+        )
         return _compile_queryset(
             queryset, alias, record=records[0], expr=None, records=records,
         )
 
     def _compile_has_perm(self, records, model):
 
-        subject, alias = self.subject, self.alias
+        catalog, alias = self.catalog, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         instance = _content_sentinel(model, alias)
-        predicate = subject.complete_grant_q(instance, user, permission)
+        predicate = catalog.complete_grant_q(instance, user, permission)
         if predicate is None:
             raise TrustsConfigurationError(
                 'Policy SQL found no grant for %s.' % _model_label(model)
             )
         exists = _content_manager(model).filter(pk=instance.pk).filter(predicate)
-        compiled = bound_exists_query(exists)
+        compiled = bound_exists_query(exists, user_model=catalog.user_model)
         return _compile_queryset(
             _Query(compiled),
             alias, record=records[0], expr=None, records=records,
@@ -437,11 +436,11 @@ class _PolicyVisitor(object):
 
     def _compile_get_all_permissions(self, records, model):
 
-        subject, alias = self.subject, self.alias
+        catalog, alias = self.catalog, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         instance = _content_sentinel(model, alias)
         queryset = _compile_common_permissions(
-            subject, instance, user, kind='complete',
+            catalog, instance, user, kind='complete',
         )
         if queryset is None:
             raise TrustsConfigurationError(
@@ -454,12 +453,12 @@ class _PolicyVisitor(object):
 
     def _compile_get_permitted_users(self, records, model):
 
-        subject, alias = self.subject, self.alias
+        catalog, alias = self.catalog, self.alias
         content = _content_sentinel(model, alias)
         _populate_reverse_along_identity(content, records, alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         queryset = lock_permitted_users_queryset(
-            subject, content, permission,
+            catalog, content, permission,
         )
         return _compile_queryset(
             queryset, alias, record=records[0], expr=None, records=records,
@@ -468,18 +467,17 @@ class _PolicyVisitor(object):
 
     def _compile_filter_by_permitted_content(self, records, model):
         """One statement per proper prefix, the queryset that actually runs."""
-
-        subject, alias = self.subject, self.alias
+        catalog, alias = self.catalog, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         rows = []
-        for prefix in _permitted_content_prefix_models(subject, model):
+        for prefix in catalog.permitted_content_prefix_models(model):
             queryset = _compile_permitted_content_queryset(
                 _content_manager(prefix).all(),
                 user,
                 permission,
                 content=model,
-                registry=subject,
+                catalog=catalog,
             )
             if queryset.query.is_empty():
                 continue
@@ -495,11 +493,11 @@ class _PolicyVisitor(object):
 
     def _compile_get_group_permissions(self, records, model):
 
-        registry, alias = self.subject, self.alias
+        catalog, alias = self.catalog, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         instance = _content_sentinel(model, alias)
         queryset = _compile_common_permissions(
-            registry, instance, user, kind='group',
+            catalog, instance, user, kind='group',
         )
         if queryset is None:
             raise TrustsConfigurationError(
@@ -518,15 +516,15 @@ def _build_document(catalogs, alias):
         raise TrustsConfigurationError(
             'Policy SQL render alias %r has no DATABASES ENGINE.' % (alias,)
         )
-    projected = []
+    projected, seen = [], set()
     for catalog in catalogs:
-        projected.append(_project_backend(catalog, alias))
+        row = _project_backend(catalog, alias)
+        if row['path'] in seen:
+            raise TrustsConfigurationError('Policy SQL render found duplicate backend paths.')
+        seen.add(row['path'])
+        if row['contents']:
+            projected.append(row)
     projected.sort(key=lambda row: row['path'])
-    paths = [row['path'] for row in projected]
-    if len(paths) != len(set(paths)):
-        raise TrustsConfigurationError(
-            'Policy SQL render found duplicate backend paths.'
-        )
     return {
         'schema_version': SCHEMA_VERSION,
         'database': {'engine': engine},
@@ -534,34 +532,34 @@ def _build_document(catalogs, alias):
     }
 
 
-def _project_backend(registry, alias):
-    path = registry.path
+def _project_backend(catalog, alias):
+    path = catalog.path
     if not isinstance(path, str) or path == '':
         raise TrustsConfigurationError(
             'Policy SQL render catalog is missing a configured path: %r.'
             % (path,)
         )
-    family = registry.family
+    family = catalog.family
     if family != 'relationship':
         raise TrustsConfigurationError(
             'Policy SQL render only serializes family %r; backend path '
             '%r has unsupported family %r.'
             % ('relationship', path, family)
         )
-    records = tuple(registry.records)
-    delegations = tuple(registry.delegations)
+    records = tuple(catalog.records)
+    delegations = tuple(catalog.delegations)
     all_records = records + delegations
     ids = _assign_ids(all_records)
-    named_filters = _project_named_filters(registry, alias)
+    named_filters = _project_named_filters(catalog, alias)
     return {
         'path': path,
         'contents': _project_contents(
-            registry, alias, all_records, ids, named_filters,
+            catalog, alias, all_records, ids, named_filters,
         ),
     }
 
 
-def _project_contents(registry, alias, records, ids, named_filters):
+def _project_contents(catalog, alias, records, ids, named_filters):
     groups = []
     index = {}
     for record, trust_id in zip(records, ids):
@@ -588,13 +586,13 @@ def _project_contents(registry, alias, records, ids, named_filters):
     contents = []
     seen = set()
     visitor = _PolicyVisitor(
-        registry, alias,
+        catalog, alias,
         trust_ids={
             id(record): trust_id for record, trust_id in zip(records, ids)
         },
     )
     if groups:
-        registry.walk_questions(visitor)
+        catalog.walk_questions(visitor)
         for group in groups:
             seen.add(group['label'])
             content = visitor.content_for(group['label'])
@@ -805,63 +803,6 @@ def _role_sentinel(record, role, alias):
     )
 
 
-def _compile_content_grant(subject, alias, records, model):
-    return _PolicyVisitor(subject, alias)._compile_content_grant(records, model)
-
-
-def _compile_has_perm(subject, alias, records, model):
-    return _PolicyVisitor(subject, alias)._compile_has_perm(records, model)
-
-
-def _compile_get_all_permissions(subject, alias, records, model):
-    return _PolicyVisitor(subject, alias)._compile_get_all_permissions(
-        records, model)
-
-
-def _compile_get_permitted_users(subject, alias, records, model):
-    return _PolicyVisitor(subject, alias)._compile_get_permitted_users(
-        records, model)
-
-
-def _permitted_content_prefix_models(registry, model):
-    """Concrete models that are a proper prefix of this backend's content path.
-
-    Order is registration order, then path order. A model is listed once.
-    The protected model is included only when an earlier hop on the same
-    path also uses it.
-    """
-    plan = registry.plan_for(model)
-    legs = tuple(plan.records) + tuple(plan.delegations)
-    found = []
-    seen = set()
-    for record in legs:
-        path = record.content_path
-        if not path:
-            continue
-        current = record.root
-        last = len(path) - 1
-        for index, name in enumerate(path):
-            field = current._meta.get_field(name)
-            related, _target = resolved_hop(field, 'content', path)
-            concrete = related._meta.concrete_model
-            if index != last and concrete not in seen:
-                seen.add(concrete)
-                found.append(concrete)
-            current = related
-    return tuple(found)
-
-
-def _compile_filter_by_permitted_content(subject, alias, records, model):
-    """One statement per proper prefix, the queryset that actually runs."""
-    return _PolicyVisitor(subject, alias)._compile_filter_by_permitted_content(
-        records, model)
-
-
-def _compile_get_group_permissions(subject, alias, records, model):
-    return _PolicyVisitor(subject, alias)._compile_get_group_permissions(
-        records, model)
-
-
 class _Query(object):
     def __init__(self, query):
         self.query = query
@@ -1030,9 +971,9 @@ def _base_id(record):
     return label.replace('.', '__')
 
 
-def _project_named_filters(registry, alias):
+def _project_named_filters(catalog, alias):
     rows = []
-    iterator = getattr(registry, 'iter_permission_conditions', None)
+    iterator = catalog.iter_permission_conditions
     if not callable(iterator):
         return rows
     for model, code, record in iterator():
@@ -1046,7 +987,9 @@ def _project_named_filters(registry, alias):
                 % (model_label, code)
             )
         expr = getattr(record, 'expr', None)
-        sql, params = _compile_named_filter(model, expr, alias)
+        sql, params = _compile_named_filter(
+            model, expr, alias, catalog.user_model,
+        )
         rows.append({
             'model': model_label,
             'id': _dotless_id(model_label, code),
@@ -1056,24 +999,20 @@ def _project_named_filters(registry, alias):
     return rows
 
 
-def _compile_named_filter(model, expr, alias):
+def _compile_named_filter(model, expr, alias, user_model):
 
     compiled = compile_expression_q(
         expr, model,
-        _any_sentinel_user(alias),
+        _any_sentinel_user(alias, user_model),
         _any_sentinel_permission(alias),
+        user_model=user_model,
     )
     queryset = model._meta.concrete_model._default_manager.filter(compiled)
     return _compile_queryset(queryset, alias, record=None, expr=expr)
 
 
-def _any_sentinel_user(alias):
-    model = standards.user_model
-    if model is None:
-        raise TrustsConfigurationError(
-            'Policy SQL has no user model. TrustsImplementationConfig.ready has not stored one.'
-        )
-    return _sentinel(model, model._meta.pk.attname, alias=alias)
+def _any_sentinel_user(alias, user_model):
+    return _sentinel(user_model, user_model._meta.pk.attname, alias=alias)
 
 
 def _any_sentinel_permission(alias):
@@ -1360,7 +1299,6 @@ def _comparison_symbol(node):
 
 class _ExportOps(object):
     """Database operations that build export-scoped compilers only."""
-
     def __init__(self, ops):
         self._ops = ops
 
@@ -1554,7 +1492,6 @@ def _value_hint(node, query):
 
 def _const_hint(node, value):
     """Readable label for one constant placeholder."""
-
     if isinstance(node, Value):
         return 'literal'
     if isinstance(node, Lookup):
@@ -1748,7 +1685,6 @@ def _json_const(value):
 
 def _const_from_json(value):
     """Inverse of :func:`_json_const` for one recorded constant value."""
-
     if isinstance(value, dict):
         kind = value.get('type')
         if kind == 'float':

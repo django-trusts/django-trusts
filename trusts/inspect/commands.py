@@ -1,9 +1,8 @@
 """Management command for the authorization policy SQL document.
 
-Core is not a Django app and does not ship
-``trusts/management``. ``TrustsImplementationConfig.ready`` calls
-:func:`install_policy_commands` so ``trusts_policy_sql`` is
-discoverable after ``django.setup()``.
+A host app gets the command by adding
+``management/commands/trusts_policy_sql.py`` containing
+``from trusts.inspect.commands import PolicySqlCommand as Command``.
 
 The command prints the schema-1 canonical YAML document and, with
 ``--lock``, writes those same bytes. It does not authorize and it does
@@ -11,8 +10,6 @@ not execute the exported statements.
 """
 
 from __future__ import annotations
-
-__all__ = []
 
 from django.core.management.base import BaseCommand, CommandError
 
@@ -22,10 +19,8 @@ from trusts.inspect.snapshot import (
     resolve_policy_database,
     write_policy_lock,
 )
-import django.core.management as management
 
-_POLICY_COMMAND_APP = 'trusts.policy_commands'
-_INSTALLED = False
+__all__ = ['PolicySqlCommand']
 
 
 class PolicySqlCommand(BaseCommand):
@@ -36,8 +31,9 @@ class PolicySqlCommand(BaseCommand):
         'alias selected by TRUSTS_POLICY_DATABASE, or Django\'s default '
         'alias when that setting is unset. Each content lists its trust '
         'legs and the compiled SQL for permitted, has_perm, '
-        'get_all_permissions, and get_permitted_users. --database selects another configured alias for this '
-        'process only. --lock writes the same bytes to the lockfile path.'
+        'get_all_permissions, and get_permitted_users. --database selects '
+        'another configured alias for this process only. --lock writes '
+        'the same bytes to the lockfile path.'
     )
     requires_system_checks = []
     requires_migrations_checks = False
@@ -69,44 +65,3 @@ class PolicySqlCommand(BaseCommand):
         except TrustsConfigurationError as exc:
             raise CommandError(str(exc)) from exc
         self.stdout.write(payload.decode('utf-8'), ending='')
-
-
-_POLICY_COMMANDS = {
-    'trusts_policy_sql': PolicySqlCommand,
-}
-
-
-def install_policy_commands():
-    """Register ``trusts_policy_sql`` on Django's command loader.
-
-    Idempotent. Does not override a command of the same name already
-    provided by another application. Safe to call from every
-    implementation ``ready()``.
-    """
-    global _INSTALLED
-    if _INSTALLED:
-        return
-
-    original_get = management.get_commands
-    original_load = management.load_command_class
-
-    def get_commands():
-        commands = original_get()
-        for name in _POLICY_COMMANDS:
-            commands.setdefault(name, _POLICY_COMMAND_APP)
-        return commands
-
-    def cache_clear():
-        original_get.cache_clear()
-
-    get_commands.cache_clear = cache_clear
-
-    def load_command_class(app_name, name):
-        command_cls = _POLICY_COMMANDS.get(name)
-        if app_name == _POLICY_COMMAND_APP and command_cls is not None:
-            return command_cls()
-        return original_load(app_name, name)
-
-    management.get_commands = get_commands
-    management.load_command_class = load_command_class
-    _INSTALLED = True

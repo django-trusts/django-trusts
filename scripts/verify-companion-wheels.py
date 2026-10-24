@@ -5,7 +5,8 @@ Proves Zero RECORD does not own trusts/__init__.py or trusts/apps.py,
 and that both companion layouts work:
 
 1. Kernel wheel then Zero overlay (site-packages merge).
-2. Isolated Zero wheel (no kernel trusts/__init__.py) still imports ZeroConfig.
+2. Isolated Zero wheel (Core removed) configures Django and raises
+   ModuleNotFoundError for ``trusts.apps``.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from management_archive import ships_trusts_management
 
 ROOT = Path(__file__).resolve().parents[1]
 # Exact Zero candidate companion.
-ZERO_HEAD = '833866b9a096ac8a31e8bc60424e01a02f05389c'
+ZERO_HEAD = '849baad6109425dc0f35e43ca2f1cf1ee310742c'
 FORBIDDEN_ZERO_PATHS = (
     'trusts/__init__.py',
     'trusts/apps.py',
@@ -124,10 +125,16 @@ for name in list(sys.modules):
         del sys.modules[name]
 if not settings.configured:
     settings.configure(SECRET_KEY="companion-zero-isolated")
-from trusts.zero.apps import ZeroConfig
-assert ZeroConfig.name == "trusts.zero"
-assert ZeroConfig.label == "trusts"
-print("companion-zero-isolated-ok")
+try:
+    from trusts.zero.apps import ZeroConfig  # noqa: F401
+except ModuleNotFoundError as exc:
+    missing = exc.name or ""
+    if missing == "trusts.apps":
+        print("companion-zero-isolated-ok")
+        raise SystemExit(0)
+    raise
+print("unexpected-zero-without-core")
+raise SystemExit(1)
 '''
 
 

@@ -3,23 +3,21 @@
 Live one-path Trust/Content ``has_perm`` stays on Zero ``tests/legacy/``.
 """
 from django.contrib.auth import get_user_model
+from django.core.checks import run_checks
+from django.test import TestCase, override_settings
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db.models.query import QuerySet
-from django.test import TestCase
-from tests.support import configured_catalog, live_config, built_catalog
+from tests.support import configured_catalog, built_catalog, compiler
 from tests.core import KernelHostRequiredMixin
 from tests.backends import RaisingCompilerBackend
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 
-from trusts.plan.aggregates import _compile_common_permissions, compiler_for_class
-from trusts.plan.relations import PlanQueryCompiler
-from trusts.errors import TrustsCompilerError
-from trusts.compile.factory import RegistryFactory
+from trusts.plan.aggregates import _compile_common_permissions
 from trusts.plan.contents import granted
-from tests.backends import MissingCompilerBackend
+
 
 def _pks(qs):
     return set(qs.values_list('pk', flat=True))
@@ -32,27 +30,28 @@ def _change_document():
 def _contribute_document(registry):
     from trusts.compile.nodes import Ref
     j = Ref(DocumentGrant)
-    registry.register(content=j.document, user=j.user, permission=j.permission)
+    registry.register_relation(content=j.document, user=j.user, permission=j.permission)
 
 class CompilerFailureTest(KernelHostRequiredMixin, TestCase):
 
     def test_raising_compiler_propagates_on_granted(self):
         User = get_user_model()
-        registry = RegistryFactory(compiler=RaisingCompilerBackend.query_compiler)
+        registry = compiler(query_compiler=RaisingCompilerBackend.query_compiler)
         registry.path = 'tests.backends.RaisingCompilerBackend'
         handle = registry
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
-            granted(handle.build_registry(), Document, User(), Permission(), kind='complete')
+            granted(built_catalog(handle), Document, User(), Permission(), kind='complete')
         self.assertIn('compiler exploded', str(ctx.exception))
 
-    def test_missing_compiler_fails_loud(self):
-        with self.assertRaises(TrustsCompilerError):
-            compiler_for_class(MissingCompilerBackend)
-
     def test_unconfigured_and_ambiguous_path_fail_loud(self):
-        with self.assertRaises(Exception):
-            configured_catalog('tests.backends.MixinOnlyBackend')
+        outside = 'tests.gh_permissions.backends.OutsideBackend'
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST_BACKEND, outside)):
+            messages = run_checks()
+        self.assertTrue(any(
+            getattr(message, 'id', None) == 'trusts.E012'
+            for message in messages
+        ))
 
 class CompilerIsolationBackendTest(KernelHostRequiredMixin, TestCase):
 
@@ -63,7 +62,7 @@ class CompilerIsolationBackendTest(KernelHostRequiredMixin, TestCase):
         self.assertTrue(document.plan_for(Document).records)
 
     def test_mixin_only_alone_does_not_see_document_plan(self):
-        mixin = RegistryFactory(path='tests.backends.MixinOnlyBackend')
+        mixin = compiler(path='tests.backends.MixinOnlyBackend')
         self.assertFalse(built_catalog(mixin).plan_for(Document).records)
 
 class CoordinatorQueryCountTest(KernelHostRequiredMixin, TestCase):

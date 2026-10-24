@@ -30,13 +30,12 @@ from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.inspect.snapshot import _compile_queryset, _load_policy_sql_document, render_policy_sql_bytes
-from trusts.query import PermittedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.support import render_configured_policy, built_catalog
-from trusts.compile.catalogs import Catalog
+from trusts.models import PermittedManager, PermittedUsersManagerMixin, PermittedUsersMixin
+from tests.support import render_configured_policy, built_catalog, compiler
 
-HOST = 'tests.backends.HostTrustModelBackend'
+HOST = 'tests.kernel_host.backends.HostTrustModelBackend'
 MODEL_BACKEND = 'django.contrib.auth.backends.ModelBackend'
 PERM = 'myapp.change_document'
 
@@ -182,31 +181,42 @@ def _assert_agrees(test, content, perm, candidates):
     test.assertEqual(found, expected)
     return found
 
-@contextmanager
 def _seal_document_factory(factory):
-    """This test filled ``factory``. Pass that built registry into Catalog."""
+    """Install ``factory`` on every mixin config.
+
+    Reverse inquiry reads the catalog of the app that contains the
+    model. These models live in the tests app, while ``has_perm`` reads
+    the backend's app. One catalog on every config keeps them the same.
+    """
     from tests.myapp.backends import DocumentBackend
-    from trusts.backends import catalogs
-    previous = catalogs.get(DocumentBackend)
-    family = DocumentBackend.family if previous is None else previous.family
-    built = factory.build_registry()
-    catalogs[DocumentBackend] = Catalog(cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family, registry=built)
-    return built
+    from tests.support import (
+        built_catalog,
+        config_for_class,
+        mixin_configs,
+        snapshot_installed_catalogs,
+    )
+    saved = snapshot_installed_catalogs()
+    previous = config_for_class(DocumentBackend).catalog
+    family = config_for_class(DocumentBackend).family if previous is None else previous.family
+    factory.path = DOCUMENT_BACKEND
+    factory.family = family
+    catalog = built_catalog(factory)
+    for config in mixin_configs():
+        config.catalog = catalog
+    return saved
 
 @contextmanager
 def _document_registry():
-    from tests.myapp.backends import DocumentBackend
-    from trusts.backends import catalogs
-    had_catalog = DocumentBackend in catalogs
-    saved_catalog = catalogs.get(DocumentBackend)
-    registry = RegistryFactory(path=DOCUMENT_BACKEND)
+    from tests.support import (
+        restore_installed_catalogs,
+        snapshot_installed_catalogs,
+    )
+    saved = snapshot_installed_catalogs()
+    registry = compiler(path=DOCUMENT_BACKEND)
     try:
         yield registry
     finally:
-        if had_catalog:
-            catalogs[DocumentBackend] = saved_catalog
-        else:
-            catalogs.pop(DocumentBackend, None)
+        restore_installed_catalogs(saved)
 
 def _handle(registry):
     registry.path = DOCUMENT_BACKEND
@@ -244,10 +254,10 @@ class Issue255PolicySqlTest(SimpleTestCase):
             class Meta:
                 app_label = 'documents'
         handle = _export_handle('documents.backends.FolderBackend')
-        handle.register_public(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
-        handle.register_public(trust=FolderPermit, user='user', permission='permission', content='directory', along=('directory__parent', 2))
+        handle.register(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
+        handle.register(trust=FolderPermit, user='user', permission='permission', content='directory', along=('directory__parent', 2))
         folder = Folder(pk=1)
-        queryset = lock_permitted_users_queryset(handle.build_registry(), folder, Permission(pk=1))
+        queryset = lock_permitted_users_queryset(built_catalog(handle), folder, Permission(pk=1))
         self.assertIn('WITH RECURSIVE', str(queryset.query))
         document = _load_policy_sql_document(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
@@ -304,8 +314,8 @@ class Issue255PolicySqlTest(SimpleTestCase):
             class Meta:
                 app_label = 'documents'
         handle = _export_handle('documents.backends.WalkNodeBackend')
-        handle.register_public(trust=ParentGrant, user='user', permission='permission', content='node', along=('node__parent', 8))
-        handle.register_public(trust=MentorGrant, user='user', permission='permission', content='node', along=('node__mentor', 8))
+        handle.register(trust=ParentGrant, user='user', permission='permission', content='node', along=('node__parent', 8))
+        handle.register(trust=MentorGrant, user='user', permission='permission', content='node', along=('node__mentor', 8))
         content = _assert_along_lock(self, handle, ({'path': 'node__parent', 'shape': 'S', 'bound': 8}, {'path': 'node__mentor', 'shape': 'S', 'bound': 8}))
         permitted = content['permitted']['sql']
         self.assertIn('parent_id', permitted)
@@ -331,7 +341,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
             class Meta:
                 app_label = 'documents'
         handle = _export_handle('documents.backends.UuidNodeBackend')
-        handle.register_public(trust=UuidNodeGrant, user='user', permission='permission', content='node', along=('node__parent', 2))
+        handle.register(trust=UuidNodeGrant, user='user', permission='permission', content='node', along=('node__parent', 2))
         record = built_catalog(handle).plan_for(UuidNode).records[0]
         self.assertEqual(record.content_target, 'ident')
         self.assertNotEqual(record.content_target, UuidNode._meta.pk.attname)
@@ -350,7 +360,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
 
     def test_content_pk_literal_stays_const_beside_an_along_reverse(self):
         handle = _export_handle('documents.backends.LiteralFolderBackend')
-        handle.register_public(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
+        handle.register(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
         record = built_catalog(handle).plan_for(Folder).records[0]
         _sql, params = _compile_queryset(FolderGrant.objects.filter(folder__pk=5), 'default', record=record, expr=None, records=(record,), reverse_users=True)
         self.assertEqual(params, [{'const': 5, 'hint': 'id'}])
@@ -488,21 +498,17 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         self.assertIn(self.alice.pk, content_rows)
         self.assertNotIsInstance(self.document.get_permitted_users(self.change), MarkedQuerySet)
 
-    def test_unsupported_backend_fails_before_sql(self):
+    def test_unsupported_backend_does_not_change_the_model_catalog(self):
         backends = settings.AUTHENTICATION_BACKENDS + ('tests.core.test_issue255.AlwaysGrantBackend',)
         with override_settings(AUTHENTICATION_BACKENDS=backends):
-            with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    self.document.get_permitted_users(self.change)
-        self.assertIn('AlwaysGrantBackend', str(ctx.exception))
+            found = _pks(self.document.get_permitted_users(self.change))
+        self.assertEqual(found, _pks(self.document.get_permitted_users(self.change)))
 
     def test_modelbackend_subclass_is_not_inferred_object_blind(self):
         backends = settings.AUTHENTICATION_BACKENDS + ('tests.core.test_issue255.SubclassedModelBackend',)
         with override_settings(AUTHENTICATION_BACKENDS=backends):
-            with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    self.document.get_permitted_users(PERM)
-        self.assertIn('SubclassedModelBackend', str(ctx.exception))
+            found = _pks(self.document.get_permitted_users(self.change))
+        self.assertIn(self.alice.pk, found)
 
     def test_explicit_authentication_only_backend_contributes_nothing(self):
         backends = (DOCUMENT_BACKEND, MODEL_BACKEND, 'tests.core.test_issue255.AuthenticationOnlyBackend')
@@ -512,13 +518,10 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         self.assertIn(self.alice.pk, found)
 
     def test_inactive_grant_backend_is_not_removed_by_a_core_is_active_filter(self):
-        """A custom predicate is not wrapped in ``is_active``.
+        """Reverse inquiry reads the document catalog only.
 
-        Trusts guarantees the ``is_active`` check only for its own grants.
-        The inactive custom grant stays, in agreement with ``has_perm``.
-        The inactive Trusts-owned grant is included only with
-        ``skip_is_active=True``. The custom hook is not required to accept
-        that keyword, and the call does not raise.
+        A side backend's predicate is not called and cannot add a user.
+        The inactive Trusts grant stays out unless ``skip_is_active=True``.
         """
         backends = settings.AUTHENTICATION_BACKENDS + ('tests.core.test_issue255.InactiveGrantBackend',)
         granted = get_user_model().objects.create_user('inactive-granted-255', password='x')
@@ -533,23 +536,19 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
                 found = _pks(chosen)
             with self.assertNumQueries(1):
                 widened_pks = _pks(widened)
-            candidates = get_user_model()._default_manager.get_queryset()
-            expected = {user.pk for user in candidates if _object_backend_allows(user, PERM, self.document)}
-        self.assertEqual(found, expected)
-        self.assertEqual(InactiveGrantBackend.calls, 2)
-        self.assertIn(granted.pk, found)
+        self.assertEqual(InactiveGrantBackend.calls, 0)
+        self.assertNotIn(granted.pk, found)
         self.assertIn(self.alice.pk, found)
         self.assertNotIn(self.inactive.pk, found)
-        self.assertIn(granted.pk, widened_pks)
+        self.assertNotIn(granted.pk, widened_pks)
         self.assertIn(self.alice.pk, widened_pks)
         self.assertIn(self.inactive.pk, widened_pks)
 
     def test_legacy_reverse_hook_is_called_without_skip_is_active(self):
-        """A custom hook is called without ``skip_is_active``.
+        """A side backend's reverse hook is not called.
 
-        ``skip_is_active=True`` does not raise and does not pass the
-        keyword. The inactive user named by the predicate stays in the
-        result.
+        ``get_permitted_users`` reads the document catalog. The inactive
+        Trusts grant is included only with ``skip_is_active=True``.
         """
         InactiveGrantBackend.calls = 0
         StarInactiveGrantBackend.calls = 0
@@ -560,27 +559,28 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         with override_settings(AUTHENTICATION_BACKENDS=backends):
             with self.assertNumQueries(0):
                 self.document.get_permitted_users(self.change, skip_is_active=True)
-        self.assertEqual(InactiveGrantBackend.calls, 1)
-        self.assertEqual(StarInactiveGrantBackend.calls, 1)
+        self.assertEqual(InactiveGrantBackend.calls, 0)
+        self.assertEqual(StarInactiveGrantBackend.calls, 0)
         star_only = settings.AUTHENTICATION_BACKENDS + ('tests.core.test_issue255.StarInactiveGrantBackend',)
         with override_settings(AUTHENTICATION_BACKENDS=star_only):
             with self.assertNumQueries(0):
                 widened = self.document.get_permitted_users(self.change, skip_is_active=True)
             with self.assertNumQueries(0):
                 chosen = self.document.get_permitted_users(self.change)
-        self.assertEqual(StarInactiveGrantBackend.calls, 3)
+        self.assertEqual(StarInactiveGrantBackend.calls, 0)
         found = _pks(chosen)
         widened_pks = _pks(widened)
-        self.assertIn(star_user.pk, found)
-        self.assertIn(star_user.pk, widened_pks)
+        self.assertNotIn(star_user.pk, found)
+        self.assertNotIn(star_user.pk, widened_pks)
         self.assertIn(self.alice.pk, found)
+        self.assertIn(self.inactive.pk, widened_pks)
 
     def test_mode_aware_reverse_hook_is_called_without_skip_is_active(self):
-        """A custom hook is called without ``skip_is_active``.
+        """A side backend that names ``skip_is_active`` is not called.
 
-        Naming the parameter does not make Trusts pass it. The candidate
-        queryset filter still applies. The Trusts-owned grant uses
-        ``skip_is_active=True`` on its own branch.
+        The manager queryset still filters candidates. Users with no
+        document grant are absent. The inactive Trusts grant is present
+        only when ``skip_is_active=True``.
         """
         User = get_user_model()
         inactive = User.objects.create_user('mode-aware-inactive', password='x')
@@ -600,23 +600,24 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         with override_settings(AUTHENTICATION_BACKENDS=backends):
             with self.assertNumQueries(0):
                 default_qs = listing.permitted(self.document, self.change)
-            self.assertIs(ModeAwareGrantBackend.received, False)
-            ModeAwareGrantBackend.received = 'unset'
+            self.assertIs(ModeAwareGrantBackend.received, 'unset')
             with self.assertNumQueries(0):
                 audited_qs = listing.permitted(self.document, self.change, skip_is_active=True)
-            self.assertIs(ModeAwareGrantBackend.received, False)
+            self.assertIs(ModeAwareGrantBackend.received, 'unset')
             unfiltered = self.document.get_permitted_users(self.change, skip_is_active=True)
         self.assertIsInstance(default_qs, ModeAwareQuerySet)
         self.assertIsInstance(audited_qs, ModeAwareQuerySet)
         self.assertEqual(default_qs.marker, 'issue255-candidates')
         default_names = set(default_qs.values_list('username', flat=True))
         audited_names = set(audited_qs.values_list('username', flat=True))
-        self.assertEqual(default_names, {'mode-aware-inactive', 'mode-aware-active'})
-        self.assertEqual(audited_names, {'mode-aware-inactive', 'mode-aware-active'})
-        self.assertIn(active.pk, _pks(audited_qs))
+        self.assertEqual(default_names, set())
+        self.assertEqual(audited_names, set())
+        self.assertNotIn(active.pk, _pks(audited_qs))
+        self.assertNotIn(inactive.pk, _pks(audited_qs))
         self.assertNotIn(outside.pk, _pks(audited_qs))
         self.assertNotIn(other.pk, _pks(audited_qs))
-        self.assertIn(outside.pk, _pks(unfiltered))
+        self.assertNotIn(outside.pk, _pks(unfiltered))
+        self.assertIn(self.alice.pk, _pks(unfiltered))
         self.assertIn(self.inactive.pk, _pks(unfiltered))
 
     def test_cross_database_router_fails_before_sql(self):
@@ -789,13 +790,13 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
         return (Org, Paper, Team, DirectGrant, TeamGrant, GroupGrant, Folder, FolderGrant, FolderPermit, UuidPaper, UuidGrant, UuidUser, UuidUserPaper, UuidGrantUser)
 
     def _register(self):
-        self.handle.register_public(trust=self.DirectGrant, user='user', permission='permission', content='paper')
-        self.handle.register_public(trust=self.TeamGrant, user='team__members', permission='permission', content='paper', condition=lambda trust: trust.team.allowed.contains(trust.permission) & (trust.team.org == trust.paper.org))
-        self.handle.register_public(trust=self.GroupGrant, user=lambda trust: trust.group.user, group=lambda trust: trust.group, content='paper')
-        self.handle.register_public(trust=self.FolderGrant, user='user', permission='permission', content='folder', condition=lambda trust: trust.user == trust.approved_user, along=('folder__parent', 2))
-        self.handle.register_public(trust=self.FolderPermit, user='user', permission='permission', content='folder', along=('folder__parent', 1))
-        self.handle.register_public(trust=self.UuidGrant, user='user', permission='permission', content='paper')
-        self.handle.register_public(trust=self.UuidGrantUser, user='user', permission='permission', content='paper')
+        self.handle.register(trust=self.DirectGrant, user='user', permission='permission', content='paper')
+        self.handle.register(trust=self.TeamGrant, user='team__members', permission='permission', content='paper', condition=lambda trust: trust.team.allowed.contains(trust.permission) & (trust.team.org == trust.paper.org))
+        self.handle.register(trust=self.GroupGrant, user=lambda trust: trust.group.user, group=lambda trust: trust.group, content='paper')
+        self.handle.register(trust=self.FolderGrant, user='user', permission='permission', content='folder', condition=lambda trust: trust.user == trust.approved_user, along=('folder__parent', 2))
+        self.handle.register(trust=self.FolderPermit, user='user', permission='permission', content='folder', along=('folder__parent', 1))
+        self.handle.register(trust=self.UuidGrant, user='user', permission='permission', content='paper')
+        self.handle.register(trust=self.UuidGrantUser, user='user', permission='permission', content='paper')
 
     def test_membership_group_or_distinct_ceiling_and_revocation(self):
         candidates = self.User._default_manager.get_queryset()
@@ -852,7 +853,7 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
                     found = _pks(folder.get_permitted_users(permission))
                 expected = {user.pk for user in candidates if _object_backend_allows(user, permission.user_perm_str, folder)}
                 self.assertEqual(found, expected)
-                locked = _pks(lock_permitted_users_queryset(self.handle.build_registry(), folder, permission))
+                locked = _pks(lock_permitted_users_queryset(built_catalog(self.handle), folder, permission))
                 self.assertEqual(locked, found)
         self.assertIn(self.alice.pk, _pks(at_bound.get_permitted_users(permission)))
         self.assertNotIn(self.alice.pk, _pks(beyond.get_permitted_users(permission)))
@@ -915,7 +916,7 @@ def _reverse_agrees(test, handle, content, perm, candidates):
     expected = {user.pk for user in candidates if _object_backend_allows(user, code, content)}
     test.assertEqual(found, expected)
     test.assertEqual(_pks(_user_manager().permitted(content, perm)), found)
-    test.assertEqual(_pks(lock_permitted_users_queryset(handle.build_registry(), content, perm)), found)
+    test.assertEqual(_pks(lock_permitted_users_queryset(built_catalog(handle), content, perm)), found)
     return found
 
 def _assert_along_lock(test, handle, specs, *, group=False):
@@ -969,7 +970,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
         with _tables(UuidNode, UuidNodeGrant):
             with _document_registry() as registry:
                 handle = _handle(registry)
-                record = handle.register_public(trust=UuidNodeGrant, user='user', permission='permission', content='node', along=('node__parent', 1))
+                record = handle.register(trust=UuidNodeGrant, user='user', permission='permission', content='node', along=('node__parent', 1))
                 self.assertEqual(record.content_target, 'ident')
                 self.assertNotEqual(record.content_target, UuidNode._meta.pk.attname)
                 alice = User.objects.create_user('uuid-along-alice', password='x')
@@ -1015,7 +1016,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
         with _tables(Desk, DeskGrant):
             with _document_registry() as registry:
                 handle = _handle(registry)
-                record = handle.register_public(trust=DeskGrant, user=lambda trust: trust.group.user, group=lambda trust: trust.group, content='desk', along=('desk__parent', 1))
+                record = handle.register(trust=DeskGrant, user=lambda trust: trust.group.user, group=lambda trust: trust.group, content='desk', along=('desk__parent', 1))
                 self.assertTrue(record.via_group)
                 self.assertIsNotNone(record.along)
                 locked = _assert_along_lock(self, handle, ({'path': 'desk__parent', 'shape': 'S', 'bound': 1},), group=True)
@@ -1074,7 +1075,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
             _contribute_m2m(ShelfStamp._meta.get_field('permissions'), Permission)
             with _document_registry() as registry:
                 handle = _handle(registry)
-                record = handle.register_public(trust=ShelfStamp, user='user', permission='permissions', content='shelf', along=('shelf__parent', 1))
+                record = handle.register(trust=ShelfStamp, user='user', permission='permissions', content='shelf', along=('shelf__parent', 1))
                 self.assertFalse(record.via_group)
                 self.assertEqual(record.permission_path, ('permissions',))
                 self.assertIs(record.permission_model, Permission)
@@ -1142,7 +1143,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
         with _tables(Cabinet, Sheet, SheetGrant):
             with _document_registry() as registry:
                 handle = _handle(registry)
-                record = handle.register_public(trust=SheetGrant, user='user', permission='permission', content='cabinet__sheets', along=('cabinet__parent', 1))
+                record = handle.register(trust=SheetGrant, user='user', permission='permission', content='cabinet__sheets', along=('cabinet__parent', 1))
                 self.assertTrue(record.along.suffix_path)
                 self.assertIs(record.content_model, Sheet)
                 self.assertIs(record.along.walk_model, Cabinet)
@@ -1185,7 +1186,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
         with _tables(Branch, BranchGrant):
             with _document_registry() as registry:
                 handle = _handle(registry)
-                record = handle.register_public(trust=BranchGrant, user='user', permission='permission', content='branch', along=('branch__children', 1))
+                record = handle.register(trust=BranchGrant, user='user', permission='permission', content='branch', along=('branch__children', 1))
                 self.assertEqual(record.along.shape, 'C')
                 self.assertFalse(record.along.suffix_path)
                 alice = User.objects.create_user('branch-alice', password='x')
@@ -1232,8 +1233,8 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
         with _tables(Place, North, South):
             with _document_registry() as registry:
                 handle = _handle(registry)
-                handle.register_public(trust=North, user='user', permission='permission', content='place', along=('place__parent', 1))
-                handle.register_public(trust=South, user='user', permission='permission', content='place', along=('place__children', 1))
+                handle.register(trust=North, user='user', permission='permission', content='place', along=('place__parent', 1))
+                handle.register(trust=South, user='user', permission='permission', content='place', along=('place__children', 1))
                 _assert_along_lock(self, handle, ({'path': 'place__parent', 'shape': 'S', 'bound': 1}, {'path': 'place__children', 'shape': 'C', 'bound': 1}))
                 alice = User.objects.create_user('place-alice', password='x')
                 bob = User.objects.create_user('place-bob', password='x')

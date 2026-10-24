@@ -13,7 +13,8 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase, override_settings
-from tests.backends import HostTrustModelBackend, MixinOnlyBackend
+from tests.kernel_host.backends import HostTrustModelBackend
+from tests.backends import MixinOnlyBackend
 from trusts.backends import TrustModelBackendMixin
 from django.contrib.auth.backends import ModelBackend
 from tests.core import KernelHostRequiredMixin
@@ -21,10 +22,10 @@ from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
-from tests.support import empty_catalogs, sweep_listed_backends
+from tests.support import built_catalog, compiler
 
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 PERM = 'myapp.change_document'
 FILTERED = 'myapp.change_document:non_confidential'
 WRONG = 'myapp.add_document'
@@ -132,47 +133,31 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
         one = self._granted_qs(self.open_one)
         two = self._granted_qs(self.open_two)
         both = self._granted_qs(self.open_one, self.open_two)
-        from trusts.backends import recorders
-
-        alt_path = 'tests.core.test_issue181._AltGrantBackend'
-        recorder = _AltGrantBackend().get_registry()
-        if not recorder.frozen:
-            recorder.register(
-                trust=DocumentAltGrant, user='user',
-                permission='permission', content='document',
-            )
-        mixin = _AltGrantBackend()
-        try:
-            with empty_catalogs():
-                with override_settings(AUTHENTICATION_BACKENDS=(HOST_BACKEND, DOCUMENT_BACKEND, alt_path)):
-                    sweep_listed_backends()
-                    with self.assertNumQueries(1):
-                        self.assertTrue(self.document_backend.has_perm(self.alice, PERM, one))
-                    with self.assertNumQueries(1):
-                        self.assertTrue(mixin.has_perm(self.alice, PERM, two))
-                    with self.assertNumQueries(1):
-                        self.assertFalse(self.document_backend.has_perm(self.alice, PERM, both))
-                    with self.assertNumQueries(1):
-                        self.assertFalse(mixin.has_perm(self.alice, PERM, both))
-                    with self.assertNumQueries(0):
-                        self.assertFalse(self.host.has_perm(self.alice, PERM, both))
-                    with self.assertNumQueries(1):
-                        self.assertEqual(self.document_backend.get_all_permissions(self.alice, both), set())
-                    with self.assertNumQueries(1):
-                        self.assertEqual(mixin.get_all_permissions(self.alice, both), set())
-                    with self.assertNumQueries(2):
-                        self.assertFalse(self.alice.has_perm(PERM, both))
-                    self.assertEqual(self.alice.get_all_permissions(both), set())
-                    self.assertTrue(self.alice.has_perm(PERM, one))
-                    self.assertTrue(self.alice.has_perm(PERM, two))
-                with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue181._AltGrantBackend', DOCUMENT_BACKEND, HOST_BACKEND)):
-                    with self.assertNumQueries(2):
-                        self.assertFalse(self.alice.has_perm(PERM, both))
-                    self.assertEqual(self.alice.get_all_permissions(both), set())
-                    self.assertTrue(self.alice.has_perm(PERM, one))
-                    self.assertTrue(self.alice.has_perm(PERM, two))
-        finally:
-            recorders.pop(_AltGrantBackend, None)
+        alt = compiler(user_model=get_user_model(), path='tests.core.alt181')
+        alt.register(
+            trust=DocumentAltGrant, user='user',
+            permission='permission', content='document',
+        )
+        alt_catalog = built_catalog(alt)
+        with self.assertNumQueries(1):
+            self.assertTrue(self.document_backend.has_perm(self.alice, PERM, one))
+        with self.assertNumQueries(1):
+            self.assertTrue(alt_catalog.has_perm(self.alice, PERM, two))
+        with self.assertNumQueries(1):
+            self.assertFalse(self.document_backend.has_perm(self.alice, PERM, both))
+        with self.assertNumQueries(1):
+            self.assertFalse(alt_catalog.has_perm(self.alice, PERM, both))
+        with self.assertNumQueries(0):
+            self.assertFalse(self.host.has_perm(self.alice, PERM, both))
+        with self.assertNumQueries(1):
+            self.assertEqual(self.document_backend.get_all_permissions(self.alice, both), set())
+        with self.assertNumQueries(1):
+            self.assertEqual(alt_catalog.get_all_permissions(self.alice, both), set())
+        with self.assertNumQueries(1):
+            self.assertFalse(self.alice.has_perm(PERM, both))
+        self.assertEqual(self.alice.get_all_permissions(both), set())
+        self.assertTrue(self.alice.has_perm(PERM, one))
+        self.assertFalse(self.alice.has_perm(PERM, two))
 
     def test_duplicate_path_is_two_evaluations(self):
         qs = self._granted_qs(self.open_one)

@@ -9,7 +9,6 @@ from typing import TypeVar
 from dataclasses import dataclass, field, replace
 
 from django.core.exceptions import FieldDoesNotExist
-from django.utils.module_loading import import_string
 from django.db.models import F, Model, Q
 from django.db.models.query import QuerySet
 
@@ -58,21 +57,20 @@ from trusts.compile.resolution import (
 from trusts.errors import TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
-from trusts.compile.catalogs import Catalog
-from trusts.backends import TrustModelBackendMixin, catalogs, recorders
+from trusts.compile.catalogs import Catalog, CatalogShape
 from trusts.plan.conditions import (
     ConditionRegistry,
     Expr,
-    RegistryConditionLookup,
+    FrozenConditionLookup,
 )
-from trusts.plan.registry import Registry
-from trusts.plan.relations import PlanQueryCompiler, bind_checked_user
+from trusts.plan.relations import PlanQueryCompiler, RelationPlan, bind_checked_user
 from trusts.plan.standards import (
     UserCondition,
     assert_concrete_booleans,
     builtin_user_conditions,
     compile_override_q,
     compile_user_rules,
+    field_state,
     concrete_rule,
     normalize_on,
     normalize_override_on,
@@ -178,8 +176,8 @@ class PublicRegistration:
     for exactly one mode (ordinary ``user`` plus ``permission`` or
     ``group``, or delegated ``delegate`` plus ``sponsor``), the already
     lowered ``condition``, and the bound ``along``. The unused mode's
-    refs are ``None``. Storing it is ``_register_public``'s job, via
-    ``register`` or ``register_delegation``.
+    refs are ``None``. Storing it is ``register``'s job, via
+    ``register_relation`` or ``register_delegation``.
     """
 
     trust: type
@@ -193,107 +191,136 @@ class PublicRegistration:
     along: object | None = None
 
 
-class RegistryFactory(object):
-    """Instantiable registry of permission-bearing relation declarations.
+def relation_plan(records, delegations, content, user, permission,
+                  catalog_user, user_conditions, user_rules, override_q):
+    """One plan for ``(content, user, permission)``. An empty selection is a plan."""
+    chosen = tuple(
+        record for record in records
+        if record.content_model is content
+        and (user is None or record.user_model is user)
+        and (permission is None or record.permission_model is permission))
+    bridges = tuple(
+        record for record in delegations
+        if record.content_model is content
+        and (user is None or record.delegate_model is user))
+    plan_permission = permission
+    column = 'pk'
+    if chosen:
+        models = {record.permission_model for record in chosen}
+        if len(models) != 1:
+            raise TrustsConfigurationError(
+                'Applicable registrations must share one permission '
+                'model; got %s.'
+                % ', '.join(sorted(model._meta.label for model in models)))
+        plan_permission = models.pop()
+        targets = {record.permission_target for record in chosen}
+        if len(targets) != 1:
+            raise TrustsConfigurationError(
+                'Applicable registrations must share one permission '
+                'comparison target; got %s.'
+                % ', '.join(sorted(targets)))
+        stored = targets.pop()
+        if stored not in (plan_permission._meta.pk.attname, 'pk'):
+            column = stored
+    subject = user
+    if subject is None:
+        subjects = {
+            record.user_model._meta.concrete_model for record in chosen}
+        subjects.update(
+            record.delegate_model._meta.concrete_model for record in bridges)
+        if len(subjects) == 1:
+            subject = subjects.pop()
+    rules = closed = override = None
+    if subject is not None:
+        primary, absent = user_rules
+        rules = primary if (
+            user_conditions is not None or builtin_user_conditions(subject)
+        ) else absent
+        closed, override = rules, override_q
+    return RelationPlan(
+        records=chosen, delegations=bridges, permission_model=plan_permission,
+        content_identity=content, user_rules=rules, user_rules_closed=closed,
+        user_override_q=override, user_model=catalog_user,
+        permission_column=column)
 
-    Create a new instance per isolated context. There is no process-global
-    singleton in this slice. ``register`` performs zero SQL. Projection
-    methods compile one shared plan from stored records. One root may
-    store several records when they terminate on different content
-    models, or when the same bindings use a different closed condition.
 
-        ``build_registry()`` freezes this factory and returns a fresh
-        ``Registry`` from the records already stored. A later build
-        returns another registry from those same records. ``register``,
-        ``register_delegation``, ``register_permission_condition``,
-        ``set_user_condition``, ``set_user_override``, and
-        ``set_filter_lookup`` raise ``TrustsConfigurationError``.
+def plan_table(records, delegations, catalog_user, user_conditions,
+               user_rules, override_q):
+    """Selectable keys in first-seen order. ``None`` is the default plan."""
+    users, perms, order = {}, {}, []
+    observed = [
+        (record.content_model, record.user_model, record.permission_model)
+        for record in records]
+    observed.extend(
+        (record.content_model, record.delegate_model, None)
+        for record in delegations)
+    for content, user, perm in observed:
+        seen = users.get(content)
+        if seen is None:
+            order.append(content)
+            users[content] = seen = []
+            perms[content] = []
+        if user not in seen:
+            seen.append(user)
+        if perm is not None and perm not in perms[content]:
+            perms[content].append(perm)
+    table = {
+        (content, user, perm): relation_plan(
+            records, delegations, content, user, perm, catalog_user,
+            user_conditions, user_rules, override_q)
+        for content in order
+        for user in (None, *users[content])
+        for perm in (None, *perms[content])}
+    table[None] = relation_plan(
+        records, delegations, None, None, None, catalog_user,
+        user_conditions, user_rules, override_q)
+    return table
+
+
+class Compiler(object):
+    """Replay target for one recorder.
+
+    The app recorder stores every registration call. ``ready`` replays
+    that log onto this compiler. ``register`` performs zero SQL.
+    ``compile`` freezes this compiler and returns a ``Catalog``. A later
+    ``compile`` returns another catalog from the same stored rows.
+    After that, ``register``, ``register_delegation``,
+    ``add_named_filter``, ``set_user_condition``, and
+    ``set_user_override`` raise ``TrustsConfigurationError``.
     """
 
-    def __init__(self, *, compiler=None, path='', family='relationship',
-                 user_model=None):
+    def __init__(self, *, user_model, query_compiler, path, family):
         self._by_root = {}
         self._order = []
         self._delegations_by_root = {}
         self._delegation_order = []
-        self._filter_lookup = None
         self.frozen = False
         self._user_conditions = None
         self._user_override = None
-        self._rule_fragments = {}
-        self._override_fragments = {}
-        self.conditions = ConditionRegistry()
-        self.set_filter_lookup(RegistryConditionLookup(self.conditions))
-        self._explicit_compiler = compiler is not None
-        self._compiler = compiler if self._explicit_compiler else PlanQueryCompiler()
+        self.conditions = ConditionRegistry(user_model=user_model)
+        self.query_compiler = query_compiler
         self.path = path
         self.family = family
         self.user_model = user_model
 
-    @property
-    def compiler(self):
-        """Compiler handed to every registry this factory builds."""
-        return self._compiler
+    @staticmethod
+    def default_query_compiler():
+        """Plan compiler ``ready`` stores when the config does not set one."""
+        return PlanQueryCompiler()
 
-    @property
-    def filter_lookup(self):
-        """Bound ``ConditionLookup``, or ``None`` after explicit unbind."""
-        return self._filter_lookup
+    def get_recorder_target(self):
+        return self
 
-    def set_filter_lookup(self, lookup):
-        """Bind a ``ConditionLookup`` on this instance (zero SQL).
-
-        Construction already self-binds the private store adapter.
-        Both ``record_for`` and ``compile_q`` must be callable. A missing
-        method raises ``TrustsConfigurationError`` and does not bind
-        (no partial bind). ``lookup is None`` clears the binding.
-        Methods are not invoked at bind time. A built factory is frozen.
-        """
-        self._open('set_filter_lookup')
-        if lookup is None:
-            self._filter_lookup = None
-            return
-        record_for = getattr(lookup, 'record_for', None)
-        compile_q = getattr(lookup, 'compile_q', None)
-        if not callable(record_for) or not callable(compile_q):
-            raise TrustsConfigurationError(
-                'ConditionLookup must provide record_for and compile_q; '
-                'no partial bind.'
-            )
-        self._filter_lookup = lookup
-
-    def register_permission_condition(self, model, cond_code, condition):
-        """Register a ``:cond_code`` condition on ``model`` for this instance.
+    def add_named_filter(self, model, code, predicate):
+        """Register a ``:code`` condition on ``model`` for this instance.
 
         A callable is a registration-time builder, invoked once
         here. A prebuilt ``Expr`` is rejected by the condition
         store with ``TypeError`` before mutation.
         """
-        self._open('register_permission_condition')
+        self._open('add_named_filter')
         return self.conditions.register_permission_condition(
-            model, cond_code, condition,
-        )
-
-    def get_permission_condition_record(self, model, cond_code):
-        """Return this instance's record for ``(model, cond_code)``, or ``None``."""
-        return self.conditions.get_permission_condition_record(
-            model, cond_code,
-        )
-
-    def iter_permission_conditions(self):
-        """Yield ``(model, cond_code, record)`` registered on this instance."""
-        return self.conditions.iter_permission_conditions()
-
-    def compile_registered_condition_q(self, model, perm, user):
-        """Compile a registered ``:condition`` to ``Q`` from this instance."""
-        return self.conditions.compile_registered_condition_q(
-            model, perm, user,
-        )
-
-    def evaluate_permission_condition(self, model, cond_code, user, perm, obj):
-        """Evaluate a registered condition from this instance against ``obj``."""
-        return self.conditions.evaluate_permission_condition(
-            model, cond_code, user, perm, obj,
+            model, code, predicate, user_model=self.user_model,
         )
 
     def user_conditions(self):
@@ -305,11 +332,6 @@ class RegistryFactory(object):
         that model's own fields.
         """
         if self._user_conditions is None:
-            if self.user_model is None:
-                raise TrustsConfigurationError(
-                    'RegistryFactory has no user model. Pass user_model '
-                    'at construction.'
-                )
             return builtin_user_conditions(self.user_model)
         return tuple(self._user_conditions.values())
 
@@ -322,7 +344,6 @@ class RegistryFactory(object):
         The lambda is walked once against this factory's ``user_model``.
         """
         self._open('set_user_condition')
-        self._require_user_model()
         self._open_for_rules('condition')
         validate_user_rule_name(name, kind='condition')
         target = normalize_on(on)
@@ -347,7 +368,6 @@ class RegistryFactory(object):
                         'User condition %r is not registered.' % (name,)
                     )
                 del self._user_conditions[name]
-                self._clear_compiled_rules()
                 return None
             rule = UserCondition(
                 name, concrete_rule(expr, name, self.user_model), target,
@@ -357,7 +377,6 @@ class RegistryFactory(object):
                 self._user_conditions = None
             raise
         self._user_conditions[name] = rule
-        self._clear_compiled_rules()
         return rule
 
     def set_user_override(self, name, expr, on='user'):
@@ -368,7 +387,6 @@ class RegistryFactory(object):
         registered condition.
         """
         self._open('set_user_override')
-        self._require_user_model()
         self._open_for_rules('override')
         validate_user_rule_name(name, kind='override')
         normalize_override_on(on)
@@ -386,12 +404,10 @@ class RegistryFactory(object):
                     'User override %r is not the current override.' % (name,)
                 )
             self._user_override = None
-            self._clear_compiled_rules()
             return None
         self._user_override = UserCondition(
             name, concrete_rule(expr, name, self.user_model), 'user',
         )
-        self._clear_compiled_rules()
         return self._user_override
 
     @property
@@ -401,28 +417,6 @@ class RegistryFactory(object):
     @property
     def delegations(self):
         return tuple(self._delegation_order)
-
-    def records_for_root(self, root):
-        """Insertion-ordered records registered for ``root``.
-
-        Raises ``TrustsConfigurationError`` when the root is absent.
-        """
-        try:
-            return tuple(self._by_root[root])
-        except KeyError:
-            raise TrustsConfigurationError(
-                'No registration for %r.' % (getattr(root, '__name__', root),)
-            )
-
-    def delegations_for_root(self, root):
-        """Insertion-ordered delegated records registered for ``root``."""
-        try:
-            return tuple(self._delegations_by_root[root])
-        except KeyError:
-            raise TrustsConfigurationError(
-                'No delegated registration for %r.'
-                % (getattr(root, '__name__', root),)
-            )
 
     @staticmethod
     def build_delegation(*, content, delegate, sponsor, condition=None,
@@ -551,11 +545,6 @@ class RegistryFactory(object):
             _rules_for_model(conditions, sponsor_model),
             role='sponsor', values={},
         ))
-        self._rule_fragment(record.delegate_model, role='user')
-        self._override_fragment(record.delegate_model)
-        self._rule_fragment(
-            record.sponsor_model, role='sponsor', path=record.sponsor_field,
-        )
         existing_rows = self._delegations_by_root.get(root)
         if existing_rows:
             existing_rows.append(record)
@@ -652,7 +641,7 @@ class RegistryFactory(object):
             group_target=group_target,
         )
 
-    def register(self, *, content, user, permission=None, group=None,
+    def register_relation(self, *, content, user, permission=None, group=None,
                  condition=None, along=None):
         """Register one permission-bearing relation from root-relative refs.
 
@@ -720,8 +709,6 @@ class RegistryFactory(object):
             user_model=record.user_model, sponsor_model=None,
             conditions=conditions, override=override,
         )
-        self._rule_fragment(record.user_model, role='user')
-        self._override_fragment(record.user_model)
         existing_rows = self._by_root.get(root)
         if existing_rows:
             existing_rows.append(record)
@@ -737,12 +724,12 @@ class RegistryFactory(object):
     ):
         """Build a normalized ``PublicRegistration`` without storing it.
 
-        Shape-building half of ``_register_public``: same mode, trust,
+        Shape-building half of ``register``: same mode, trust,
         path-builder, condition, and ``along`` validation and errors, in
         the same order, but no append. Path and
         condition builders are invoked exactly once, here; the returned
         shape carries only refs, lowered condition IR, and ``Along``.
-        ``_register_public`` stores the shape
+        ``register`` stores the shape
         via ``register`` or ``register_delegation``.
         """
         ordinary = user is not None or permission is not None or group is not None
@@ -834,7 +821,7 @@ class RegistryFactory(object):
             along=_bind_public_along(trust, along),
         )
 
-    def register_public(
+    def register(
         self, *,
         trust: type[T],
         user: str | Callable[[T], object] | None = None,
@@ -862,14 +849,14 @@ class RegistryFactory(object):
                 along=shape.along,
             )
         if shape.group is not None:
-            return self.register(
+            return self.register_relation(
                 content=shape.content,
                 user=shape.user,
                 group=shape.group,
                 condition=shape.condition,
                 along=shape.along,
             )
-        return self.register(
+        return self.register_relation(
             content=shape.content,
             user=shape.user,
             permission=shape.permission,
@@ -877,29 +864,55 @@ class RegistryFactory(object):
             along=shape.along,
         )
 
-    _register_public = register_public
+    def compile(self):
+        """Freeze this compiler and return its ``Catalog``.
 
-    def build_registry(self):
-        """Build a query-time ``Registry`` from stored values.
-
-        Records, delegations, the shared condition store, stored user
-        conditions, the user override, and the bound condition lookup
-        are passed as data, all at once. No builders are injected.
+        Condition rows are a tuple taken once. The condition lookup is
+        a ``FrozenConditionLookup`` over that tuple, so the catalog does
+        not share this compiler's mutable store. User-rule and override
+        fragments and the plan table are compiled here. A later call
+        compiles another catalog from the same stored rows.
         """
-        registry = Registry(
-            records=self.records,
-            delegations=self.delegations,
-            conditions=self.conditions,
-            user_conditions=self._stored_user_conditions(),
-            user_override=self._user_override,
-            filter_lookup=self._filter_lookup,
-            compiler=self._compiler if self._explicit_compiler else None,
-            path=self.path or '',
-            family=self.family,
-            user_model=self.user_model,
+        rows = tuple(self.conditions.iter_permission_conditions())
+        lookup = FrozenConditionLookup(rows)
+        stored = self._stored_user_conditions()
+        model = self.user_model
+        primary = compile_user_rules(
+            model, '', None if stored is None else stored, role='user', values={},
         )
+        absent = primary if stored is not None else compile_user_rules(
+            model, '', (), role='user', values={})
+        slot = self._user_override
+        override_q = None
+        if slot is not None:
+            seen = set()
+            candidates = [model]
+            candidates.extend(record.user_model for record in self.records)
+            candidates.extend(record.delegate_model for record in self.delegations)
+            for candidate in candidates:
+                concrete = candidate._meta.concrete_model
+                if concrete in seen:
+                    continue
+                seen.add(concrete)
+                if field_state(concrete, slot.expr) != 'ok':
+                    raise TrustsConfigurationError(
+                        'User override %r needs a concrete BooleanField on %s.'
+                        % (slot.name, concrete._meta.label)
+                    )
+            override_q = compile_override_q(model, '', slot, {})
+        rules = (primary, absent)
+        plans = plan_table(
+            self.records, self.delegations, model, stored, rules, override_q)
         self.frozen = True
-        return registry
+        shape = CatalogShape(
+            records=self.records, delegations=self.delegations, conditions=rows,
+            user_conditions=stored, user_override=self._user_override,
+            filter_lookup=lookup,
+            compiler=self.query_compiler,
+            path=self.path, family=self.family, user_model=model,
+            user_rules=rules, override_q=override_q, plans=plans,
+        )
+        return Catalog(shape, user_model=model)
 
     def _stored_user_conditions(self):
         """``None`` when the registry still uses the built-in rule."""
@@ -907,75 +920,10 @@ class RegistryFactory(object):
             return None
         return tuple(self._user_conditions.values())
 
-    def _conditions_for_model(self, model):
-        """Conditions compiled for ``model``.
-
-        With no caller-set rules, the built-in ``is_active`` condition is
-        included only when ``model`` has that concrete boolean field.
-        A caller-set list is used as stored, including a replacement
-        ``is_active`` condition. Every inquiry uses this same list.
-        """
-        stored = self._stored_user_conditions()
-        if stored is not None:
-            return stored
-        return builtin_user_conditions(model)
-
-    def _rule_fragment(self, model, *, role, path=''):
-        """Registration-time ``(skip OR condition)`` for one model and role."""
-        model = model._meta.concrete_model
-        key = (model, role, path)
-        try:
-            return self._rule_fragments[key]
-        except KeyError:
-            compiled = compile_user_rules(
-                model, path, self._conditions_for_model(model),
-                role=role, values={},
-            )
-            self._rule_fragments[key] = compiled
-            return compiled
-
-    def _override_fragment(self, model):
-        """Registration-time ``(NOT skip AND override)`` for the checked user."""
-        model = model._meta.concrete_model
-        try:
-            return self._override_fragments[model]
-        except KeyError:
-            compiled = compile_override_q(
-                model, '', self._user_override, {},
-            )
-            self._override_fragments[model] = compiled
-            return compiled
-
-    def _clear_compiled_rules(self):
-        """Drop registration-time fragments after a successful rule edit."""
-        self._rule_fragments.clear()
-        self._override_fragments.clear()
-
-    def _compiled_subject(self, records, delegations, user_model):
-        if user_model is not None:
-            return user_model
-        models = {
-            record.user_model._meta.concrete_model for record in records
-        }
-        models.update(
-            record.delegate_model._meta.concrete_model
-            for record in delegations
-        )
-        if len(models) == 1:
-            return models.pop()
-        return None
-
-    def _require_user_model(self):
-        if self.user_model is None:
-            raise TrustsConfigurationError(
-                'RegistryFactory has no user model. Pass user_model '
-                'at construction.'
-            )
-
     def _open(self, method):
         if self.frozen:
             raise TrustsConfigurationError(
-                '%s refused: this factory is frozen.' % method
+                '%s refused: this compiler is frozen.' % method
             )
 
     def _open_for_rules(self, kind):
@@ -984,103 +932,6 @@ class RegistryFactory(object):
                 'Record user conditions and the override before '
                 'register(). The catalog sweep checks this at ready().'
             )
-
-    def _records_for(self, content_model, user_model=None, permission_model=None):
-        chosen = []
-        for record in self._order:
-            if record.content_model is not content_model:
-                continue
-            if user_model is not None and record.user_model is not user_model:
-                continue
-            if (
-                permission_model is not None
-                and record.permission_model is not permission_model
-            ):
-                continue
-            chosen.append(record)
-        return tuple(chosen)
-
-    def _delegations_for(self, content_model, delegate_model=None):
-        chosen = []
-        for record in self._delegation_order:
-            if record.content_model is not content_model:
-                continue
-            if (
-                delegate_model is not None
-                and record.delegate_model is not delegate_model
-            ):
-                continue
-            chosen.append(record)
-        return tuple(chosen)
-
-
-def compile_recorder(recorder, *, path, family, compiler, user_model):
-    """Replay ``recorder.rows`` into one factory and return its registry.
-
-    ``user_model`` is the model the caller resolved. This is the only
-    factory constructed for those rows.
-    """
-    built = RegistryFactory(
-        compiler=compiler, path=path, family=family, user_model=user_model,
-    )
-    recorder.freeze()
-    for entry in recorder.rows:
-        kind = entry[0]
-        if kind == 'condition':
-            built.set_user_condition(entry[1], entry[2], on=entry[3])
-        elif kind == 'override':
-            built.set_user_override(entry[1], entry[2], on=entry[3])
-        elif kind == 'filter':
-            built.register_permission_condition(entry[1], entry[2], entry[3])
-        elif kind == 'register':
-            built.register_public(**entry[1])
-        else:
-            raise TrustsConfigurationError(
-                'Unknown recorder row %r.' % (kind,)
-            )
-    return built.build_registry()
-
-
-def build_configured_catalogs(paths, user_model):
-    """Build one catalog per listed mixin backend. A second call does nothing.
-
-    Only classes named in ``paths`` (``AUTHENTICATION_BACKENDS`` order)
-    that subclass ``TrustModelBackendMixin`` are compiled.
-    """
-    if catalogs:
-        return
-    chosen = []
-    seen = {}
-    for path in paths:
-        obj = import_string(path)
-        if not isinstance(obj, type) or not issubclass(obj, TrustModelBackendMixin):
-            continue
-        if obj in seen:
-            raise TrustsConfigurationError(
-                'Configured Trusts backend class is listed under multiple '
-                'paths: %r → %s.' % (path, [seen[obj], path])
-            )
-        seen[obj] = path
-        chosen.append((path, obj))
-    pending = []
-    for path, cls in chosen:
-        if cls not in recorders:
-            cls()
-        registry = compile_recorder(
-            recorders[cls],
-            path=path,
-            family=cls.family,
-            compiler=cls.query_compiler,
-            user_model=user_model,
-        )
-        pending.append((cls, path, cls.family, registry))
-    for cls, path, family, registry in pending:
-        catalogs[cls] = Catalog(
-            cls=cls,
-            path=path,
-            family=family,
-            registry=registry,
-        )
 
 
 def probe_along_capabilities(connection):

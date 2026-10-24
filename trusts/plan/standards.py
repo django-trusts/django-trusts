@@ -19,8 +19,6 @@ from django.db.models.expressions import RawSQL
 
 from trusts.errors import TrustsConfigurationError
 
-user_model = None
-
 _MSG = 'User conditions only support concrete boolean fields, &, and ~.'
 
 # ``skip_<name>`` must not reuse an inquiry parameter. ``skip_is_active``
@@ -253,10 +251,5 @@ def compile_override_q(model, path, slot, values):
     """``(NOT skip_<override> AND override)``, or ``None`` when unset."""
     if slot is None:
         return None
-    if field_state(model, slot.expr) != 'ok':
-        raise TrustsConfigurationError(
-            'User override %r needs a concrete BooleanField on %s.'
-            % (slot.name, model._meta.label)
-        )
     flag = SkipFlag(slot.name, (values or {}).get(slot.name, False))
     return ~Q(flag) & _compile(path, slot.expr)

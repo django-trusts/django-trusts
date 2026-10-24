@@ -177,18 +177,18 @@ def main() -> int:
     import importlib
     import sys as _sys
     import trusts
-    from trusts.apps import (
-        TrustsImplementationConfig)
     from trusts.backends import TrustModelBackendMixin
+    from trusts.apps import (
+        TrustsConfigMixin)
     from trusts.compile.factory import (
         RegisteredDelegation,
         RegisteredRelation,
-        RegistryFactory,
+        Compiler,
     )
     from trusts.compile.nodes import Ref
     from trusts.decorators import filter_by_permitted_content
-    from trusts.plan.relations import ConditionLookup, RelationPlan
-    from trusts.query import AuthorizedManager, AuthorizedManagerMixin, AuthorizedQuerySet
+    from trusts.plan.relations import RelationPlan
+    from trusts.models import AuthorizedManager, AuthorizedManagerMixin, AuthorizedQuerySet
     from trusts.conditions import (
         PermissionConditionError,
         permission_condition_code,
@@ -208,11 +208,11 @@ def main() -> int:
         raise SystemExit('installed wheel missing trusts/py.typed')
     if hasattr(trusts, 'BackendHandle') or hasattr(trusts.backends, 'BackendHandle'):
         raise SystemExit('library wheel still exports BackendHandle')
-    if hasattr(RegistryFactory, 'register_relationship'):
+    if hasattr(Compiler, 'register_relationship'):
         raise SystemExit('library wheel still exposes register_relationship')
-    assert_register_signature(RegistryFactory.register_public)
+    assert_register_signature(Compiler.register)
     print('py.typed present')
-    print('register contextual typing', RegistryFactory.register_public)
+    print('register contextual typing', Compiler.register)
 
     from django.apps import apps as django_apps
 
@@ -262,18 +262,20 @@ def main() -> int:
     else:
         raise SystemExit('trusts.core_backends still imports from the library wheel')
     import trusts.apps as apps_mod
-    from trusts.backends import catalogs as installed_catalogs
-    from trusts.backends import recorders as installed_recorders
-    if installed_catalogs or installed_recorders:
-        raise SystemExit('library-only populate must not build catalogs before ready')
+    for config in django_apps.get_app_configs():
+        if isinstance(config, TrustsConfigMixin):
+            raise SystemExit(
+                'library-only populate must not install a TrustsConfigMixin'
+            )
     for removed in (
         'implementation_configs',
         'implementation_for_path',
         'implementation_for_class',
         'relationship_registries',
         'trusts_backend_paths',
+        'TrustsImplementationConfig',
     ):
-        if hasattr(apps_mod, removed) or hasattr(TrustsImplementationConfig, removed):
+        if hasattr(apps_mod, removed):
             raise SystemExit('library wheel still exposes %s' % removed)
     try:
         from trusts.backends import TrustModelBackend  # noqa: F401
@@ -281,9 +283,6 @@ def main() -> int:
         pass
     else:
         raise SystemExit('historical TrustModelBackend still imports')
-    if TrustsImplementationConfig.name == 'trusts' or TrustsImplementationConfig.label == 'trusts':
-        raise SystemExit('sweep config must not take the trusts app label')
-
     import trusts.models as models_mod
     try:
         from trusts.models import Trust
@@ -302,20 +301,25 @@ def main() -> int:
     print('TrustModelBackendMixin', TrustModelBackendMixin)
     print('library apps', sorted(labels))
     print('kernel_config absent')
-    print('TrustsImplementationConfig', TrustsImplementationConfig)
-    print('catalogs', installed_catalogs)
+    print('TrustsConfigMixin', TrustsConfigMixin)
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager)
     print('filter_by_permitted_content', filter_by_permitted_content)
-    print('ConditionLookup', ConditionLookup)
-    standalone = RegistryFactory()
-    bound = standalone.filter_lookup
-    if bound is None:
-        raise SystemExit('RegistryFactory did not self-bind condition lookup')
-    if bound.conditions is not standalone.conditions:
-        raise SystemExit('self-bound lookup does not wrap registry.conditions')
-    print('condition lookup self-bound')
+    from trusts.plan.conditions import FrozenConditionLookup
+    print('FrozenConditionLookup', FrozenConditionLookup)
+    from django.contrib.auth import get_user_model
+    standalone = Compiler(
+        user_model=get_user_model(),
+        query_compiler=Compiler.default_query_compiler(),
+        path='scripts.verify',
+        family='relationship',
+    )
+    shape = standalone.compile()
+    bound = shape.filter_lookup
+    if not isinstance(bound, FrozenConditionLookup):
+        raise SystemExit('Compiler.compile() did not freeze a condition lookup')
+    print('condition lookup frozen')
     print(
-        'defining modules', RegistryFactory, Ref, RegisteredRelation,
+        'defining modules', Compiler, Ref, RegisteredRelation,
         RegisteredDelegation, RelationPlan,
     )
     print('permission_has_condition', permission_has_condition)

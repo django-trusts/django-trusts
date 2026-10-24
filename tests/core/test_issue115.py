@@ -21,9 +21,9 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from tests.myapp.settings import AUTHENTICATION_BACKENDS, INSTALLED_APPS
 from tests.myapp.views import edit_document
-from trusts.apps import TrustsImplementationConfig
+from trusts.apps import TrustsConfigMixin
 from trusts.backends import TrustModelBackendMixin
-from trusts.query import AuthorizedQuerySet
+from trusts.models import AuthorizedQuerySet
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -82,12 +82,10 @@ class ReadmeExampleAuthorizationTest(TestCase):
 
         owner = django_apps.get_app_config('myapp')
         self.assertIs(type(owner), DocumentConfig)
-        self.assertNotIsInstance(owner, TrustsImplementationConfig)
+        self.assertIsInstance(owner, TrustsConfigMixin)
         catalog = configured_catalog(DOCUMENT_BACKEND)
-        self.assertEqual(catalog.path, DOCUMENT_BACKEND)
-        from trusts.backends import catalogs
-
-        self.assertIs(catalog, catalogs[DocumentBackend])
+        self.assertEqual(catalog.path, owner.catalog_path())
+        self.assertIs(catalog, DocumentBackend().catalog)
         self.assertTrue(catalog.records)
         self.assertIs(
             catalog.records[0].content_model,
@@ -171,12 +169,11 @@ class ReadmeExampleAuthorizationTest(TestCase):
 class ReadmeHostSurfaceTest(SimpleTestCase):
     def test_default_suite_still_has_no_trusts_app(self):
         from django.apps import apps as django_apps
-        sweep = django_apps.get_app_config('trusts_lifecycle')
         host = django_apps.get_app_config('trusts_kernel_host')
-        self.assertIs(type(sweep), TrustsImplementationConfig)
-        self.assertEqual(sweep.name, 'trusts.apps')
+        with self.assertRaises(LookupError):
+            django_apps.get_app_config('trusts_lifecycle')
         self.assertIs(type(host), KernelHostConfig)
-        self.assertFalse(issubclass(KernelHostConfig, TrustsImplementationConfig))
+        self.assertTrue(issubclass(KernelHostConfig, TrustsConfigMixin))
         labels = {config.label for config in django_apps.get_app_configs()}
         names = {config.name for config in django_apps.get_app_configs()}
         self.assertNotIn('trusts', labels)
@@ -260,7 +257,6 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
 
         self.assertNotIn('.. code-block::', readme)
         self.assertIn('Define the models', rst)
-        self.assertIn('TrustsImplementationConfig', rst)
         self.assertIn('TrustModelBackendMixin', rst)
         self.assertIn('backend.register(', rst)
         self.assertIn('trust=DocumentPermission', rst)

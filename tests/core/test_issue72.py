@@ -8,20 +8,22 @@ from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
 from tests.apps import TestsConfig
-from tests.support import configured_catalog, live_config
+from tests.support import configured_catalog, compiler
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.models import Document
 import tests as tests_module
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 
 
 class IsolatedHostDoesNotReceiveDocumentContributionTest(
     KernelHostRequiredMixin, SimpleTestCase,
 ):
     def test_host_registry_stays_empty_of_document_terminal(self):
-        host = live_config()
-        self.assertEqual(configured_catalog(HOST_BACKEND).path, HOST_BACKEND)
+        host = apps.get_app_config('trusts_kernel_host')
+        self.assertEqual(
+            configured_catalog(HOST_BACKEND).path, host.catalog_path(),
+        )
         registry = configured_catalog(HOST_BACKEND)
         self.assertFalse(registry.plan_for(Document).records)
         before = registry.records
@@ -50,4 +52,4 @@ class IsolatedAppsDoesNotDonateTicketContributionTest(
         self.assertIsNone(getattr(contributor, '_trusts_tup_ticket_registry_id', None))
         self.assertEqual(live_host.records, before_host)
         self.assertEqual(live_doc.records, before_doc)
-        self.assertIsInstance(RegistryFactory(), RegistryFactory)
+        self.assertIsInstance(compiler(), Compiler)

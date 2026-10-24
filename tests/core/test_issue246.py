@@ -24,14 +24,14 @@ from tests.support import (
     listed_relationship,
     bound_handle,
     built_catalog,
+    compiler,
 )
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
-from trusts.query import AuthorizedManager
-from trusts.compile.catalogs import Catalog
+from trusts.models import AuthorizedManager
 
 
 class _ProbeBackend(TrustModelBackendMixin, ModelBackend):
@@ -59,7 +59,7 @@ def _code(permission):
 
 def _handle(registry=None, path='tests.core.issue246'):
     if registry is None:
-        registry = RegistryFactory()
+        registry = compiler()
     registry.path = path
     return registry
 
@@ -141,8 +141,8 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
     def _grant_model(self):
 
         class GroupPaperGrant(models.Model):
-            group = models.ForeignKey('auth.Group', on_delete=models.CASCADE)
-            paper = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            group = models.ForeignKey(Group, on_delete=models.CASCADE)
+            paper = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
 
             class Meta:
                 app_label = 'trusts_tests'
@@ -155,13 +155,13 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
         def boom(_trust):
             raise AssertionError('path builder must not run')
         with self.assertRaisesRegex(TrustsConfigurationError, 'not both'):
-            handle.register_public(trust=Grant, user='group__user', permission='paper', group='group', content='paper')
+            handle.register(trust=Grant, user='group__user', permission='paper', group='group', content='paper')
         with self.assertRaisesRegex(TrustsConfigurationError, 'not both'):
-            handle.register_public(trust=Grant, user=boom, permission=boom, group=boom, content=boom)
-        registry = RegistryFactory()
+            handle.register(trust=Grant, user=boom, permission=boom, group=boom, content=boom)
+        registry = compiler()
         ref = Ref(Grant)
         with self.assertRaisesRegex(TrustsConfigurationError, 'not both'):
-            registry.register(content=ref.paper, user=ref.group.user, permission=ref.paper, group=ref.group)
+            registry.register_relation(content=ref.paper, user=ref.group.user, permission=ref.paper, group=ref.group)
         self.assertEqual(built_catalog(handle).records, ())
         self.assertEqual(registry.records, ())
 
@@ -169,13 +169,13 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
         Grant = self._grant_model()
         handle = _handle()
         with self.assertRaisesRegex(TrustsConfigurationError, 'requires permission= or group='):
-            handle.register_public(trust=Grant, user='group__user', content='paper')
+            handle.register(trust=Grant, user='group__user', content='paper')
         with self.assertRaises(TypeError):
-            handle.register_public(trust=Grant, user='group__user')
-        registry = RegistryFactory()
+            handle.register(trust=Grant, user='group__user')
+        registry = compiler()
         ref = Ref(Grant)
         with self.assertRaisesRegex(TrustsConfigurationError, 'requires permission= or group='):
-            registry.register(content=ref.paper, user=ref.group.user)
+            registry.register_relation(content=ref.paper, user=ref.group.user)
         self.assertEqual(built_catalog(handle).records, ())
         self.assertEqual(registry.records, ())
 
@@ -189,28 +189,28 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
 
         class CrewPaper(models.Model):
             crew = models.ForeignKey(Crew, on_delete=models.CASCADE)
-            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
-            paper = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
+            paper = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
 
             class Meta:
                 app_label = 'trusts_tests'
         Grant = self._grant_model()
         handle = _handle()
         with self.assertRaisesRegex(TrustsConfigurationError, 'must end at auth.Group'):
-            handle.register_public(trust=CrewPaper, user='user', group='crew', content='paper')
+            handle.register(trust=CrewPaper, user='user', group='crew', content='paper')
         with self.assertRaisesRegex(TrustsConfigurationError, 'do not append permissions'):
-            handle.register_public(trust=Grant, user='group__user', group=lambda t: t.group.permissions, content='paper')
+            handle.register(trust=Grant, user='group__user', group=lambda t: t.group.permissions, content='paper')
         with self.assertRaisesRegex(TrustsConfigurationError, 'user_set'):
-            handle.register_public(trust=Grant, user=lambda t: t.group.user_set, group='group', content='paper')
+            handle.register(trust=Grant, user=lambda t: t.group.user_set, group='group', content='paper')
         self.assertEqual(built_catalog(handle).records, ())
 
     def test_public_group_registration_matches_ref_and_compiler_hop(self):
         Grant = self._grant_model()
-        via_ref = RegistryFactory()
+        via_ref = compiler()
         ref = Ref(Grant)
-        expected = via_ref.register(content=ref.paper, user=ref.group.user, group=ref.group)
-        strings = _handle(path='tests.core.issue246-strings').register_public(trust=Grant, user='group__user', group='group', content='paper')
-        callables = _handle(path='tests.core.issue246-callables').register_public(trust=Grant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper)
+        expected = via_ref.register_relation(content=ref.paper, user=ref.group.user, group=ref.group)
+        strings = _handle(path='tests.core.issue246-strings').register(trust=Grant, user='group__user', group='group', content='paper')
+        callables = _handle(path='tests.core.issue246-callables').register(trust=Grant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper)
         self.assertEqual(strings, expected)
         self.assertEqual(callables, expected)
         self.assertTrue(expected.via_group)
@@ -223,18 +223,18 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
         self.assertNotIn('permissions', expected.group_path)
 
         class Station(models.Model):
-            group = models.ForeignKey('auth.Group', on_delete=models.CASCADE)
+            group = models.ForeignKey(Group, on_delete=models.CASCADE)
 
             class Meta:
                 app_label = 'trusts_tests'
 
         class StationGrant(models.Model):
             station = models.ForeignKey(Station, on_delete=models.CASCADE)
-            paper = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            paper = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
 
             class Meta:
                 app_label = 'trusts_tests'
-        multi = _handle().register_public(trust=StationGrant, user='station__group__user', group='station__group', content='paper')
+        multi = _handle().register(trust=StationGrant, user='station__group__user', group='station__group', content='paper')
         self.assertEqual(multi.group_path, ('station', 'group'))
         self.assertEqual(multi.permission_field, 'station__group__permissions')
         self.assertEqual(multi.permission_model._meta.label, 'auth.Permission')
@@ -242,13 +242,13 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
     def test_permission_registration_is_not_via_group(self):
 
         class Direct(models.Model):
-            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
             permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
-            paper = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            paper = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
 
             class Meta:
                 app_label = 'trusts_tests'
-        record = _handle().register_public(trust=Direct, user='user', permission='permission', content='paper')
+        record = _handle().register(trust=Direct, user='user', permission='permission', content='paper')
         self.assertFalse(record.via_group)
         self.assertEqual(record.permission_path, ('permission',))
         self.assertEqual(record.group_path, ())
@@ -287,13 +287,13 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         self.DirectPaperGrant.objects.create(user=self.alice, paper=self.paper_b, permission=self.write)
         self.station = self.Station.objects.create(title='desk', group=self.editors)
         self.StationPaperGrant.objects.create(station=self.station, paper=self.paper_d)
-        self.registry = RegistryFactory()
+        self.registry = compiler()
         self.handle = _handle(self.registry)
-        self.handle.register_public(trust=self.GroupPaperGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper)
-        self.handle.register_public(trust=self.GroupFolderGrant, user='group__user', group='group', content='folder__papers')
-        self.handle.register_public(trust=self.DeskPaperGrant, user='desk__holders', permission='permission', content='paper')
-        self.handle.register_public(trust=self.DirectPaperGrant, user='user', permission='permission', content='paper')
-        self.handle.register_public(trust=self.StationPaperGrant, user='station__group__user', group='station__group', content='paper')
+        self.handle.register(trust=self.GroupPaperGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper)
+        self.handle.register(trust=self.GroupFolderGrant, user='group__user', group='group', content='folder__papers')
+        self.handle.register(trust=self.DeskPaperGrant, user='desk__holders', permission='permission', content='paper')
+        self.handle.register(trust=self.DirectPaperGrant, user='user', permission='permission', content='paper')
+        self.handle.register(trust=self.StationPaperGrant, user='station__group__user', group='station__group', content='paper')
         self.backend = _ProbeBackend()
         self.change_code = _code(self.change)
         self.add_code = _code(self.add)
@@ -304,19 +304,8 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
 
     @contextmanager
     def _backend(self):
-        from trusts.backends import catalogs
-        cls = type(self.backend)
-        saved = catalogs.get(cls)
-        factory = self.handle
-        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, registry=factory.build_registry())
-        try:
-            with bound_handle(self.backend, self.handle):
-                yield
-        finally:
-            if saved is None:
-                catalogs.pop(cls, None)
-            else:
-                catalogs[cls] = saved
+        with bound_handle(self.backend, self.handle):
+            yield
 
     def test_explicit_group_feeds_group_and_ordinary_authorization(self):
         with self._backend():
@@ -333,12 +322,12 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
             self.assertFalse(self.backend.has_perm(self.alice, self.change_code, mixed))
             self.assertEqual(self.backend.get_group_permissions(self.alice, mixed), set())
             self.assertEqual(self.backend.get_group_permissions(self.alice, self.paper_c), {self.change_code})
-        granted = self.registry.build_registry().filter_authorized(self.Paper.objects.order_by('pk'), self.alice, self.change)
+        granted = built_catalog(self.registry).filter_authorized(self.Paper.objects.order_by('pk'), self.alice, self.change)
         self.assertEqual(list(granted), [self.paper_a, self.paper_c, self.paper_d])
         with listed_relationship((self.handle,)):
             listed = sorted(self.Paper.objects.authorized(self.alice, self.change), key=lambda row: row.pk)
         self.assertEqual(listed, [self.paper_a, self.paper_c, self.paper_d])
-        folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, registry=self.handle.build_registry())
+        folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, registry=built_catalog(self.handle))
         self.assertEqual(list(folders), [self.folder_a])
 
     def test_permission_and_membership_do_not_feed_group_permissions(self):
@@ -365,9 +354,9 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
 
     def test_policy_sql_records_the_compiler_owned_group_hop(self):
         group_only = _handle(path='tests.core.issue246-policy-group')
-        group_only.register_public(trust=self.GroupPaperGrant, user='group__user', group='group', content='paper')
+        group_only.register(trust=self.GroupPaperGrant, user='group__user', group='group', content='paper')
         direct_only = _handle(path='tests.core.issue246-policy-direct')
-        direct_only.register_public(trust=self.DirectPaperGrant, user='user', permission='permission', content='paper')
+        direct_only.register(trust=self.DirectPaperGrant, user='user', permission='permission', content='paper')
         grouped = _load_policy_sql_document(render_configured_policy(group_only))
         direct = _load_policy_sql_document(render_configured_policy(direct_only))
         group_content = grouped['backends'][0]['contents'][0]
@@ -452,9 +441,9 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
         self.other = self.Paper.objects.create(title='other', folder=self.Folder.objects.create(title='other'))
         grant = self.Grant.objects.create(group=self.editors, folder=self.folder)
         grant.grants.add(self.read)
-        self.registry = RegistryFactory()
+        self.registry = compiler()
         self.handle = _handle(self.registry, path='tests.core.issue246-ceiling')
-        self.handle.register_public(trust=self.Grant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.folder.papers, condition=lambda t: t.grants.contains(t.group.permissions))
+        self.handle.register(trust=self.Grant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.folder.papers, condition=lambda t: t.grants.contains(t.group.permissions))
         self.backend = _ProbeBackend()
         self.one = self.Paper.objects.filter(pk=self.paper.pk)
 
@@ -463,19 +452,8 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
 
     @contextmanager
     def _backend(self):
-        from trusts.backends import catalogs
-        cls = type(self.backend)
-        saved = catalogs.get(cls)
-        factory = self.handle
-        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, registry=factory.build_registry())
-        try:
-            with bound_handle(self.backend, self.handle):
-                yield
-        finally:
-            if saved is None:
-                catalogs.pop(cls, None)
-            else:
-                catalogs[cls] = saved
+        with bound_handle(self.backend, self.handle):
+            yield
 
     @contextmanager
     def _handles(self):
@@ -511,8 +489,8 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
                 sql = str(rows.query)
                 with self.subTest(authorized_sql=label):
                     self.assertEqual(len(_group_permission_aliases(sql)), 1, sql)
-        read_folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.read, content=self.Paper, registry=self.handle.build_registry())
-        change_folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, registry=self.handle.build_registry())
+        read_folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.read, content=self.Paper, registry=built_catalog(self.handle))
+        change_folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, registry=built_catalog(self.handle))
         with self.subTest('scope read'):
             self.assertEqual(list(read_folders), [self.folder])
         with self.subTest('scope change'):
@@ -616,13 +594,13 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
             raise
 
     def _register_handles(self):
-        self.local = _handle(RegistryFactory(), path='tests.core.issue246-matrix-local')
-        self.local.register_public(trust=self.LocalGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper, condition=lambda t: t.grants.contains(t.group.permissions))
-        self.roots = _handle(RegistryFactory(), path='tests.core.issue246-matrix-roots')
-        self.roots.register_public(trust=self.LocalGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper, condition=lambda t: t.grants.contains(t.group.permissions))
-        self.roots.register_public(trust=self.OtherGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper, condition=lambda t: t.stamps.contains(t.group.permissions))
-        self.role = _handle(RegistryFactory(), path='tests.core.issue246-matrix-role')
-        self.role_record = self.role.register_public(trust=self.TrustGroupPermission, user=lambda t: t.link.group.user, permission=lambda t: t.permission, content=lambda t: t.paper, condition=lambda t: t.link.role.permissions.contains(t.permission))
+        self.local = _handle(compiler(), path='tests.core.issue246-matrix-local')
+        self.local.register(trust=self.LocalGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper, condition=lambda t: t.grants.contains(t.group.permissions))
+        self.roots = _handle(compiler(), path='tests.core.issue246-matrix-roots')
+        self.roots.register(trust=self.LocalGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper, condition=lambda t: t.grants.contains(t.group.permissions))
+        self.roots.register(trust=self.OtherGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper, condition=lambda t: t.stamps.contains(t.group.permissions))
+        self.role = _handle(compiler(), path='tests.core.issue246-matrix-role')
+        self.role_record = self.role.register(trust=self.TrustGroupPermission, user=lambda t: t.link.group.user, permission=lambda t: t.permission, content=lambda t: t.paper, condition=lambda t: t.link.role.permissions.contains(t.permission))
 
     def _create_people(self):
         User = get_user_model()
@@ -663,13 +641,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         backend = _ProbeBackend()
         granted_codes = _codes(granted)
         one = self.Paper.objects.filter(pk=paper.pk)
-        from trusts.backends import catalogs
-        cls = type(backend)
-        saved = catalogs.get(cls)
-        factory = handle
-        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, registry=factory.build_registry())
-        try:
-            with bound_handle(backend, handle):
+        with bound_handle(backend, handle):
                 for perm in granted:
                     code = _code(perm)
                     for label, target in (('instance', paper), ('queryset', one)):
@@ -685,11 +657,6 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
                         self.assertEqual(backend.get_all_permissions(user, target), granted_codes)
                     with self.subTest(user=user.username, paper=paper.title, enumeration=label, kind='get_group_permissions'):
                         self.assertEqual(backend.get_group_permissions(user, target), set(group_codes))
-        finally:
-            if saved is None:
-                catalogs.pop(cls, None)
-            else:
-                catalogs[cls] = saved
 
     def _authorized(self, handle, expectations):
         with listed_relationship((handle,)):

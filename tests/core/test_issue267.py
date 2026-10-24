@@ -24,34 +24,22 @@ from django.test.utils import isolate_apps
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.decorators import _declared_authorization_guards, authorization_required
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
-from trusts.query import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.support import render_configured_policy, built_catalog, install_class_handle
-from trusts.compile.catalogs import Catalog
+from trusts.models import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
+from tests.support import render_configured_policy, built_catalog, install_class_handle, compiler
 
 
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
     pass
 
-def _seal_factory(backend_cls, factory):
-    from trusts.backends import catalogs
-    built = factory.build_registry()
-    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built)
-
 @contextmanager
 def _installed(handle):
-    from trusts.backends import catalogs
-    install_class_handle(_ListedBackend, handle)
-    _seal_factory(_ListedBackend, handle)
-    with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue267._ListedBackend',)):
-        try:
+    from tests.support import published_class_catalog
+    with published_class_catalog(_ListedBackend, handle):
+        with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue267._ListedBackend',)):
             yield
-        finally:
-            install_class_handle(_ListedBackend, None)
-            catalogs.pop(_ListedBackend, None)
 
 @contextmanager
 def _tables(*model_classes):
@@ -74,7 +62,7 @@ def _code(permission):
     return '%s.%s' % (permission.content_type.app_label, permission.codename)
 
 def _handle(path):
-    return RegistryFactory(path=path)
+    return compiler(path=path)
 
 def _request(user):
     request = HttpRequest()
@@ -184,8 +172,8 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
         self.Ownership.objects.create(user=self.owner, organization=self.acme)
         self.handle = _handle('tests.core.issue267-owner')
         with self.assertNumQueries(0):
-            self.handle.register_public(trust=self.Ownership, user='user', permission='organization__owner_group__permissions', content='organization')
-            self.handle.register_public(trust=self.Ownership, user='user', permission='organization__owner_group__permissions', content='organization__repositories')
+            self.handle.register(trust=self.Ownership, user='user', permission='organization__owner_group__permissions', content='organization')
+            self.handle.register(trust=self.Ownership, user='user', permission='organization__owner_group__permissions', content='organization__repositories')
         self.users = _PermittedUsers(User)
 
     def test_module_is_on_kernel_and_pair_suites(self):
@@ -220,8 +208,8 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
             self.assertEqual(list(self.Repository.objects.authorized(self.owner, self.read)), [self.specs])
             self.assertEqual(list(self.Organization.objects.authorized(self.owner, self.read)), [])
             self.assertEqual(list(self.Repository.objects.authorized(self.owner, self.manage)), [])
-            self.assertEqual(list(self.handle.build_registry().filter_authorized(self.Team.objects.all(), self.owner, self.manage)), [])
-            self.assertEqual(list(self.handle.build_registry().filter_authorized(self.Widget.objects.all(), self.owner, self.read)), [])
+            self.assertEqual(list(built_catalog(self.handle).filter_authorized(self.Team.objects.all(), self.owner, self.manage)), [])
+            self.assertEqual(list(built_catalog(self.handle).filter_authorized(self.Widget.objects.all(), self.owner, self.read)), [])
             for obj, permission, expected in ((self.acme, self.manage, ['owner-267']), (self.specs, self.read, ['owner-267']), (self.acme, self.read, []), (self.specs, self.manage, [])):
                 with self.subTest(obj=obj.name, perm=permission.codename):
                     self.assertEqual(list(obj.get_permitted_users(permission).values_list('username', flat=True)), expected)
@@ -291,8 +279,8 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
                 self.assertEqual(publish_allowed(_request(self.owner), pk=self.specs.pk), 'ok')
                 with self.assertRaises(PermissionDenied):
                     publish_denied(_request(self.owner), pk=self.acme.pk)
-                with self.assertNumQueries(0):
-                    with self.assertRaises(TrustsConfigurationError):
+                with self.assertNumQueries(1):
+                    with self.assertRaises(PermissionDenied):
                         missing(_request(self.owner), pk=self.widget.pk)
         finally:
             for model, permission in ((self.Organization, self.manage_code), (self.Organization, self.read_code), (self.Repository, self.read_code), (self.Repository, self.manage_code), (self.Repository, self.publish_code), (self.Organization, self.publish_code), (self.Widget, 'trusts_tests.view_widget')):
@@ -410,12 +398,12 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
     def test_terminal_without_content_type_keeps_primary_key_identity(self):
         operation = self.Operation.objects.create(code='review')
         self.OperationGrant.objects.create(user=self.owner, organization=self.org, repository=self.repo, operation=operation)
-        registry = RegistryFactory()
+        registry = compiler()
         with self.assertNumQueries(0):
-            registry.register(content=self._ref(self.OperationGrant).organization, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
-            registry.register(content=self._ref(self.OperationGrant).repository, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
-        self.assertTrue(registry.build_registry().has_permission(self.owner, self.org, operation))
-        self.assertTrue(registry.build_registry().has_permission(self.owner, self.repo, operation))
+            registry.register_relation(content=self._ref(self.OperationGrant).organization, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
+            registry.register_relation(content=self._ref(self.OperationGrant).repository, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
+        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.org, operation))
+        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.repo, operation))
         registry.path = 'tests.core.issue267-operation'
         handle = registry
         document = _load_policy_sql_document(render_configured_policy(handle))
@@ -429,14 +417,14 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         repo_permit = self.TypedPermit.objects.create(content_type=repo_ct, codename='read_repository')
         self.TypedGrant.objects.create(user=self.owner, organization=self.org, repository=self.repo, permit=repo_permit)
         self.TypedGrant.objects.create(user=self.owner, organization=self.org, repository=self.repo, permit=org_permit)
-        registry = RegistryFactory()
+        registry = compiler()
         grant = self._ref(self.TypedGrant)
-        registry.register(content=grant.organization, user=grant.user, permission=grant.permit)
-        registry.register(content=grant.repository, user=grant.user, permission=grant.permit)
-        self.assertTrue(registry.build_registry().has_permission(self.owner, self.org, org_permit))
-        self.assertTrue(registry.build_registry().has_permission(self.owner, self.repo, repo_permit))
-        self.assertTrue(registry.build_registry().has_permission(self.owner, self.org, repo_permit))
-        self.assertTrue(registry.build_registry().has_permission(self.owner, self.repo, org_permit))
+        registry.register_relation(content=grant.organization, user=grant.user, permission=grant.permit)
+        registry.register_relation(content=grant.repository, user=grant.user, permission=grant.permit)
+        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.org, org_permit))
+        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.repo, repo_permit))
+        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.org, repo_permit))
+        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.repo, org_permit))
         registry.path = 'tests.core.issue267-typed'
         handle = registry
         document = _load_policy_sql_document(render_configured_policy(handle))
@@ -448,9 +436,9 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         read = _perm(self.Repository, 'read_repository')
         self.DirectGrant.objects.create(user=self.owner, organization=self.org, permission=manage)
         self.DirectGrant.objects.create(user=self.owner, organization=self.org, permission=read)
-        registry = RegistryFactory()
+        registry = compiler()
         grant = self._ref(self.DirectGrant)
-        registry.register(content=grant.organization, user=grant.user, permission=grant.permission)
+        registry.register_relation(content=grant.organization, user=grant.user, permission=grant.permission)
         catalog = built_catalog(registry)
         self.assertTrue(catalog.has_perm(self.owner, _code(manage), self.org))
         self.assertFalse(catalog.has_perm(self.owner, _code(read), self.org))

@@ -59,6 +59,9 @@ django-trusts requires Python 3.12--3.14 and Django 6.1.
    python -m pip install "Django>=6.1,<6.2"
    python -m pip install "django-trusts @ git+https://github.com/django-trusts/django-trusts@dev"
 
+Every app that hosts Trusts registrations or a Trusts backend must extend
+``TrustsConfigMixin`` on its Django ``AppConfig``, so the app owns its catalog.
+
 Define the models
 -----------------
 
@@ -222,10 +225,12 @@ Register the model paths when the application starts:
 
    # documents/apps.py
 
-   from trusts.apps import TrustsImplementationConfig
+   from django.apps import AppConfig
+
+   from trusts.apps import TrustsConfigMixin
 
 
-   class DocumentsConfig(TrustsImplementationConfig):
+   class DocumentsConfig(TrustsConfigMixin, AppConfig):
        name = "documents"
        trusts_backend_paths = (
            "documents.backends.DocumentBackend",
@@ -721,6 +726,12 @@ output containing generated parameterized SQL:
 .. code-block:: console
 
    python manage.py trusts_policy_sql
+
+A host app opts in with ``management/commands/trusts_policy_sql.py``:
+
+.. code-block:: python
+
+   from trusts.inspect.commands import PolicySqlCommand as Command
 
 This output is for examining the queries and noticing changes. It is not a
 public file format or an input API. Write the current output to a lockfile
