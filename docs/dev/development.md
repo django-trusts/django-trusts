@@ -76,8 +76,7 @@ An intermediate many-to-many and a reverse many-to-many still fail
 closed at registration. A direct to-one permission relation is
 unchanged, including one that names a custom permission model. A
 `permission=` collection does not contribute to
-`get_group_permissions()`. The grammar is in
-[docs/core-registry.md](core-registry.md).
+`get_group_permissions()`.
 
 ## Along inquiry surfaces (#282)
 
