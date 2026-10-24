@@ -5,8 +5,7 @@ from django.contrib.auth.models import Permission
 from django.db.models import Manager, Model, QuerySet
 
 from trusts.backends import (
-    codename_binding, compile_permitted_users, filter_listed,
-    grant_authorized, grant_permitted)
+    codename_binding, compile_permitted_users, filter_listed)
 from trusts.errors import TrustsConfigurationError
 from trusts.utils import guard_conditions, guard_permission_string
 
@@ -19,7 +18,7 @@ class AuthorizedQuerySet(QuerySet):
     method does not parse ``:condition`` and does not call
     ``get_permission``.
 
-    An authenticated user who fails a registered user condition receives
+        An authenticated user who fails a registered user condition receives
     an empty queryset unless that condition's ``skip_<name>`` keyword is
     true. ``skip_is_active`` is the keyword for the built-in ``is_active``
     condition. Anonymous and unauthenticated users receive an empty
@@ -29,8 +28,9 @@ class AuthorizedQuerySet(QuerySet):
     content-list inquiry is
     ``PermittedQuerySet.permitted(permission, user, conditions=())``.
     ``.authorized`` stays this lower-level projection: it does not use
-    that permitted-input validation. It asks the listed backends, in
-    order, and ORs each catalog's grant.
+    that permitted-input validation. It asks each listed backend, in
+    order, and ORs that backend's own grant. A ``skip_<name>`` keyword is
+    checked against the catalog being asked.
     """
 
     def authorized(self, user, permission, extra_q=None, backend=None,
@@ -42,8 +42,8 @@ class AuthorizedQuerySet(QuerySet):
             raise TrustsConfigurationError('user must be a model instance, not None.')
         return filter_listed(
             self, user,
-            ask=lambda item, skipped: grant_authorized(
-                item, skipped, self, user, permission),
+            ask=lambda item, skipped: item.authorized_grant_q(
+                self, user, permission, skipped=skipped),
             backend=backend, skip_flags=skip_flags, extra_q=extra_q)
 
 
@@ -76,14 +76,17 @@ class PermittedQuerySetMixin:
         Anonymous users, and users who fail a registered condition unless
         that condition's ``skip_<name>`` keyword is true, receive an empty
         queryset. ``skip_is_active`` is the keyword for the built-in
-        ``is_active`` condition. Malformed input and incomplete
-        configuration raise before that shortcut and before SQL.
+        ``is_active`` condition. Malformed permission strings and
+        malformed condition tuples raise before that shortcut and
+        before SQL. A selected name this backend did not register does
+        not raise.
 
         Each listed backend answers from its own catalog, in
         ``AUTHENTICATION_BACKENDS`` order. A catalog that did not
-        register this model contributes an empty grant and does not
-        raise. Grants are OR'd. ``backend`` is one dotted path.
-        There is no active-superuser shortcut.
+        register this model, or that does not own every selected name,
+        contributes nothing and does not raise. When none of them
+        contribute, the queryset is empty. Grants are OR'd. ``backend``
+        is one dotted path. There is no active-superuser shortcut.
         """
         model = self.model
         normalized = _normalize_permitted_permission(permission, api='permitted')
@@ -92,11 +95,10 @@ class PermittedQuerySetMixin:
         binding = _permitted_binding(model, normalized)
         return filter_listed(
             self, user,
-            ask=lambda item, skipped: grant_permitted(
-                item, skipped, self, user, label,
+            ask=lambda item, skipped: item.permitted_grant_q(
+                self, user, label, skipped=skipped,
                 conditions=conditions, binding=binding, api='permitted'),
-            backend=backend, skip_flags=skip_flags, preflight=True,
-            model=model, conditions=conditions, api='permitted')
+            backend=backend, skip_flags=skip_flags)
 
 
 class PermittedQuerySet(PermittedQuerySetMixin, QuerySet):
@@ -106,9 +108,10 @@ class PermittedQuerySet(PermittedQuerySetMixin, QuerySet):
 class PermittedUsersMixin:
     """Content-instance adapter for the reverse permission inquiry.
 
-    ``content.get_permitted_users(perm)`` is the path that exists on
-    every protected model that mixes this in. It is not a content-manager
-    method: ``Content.objects`` keeps returning content rows.
+    ``content.get_permitted_users(perm)`` asks each listed backend for
+    its own user predicate and ORs those predicates. The user model is
+    ``AUTH_USER_MODEL``. It is not a content-manager method:
+    ``Content.objects`` keeps returning content rows.
     """
 
     def get_permitted_users(self, perm, backend=None, **skip_flags):
@@ -119,11 +122,11 @@ class PermittedUsersManagerMixin:
     """Optional adapter on an application's existing user manager.
 
     ``permitted`` and ``with_perm`` both call the one reverse inquiry.
-    That inquiry asks each listed backend for its user predicate and
-    ORs them. ``backend`` is one dotted path. Stock ``auth.User`` does
-    not acquire either method. The content adapter
-    ``get_permitted_users`` remains the path that does not require a
-    user-manager change.
+    Each listed backend contributes its own predicate. The candidate
+    model is this queryset's model. ``backend`` is one dotted path.
+    Stock ``auth.User`` does not acquire either method. The content
+    adapter ``get_permitted_users`` remains the path that does not
+    require a user-manager change.
     """
 
     def permitted(self, content, perm, backend=None, **skip_flags):
