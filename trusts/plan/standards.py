@@ -232,6 +232,7 @@ class SkipFlag(RawSQL):
 
     def __init__(self, name, value):
         self.name = name
+        self.hint = 'skip_%s' % name
         self.value = bool(value)
         super().__init__('%s', (self.value,), output_field=BooleanField())
 

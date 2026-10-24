@@ -872,8 +872,7 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
         self.assertIn(b'skip_is_active=False', raw)
         self.assertIn(b'skip_staff=False', raw)
         self.assertIn(b'skip_superuser=False', raw)
-        from trusts.plan.users import lock_permitted_users_queryset
-        queryset = lock_permitted_users_queryset(handle, self.doc, self.change)
+        queryset = handle.permitted_users(self.doc, self.change)
         sql = str(queryset.query)
         self.assertIn('is_staff', sql)
         self.assertIn('is_superuser', sql)
@@ -1362,7 +1361,6 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
         The registry never sets an ``is_active`` condition, and this model
         has no such field, so the default condition is not added.
         """
-        from trusts.plan.users import lock_permitted_users_queryset
         user_model, note_model, grant_model, link_model = self._create('Open')
         try:
             holder = user_model.objects.create(username='columnless-holder', password='x')
@@ -1396,9 +1394,10 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
             denied = granted(built_catalog(handle), note, outsider, permission)
             if denied is not None:
                 self.assertFalse(bind_once(note_model.objects.filter(pk=note.pk).filter(denied), user_model=get_user_model()).exists())
-            found = set(lock_permitted_users_queryset(built_catalog(handle), note, permission).values_list('pk', flat=True))
+            catalog = built_catalog(handle)
+            found = set(catalog.permitted_users(note, permission).values_list('pk', flat=True))
             self.assertEqual(found, {holder.pk, sponsor.pk, delegate.pk})
-            reverse_sql = str(lock_permitted_users_queryset(built_catalog(handle), note, permission).query)
+            reverse_sql = str(catalog.permitted_users(note, permission).query)
             self.assertNotIn('is_active', reverse_sql)
         finally:
             self._drop(user_model, note_model, grant_model, link_model)

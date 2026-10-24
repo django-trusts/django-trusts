@@ -20,12 +20,10 @@ from django.db import connections
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
 from trusts.backends import TrustModelBackendMixin
-from trusts.compile.factory import probe_along_capabilities
 from trusts.errors import (
     TrustsConfigurationError,
     TrustsMixinRequired,
 )
-from trusts.plan.conditions import obsolete_legacy_callback_setting_enabled
 from trusts.plan.walk import along_connection_supported
 
 
@@ -68,25 +66,6 @@ def _model_label(model):
     if meta is not None:
         return meta.label
     return repr(model)
-
-
-def _messages_for_obsolete_callback_setting():
-    if not obsolete_legacy_callback_setting_enabled():
-        return []
-    return [django_checks.Error(
-        'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS is True, but runtime '
-        'permission callbacks are removed. The setting does not enable '
-        'callbacks. Register a builder '
-        '(backend.add_named_filter(model, code, '
-        'lambda u, p, o: ...)).',
-        hint=(
-            'Remove TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS from settings. '
-            'It cannot restore object-only has_perm callbacks. '
-            + _SILENCE_DOES_NOT_ENABLE_HINT
-        ),
-        obj=None,
-        id=CHECK_ID_OBSOLETE_CALLBACK_SETTING,
-    )]
 
 
 def _is_concrete_model(model):
@@ -235,7 +214,22 @@ def check_missing_declarations(app_configs, **kwargs):
 @django_checks.register()
 def check_obsolete_legacy_callback_setting(app_configs, **kwargs):
     """Fail loud if the deleted runtime-callback setting is still True."""
-    return _messages_for_obsolete_callback_setting()
+    if not getattr(settings, 'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS', False):
+        return []
+    return [django_checks.Error(
+        'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS is True, but runtime '
+        'permission callbacks are removed. The setting does not enable '
+        'callbacks. Register a builder '
+        '(backend.add_named_filter(model, code, '
+        'lambda u, p, o: ...)).',
+        hint=(
+            'Remove TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS from settings. '
+            'It cannot restore object-only has_perm callbacks. '
+            + _SILENCE_DOES_NOT_ENABLE_HINT
+        ),
+        obj=None,
+        id=CHECK_ID_OBSOLETE_CALLBACK_SETTING,
+    )]
 
 
 @django_checks.register()
@@ -281,7 +275,13 @@ def check_along_renderer(app_configs, **kwargs):
             ))
             continue
         try:
-            probe_along_capabilities(connection)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    'WITH RECURSIVE t(n) AS ('
+                    'SELECT 0 UNION ALL SELECT n + 1 FROM t WHERE n < 0'
+                    ') SELECT n FROM t'
+                )
+                cursor.fetchone()
         except Exception as exc:
             messages.append(django_checks.Error(
                 'Database alias %r (ENGINE=%s, vendor=%s) cannot render '

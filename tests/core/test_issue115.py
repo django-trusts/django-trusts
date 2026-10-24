@@ -95,7 +95,8 @@ class ReadmeExampleAuthorizationTest(TestCase):
             Document,
         )
         record = next(
-            item for model, code, item in catalog.iter_permission_conditions()
+            item
+            for (_label, code), (model, item) in catalog.named_filters.items()
             if model is Document and code == 'non_confidential'
         )
         self.assertIsNotNone(record)

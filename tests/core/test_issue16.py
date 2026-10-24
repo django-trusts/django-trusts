@@ -23,7 +23,6 @@ from trusts.inspect.checks import (
     CHECK_ID_OBSOLETE_CALLBACK_SETTING,
     check_obsolete_legacy_callback_setting,
 )
-from trusts.plan.conditions import obsolete_legacy_callback_setting_enabled
 from trusts.plan.grammar import Tree
 
 
@@ -442,10 +441,8 @@ class NamedFilterCheckTest(SimpleTestCase):
         registry.add_named_filter(Note, 'missing', lambda u, p, o: u == o.owner)
 
     def test_obsolete_setting_is_check_error_and_does_not_enable_callbacks(self):
-        self.assertFalse(obsolete_legacy_callback_setting_enabled())
         self.assertEqual(check_obsolete_legacy_callback_setting(None), [])
         with override_settings(TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS=True):
-            self.assertTrue(obsolete_legacy_callback_setting_enabled())
             messages = check_obsolete_legacy_callback_setting(None)
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0].id, CHECK_ID_OBSOLETE_CALLBACK_SETTING)

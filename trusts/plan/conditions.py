@@ -60,7 +60,6 @@ from django.db.models import (
     UUIDField,
 )
 from django.apps import apps as django_apps
-from django.conf import settings as django_settings
 from django.db.backends.base.base import BaseDatabaseWrapper
 from django.db.models.fields import GenericIPAddressField
 from django.http import HttpRequest
@@ -92,19 +91,6 @@ def permission_binding(perm, model):
             content_type__model=modelname,
         ).values('pk')[:1]
     )
-
-
-def obsolete_legacy_callback_setting_enabled():
-    """True when the deleted runtime-callback setting is still ``True``.
-
-    The setting no longer enables object-only callbacks. A True value is
-    a configuration error (``trusts.E007``). Missing or False is quiet.
-    Read at call time so ``override_settings`` works.
-    """
-
-    return bool(getattr(
-        django_settings, 'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS', False
-    ))
 
 
 def _node(node, *kinds):

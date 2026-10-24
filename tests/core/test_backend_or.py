@@ -93,11 +93,11 @@ def _page_catalog(trust, *, along=None):
 
 
 @contextmanager
-def _listed(alpha, beta):
+def _listed(alpha, beta, order=(ALPHA, BETA)):
     restore_alpha = push_catalog(PairAlphaBackend, alpha)
     restore_beta = push_catalog(PairBetaBackend, beta)
     try:
-        with override_settings(AUTHENTICATION_BACKENDS=(ALPHA, BETA)):
+        with override_settings(AUTHENTICATION_BACKENDS=order):
             yield
     finally:
         restore_alpha()
@@ -171,11 +171,11 @@ class ListedBackendOrTest(TestCase):
             self.assertEqual(own.get_group_permissions(self.holder, foreign), set())
             users = _grant_users()
             self.assertEqual(
-                set(users.with_perm(self.page_code, obj=foreign, backend=ALPHA)),
+                set(users.permitted(foreign, self.page_code, backend=ALPHA)),
                 set(),
             )
             self.assertEqual(
-                set(users.with_perm(self.page_code, obj=foreign, backend=BETA)),
+                set(users.permitted(foreign, self.page_code, backend=BETA)),
                 {self.holder},
             )
             self.assertEqual(
@@ -304,7 +304,7 @@ class ListedBackendOrTest(TestCase):
             loaded = import_string(ALPHA)()
             self.assertTrue(loaded.has_perm(self.holder, self.note_code, self.note))
 
-    def test_with_perm_ors_catalogs_and_ignores_the_django_flags(self):
+    def test_permitted_ors_catalogs(self):
         NoteGrant.objects.create(
             shelf=self.shelf, user=self.holder, permission=self.note_perm,
         )
@@ -318,22 +318,67 @@ class ListedBackendOrTest(TestCase):
         beta = _note_catalog(NoteAlso)
         users = _grant_users()
         with _listed(alpha, beta):
-            found = set(users.with_perm(
-                self.note_code, obj=self.note,
+            found = set(users.permitted(
+                self.note, self.note_code,
             ).values_list('pk', flat=True))
             self.assertEqual(found, {self.holder.pk, self.other.pk})
             self.assertNotIn(self.superuser.pk, found)
             self.assertNotIn(self.inactive.pk, found)
-            inactive_flag = set(users.with_perm(
-                self.note_code, is_active=False, include_superusers=True,
-                obj=self.note,
-            ).values_list('pk', flat=True))
-            self.assertEqual(inactive_flag, found)
-            alpha_only = set(users.with_perm(
-                self.note_code, backend=ALPHA, obj=self.note,
+            alpha_only = set(users.permitted(
+                self.note, self.note_code, backend=ALPHA,
             ).values_list('pk', flat=True))
             self.assertEqual(alpha_only, {self.holder.pk})
-            self.assertFalse(users.with_perm(self.note_code).exists())
+
+    def test_unknown_skip_on_one_backend_does_not_veto_the_other(self):
+        NoteGrant.objects.create(
+            shelf=self.shelf, user=self.holder, permission=self.note_perm,
+        )
+        alpha = compiler()
+        alpha.set_user_condition('staff', lambda u: u.is_staff)
+        alpha.register(
+            trust=NoteGrant, user='user', permission='permission',
+            content='shelf__notes',
+        )
+        beta = compiler()
+        for order in ((ALPHA, BETA), (BETA, ALPHA)):
+            with _listed(alpha, beta, order):
+                self.assertTrue(PairAlphaBackend().has_perm(
+                    self.holder, self.note_code, self.note, skip_staff=True,
+                ))
+                self.assertFalse(PairBetaBackend().has_perm(
+                    self.holder, self.note_code, self.note, skip_staff=True,
+                ))
+                self.assertEqual(
+                    set(Note.objects.permitted(
+                        self.note_code, self.holder, skip_staff=True,
+                    )),
+                    {self.note},
+                )
+                self.assertEqual(
+                    set(Note.objects.permitted(
+                        self.note_code, self.holder, backend=ALPHA,
+                        skip_staff=True,
+                    )),
+                    {self.note},
+                )
+                self.assertEqual(
+                    set(self.note.get_permitted_users(
+                        self.note_perm, skip_staff=True,
+                    )),
+                    {self.holder},
+                )
+                self.assertEqual(
+                    set(self.note.get_permitted_users(
+                        self.note_perm, backend=ALPHA, skip_staff=True,
+                    )),
+                    {self.holder},
+                )
+                self.assertEqual(
+                    set(Note.objects.permitted(
+                        self.note_code, self.holder, skip_staff='no',
+                    )),
+                    set(),
+                )
 
     def test_unlisted_registrations_raise_from_ready(self):
         import tests.core.pair_alpha as pair_alpha

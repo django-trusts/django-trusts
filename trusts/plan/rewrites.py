@@ -27,12 +27,6 @@ from django.db.models.query_utils import Q
 from django.db.models.sql.query import Query
 from django.db.models.sql.where import ExtraWhere, NothingNode, WhereNode
 
-from trusts.plan.recursions import (
-    GrantReach,
-    _AnchorInInverseReach,
-    _KeyedReach,
-    _PrefixInForwardWalk,
-)
 from trusts.errors import TrustsConfigurationError
 from django.conf import settings
 import django
@@ -676,7 +670,7 @@ class _Walk(object):
         if id(node) in self.seen_along:
             return
         self.seen_along.add(id(node))
-        bound = _along_bound(node)
+        bound = int(node.along_bound)
         self.hits.append(_Hit(bound, 'const', 'along bound', _INTEGER, apply))
         self._visit_sources(node)
 
@@ -942,22 +936,8 @@ def _plain_value(value):
     return value
 
 
-_ALONG_NODES = (
-    GrantReach,
-    _AnchorInInverseReach,
-    _KeyedReach,
-    _PrefixInForwardWalk,
-)
-
-
 def _is_along(node):
-    return isinstance(node, _ALONG_NODES)
-
-
-def _along_bound(node):
-    if isinstance(node, _KeyedReach):
-        return int(node.walk.bound)
-    return int(node.record.along.bound)
+    return getattr(node, 'along_bound', None) is not None
 
 
 def _unresolved_pair(child):
