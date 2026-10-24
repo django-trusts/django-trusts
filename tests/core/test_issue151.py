@@ -21,9 +21,7 @@ from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document
-from trusts.conditions import (
-    PermissionConditionError,
-)
+from trusts.errors import PermissionConditionError
 
 
 ROOT = Path(__file__).resolve().parents[2]

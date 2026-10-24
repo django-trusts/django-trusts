@@ -10,7 +10,9 @@ permissions:
 
 env:
   # Exact Zero candidate companion.
-  COMPANION_ZERO_SHA: 849baad6109425dc0f35e43ca2f1cf1ee310742c
+  COMPANION_ZERO_SHA: 36f577c3774b7851c03fcd13c3203adb24cd07e9
+  # Exact GH Permissions candidate companion.
+  COMPANION_GH_SHA: 3bd80f82199b37cd34c1028ecd669e88711c3270
 
 jobs:
   tests:
@@ -215,8 +217,10 @@ jobs:
         python scripts/verify-companion-wheels.py
 
   # Zero and GH Permissions against this Core commit, without editing
-  # their pins. A failure is reported and does not block the workflow.
-  # This job does not comment on the pull request.
+  # their pins. Same-named branch, else the pinned SHA while it is not
+  # in companion dev, else dev, else the stable branch. A failure is
+  # reported and does not block the workflow. This job does not comment
+  # on the pull request.
   follow-companions:
     name: follow Core (${{ matrix.companion }})
     runs-on: ubuntu-latest
@@ -242,10 +246,16 @@ jobs:
       with:
         path: core
 
+    # 1. same-named branch, if the companion has one.
+    # 2. the pinned SHA, while that commit is not in companion dev.
+    # 3. companion dev.
+    # 4. the companion's stable branch.
     - name: Select companion ref
       id: companion
       env:
         REPOSITORY: ${{ matrix.repository }}
+        COMPANION: ${{ matrix.companion }}
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         url="https://github.com/${REPOSITORY}.git"
@@ -255,6 +265,15 @@ jobs:
           exit 1
         fi
         echo "Core branch: ${core_branch}"
+        case "${COMPANION}" in
+          zero) pin="${COMPANION_ZERO_SHA}" ;;
+          gh-permissions) pin="${COMPANION_GH_SHA}" ;;
+          *)
+            echo "No pinned SHA for companion ${COMPANION}" >&2
+            exit 1
+            ;;
+        esac
+        echo "Pinned SHA: ${pin}"
 
         # Stable branch is the companion's GitHub default branch.
         # Admins must keep that default on master or main, not dev.
@@ -278,16 +297,40 @@ jobs:
         }
         if branch_exists "${core_branch}"; then
           ref="${core_branch}"
+          rule="same-named branch"
         elif branch_exists "dev"; then
-          ref="dev"
+          # compare pin...dev: ahead or identical means dev contains the pin.
+          status="$(curl -fsS \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            "https://api.github.com/repos/${REPOSITORY}/compare/${pin}...dev" \
+            | jq -r '.status')"
+          echo "Compare ${pin}...dev: ${status}"
+          case "${status}" in
+            ahead|identical)
+              ref="dev"
+              rule="pinned SHA is in dev"
+              ;;
+            behind|diverged)
+              ref="${pin}"
+              rule="pinned SHA is not in dev"
+              ;;
+            *)
+              echo "Unexpected compare status '${status}' for ${pin}...dev" >&2
+              exit 1
+              ;;
+          esac
         elif branch_exists "${stable}"; then
           ref="${stable}"
+          rule="stable branch"
         else
-          echo "No branch named ${core_branch}, dev, or ${stable} in ${REPOSITORY}" >&2
+          echo "No branch named ${core_branch} or ${stable}, and no dev, in ${REPOSITORY}" >&2
           exit 1
         fi
         echo "ref=${ref}" >> "${GITHUB_OUTPUT}"
         echo "stable=${stable}" >> "${GITHUB_OUTPUT}"
+        echo "rule=${rule}" >> "${GITHUB_OUTPUT}"
+        echo "Companion rule: ${rule}"
         echo "Companion ref: ${ref}"
 
     - name: Check out companion
@@ -310,6 +353,7 @@ jobs:
     - name: Log tested revisions
       run: |
         echo "Core SHA: $(git -C core rev-parse HEAD)"
+        echo "Companion rule: ${{ steps.companion.outputs.rule }}"
         echo "Companion ref: ${{ steps.companion.outputs.ref }}"
         echo "Companion stable branch: ${{ steps.companion.outputs.stable }}"
         echo "Companion SHA: $(git -C companion rev-parse HEAD)"

@@ -23,6 +23,7 @@ from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
 from trusts.compile.nodes import Along
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
+from trusts.apps import Recorder
 from trusts.compile.factory import Compiler
 from tests.support import built_catalog, compiler
 ROOT = Path(__file__).resolve().parents[2]
@@ -88,7 +89,7 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         wheel = (ROOT / 'scripts' / 'verify-wheel-install.py').read_text()
         self.assertIn('trusts/py.typed', wheel)
         self.assertIn('register contextual typing', wheel)
-        self.assertIn('register_relationship', wheel)
+        self.assertIn('Recorder.register', wheel)
         metadata = (ROOT / 'scripts' / 'verify-package-metadata.py').read_text()
         self.assertIn('trusts/py.typed', metadata)
         pyright = (ROOT / 'scripts' / 'verify-wheel-pyright.py').read_text()
@@ -144,14 +145,14 @@ class RegisterWheelSignatureTest(SimpleTestCase):
         register = _fake_register(names, annotations, keyword_only=keyword_only)
         self.wheel.assert_register_signature(register)
 
-    def test_installed_contract_accepts_backend_handle_register(self):
-        self.wheel.assert_register_signature(Compiler.register)
+    def test_installed_contract_accepts_recorder_register(self):
+        self.wheel.assert_register_signature(Recorder.register)
 
     def test_error_branches_fail_closed(self):
         trust_var = get_args(self.hints['trust'])[0]
         one_arg = Callable[[trust_var], object]
         two_arg = Callable[[trust_var, object], object]
-        cases = (('parameters', {'names': ('trust', 'user')}), ('keyword-only', {'keyword_only': False}), ('trust-origin', {'trust': trust_var}), ('trust-var', {'trust': type[Model]}), ('user-str', {'user': one_arg | None}), ('user-callable', {'user': str | None}), ('user-callable-args', {'user': str | Callable[[object], object] | None}), ('delegate-str', {'delegate': one_arg | None}), ('delegate-none', {'delegate': str | one_arg}), ('delegate-callable', {'delegate': str | None}), ('delegate-callable-args', {'delegate': str | Callable[[object], object] | None}), ('sponsor-str', {'sponsor': one_arg | None}), ('condition-none', {'condition': one_arg | two_arg}), ('condition-forms', {'condition': one_arg | None}), ('ordinary-condition', {'condition': two_arg | Callable[[trust_var, int], object] | None}), ('delegated-condition', {'condition': one_arg | Callable[[trust_var, int], object] | None}), ('return-type', {'return': RegisteredRelation}))
+        cases = (('parameters', {'names': ('trust', 'user')}), ('keyword-only', {'keyword_only': False}), ('trust-origin', {'trust': trust_var}), ('trust-var', {'trust': type[Model]}), ('user-str', {'user': one_arg | None}), ('user-callable', {'user': str | None}), ('user-callable-args', {'user': str | Callable[[object], object] | None}), ('delegate-str', {'delegate': one_arg | None}), ('delegate-none', {'delegate': str | one_arg}), ('delegate-callable', {'delegate': str | None}), ('delegate-callable-args', {'delegate': str | Callable[[object], object] | None}), ('sponsor-str', {'sponsor': one_arg | None}), ('condition-none', {'condition': one_arg | two_arg}), ('condition-forms', {'condition': one_arg | None}), ('ordinary-condition', {'condition': two_arg | Callable[[trust_var, int], object] | None}), ('delegated-condition', {'condition': one_arg | Callable[[trust_var, int], object] | None}))
         for label, updates in cases:
             with self.subTest(label=label):
                 names = updates.pop('names', _REGISTER_NAMES)

@@ -17,13 +17,11 @@ from django.test.utils import isolate_apps
 from tests.core import kernel_host_listed
 from tests.models import Organization, Ticket, ticket_meta_own
 from tests.support import built_catalog, compiler, override_catalog
-from trusts.conditions import PermissionConditionError
+from trusts.backends import policy_document
+from trusts.errors import PermissionConditionError
 from trusts.inspect.checks import (
-    CHECK_ID_INVALID_EXPR,
     CHECK_ID_OBSOLETE_CALLBACK_SETTING,
     check_obsolete_legacy_callback_setting,
-    check_permission_conditions,
-    iter_live_permission_conditions,
 )
 from trusts.plan.conditions import obsolete_legacy_callback_setting_enabled
 from trusts.plan.grammar import Tree
@@ -206,6 +204,10 @@ class NamedFilterRuntimeTest(TransactionTestCase):
             self.assertEqual(len(log.calls), 1)
 
     def test_ticket_meta_own_agrees_on_has_perm(self):
+        if any(field.name == 'trust' for field in Ticket._meta.concrete_fields):
+            self.skipTest(
+                'pair Ticket subclasses Content and this fixture is the plain model'
+            )
         User = get_user_model()
 
         class TicketGrant(models.Model):
@@ -429,25 +431,6 @@ class NamedFilterRuntimeTest(TransactionTestCase):
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class NamedFilterCheckTest(SimpleTestCase):
 
-    def test_checks_never_reinvoke_builder(self):
-        from tests.kernel_host.backends import HostTrustModelBackend
-
-        Note, _Memo = _note_models()
-        log = _BuilderLog()
-        registry = compiler()
-        registry.add_named_filter(Note, 'own', log)
-        with override_catalog(
-            HostTrustModelBackend, registry,
-            'tests.kernel_host.backends.HostTrustModelBackend',
-        ):
-            messages = check_permission_conditions(None)
-        self.assertEqual(len(log.calls), 1)
-        own = [
-            message for message in messages
-            if message.id == CHECK_ID_INVALID_EXPR and "'own'" in message.msg
-        ]
-        self.assertEqual(own, [])
-
     def test_builder_unresolved_field_fails_at_register(self):
         Note, _Memo = _note_models()
         registry = compiler()
@@ -479,28 +462,21 @@ class NamedFilterCheckTest(SimpleTestCase):
         owner_b = compiler()
         owner_a.add_named_filter(Note, 'own', lambda u, p, o: u == o.owner)
         owner_b.add_named_filter(Note, 'own', lambda u, p, o: o.title == 'keep')
-        with override_settings(AUTHENTICATION_BACKENDS=(
+        with override_catalog(
+            HostTrustModelBackend, owner_a,
             'tests.kernel_host.backends.HostTrustModelBackend',
-            'tests.backends.MixinOnlyBackend',
-        )):
+        ):
             with override_catalog(
-                HostTrustModelBackend, owner_a,
-                'tests.kernel_host.backends.HostTrustModelBackend',
+                MixinOnlyBackend, owner_b,
+                'tests.backends.MixinOnlyBackend',
             ):
-                with override_catalog(
-                    MixinOnlyBackend, owner_b,
-                    'tests.backends.MixinOnlyBackend',
-                ):
-                    live = list(iter_live_permission_conditions())
-                    messages = check_permission_conditions(None)
-        own_rows = [
-            tree for model, code, tree in live
-            if model is Note and code == 'own'
+                document = policy_document()
+        own_sql = [
+            named['sql']
+            for row in document['backends']
+            for content in row['contents']
+            for named in content.get('named_filters', ())
+            if named['id'] == 'trusts_tests__Note__own'
         ]
-        self.assertEqual(len(own_rows), 2)
-        self.assertEqual(len({id(tree) for tree in own_rows}), 2)
-        invalid = [
-            message for message in messages
-            if message.id == CHECK_ID_INVALID_EXPR and "'own'" in message.msg
-        ]
-        self.assertEqual(invalid, [])
+        self.assertEqual(len(own_sql), 2)
+        self.assertEqual(len(set(own_sql)), 2)

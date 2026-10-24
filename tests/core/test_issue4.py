@@ -11,7 +11,7 @@ from django.db import models
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
-from trusts.conditions import PermissionConditionError
+from trusts.errors import PermissionConditionError
 from tests.support import compiler
 
 

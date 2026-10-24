@@ -39,7 +39,6 @@ from django.core import checks as django_checks
 from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
-from trusts.apps import installed_catalogs
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.format import _format_policy_sql
 from trusts.inspect.yaml import (
@@ -188,13 +187,12 @@ def render_policy_sql_bytes(*, alias=None):
     """Return the schema-1 policy SQL document as UTF-8 bytes.
 
     ``alias`` overrides ``TRUSTS_POLICY_DATABASE`` for this call only.
-    The document is the listed catalogs. Compilation uses ``as_sql()`` /
-    ``sql_with_params()`` and does not execute the exported statements.
-    A failure raises before a partial document is returned.
+    The document is ``policy_document()`` for the installed configs.
+    Compilation uses ``as_sql()`` / ``sql_with_params()`` and does not
+    execute the exported statements. A failure raises before a partial
+    document is returned.
     """
-    resolved = resolve_policy_database(alias)
-    document = _build_document(installed_catalogs(), resolved)
-    return _dump_document(document)
+    return _dump_document(policy_document(alias=alias))
 
 
 def write_policy_lock(payload, *, override=None):
@@ -777,8 +775,9 @@ def _permission_token(target):
 class _PolicyConditionText(object):
     """Render one stored predicate as a policy-lock condition line.
 
-    Text stays here. ``grouped`` is restored around each child so a
-    nested conjunction does not change its parent's parentheses.
+    Text stays here. Nested ``and`` inside ``and``, and ``or`` inside
+    ``or``, print as one flat chain. Parentheses stay for mixed
+    ``and``/``or`` and for the operand of ``not``.
     """
 
     def __init__(self, permission_token):
@@ -819,9 +818,9 @@ class _PolicyConditionText(object):
 
     def _join(self, node, word):
         text = '%s %s %s' % (
-            self.render(node.left, grouped=True),
+            self.render(node.left, grouped=node.left.kind != word),
             word,
-            self.render(node.right, grouped=True),
+            self.render(node.right, grouped=node.right.kind != word),
         )
         if self._grouped:
             return '(%s)' % text
@@ -1859,3 +1858,6 @@ def _atomic_write(path, payload):
                 os.unlink(tmp_name)
             except OSError:
                 pass
+
+
+from trusts.backends import policy_document

@@ -19,7 +19,7 @@ from django.utils import timezone
 import tests as tests_module
 from trusts.apps import Recorder, TrustsConfigMixin
 from trusts.backends import TrustModelBackendMixin
-from trusts.conditions import PermissionConditionError
+from trusts.errors import PermissionConditionError
 from trusts.models import PermittedQuerySet, PermittedUsersMixin
 from tests.support import compiler, published_class_catalog
 

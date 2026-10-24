@@ -1,17 +1,9 @@
-"""Django system checks for permission conditions, missing declarations,
-and Along renderer support.
-
-Model-aware semantic validation (field names, traversal, multi-valued
-relations, operand types) is reported as ``CheckMessage`` objects with
-stable IDs. ``PermissionConditionError`` is caught here so
-``SILENCED_SYSTEM_CHECKS`` can filter the diagnostic. Silencing an ID
-does not make the policy executable: ``has_perm`` and ``.permitted()``
-still validate and fail closed.
+"""Django system checks for missing declarations and Along renderer support.
 
 ``trusts.E007`` reports the deleted runtime-callback setting still
-being ``True``. That setting never enables callbacks. ``trusts.E002``,
-``trusts.E006``, and ``trusts.W001`` are retired. OrderedFold vendor
-diagnostics live in ``django-trusts-ordered-fold`` as
+being ``True``. That setting never enables callbacks. ``trusts.E001``,
+``trusts.E002``, ``trusts.E006``, and ``trusts.W001`` are retired.
+OrderedFold vendor diagnostics live in ``django-trusts-ordered-fold`` as
 ``trusts_ordered_fold.E001``.
 """
 
@@ -31,19 +23,13 @@ from trusts.backends import TrustModelBackendMixin
 from trusts.compile.factory import probe_along_capabilities
 from trusts.decorators import _declared_authorization_guards
 from trusts.errors import (
-    PermissionConditionError,
     TrustsConfigurationError,
     TrustsMixinRequired,
 )
-from trusts.plan.conditions import (
-    obsolete_legacy_callback_setting_enabled,
-    validate_expression,
-)
-from trusts.plan.grammar import Tree
+from trusts.plan.conditions import obsolete_legacy_callback_setting_enabled
 from trusts.plan.walk import along_connection_supported
 
 
-CHECK_ID_INVALID_EXPR = 'trusts.E001'
 CHECK_ID_MISSING_DECLARATION = 'trusts.E003'
 CHECK_ID_ALONG_RENDERER = 'trusts.E005'
 CHECK_ID_OBSOLETE_CALLBACK_SETTING = 'trusts.E007'
@@ -80,34 +66,11 @@ def _trusts_abstract_base(model, label):
     return None
 
 
-def _historical_content_class(apps_registry):
-    try:
-        Trust = apps_registry.get_model('trusts', 'Trust')
-    except LookupError:
-        return None
-    return _trusts_abstract_base(Trust, 'trusts.Content')
-
-
 def _model_label(model):
     meta = getattr(model, '_meta', None)
     if meta is not None:
         return meta.label
     return repr(model)
-
-
-def _messages_for_expr(model, cond_code, expr, user_model=None):
-    try:
-        validate_expression(expr, model, user_model)
-    except PermissionConditionError as exc:
-        return [django_checks.Error(
-            'Permission condition %r on %s is invalid: %s' % (
-                cond_code, _model_label(model), exc,
-            ),
-            hint=_SILENCE_DOES_NOT_ENABLE_HINT,
-            obj=model,
-            id=CHECK_ID_INVALID_EXPR,
-        )]
-    return []
 
 
 def _messages_for_obsolete_callback_setting():
@@ -273,69 +236,6 @@ def check_missing_declarations(app_configs, **kwargs):
     return messages
 
 
-def _iter_catalog_permission_conditions(catalogs):
-    """Yield condition records from the listed catalogs."""
-    for catalog in catalogs:
-        yield from catalog.iter_permission_conditions()
-
-
-def iter_live_permission_conditions(apps_registry=None, catalogs=None):
-    """Yield ``(model, cond_code, tree)`` from configured catalogs.
-
-    Catalog rows are the source of truth. The same model and code on
-    two catalogs are two rows, and both are validated. The only skip
-    is the transitional Zero ``Content`` fallback when that iterator
-    returns an object already yielded from a catalog (same identity,
-    not merely the same model and code).
-    """
-
-    if catalogs is None:
-        catalogs = _load_listed()[0]
-    seen_records = set()
-    for model, cond_code, record in _iter_catalog_permission_conditions(catalogs):
-        marker = id(record)
-        if marker in seen_records:
-            continue
-        seen_records.add(marker)
-        yield model, cond_code, record
-
-    registry = django_apps if apps_registry is None else apps_registry
-    Content = _historical_content_class(registry)
-    iter_fn = getattr(Content, 'iter_permission_conditions', None)
-    if not callable(iter_fn):
-        return
-    for model, cond_code, record in iter_fn():
-        marker = id(record)
-        if marker in seen_records:
-            continue
-        seen_records.add(marker)
-        yield model, cond_code, record
-
-
-def _stored_expression(stored):
-    """Tree from a catalog row, or ``expr`` from a historical record."""
-    if isinstance(stored, Tree):
-        return stored
-    return getattr(stored, 'expr', None)
-
-
-def permission_condition_check_messages(entries, user_model=None):
-    """Build check messages for ``(model, cond_code, tree)`` entries.
-
-    Builders are never invoked here; only stored IR is validated.
-    ``user_model`` is the catalog user model principal paths resolve against.
-    A historical ``Content`` row may still carry ``expr`` instead of a tree.
-    """
-    messages = []
-    for model, cond_code, stored in entries:
-        expr = _stored_expression(stored)
-        if expr is not None:
-            messages.extend(_messages_for_expr(
-                model, cond_code, expr, user_model,
-            ))
-    return messages
-
-
 @django_checks.register()
 def check_obsolete_legacy_callback_setting(app_configs, **kwargs):
     """Fail loud if the deleted runtime-callback setting is still True."""
@@ -434,22 +334,6 @@ def check_unlisted_catalog(app_configs, **kwargs):
             hint='List a backend whose module lives in this app.',
             obj=config, id=CHECK_ID_UNLISTED_CATALOG))
     return messages
-
-
-@django_checks.register(django_checks.Tags.models)
-def check_permission_conditions(app_configs, **kwargs):
-    """Validate every registered condition after models are loaded.
-
-    Does not import extra application modules and does not depend on
-    ``INSTALLED_APPS`` order. ``app_configs`` is ignored so a subset
-    ``manage.py check trusts`` still reports project-model conditions.
-    Builders are never invoked. No database queries.
-    """
-    catalogs = _load_listed()[0]
-    user_model = catalogs[0].user_model if catalogs else None
-    return permission_condition_check_messages(
-        iter_live_permission_conditions(catalogs=catalogs), user_model,
-    )
 
 
 @django_checks.register(django_checks.Tags.database)

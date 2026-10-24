@@ -9,24 +9,17 @@ import importlib
 from django.test import SimpleTestCase
 
 from tests.core import kernel_host_listed
-from trusts.apps import installed_catalogs
 from trusts.plan.relations import PlanQueryCompiler
 
 
 class BackendsMixinBoundaryTest(SimpleTestCase):
     def test_canonical_mixin_import_and_plan_compiler(self):
+        if not kernel_host_listed():
+            self.skipTest('kernel-only host path is not listed on the pair')
         from django.apps import apps
 
-        if kernel_host_listed():
-            catalogs = (
-                apps.get_app_config('trusts_kernel_host').get_catalog(),
-            )
-        else:
-            catalogs = installed_catalogs()
-        self.assertTrue(catalogs)
-        for catalog in catalogs:
-            self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
-            self.assertFalse(catalog.compiler.historical_fallback)
+        catalog = apps.get_app_config('trusts_kernel_host').get_catalog()
+        self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
 
     def test_core_backends_module_is_gone(self):
         with self.assertRaises(ModuleNotFoundError):

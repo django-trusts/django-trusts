@@ -5,8 +5,11 @@ Proves Zero RECORD does not own trusts/__init__.py or trusts/apps.py,
 and that both companion layouts work:
 
 1. Kernel wheel then Zero overlay (site-packages merge).
-2. Isolated Zero wheel (Core removed) configures Django and raises
-   ModuleNotFoundError for ``trusts.apps``.
+2. Isolated site with Django, Core's wheel, and Zero's wheel. Zero
+   imports ``TrustsConfigMixin`` from ``trusts.apps`` and reads
+   Django settings at import. The probe drops every other ``trusts``
+   package, including a site-packages that already holds both Django
+   and an installed Core wheel.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ from management_archive import ships_trusts_management
 
 ROOT = Path(__file__).resolve().parents[1]
 # Exact Zero candidate companion.
-ZERO_HEAD = '849baad6109425dc0f35e43ca2f1cf1ee310742c'
+ZERO_HEAD = '36f577c3774b7851c03fcd13c3203adb24cd07e9'
 FORBIDDEN_ZERO_PATHS = (
     'trusts/__init__.py',
     'trusts/apps.py',
@@ -53,8 +56,6 @@ if not settings.configured:
 import django
 django.setup()
 import trusts
-import importlib
-import trusts.apps as trusts_apps
 from trusts.backends import TrustModelBackendMixin
 from trusts.zero.apps import ZeroConfig
 from trusts.zero.models import Trust
@@ -64,77 +65,47 @@ assert ZeroConfig.label == "trusts"
 assert django_apps.get_app_config("trusts").name == "trusts.zero"
 assert Trust._meta.app_label == "trusts"
 assert TrustModelBackendMixin.__module__ == "trusts.backends"
-try:
-    importlib.import_module("trusts.core_backends")
-except ModuleNotFoundError:
-    pass
-else:
-    raise SystemExit("trusts.core_backends still imports")
-if hasattr(trusts_apps, "kernel_config") or hasattr(trusts_apps, "AppConfig"):
-    raise SystemExit("overlay still exposes kernel_config or AppConfig")
 init = Path(trusts.__file__)
 assert init.name == "__init__.py"
 assert (init.parent / "zero" / "apps.py").is_file()
 assert (init.parent / "apps.py").is_file()
-assert not (init.parent / "core_backends.py").is_file()
-from trusts.conditions import permission_has_condition, PermissionConditionError
-assert permission_has_condition("change_trust:own")
+from trusts.utils import parse_perm_code
+from trusts.errors import PermissionConditionError
+assert parse_perm_code("trusts.change_trust:own")[3] == "own"
 assert PermissionConditionError is not None
-try:
-    from trusts.conditions import Expr
-except ImportError:
-    pass
-else:
-    raise SystemExit("companion overlay still exports trusts.conditions.Expr")
-try:
-    from trusts.conditions import ConditionRegistry
-except ImportError:
-    pass
-else:
-    raise SystemExit("companion overlay still exports trusts.conditions.ConditionRegistry")
-try:
-    from trusts.conditions import validate_expression
-except ImportError:
-    pass
-else:
-    raise SystemExit("companion overlay still exports trusts.conditions.validate_expression")
-try:
-    from django_trusts import condition_refs
-except ImportError:
-    pass
-else:
-    raise SystemExit("companion overlay still exports django_trusts.condition_refs")
 print("companion-overlay-ok")
 '''
 
 ISOLATED_ZERO_PROBE = r'''
 import sys
 from pathlib import Path
-from django.conf import settings
 
-extracted = Path(%r)
+site = Path(%r).resolve()
 kept = []
 for p in sys.path:
     if Path(p, "trusts", "__init__.py").is_file():
         continue
     kept.append(p)
 sys.path[:] = kept
-sys.path.insert(0, str(extracted))
+sys.path.insert(0, str(site))
 for name in list(sys.modules):
     if name == "trusts" or name.startswith("trusts."):
         del sys.modules[name]
+import django
+from django.conf import settings
 if not settings.configured:
     settings.configure(SECRET_KEY="companion-zero-isolated")
-try:
-    from trusts.zero.apps import ZeroConfig  # noqa: F401
-except ModuleNotFoundError as exc:
-    missing = exc.name or ""
-    if missing == "trusts.apps":
-        print("companion-zero-isolated-ok")
-        raise SystemExit(0)
-    raise
-print("unexpected-zero-without-core")
-raise SystemExit(1)
+import trusts.apps as trusts_apps
+import trusts.zero.apps as zero_apps
+from trusts.apps import TrustsConfigMixin
+from trusts.zero.apps import ZeroConfig
+assert Path(django.__file__).resolve().is_relative_to(site)
+assert Path(trusts_apps.__file__).resolve().is_relative_to(site)
+assert Path(zero_apps.__file__).resolve().is_relative_to(site)
+assert issubclass(ZeroConfig, TrustsConfigMixin)
+assert ZeroConfig.name == "trusts.zero"
+assert ZeroConfig.label == "trusts"
+print("companion-zero-isolated-ok")
 '''
 
 
@@ -227,22 +198,38 @@ def main() -> int:
     zero_wheel = _ensure_zero_wheel(zero_root)
     with zipfile.ZipFile(kernel_wheel) as zf:
         names = zf.namelist()
-    if any(n.endswith('trusts/core_backends.py') for n in names):
-        raise SystemExit('library wheel still ships trusts/core_backends.py')
     if ships_trusts_management(names):
         raise SystemExit('library wheel still ships trusts/management/**')
     _assert_zero_record(zero_wheel)
 
     tmp = Path(tempfile.mkdtemp(prefix='trusts-dev3-companion-'))
     try:
-        extracted = tmp / 'zero-extracted'
-        extracted.mkdir()
-        with zipfile.ZipFile(zero_wheel) as zf:
-            zf.extractall(extracted)
+        isolated = tmp / 'isolated-site'
+        isolated.mkdir()
+        subprocess.check_call(
+            [
+                sys.executable, '-m', 'pip', 'install', '-q',
+                '--target', str(isolated),
+                'Django>=6.1,<6.2',
+            ],
+        )
+        subprocess.check_call(
+            [
+                sys.executable, '-m', 'pip', 'install', '-q',
+                '--target', str(isolated), '--no-deps',
+                str(kernel_wheel), str(zero_wheel),
+            ],
+        )
+        if not (isolated / 'django' / 'conf' / '__init__.py').is_file():
+            raise SystemExit('isolated site missing Django')
+        if not (isolated / 'trusts' / 'apps.py').is_file():
+            raise SystemExit('isolated site lost kernel trusts/apps.py')
+        if not (isolated / 'trusts' / 'zero' / 'apps.py').is_file():
+            raise SystemExit('isolated site missing trusts/zero/apps.py')
         env = os.environ.copy()
         env.pop('DJANGO_SETTINGS_MODULE', None)
         out = subprocess.check_output(
-            [sys.executable, '-c', ISOLATED_ZERO_PROBE % str(extracted)],
+            [sys.executable, '-c', ISOLATED_ZERO_PROBE % str(isolated)],
             env=env,
             cwd=str(tmp),
             text=True,

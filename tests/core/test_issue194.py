@@ -16,7 +16,6 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
 from trusts.apps import TrustsConfigMixin, installed_catalogs
 from tests.support import scoped_permitted_content as filter_by_permitted_content
-from trusts.plan.relations import QueryCompiler
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
@@ -76,16 +75,12 @@ class ProtectedFactorySurfaceTest(SimpleTestCase):
 
     def test_relationship_applies_is_records_only(self):
         compiler = PlanQueryCompiler()
-        protocol = QueryCompiler()
         empty = type('Plan', (), {'records': (), 'delegations': ()})()
         filled = type('Plan', (), {'records': (object(),), 'delegations': (), 'strategy': object()})()
         strategy_only = type('Plan', (), {'records': (), 'delegations': (), 'strategy': object()})()
         self.assertFalse(compiler.applies(empty))
-        self.assertFalse(protocol.applies(empty))
         self.assertTrue(compiler.applies(filled))
-        self.assertTrue(protocol.applies(filled))
         self.assertFalse(compiler.applies(strategy_only))
-        self.assertFalse(protocol.applies(strategy_only))
 
     def test_ready_stores_the_built_registry_on_the_catalog(self):
         from tests.kernel_host.backends import HostTrustModelBackend

@@ -3,7 +3,7 @@ from pathlib import Path
 
 from django.test import SimpleTestCase
 
-from trusts.plan.relations import PlanQueryCompiler, QueryCompiler
+from trusts.plan.relations import PlanQueryCompiler
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,10 +21,7 @@ class RelationshipOnlyCompilerTest(SimpleTestCase):
 
     def test_applies_and_any_plan_records_ignore_strategy(self):
         compiler = PlanQueryCompiler()
-        protocol = QueryCompiler()
         empty = type('Plan', (), {'records': (), 'delegations': (), 'strategy': object()})()
         filled = type('Plan', (), {'records': (object(),), 'delegations': ()})()
         self.assertFalse(compiler.applies(empty))
-        self.assertFalse(protocol.applies(empty))
         self.assertTrue(compiler.applies(filled))
-        self.assertTrue(protocol.applies(filled))

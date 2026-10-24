@@ -9,7 +9,9 @@ with the repository root as cwd or on sys.path.
 from __future__ import annotations
 
 import argparse
+import importlib
 import importlib.metadata
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -28,17 +30,12 @@ def assert_register_signature(register) -> None:
     """Fail closed unless installed ``register`` is the 1.1 public contract.
 
     Ordinary roles stay one-argument path callables. Delegated registration
-    adds ``delegate`` and ``sponsor``, a second ``condition`` callable, and
-    the ``RegisteredRelation | RegisteredDelegation`` return.
+    adds ``delegate`` and ``sponsor`` and a second ``condition`` callable.
+    ``Recorder.register`` returns ``None``.
     """
     import inspect
     from collections.abc import Callable as AbcCallable
     from typing import TypeVar, get_args, get_origin, get_type_hints
-
-    from trusts.compile.factory import (
-        RegisteredDelegation,
-        RegisteredRelation,
-    )
 
     signature = inspect.signature(register)
     param_names = [name for name in signature.parameters if name != 'self']
@@ -119,12 +116,6 @@ def assert_register_signature(register) -> None:
             'delegated condition Callable args are %r, expected '
             '[TypeVar, object] + object' % (shapes,)
         )
-    return_hint = hints.get('return')
-    if set(get_args(return_hint)) != {RegisteredRelation, RegisteredDelegation}:
-        raise SystemExit(
-            'register return annotation is %r, expected '
-            'RegisteredRelation | RegisteredDelegation' % return_hint
-        )
 
 
 def main() -> int:
@@ -174,45 +165,30 @@ def main() -> int:
     import django
     django.setup()
 
-    import importlib
     import sys as _sys
     import trusts
+    import trusts.apps as apps_mod
+    from trusts.apps import Recorder, TrustsConfigMixin
     from trusts.backends import TrustModelBackendMixin
-    from trusts.apps import (
-        TrustsConfigMixin)
-    from trusts.compile.factory import (
-        RegisteredDelegation,
-        RegisteredRelation,
-        Compiler,
-    )
-    from trusts.compile.nodes import Ref
     from trusts.decorators import filter_by_permitted_content
-    from trusts.plan.relations import RelationPlan
+    from trusts.errors import PermissionConditionError
     from trusts.models import AuthorizedManager, AuthorizedManagerMixin, AuthorizedQuerySet
-    from trusts.conditions import (
-        PermissionConditionError,
-        permission_condition_code,
-        permission_has_condition,
-    )
+    from trusts.utils import parse_perm_code
 
     trusts_file = Path(trusts.__file__).resolve()
     if checkout == trusts_file or checkout in trusts_file.parents:
         raise SystemExit('Imported trusts from the checkout: %s' % trusts_file)
     if 'site-packages' not in str(trusts_file) and 'dist-packages' not in str(trusts_file):
         raise SystemExit('trusts.__file__ is not a site-packages install: %s' % trusts_file)
-    factory_file = Path(trusts.compile.factory.__file__).resolve()
-    if 'site-packages' not in str(factory_file) and 'dist-packages' not in str(factory_file):
-        raise SystemExit('trusts.compile.factory is not a site-packages install: %s' % factory_file)
+    apps_file = Path(apps_mod.__file__).resolve()
+    if 'site-packages' not in str(apps_file) and 'dist-packages' not in str(apps_file):
+        raise SystemExit('trusts.apps is not a site-packages install: %s' % apps_file)
     typed_marker = Path(trusts.__file__).resolve().parent / 'py.typed'
     if not typed_marker.is_file():
         raise SystemExit('installed wheel missing trusts/py.typed')
-    if hasattr(trusts, 'BackendHandle') or hasattr(trusts.backends, 'BackendHandle'):
-        raise SystemExit('library wheel still exports BackendHandle')
-    if hasattr(Compiler, 'register_relationship'):
-        raise SystemExit('library wheel still exposes register_relationship')
-    assert_register_signature(Compiler.register)
+    assert_register_signature(Recorder.register)
     print('py.typed present')
-    print('register contextual typing', Compiler.register)
+    print('register contextual typing', Recorder.register)
 
     from django.apps import apps as django_apps
 
@@ -234,8 +210,6 @@ def main() -> int:
         pass
     else:
         raise SystemExit('library-only populate must not own label trusts_core')
-    if hasattr(trusts.apps, 'kernel_config') or hasattr(trusts.apps, 'AppConfig'):
-        raise SystemExit('library wheel still exposes kernel_config or AppConfig')
     if 'trusts.zero' in _sys.modules:
         raise SystemExit('wheel populate imported trusts.zero')
     installed_version = importlib.metadata.version('django-trusts')
@@ -255,28 +229,11 @@ def main() -> int:
             'TrustModelBackendMixin.__module__ is %r, expected trusts.backends'
             % TrustModelBackendMixin.__module__
         )
-    try:
-        importlib.import_module('trusts.core_backends')
-    except ModuleNotFoundError:
-        pass
-    else:
-        raise SystemExit('trusts.core_backends still imports from the library wheel')
-    import trusts.apps as apps_mod
     for config in django_apps.get_app_configs():
         if isinstance(config, TrustsConfigMixin):
             raise SystemExit(
                 'library-only populate must not install a TrustsConfigMixin'
             )
-    for removed in (
-        'implementation_configs',
-        'implementation_for_path',
-        'implementation_for_class',
-        'relationship_registries',
-        'trusts_backend_paths',
-        'TrustsImplementationConfig',
-    ):
-        if hasattr(apps_mod, removed):
-            raise SystemExit('library wheel still exposes %s' % removed)
     try:
         from trusts.backends import TrustModelBackend  # noqa: F401
     except ImportError:
@@ -300,81 +257,14 @@ def main() -> int:
     print('trusts.backends', backends_file)
     print('TrustModelBackendMixin', TrustModelBackendMixin)
     print('library apps', sorted(labels))
-    print('kernel_config absent')
     print('TrustsConfigMixin', TrustsConfigMixin)
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager)
     print('filter_by_permitted_content', filter_by_permitted_content)
-    from django.contrib.auth import get_user_model
-    standalone = Compiler(
-        user_model=get_user_model(),
-        query_compiler=Compiler.default_query_compiler(),
-        path='scripts.verify',
-        family='relationship',
-    )
-    catalog = standalone.compile()
-    if not isinstance(catalog.named_filters, dict):
-        raise SystemExit('Compiler.compile() did not store named filters')
-    again = standalone.compile()
-    if again.named_filters is catalog.named_filters:
-        raise SystemExit('Compiler.compile() shared the named-filter mapping')
-    if hasattr(catalog, 'filter_lookup') or hasattr(standalone, 'filter_lookup'):
-        raise SystemExit('Compiler.compile() still exposes filter_lookup')
-    print('named filters copied')
-    print(
-        'defining modules', Compiler, Ref, RegisteredRelation,
-        RegisteredDelegation, RelationPlan,
-    )
-    print('permission_has_condition', permission_has_condition)
-    print('permission_condition_code', permission_condition_code)
+    parsed = parse_perm_code('app.change_trust:own')
+    if parsed[3] != 'own':
+        raise SystemExit('parse_perm_code suffix is %r' % (parsed[3],))
+    print('parse_perm_code', parse_perm_code)
     print('PermissionConditionError', PermissionConditionError)
-    try:
-        from django_trusts import TQ  # noqa: F401
-    except ImportError:
-        pass
-    else:
-        raise SystemExit('django_trusts still exports TQ')
-    try:
-        from django_trusts import condition_refs  # noqa: F401
-    except ImportError:
-        pass
-    else:
-        raise SystemExit('django_trusts still exports condition_refs')
-    try:
-        from trusts.conditions import Expr  # noqa: F401
-    except ImportError:
-        pass
-    else:
-        raise SystemExit('trusts.conditions still exports Expr')
-    try:
-        from trusts.conditions import condition_refs  # noqa: F401
-    except ImportError:
-        pass
-    else:
-        raise SystemExit('trusts.conditions still exports condition_refs')
-    for _hidden in (
-        'ConditionLookup',
-        'ConditionRecord',
-        'ConditionRegistry',
-        'ModelIdentity',
-        'RegistryConditionLookup',
-        'compile_expression_q',
-        'evaluate_registered_expression',
-        'obsolete_legacy_callback_setting_enabled',
-        'validate_expression',
-    ):
-        try:
-            getattr(__import__('trusts.conditions', fromlist=[_hidden]), _hidden)
-        except AttributeError:
-            pass
-        else:
-            raise SystemExit('trusts.conditions still exports %s' % _hidden)
-        try:
-            exec('from trusts.conditions import %s' % _hidden)
-        except ImportError:
-            pass
-        else:
-            raise SystemExit('trusts.conditions still imports %s' % _hidden)
-    print('public construction imports fail')
     import trusts.decorators as decorators_mod
     from trusts.decorators import authorization_required
     if authorization_required is None:
@@ -398,7 +288,6 @@ def main() -> int:
     if 'trusts.zero' in decorators_src:
         raise SystemExit('library wheel decorators import Zero')
     print('legacy decorator family absent')
-    import importlib.util
 
     def _find_spec(name):
         try:

@@ -259,7 +259,6 @@ def _pks(rows):
 
 class _SplitCompiler(PlanQueryCompiler):
     """Direct plan OR group-registry plan. Group-only uses the group plan."""
-    historical_fallback = False
 
     def __init__(self, group_registry):
         self.group_registry = group_registry

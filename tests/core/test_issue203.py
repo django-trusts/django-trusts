@@ -27,7 +27,7 @@ from django.utils.functional import SimpleLazyObject
 from django.utils.translation import gettext_lazy
 from trusts.apps import TrustsConfigMixin
 from trusts.backends import TrustModelBackendMixin
-from trusts.conditions import PermissionConditionError
+from trusts.errors import PermissionConditionError
 from trusts.plan.relations import PlanQueryCompiler
 from tests.support import built_catalog, compiler
 

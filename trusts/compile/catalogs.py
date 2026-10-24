@@ -8,6 +8,7 @@ from django.db import router
 from django.db.models import Model, Q, QuerySet, Subquery
 
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
+from trusts.utils import parse_perm_code
 from trusts.plan.aggregates import (
     _compile_common_permissions,
     _delegated_user_exists,
@@ -16,10 +17,7 @@ from trusts.plan.aggregates import (
 )
 from trusts.plan.conditions import (
     condition_model_key,
-    parse_perm_code,
     permission_binding,
-    permission_condition_code,
-    permission_has_condition,
     validate_expression,
 )
 from trusts.plan.grammar import is_predicate
@@ -413,9 +411,9 @@ class Catalog(object):
         if not self.applies(self.plan_for(obj, user=user_obj)):
             return PreparedInquiry(model, result=False)
         stored, extra_q = self._condition_overlay(permext, obj, user_obj)
-        applabel, modelname, action, _cond = parse_perm_code(permext)
+        applabel, modelname, action, cond = parse_perm_code(permext)
         perm = '%s.%s_%s' % (applabel, action, modelname)
-        if permission_has_condition(permext) and stored is None:
+        if cond and stored is None:
             return PreparedInquiry(model, result=False)
         held = self.has_permission(
             user_obj, obj, permission_binding(perm, model),
@@ -462,9 +460,9 @@ class Catalog(object):
         return _perm_codes(qs)
 
     def _condition_overlay(self, permext, obj, user_obj):
-        if not permission_has_condition(permext):
-            return None, None
         cond = parse_perm_code(permext)[3]
+        if not cond:
+            return None, None
         model = _content_model(obj)
         stored = self._stored_named_filter(model, cond)
         if stored is None or not isinstance(obj, QuerySet):
@@ -722,7 +720,7 @@ def _selected_condition_q(catalog, model, permission, conditions, user, *, api):
 
 def compile_stored_condition_q(stored, model, perm, user, user_model=None):
     """Compile one stored ``(model, tree)`` pair, or raise fail-closed."""
-    cond = permission_condition_code(perm)
+    cond = parse_perm_code(perm)[3]
     if stored is None:
         raise _unknown_condition_error(model, cond)
     _registered, tree = stored
