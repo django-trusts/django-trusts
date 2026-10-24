@@ -4,7 +4,7 @@ import django.apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 
-from trusts.compile.factory import Compiler
+from trusts.compile.compilers import Compiler
 from trusts.errors import TrustsConfigurationError
 
 # Register system checks once this module loads. App configs do not.

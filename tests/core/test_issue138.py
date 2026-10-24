@@ -206,7 +206,7 @@ def _document_backend():
     from tests.myapp.backends import DocumentBackend
 
     from tests.support import config_for_class, read_family
-    from trusts.compile.factory import Compiler
+    from trusts.compile.compilers import Compiler
 
     factory = compiler(
         path=DOCUMENT_BACKEND,

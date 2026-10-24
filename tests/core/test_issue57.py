@@ -12,7 +12,7 @@ from django.db import models
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
-from trusts.compile.factory import RegisteredRelation
+from trusts.compile.compilers import RegisteredRelation
 from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
 from tests.support import compiler

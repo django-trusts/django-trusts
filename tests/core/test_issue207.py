@@ -19,12 +19,12 @@ from django.db.models import Model
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import isolate_apps
 from tests.myapp.models import Document, DocumentGrant
-from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
+from trusts.compile.compilers import RegisteredDelegation, RegisteredRelation
 from trusts.compile.graph import Along
 from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.backends import Recorder, Registry
-from trusts.compile.factory import Compiler
+from trusts.compile.compilers import Compiler
 from tests.support import built_catalog, compiler
 ROOT = Path(__file__).resolve().parents[2]
 

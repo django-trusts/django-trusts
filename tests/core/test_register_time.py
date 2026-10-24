@@ -114,23 +114,25 @@ class RegisterTimeCheckTest(TestCase):
             'The catalog is already built.',
         )
 
-    def test_listener_import_loads_no_models(self):
+    def test_app_config_import_does_not_load_the_compiler(self):
         script = (
             'import os\n'
             'os.environ["DJANGO_SETTINGS_MODULE"] = "tests.settings"\n'
+            'import sys\n'
             'from django.apps import apps\n'
             'before = {app: set(models) for app, models in apps.all_models.items()}\n'
-            'import trusts.compile.listener\n'
+            'import trusts.apps\n'
             'after = {app: set(models) for app, models in apps.all_models.items()}\n'
             'assert before == after, (before, after)\n'
             'assert apps.ready is False\n'
-            'print("listener-import-ok")\n'
+            'assert "trusts.compile.compilers" not in sys.modules\n'
+            'print("apps-import-ok")\n'
         )
         completed = subprocess.run(
             [sys.executable, '-c', script],
             check=True, capture_output=True, text=True,
         )
-        self.assertIn('listener-import-ok', completed.stdout)
+        self.assertIn('apps-import-ok', completed.stdout)
 
 
 class DotlessHasPermTest(TestCase):

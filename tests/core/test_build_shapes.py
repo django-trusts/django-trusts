@@ -19,7 +19,7 @@ from django.test.utils import isolate_apps
 
 from trusts.compile.catalogs import Catalog
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan
-from trusts.compile.factory import (
+from trusts.compile.compilers import (
     relation_plan,
     PublicRegistration,
     RegisteredDelegation,

@@ -165,8 +165,8 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
     def test_registration_does_not_resolve_the_user_model(self):
         from django.contrib.auth import get_user_model
         from trusts.backends import Recorder
-        from trusts.compile.factory import Compiler
-        from trusts.compile.listener import RegistrationListener
+        from trusts.compile.compilers import Compiler
+        from trusts.compile.compilers import RegistrationListener
 
         log = Recorder(RegistrationListener())
         _contribute_recorder(log)

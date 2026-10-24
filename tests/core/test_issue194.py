@@ -21,7 +21,7 @@ from trusts.apps import TrustsConfigMixin
 from trusts.backends import TrustModelBackendMixin
 from tests.support import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.compile.factory import Compiler
+from trusts.compile.compilers import Compiler
 from trusts.plan.contents import granted
 from trusts.decorators import authorization_required
 HOST = HOST_BACKEND

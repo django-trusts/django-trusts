@@ -17,7 +17,7 @@ from django.db.models import Model, QuerySet, Subquery
 from trusts.apps import AppLifecycle
 from trusts.compile.appbuild import build_app_catalog
 from trusts.compile.catalogs import compile_catalog_users, filter_catalogs
-from trusts.compile.listener import RegistrationListener
+from trusts.compile.compilers import RegistrationListener
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import (
     _build_document,

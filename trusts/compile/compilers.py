@@ -10,7 +10,9 @@ from typing import TypeVar
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 
-from django.core.exceptions import FieldDoesNotExist
+from django.apps import apps as django_apps
+from django.conf import settings
+from django.core.exceptions import AppRegistryNotReady, FieldDoesNotExist
 from django.db.models import Model, Q
 
 from trusts.plan.hops import (
@@ -1830,3 +1832,72 @@ def _bind_public_along(root, along):
         )
     path, bound = along
     return Along(_public_ref(root, path, 'along'), bound)
+
+
+class RegistrationListener(object):
+    """Checks one registration call, then lets the log record it.
+
+    A missing field, a reverse relation, or a model that is not loaded
+    yet is left for ``ready``. Anything else raises at this call.
+    """
+
+    def __init__(self):
+        self._inner, self._saw_register = None, False
+
+    def register(self, **kwargs):
+        self._run('register', (), kwargs)
+
+    def add_named_filter(self, model, code, predicate):
+        self._run('add_named_filter', (model, code, predicate), {})
+
+    def set_user_condition(self, name, expr, on='*'):
+        self._run('set_user_condition', (name, expr), {'on': on})
+
+    def set_user_override(self, name, expr, on='user'):
+        self._run('set_user_override', (name, expr), {'on': on})
+
+    def _run(self, name, args, kwargs):
+        if name in ('set_user_condition', 'set_user_override') and self._saw_register:
+            raise TrustsConfigurationError(
+                'Record user conditions and the override before register().'
+            )
+        try:
+            inner = self._compiler()
+            if inner is None and name == 'register':
+                Compiler.build_public_registration(**kwargs)
+            elif inner is not None:
+                getattr(inner, name)(*args, **kwargs)
+        except (TrustsConfigurationError, AppRegistryNotReady) as exc:
+            if not _deferrable(exc):
+                raise
+        if name == 'register':
+            self._saw_register = True
+
+    def _compiler(self):
+        if self._inner is not None:
+            return self._inner
+        user = _loaded_user_model()
+        if user is None:
+            return None
+        self._inner = Compiler(
+            user_model=user, path='trusts.compile.compilers',
+            family='relationship',
+            query_compiler=Compiler.default_query_compiler(),
+        )
+        return self._inner
+
+
+def _deferrable(exc):
+    text = str(exc)
+    return isinstance(exc, AppRegistryNotReady) or any(
+        piece in text for piece in (
+            'missing field', 'reverse', 'does not terminate on a model',
+        ))
+
+
+def _loaded_user_model():
+    try:
+        return django_apps.get_model(
+            *settings.AUTH_USER_MODEL.split('.'), require_ready=False)
+    except (LookupError, ValueError):
+        return None

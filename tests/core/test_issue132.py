@@ -41,7 +41,7 @@ def _replay_listed(path):
 
     cls = import_string(path)
     from tests.support import config_for_class
-    from trusts.compile.factory import Compiler
+    from trusts.compile.compilers import Compiler
 
     factory = compiler(
         path=path,

@@ -15,7 +15,7 @@ from trusts.backends import (
     RelationshipBackend,
     TrustModelBackendMixin,
 )
-from trusts.compile.factory import Compiler
+from trusts.compile.compilers import Compiler
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import render_policy_sql_bytes
 
