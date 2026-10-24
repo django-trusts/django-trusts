@@ -6,7 +6,7 @@ user-binding and candidate helpers they close over.
 
 __all__ = []
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import reduce
 from operator import or_
 
@@ -306,6 +306,8 @@ class RelationPlan:
     user_override_q: object | None = None
     user_model: object = None
     permission_column: str = 'pk'
+    applicable: bool = False
+    query_compiler: object = field(default=None, compare=False, repr=False)
 
     def _bound_root_qs(self, record, **bindings):
         return bind_record_qs(
