@@ -15,7 +15,7 @@ from django.test.utils import isolate_apps
 from tests.core.test_issue98 import _gh_models, _register_direct, _register_team, _tables
 from tests.myapp.models import Document, DocumentGrant
 from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
-from trusts.compile.nodes import Along, Ref
+from trusts.compile.graph import Along, Ref
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from trusts.plan.grammar import Tree

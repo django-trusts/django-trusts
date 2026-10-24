@@ -27,9 +27,9 @@ from trusts.inspect.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
 from trusts.inspect.format import _format_policy_sql, _tokenize_policy_sql
 from trusts.plan.aggregates import all_match
 from trusts.plan.walk import _render_reach_sql
-from trusts.compile.nodes import Along
+from trusts.compile.graph import Along
 from trusts.plan.recursions import GrantReach
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import granted
 CONCRETE = 'tests.kernel_host.backends.HostTrustModelBackend'

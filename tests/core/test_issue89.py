@@ -29,7 +29,7 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.backends import TrustModelBackendMixin
 HOST = HOST_BACKEND

@@ -21,8 +21,9 @@ from trusts.plan.hops import (
     require_instance,
     resolved_hop,
 )
-from trusts.compile.nodes import (
+from trusts.compile.graph import (
     Along,
+    AlongWalk,
     Ref,
     _is_model_class,
     _require_ref,
@@ -36,7 +37,6 @@ from trusts.plan.grammar import (
     symbol_token,
     unsupported,
 )
-from trusts.compile.paths import AlongWalk
 from trusts.compile.resolution import (
     _SUFFIX_KINDS,
     _append_group_permissions,

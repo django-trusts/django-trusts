@@ -13,8 +13,8 @@ compiler tests. OrderedFold registration left Core in #195.
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 from tests.myapp.models import Document, DocumentGrant
-from trusts.compile.nodes import Along
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Along
+from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
 from tests.support import built_catalog, compiler
 

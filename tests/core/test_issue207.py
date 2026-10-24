@@ -20,8 +20,8 @@ from django.test import SimpleTestCase, TestCase
 from django.test.utils import isolate_apps
 from tests.myapp.models import Document, DocumentGrant
 from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
-from trusts.compile.nodes import Along
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Along
+from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.backends import Recorder, Registry
 from trusts.compile.factory import Compiler

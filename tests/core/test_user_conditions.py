@@ -19,7 +19,7 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from trusts.plan.rewrites import bind_once
 from tests.support import scoped_permitted_content as filter_by_permitted_content
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import granted
 from trusts.decorators import authorization_required

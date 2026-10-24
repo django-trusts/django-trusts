@@ -23,7 +23,7 @@ from tests.support import (
     compiler,
     listed_relationship,
 )
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Ref
 from trusts.models import AuthorizedQuerySet, PermittedQuerySet, PermittedUsersManagerMixin, PermittedUsersMixin
 
 PERM = 'myapp.change_document'

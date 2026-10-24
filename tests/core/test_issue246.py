@@ -25,7 +25,7 @@ from tests.support import (
     built_catalog,
     compiler,
 )
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.models import AuthorizedManager
 

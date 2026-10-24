@@ -17,7 +17,7 @@ from django.test.utils import isolate_apps
 
 from tests.myapp.models import DocumentDelegation, DocumentGrant
 from trusts.backends import TrustModelBackendMixin
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Ref
 from trusts.errors import PermissionConditionError
 from trusts.models import PermittedQuerySet, PermittedUsersMixin
 from tests.support import compiler, published_class_catalog

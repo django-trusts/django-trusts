@@ -13,7 +13,7 @@ from tests.core import kernel_host_listed
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from trusts.backends import TrustModelBackendMixin
 from trusts.compile.factory import RegisteredDelegation
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.backends import compile_permitted_users
 from trusts.models import PermittedManager, PermittedQuerySet, PermittedUsersMixin

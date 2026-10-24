@@ -26,7 +26,7 @@ from trusts.compile.factory import (
     RegisteredRelation,
     Compiler,
 )
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
 from tests.support import built_catalog, forget_models, compiler
 

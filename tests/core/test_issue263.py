@@ -19,7 +19,7 @@ from django.db import connection, models
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
 from trusts.backends import TrustModelBackendMixin
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.models import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import (

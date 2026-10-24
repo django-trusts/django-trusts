@@ -219,7 +219,7 @@ class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         second_build = built_catalog(isolated)
         self.assertIs(first_build, second_build)
         from tests.myapp.models import DocumentGrant
-        from trusts.compile.nodes import Ref
+        from trusts.compile.graph import Ref
         fresh = compiler()
         j = Ref(DocumentGrant)
         fresh.register_relation(content=j.document, user=j.user, permission=j.permission)

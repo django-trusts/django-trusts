@@ -14,7 +14,7 @@ from django.db.models.query import QuerySet
 from django.test import TransactionTestCase
 from django.test.utils import isolate_apps
 
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Ref
 from trusts.plan.relations import RelationPlan
 from trusts.errors import TrustsConfigurationError
 from tests.support import built_catalog, compiler

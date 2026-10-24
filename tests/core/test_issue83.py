@@ -18,7 +18,7 @@ from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 from trusts.plan.aggregates import all_match
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
 from tests.support import built_catalog, compiler
 

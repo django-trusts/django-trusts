@@ -23,7 +23,7 @@ from tests.support import (
 from tests.core import kernel_host_listed
 from tests.myapp.models import Document, DocumentGrant
 from trusts.decorators import filter_by_permitted_content
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.models import (
     AuthorizedManagerMixin,
