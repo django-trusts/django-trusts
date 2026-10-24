@@ -81,7 +81,7 @@ class Recorder(Registry):
     replays those same calls onto the new target.
     """
 
-    def __init__(self, listener):
+    def __init__(self, listener: Registry):
         self._rows = []
         self.frozen = False
         self._listener = listener
@@ -94,7 +94,7 @@ class Recorder(Registry):
     def freeze(self):
         self.frozen = True
 
-    def play(self, target):
+    def play(self, target: Registry):
         """Replay this log on ``target``.
 
         The caller freezes the log first. A second play replays the
