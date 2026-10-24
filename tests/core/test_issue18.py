@@ -14,7 +14,6 @@ import ast
 import inspect
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
@@ -27,9 +26,8 @@ from tests.support import scoped_permitted_content as filter_by_permitted_conten
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
-from trusts.plan.aggregates import _compile_common_permissions, all_match, instance_match
+from trusts.plan.aggregates import all_match, instance_match
 from trusts.models import AuthorizedManager
 from tests.support import listed_relationship
 
@@ -223,11 +221,7 @@ def _pks(rows):
 
 class CoreImportBoundaryTest(SimpleTestCase):
 
-    def test_core_package_does_not_import_trusts_zero(self):
-        import ast
-        import inspect
-        from pathlib import Path
-        import trusts
+    def test_import_graph_stays_inside_core(self):
         root = Path(inspect.getfile(trusts)).resolve().parent
         forbidden = []
         for path in sorted(root.rglob('*.py')):
@@ -242,17 +236,14 @@ class CoreImportBoundaryTest(SimpleTestCase):
                 if any((name == 'trusts.zero' or name.startswith('trusts.zero.') for name in names)):
                     forbidden.append(str(path))
         self.assertEqual(forbidden, [])
-
-    def test_plan_package_does_not_import_compile(self):
-        root = Path(inspect.getfile(trusts)).resolve().parent / 'plan'
-        forbidden = []
-        for path in sorted(root.rglob('*.py')):
+        plan_forbidden = []
+        for path in sorted((root / 'plan').rglob('*.py')):
             tree = ast.parse(path.read_text())
             for node in ast.walk(tree):
                 hits = _plan_imports_compile(node)
                 if hits:
-                    forbidden.append('%s imports %s' % (path.name, ', '.join(hits)))
-        self.assertEqual(forbidden, [])
+                    plan_forbidden.append('%s imports %s' % (path.name, ', '.join(hits)))
+        self.assertEqual(plan_forbidden, [])
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class LongPathRegistrationTest(TestCase):
@@ -573,7 +564,7 @@ class MembershipGroupExistsTest(TransactionTestCase):
             self.assertIsNone(self.compiler.group_exists(plan, self.folder, self.member, self.read))
             self.assertIsNone(all_match(built_catalog(handle), self.folder, self.member, self.read, kind='group'))
             self.assertIsNone(all_match(built_catalog(handle), self.folder, self.stranger, self.read, kind='group'))
-            self.assertEqual(list(_compile_common_permissions(built_catalog(handle), self.folder, self.member, kind='group')), [])
+            self.assertEqual(list(built_catalog(handle).permissions_for(self.member, self.folder, kind='group')), [])
         with self.assertNumQueries(1):
             self.assertIs(all_match(built_catalog(handle), self.folder, self.member, self.read), True)
 
@@ -586,7 +577,7 @@ class MembershipGroupExistsTest(TransactionTestCase):
             self.assertIsNone(granted(built_catalog(handle), self.folder, self.owner, self.read, kind='group'))
         self.assertTrue(built_catalog(self.trustee).has_permission(self.owner, self.folder, self.read))
         with self.assertNumQueries(0):
-            self.assertEqual(list(_compile_common_permissions(built_catalog(handle), self.folder, self.owner, kind='group')), [])
+            self.assertEqual(list(built_catalog(handle).permissions_for(self.owner, self.folder, kind='group')), [])
 
     def test_mixed_plan_group_slice_omits_permission_records(self):
         handle = self._handle(self.mixed)

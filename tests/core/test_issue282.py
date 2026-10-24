@@ -5,23 +5,19 @@ A delegation row may walk ``along=`` itself. When both walk, the delegate
 is allowed only on objects both walks reach. Reverse inquiry agrees with
 ``has_perm``. One delegation level stays rejected.
 """
+import yaml
 from contextlib import contextmanager
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
-from django.test import SimpleTestCase, TransactionTestCase, override_settings
+from django.test import TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
-from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.models import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
-from tests.support import render_configured_policy, install_class_handle, compiler
+from tests.support import render_configured_policy, compiler
 
 
 def _handle(path='tests.core.issue282'):
@@ -58,11 +54,6 @@ def _tables(*model_classes):
             for model in reversed(model_classes):
                 editor.delete_model(model)
 
-class Issue282SuiteRegistrationTest(SimpleTestCase):
-
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue282', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue282', PAIR_KERNEL_SUITE)
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class DelegatedAlongTest(TransactionTestCase):
@@ -319,7 +310,7 @@ class DelegatedAlongTest(TransactionTestCase):
 
     def test_lockfile_records_the_walk_that_runs(self):
         handle = self._register(sponsor_along=('issue__parent', 2), delegation_along=('issue__parent', 1))
-        document = _load_policy_sql_document(render_configured_policy(handle))
+        document = yaml.safe_load(render_configured_policy(handle))
         self.assertEqual(document['schema_version'], 1)
         content = document['backends'][0]['contents'][0]
         trust = content['trusts'][0]
@@ -338,7 +329,7 @@ class DelegatedAlongTest(TransactionTestCase):
             self.assertNotIn('json_', row['sql'].lower())
 
     def _assert_content_walk_sql(self, handle, bounds, table=None):
-        document = _load_policy_sql_document(render_configured_policy(handle))
+        document = yaml.safe_load(render_configured_policy(handle))
         self.assertEqual(document['schema_version'], 1)
         content = document['backends'][0]['contents'][0]
         for operation in ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'):

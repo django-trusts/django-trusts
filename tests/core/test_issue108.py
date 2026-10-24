@@ -15,29 +15,13 @@ from tests.apps import TestsConfig
 from tests.core import KernelHostRequiredMixin, kernel_host_listed
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.kernel_host.backends import HostTrustModelBackend
-from tests.support import configured_catalog, sweep_listed_backends, compiler
+from tests.support import configured_catalog, sweep_listed_backends
 from trusts.apps import TrustsConfigMixin, installed_catalogs
-from trusts.compile.nodes import Ref
 from trusts.models import PermittedUsersManagerMixin
-from trusts.decorators import filter_by_permitted_content
-from trusts.models import AuthorizedManager, AuthorizedQuerySet
 
 
 HOST = 'tests.kernel_host.backends.HostTrustModelBackend'
 OUTSIDE = 'tests.gh_permissions.backends.OutsideBackend'
-
-
-class ImplementationHelperSurfaceTest(SimpleTestCase):
-    def test_generic_declarations_import_without_kernel_config(self):
-        import trusts.apps as apps_mod
-
-        self.assertFalse(hasattr(apps_mod, 'kernel_config'))
-        self.assertTrue(callable(filter_by_permitted_content))
-        self.assertTrue(issubclass(AuthorizedQuerySet, object))
-        self.assertTrue(issubclass(AuthorizedManager, object))
-        registry = compiler()
-        self.assertEqual(registry.records, ())
-        self.assertIsNotNone(Ref)
 
 
 class ImplementationRoutingTest(KernelHostRequiredMixin, SimpleTestCase):

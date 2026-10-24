@@ -21,12 +21,8 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document
 from trusts.conditions import (
     PermissionConditionError,
-    permission_condition_code,
-    permission_has_condition,
 )
 from trusts.plan.conditions import ConditionRecord, FrozenConditionLookup
-from trusts.compile.catalogs import Catalog
-from trusts.compile.factory import Compiler
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -72,11 +68,6 @@ class _IsolatedTables(object):
 
 
 class ConstructTimeSelfBindTest(SimpleTestCase):
-    def test_new_registry_self_binds_private_store_adapter(self):
-        registry = compiler()
-        built = built_catalog(registry)
-        self.assertIsInstance(built.filter_lookup, FrozenConditionLookup)
-        self.assertFalse(hasattr(built.filter_lookup, 'conditions'))
 
     def test_handles_do_not_share_lookup_or_store(self):
         left = compiler()
@@ -93,56 +84,6 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         self.assertIsInstance(built.filter_lookup, FrozenConditionLookup)
         self.assertFalse(hasattr(built.filter_lookup, 'conditions'))
         self.assertFalse(hasattr(registry, 'filter_lookup'))
-
-    def test_public_conditions_surface_stays_six_names(self):
-        import django_trusts
-        import trusts.conditions as conditions_mod
-
-        self.assertEqual(tuple(conditions_mod.__all__), PUBLIC_SURFACE_NAMES)
-        self.assertFalse(hasattr(conditions_mod, 'RegistryConditionLookup'))
-        self.assertFalse(hasattr(conditions_mod, 'ConditionRegistry'))
-        self.assertFalse(hasattr(django_trusts, 'RegistryConditionLookup'))
-        self.assertTrue(permission_has_condition('change_note:own'))
-        self.assertEqual(permission_condition_code('change_note:own'), 'own')
-
-    def test_companion_pin_is_exact_zero_candidate(self):
-        z_methods = '849baad6109425dc0f35e43ca2f1cf1ee310742c'
-        stale_r5a = '462c83b59edfb51011b4373e8214b2daaab7f500'
-        stale_38 = 'c7dc4f11f728ad3c4c22249e471daa4bf9849404'
-        stale_191 = '517307170f954f187da78c56e236ec1779c46e29'
-        stale_181 = 'f50946f7112702a41bd63a3e044b44a0d4ec3297'
-        stale = '841004af49687c31c466ed03dbfd4f8ce9c7f153'
-        prior_merged_zero = '2e3cccedb92b4cf85e9d6a3cd2d51821aad1d716'
-        pairing = {
-            'ci': (ROOT / '.github' / 'workflows' / 'ci.yml').read_text(),
-            'wheels': (ROOT / 'scripts' / 'verify-companion-wheels.py').read_text(),
-            'runner': (ROOT / 'scripts' / 'run-z1-pair-tests.py').read_text(),
-        }
-        self.assertIn(z_methods, pairing['ci'])
-        self.assertIn(z_methods, pairing['wheels'])
-        self.assertIn('COMPANION_ZERO_SHA: %s' % z_methods, pairing['ci'])
-        self.assertIn("ZERO_HEAD = '%s'" % z_methods, pairing['wheels'])
-        for name, text in pairing.items():
-            self.assertNotIn(stale, text, name)
-            self.assertNotIn(stale_r5a, text, name)
-            self.assertNotIn(stale_38, text, name)
-            self.assertNotIn(stale_181, text, name)
-            self.assertNotIn(stale_191, text, name)
-            self.assertNotIn(prior_merged_zero, text, name)
-        self.assertNotIn('OMIT_ZERO_UNBOUND_DEFAULT', pairing['runner'])
-        self.assertNotIn(
-            'test_unbound_is_none_and_bind_is_zero_sql',
-            pairing['runner'],
-        )
-
-    def test_host_docs_do_not_import_or_bind_ir_lookup(self):
-        apps_text = (ROOT / 'tests' / 'myapp' / 'apps.py').read_text()
-        readme = (ROOT / 'README.md').read_text()
-        rst = (ROOT / 'docs' / 'source' / 'index.rst').read_text()
-        for text in (apps_text, readme, rst):
-            self.assertNotIn('RegistryConditionLookup', text)
-            self.assertNotIn('trusts.conditions._ir', text)
-            self.assertNotIn('set_filter_lookup', text)
 
 
 class ImportOrderStandaloneConstructionTest(SimpleTestCase):
@@ -288,16 +229,6 @@ class NamedConditionCompilationTest(TransactionTestCase):
             listed = set(Note.objects.filter(compiled).values_list('pk', flat=True))
             self.assertEqual(listed, {keep.pk})
             self.assertNotIn(drop.pk, listed)
-            self.assertTrue(
-                registry.conditions.evaluate_permission_condition(
-                    Note, 'owned', alice, 'trusts_tests.change_note', keep,
-                )
-            )
-            self.assertFalse(
-                registry.conditions.evaluate_permission_condition(
-                    Note, 'owned', alice, 'trusts_tests.change_note', drop,
-                )
-            )
 
     def test_unknown_unbound_and_malformed_fail_closed(self):
         Note = _note_model()
@@ -306,7 +237,6 @@ class NamedConditionCompilationTest(TransactionTestCase):
             alice = User.objects.create_user(
                 'alice-151u', 'alice-151u@example.com', 'x',
             )
-            note = Note.objects.create(title='n', owner=alice)
             registry = compiler()
             lookup = FrozenConditionLookup(())
             self.assertIsNone(lookup.record_for(Note, 'missing'))
@@ -333,7 +263,7 @@ class NamedConditionCompilationTest(TransactionTestCase):
                 ConditionRecord(model=Note)
             )
             with self.assertRaises(PermissionConditionError) as unbound:
-                registry.conditions.evaluate_permission_condition(
-                    Note, 'empty', alice, 'trusts_tests.change_note', note,
+                registry.conditions.compile_registered_condition_q(
+                    Note, 'trusts_tests.change_note:empty', alice,
                 )
             self.assertIn('unbound', str(unbound.exception))

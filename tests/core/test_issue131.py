@@ -13,11 +13,9 @@ compiler tests. OrderedFold registration left Core in #195.
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 from tests.myapp.models import Document, DocumentGrant
-from trusts.compile.nodes import Along, permission_in
-from trusts.compile.nodes import All, Equal, Ref
-from trusts.plan.relations import PlanQueryCompiler
+from trusts.compile.nodes import Along
+from trusts.compile.nodes import Equal, Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 from tests.support import built_catalog, compiler
 
 def _handle(registry=None, path='tests.core.handle-a'):
@@ -28,18 +26,6 @@ def _handle(registry=None, path='tests.core.handle-a'):
 
 class HandleRegisterSurfaceTest(SimpleTestCase):
 
-    def test_register_is_the_public_donation_verb(self):
-        handle = _handle()
-        self.assertTrue(callable(handle.register))
-        self.assertTrue(callable(handle.add_named_filter))
-        self.assertFalse(hasattr(handle, 'register_public'))
-        self.assertFalse(hasattr(handle, 'register_permission_condition'))
-        self.assertFalse(hasattr(handle, 'register_relationship'))
-        self.assertFalse(hasattr(handle, 'register_ordered_fold'))
-        self.assertFalse(hasattr(handle, 'register_strategy'))
-        self.assertTrue(hasattr(handle, 'register'))
-        self.assertFalse(hasattr(handle, 'register_strategy'))
-        self.assertFalse(hasattr(handle, 'strategies'))
 
     def test_string_register_matches_internal_ref_record(self):
         via_ref = compiler()
@@ -168,14 +154,6 @@ class _PredicateLog:
 
 class CMethodsPublicSurfaceTest(SimpleTestCase):
 
-    def test_two_public_methods_and_no_ordered_fold(self):
-        backend = _handle()
-        self.assertTrue(callable(backend.register))
-        self.assertTrue(callable(backend.add_named_filter))
-        self.assertFalse(hasattr(backend, 'register_public'))
-        self.assertFalse(hasattr(backend, 'register_relationship'))
-        self.assertFalse(hasattr(backend, 'register_ordered_fold'))
-        self.assertFalse(hasattr(backend, 'register_strategy'))
 
     def test_register_matches_internal_ref_record(self):
         via_ref = compiler()
@@ -271,13 +249,3 @@ class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
         self.assertEqual(registry.records, (record,))
         self.assertEqual(built_catalog(registry).records, (record,))
         self.assertIs(registry.conditions.get_permission_condition_record(Document, 'non_confidential'), named_record)
-
-    def test_dual_backend_relationship_does_not_leak(self):
-        left = _handle(path='tests.core.cmethods-left')
-        right = _handle(path='tests.core.cmethods-right')
-        left.register(trust=DocumentGrant, user='user', permission='permission', content='document')
-        self.assertEqual(len(built_catalog(left).records), 1)
-        self.assertEqual(right.records, ())
-        right.register(trust=DocumentGrant, user='user', permission='permission', content='document')
-        self.assertEqual(len(built_catalog(left).records), 1)
-        self.assertEqual(len(built_catalog(right).records), 1)

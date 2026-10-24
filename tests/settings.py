@@ -26,7 +26,7 @@ INSTALLED_APPS = (
     'tests.core.pair_beta.apps.PairBetaConfig',
 )
 
-# Test-app migrations depend on trusts.0001_initial (Zero-owned after C2).
+# These apps ship no migrations, so Django does not load trusts.0001_initial.
 MIGRATION_MODULES = {
     'trusts_tests': None,
     'myapp': None,

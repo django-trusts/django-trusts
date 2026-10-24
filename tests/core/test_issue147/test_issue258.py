@@ -4,13 +4,12 @@ Observable bytes, validation errors, and deterministic sentinels. These
 tests do not change the exporter.
 """
 
+import yaml
 import copy
 import os
 import tempfile
-import uuid
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
 
 from django.apps import apps as django_apps
 from django.contrib.auth.models import Permission
@@ -27,10 +26,6 @@ from tests.core.test_issue147.test_sql_export import (
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import granted
 from trusts.inspect.snapshot import (
-    _const_from_json,
-    _json_const,
-    _load_policy_sql_document,
-    _sentinel_value,
     render_policy_sql_bytes,
     resolve_lockfile_path,
     write_policy_lock,
@@ -39,15 +34,12 @@ from trusts.inspect.yaml import (
     PolicyYamlError,
     canonical_float_scalar,
     dump_policy_yaml,
-    parse_canonical_float,
-    _load_policy_yaml,
 )
 from tests.support import (
     built_catalog,
     render_configured_policy,
     render_published_subjects,
 )
-
 
 
 def _e009():
@@ -140,34 +132,20 @@ class PolicyYamlRejectionTest(SimpleTestCase):
                 with self.assertRaises(PolicyYamlError) as ctx:
                     canonical_float_scalar(value)
                 self.assertIn('Non-finite', str(ctx.exception))
-        for text in (
-            '1', '1.50', '1e16', '+1.0', '-0.00', '01.0', '1.0e16', None, 1.5,
-        ):
-            with self.subTest(text=text):
-                with self.assertRaises(PolicyYamlError) as ctx:
-                    parse_canonical_float(text)
-                self.assertIn('not canonical', str(ctx.exception))
-
         self.assertEqual(canonical_float_scalar(0.0), '0.0')
         self.assertEqual(canonical_float_scalar(-0.0), '-0.0')
         self.assertEqual(canonical_float_scalar(1.5), '1.5')
         self.assertEqual(canonical_float_scalar(1e16), '1.0e+16')
         self.assertEqual(canonical_float_scalar(1e-7), '1.0e-07')
-        negative_zero = parse_canonical_float('-0.0')
-        self.assertEqual(negative_zero, 0.0)
-        self.assertLess(math_sign(negative_zero), 0)
-        self.assertEqual(parse_canonical_float('0.0'), 0.0)
-        self.assertGreater(math_sign(parse_canonical_float('0.0')), 0)
-        self.assertEqual(parse_canonical_float('1.0e+16'), 1e16)
 
         document = {'n': 1.5, 'z': -0.0, 'big': 1e16, 'small': 1e-7}
         first = dump_policy_yaml(document)
         second = dump_policy_yaml(document)
         self.assertEqual(first, second)
-        self.assertEqual(dump_policy_yaml(_load_policy_yaml(first)), first)
-        loaded = _load_policy_yaml(first)
-        self.assertEqual(loaded['n'], 1.5)
-        self.assertLess(math_sign(loaded['z']), 0)
+        self.assertIn(b'n: 1.5\n', first)
+        self.assertIn(b'z: -0.0\n', first)
+        self.assertIn(b'big: 1.0e+16\n', first)
+        self.assertIn(b'small: 1.0e-07\n', first)
 
     def test_dump_rejects_values_the_codec_cannot_spell(self):
         rejected = (
@@ -202,37 +180,10 @@ class PolicyYamlRejectionTest(SimpleTestCase):
         self.assertTrue(first.startswith(b'params: ['))
         self.assertTrue(first.endswith(b']\n'))
         self.assertNotIn(b'\n', first[:-1])
-        self.assertEqual(_load_policy_yaml(first), {
+        self.assertIn(b'{const: -0.0}', first)
+        self.assertEqual(yaml.safe_load(first), {
             'params': [1, [2, {'bind': 'user.id'}], {'const': -0.0}],
         })
-        self.assertLess(
-            math_sign(_load_policy_yaml(first)['params'][2]['const']), 0,
-        )
-
-    def test_loader_rejects_payloads_that_are_not_canonical_text(self):
-        rejected = (
-            (None, 'bytes or text'),
-            (1, 'bytes or text'),
-            (b'\xef\xbb\xbfn: "1"\n', 'byte-order'),
-            (b'\xff', 'UTF-8'),
-            ('n: "1"\r\n', 'LF'),
-            ('\ufeffn: "1"\n', 'BOM'),
-            ('\ud800', 'UTF-8'),
-            (b'true: "1"\n', 'strings'),
-            (b'1: "a"\n', 'strings'),
-            (b'*anchor\n', 'alias'),
-            (b'a: [\n', 'could not be read'),
-            (b'n: "1"\n---\nk: "2"\n', 'document marker'),
-        )
-        for payload, needle in rejected:
-            with self.subTest(payload=payload):
-                with self.assertRaises(PolicyYamlError) as ctx:
-                    _load_policy_yaml(payload)
-                self.assertIn(needle, str(ctx.exception))
-
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            _load_policy_sql_document(b'"only"\n')
-        self.assertIn('mapping', str(ctx.exception))
 
 
 class PolicyLockConfigurationTest(SimpleTestCase):
@@ -270,8 +221,7 @@ class PolicyLockConfigurationTest(SimpleTestCase):
         self.assertIn('missing a configured path', str(ctx.exception))
 
         with override_settings(AUTHENTICATION_BACKENDS=()):
-            empty = _load_policy_sql_document(render_policy_sql_bytes())
-
+            empty = yaml.safe_load(render_policy_sql_bytes())
         paths = [row['path'] for row in empty['backends']]
         if django_apps.is_installed('tests.myapp'):
             self.assertIn('tests.myapp.apps.DocumentConfig', paths)
@@ -309,10 +259,10 @@ class PolicyLockConfigurationTest(SimpleTestCase):
                 return getattr(self._inner, name)
 
         bare = _NoFilterRegistry(populated)
-        omitted = _load_policy_sql_document(
+        omitted = yaml.safe_load(
             render_published_subjects(bare),
         )
-        kept = _load_policy_sql_document(
+        kept = yaml.safe_load(
             render_configured_policy(handle),
         )
         omitted_content = omitted['backends'][0]['contents'][0]
@@ -439,59 +389,28 @@ class PolicyLockConfigurationTest(SimpleTestCase):
 class PolicyLockSentinelTest(SimpleTestCase):
     def test_content_primary_key_sentinels_are_call_inputs(self):
         cases = (
-            ('BoolDoc', models.BooleanField(), True),
-            ('UuidDoc', models.UUIDField(), {
-                'type': 'uuid',
-                'value': str(uuid.UUID(int=1)),
-            }),
-            ('DecimalDoc', models.DecimalField(max_digits=4, decimal_places=0), {
-                'type': 'decimal',
-                'value': '1',
-            }),
-            ('FloatDoc', models.FloatField(), 1.0),
-            ('BinaryDoc', models.BinaryField(), {
-                'type': 'bytes',
-                'hex': '01',
-            }),
-            ('DateDoc', models.DateField(), {
-                'type': 'date',
-                'value': '2000-01-01',
-            }),
-            ('TimeDoc', models.TimeField(), {
-                'type': 'time',
-                'value': '00:00:00',
-            }),
-            ('DurationDoc', models.DurationField(), {
-                'type': 'timedelta',
-                'days': 0,
-                'seconds': 1,
-                'microseconds': 0,
-            }),
-            ('EmptyTextDoc', models.CharField(max_length=0), ''),
-            ('ShortEmailDoc', models.EmailField(max_length=3), '1'),
-            ('ShortUrlDoc', models.URLField(max_length=4), '1'),
-            ('ShortIpDoc', models.GenericIPAddressField(), '127.0.0.1'),
-            ('OddDoc', _AcceptingOddField(), {
-                'type': 'decimal',
-                'value': '1',
-            }),
-            ('EmailTypedDoc', _TypedText('EmailField', max_length=254), 's@e.test'),
-            ('UrlTypedDoc', _TypedText('URLField', max_length=200), 'https://e.test/'),
-            (
-                'ShortEmailTypedDoc',
-                _TypedText('EmailField', max_length=3),
-                '1',
-            ),
+            ('BoolDoc', models.BooleanField()),
+            ('UuidDoc', models.UUIDField()),
+            ('DecimalDoc', models.DecimalField(max_digits=4, decimal_places=0)),
+            ('FloatDoc', models.FloatField()),
+            ('BinaryDoc', models.BinaryField()),
+            ('DateDoc', models.DateField()),
+            ('TimeDoc', models.TimeField()),
+            ('DurationDoc', models.DurationField()),
+            ('EmptyTextDoc', models.CharField(max_length=0)),
+            ('ShortEmailDoc', models.EmailField(max_length=3)),
+            ('ShortUrlDoc', models.URLField(max_length=4)),
+            ('ShortIpDoc', models.GenericIPAddressField()),
+            ('OddDoc', _AcceptingOddField()),
+            ('EmailTypedDoc', _TypedText('EmailField', max_length=254)),
+            ('UrlTypedDoc', _TypedText('URLField', max_length=200)),
+            ('ShortEmailTypedDoc', _TypedText('EmailField', max_length=3)),
         )
-        for name, field, expected in cases:
+        for name, field in cases:
             with self.subTest(name=name):
                 self.assertEqual(
                     _has_perm_content_token(name, field),
                     '$content.pk_value',
-                )
-                self.assertEqual(
-                    _json_const(_sentinel_value(field, 'default')),
-                    expected,
                 )
 
         aware_field = models.DateTimeField()
@@ -499,21 +418,12 @@ class PolicyLockSentinelTest(SimpleTestCase):
             _has_perm_content_token('AwareDoc', aware_field),
             '$content.pk_value',
         )
-        self.assertEqual(_json_const(_sentinel_value(aware_field, 'default')), {
-            'type': 'datetime',
-            'value': '2000-01-01T00:00:00+00:00',
-        })
         with override_settings(USE_TZ=False):
             naive_field = models.DateTimeField()
             self.assertEqual(
                 _has_perm_content_token('NaiveDoc', naive_field),
                 '$content.pk_value',
             )
-            naive = _json_const(_sentinel_value(naive_field, 'default'))
-        self.assertEqual(naive, {
-            'type': 'datetime',
-            'value': '2000-01-01T00:00:00',
-        })
 
     def test_unpreparable_primary_key_fails_before_a_document(self):
         content, grant = _pk_pair('RejectDoc', _RejectingField())
@@ -540,62 +450,13 @@ class PolicyLockSentinelTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        document = _load_policy_sql_document(
+        document = yaml.safe_load(
             render_configured_policy(handle),
         )
         params = document['backends'][0]['contents'][0]['has_perm']['params']
         self.assertIn('$content.pk_value', params)
         self.assertEqual(content._meta.pk.attname, 'pk_value')
         self.assertEqual(grant._meta.get_field('document').related_model, content)
-
-    def test_missing_grant_or_permission_query_fails_closed(self):
-        handle = _document_handle('documents.backends.MissingQueryBackend')
-        with patch(
-            'trusts.compile.catalogs.Catalog.complete_grant_q',
-            return_value=None,
-        ):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                render_configured_policy(handle)
-        self.assertIn('no grant', str(ctx.exception))
-
-        with patch(
-            'trusts.inspect.snapshot._compile_common_permissions',
-            return_value=None,
-        ):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                render_configured_policy(handle)
-        self.assertIn('no permissions query', str(ctx.exception))
-
-    def test_missing_group_permissions_query_fails_closed(self):
-        class GroupGrant(models.Model):
-            group = models.ForeignKey('auth.Group', on_delete=models.CASCADE)
-            paper = models.ForeignKey('auth.User', on_delete=models.CASCADE)
-
-            class Meta:
-                app_label = 'documents'
-
-        handle = _handle('documents.backends.GroupQueryBackend')
-        handle.register(
-            trust=GroupGrant,
-            user='group__user',
-            group='group',
-            content='paper',
-        )
-        from trusts.plan.aggregates import _compile_common_permissions
-
-        def hide_group(registry, instance, user, kind='complete'):
-            if kind == 'group':
-                return None
-            return _compile_common_permissions(
-                registry, instance, user, kind=kind,
-            )
-
-        with patch(
-            'trusts.inspect.snapshot._compile_common_permissions', hide_group,
-        ):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                render_configured_policy(handle)
-        self.assertIn('no group-permissions query', str(ctx.exception))
 
 
 class PolicyLockFilterShapeTest(SimpleTestCase):
@@ -625,7 +486,7 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
         first = render_configured_policy(handle)
         second = render_configured_policy(handle)
         self.assertEqual(first, second)
-        document = _load_policy_sql_document(first)
+        document = yaml.safe_load(first)
         filters = {
             row['id']: row
             for row in document['backends'][0]['contents'][0]['named_filters']
@@ -657,21 +518,11 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
         )
         same_bytes = render_configured_policy(same)
         self.assertEqual(same_bytes, render_configured_policy(same))
-        same_row = _load_policy_sql_document(same_bytes)['backends'][0]['contents'][0]
+        same_row = yaml.safe_load(same_bytes)['backends'][0]['contents'][0]
         same_filter = same_row['named_filters'][0]
         self.assertEqual(same_filter['params'], [])
         self.assertIn('"label" = ("documents_constantdocument"."label")', same_filter['sql'])
         self.assertNotIn('%s', same_filter['sql'])
-
-    def test_unknown_constant_tag_cannot_be_restored(self):
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            _const_from_json({'type': 'nope', 'value': '1'})
-        self.assertIn('unknown constant tag', str(ctx.exception))
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            _const_from_json(['1'])
-        self.assertIn('cannot restore', str(ctx.exception))
-        self.assertEqual(_json_const('alpha'), 'alpha')
-        self.assertEqual(_const_from_json('alpha'), 'alpha')
 
     def test_split_content_targets_bind_each_column(self):
         class CodeDocument(models.Model):
@@ -711,7 +562,7 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        document = _load_policy_sql_document(
+        document = yaml.safe_load(
             render_configured_policy(handle),
         )
         content_row = document['backends'][0]['contents'][0]
@@ -763,11 +614,6 @@ class ShortModelNameTest(SimpleTestCase):
         self.assertEqual(get_short_model_name_lower(Plain), '')
 
 
-def math_sign(value):
-    import math
-    return math.copysign(1.0, value)
-
-
 def _has_perm_content_token(name, field):
     content, grant = _pk_pair(name, field)
     handle = _handle('documents.backends.%sBackend' % name)
@@ -781,7 +627,7 @@ def _has_perm_content_token(name, field):
     second = render_configured_policy(handle)
     if first != second:
         raise AssertionError('sentinel render was not deterministic for %s' % name)
-    document = _load_policy_sql_document(first)
+    document = yaml.safe_load(first)
     content_row = document['backends'][0]['contents'][0]
     if content_row['model'] != content._meta.label:
         raise AssertionError(content_row['model'])

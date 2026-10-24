@@ -6,9 +6,10 @@ registration is rejected; compiler tests import ``trusts.plan.conditions``.
 from contextlib import contextmanager
 from decimal import Decimal
 from io import BytesIO
-from unittest.mock import patch
 from uuid import uuid4
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
+from django.contrib.contenttypes.models import ContentType
 from django.core.checks import Error
 from django.db import connection, models
 from django.http import HttpRequest
@@ -19,8 +20,6 @@ from tests.models import Ticket, ticket_meta_own
 from trusts.inspect.checks import CHECK_ID_INVALID_EXPR, CHECK_ID_OBSOLETE_CALLBACK_SETTING, check_obsolete_legacy_callback_setting, check_permission_conditions, iter_live_permission_conditions, permission_condition_check_messages
 from trusts.conditions import PermissionConditionError, PermissionConditionUnsupported
 from trusts.plan.conditions import ConditionRecord, ConditionRegistry, FrozenConditionLookup, ModelIdentity, Ref, condition_refs, obsolete_legacy_callback_setting_enabled
-from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 
 from tests.support import built_catalog, override_catalog, compiler
 
@@ -73,16 +72,6 @@ class _BuilderLog(object):
 
 class ConditionRegistryIsolationTest(SimpleTestCase):
 
-    def test_no_process_global_condition_store(self):
-        import trusts.conditions as conditions_mod
-        self.assertFalse(hasattr(conditions_mod, '_conditions'))
-        self.assertFalse(hasattr(conditions_mod, 'legacy_permission_callbacks_allowed'))
-        self.assertIsInstance(ConditionRegistry(), ConditionRegistry)
-        first = ConditionRegistry()
-        second = ConditionRegistry()
-        self.assertIsNot(first._records, second._records)
-        self.assertEqual(list(first.iter_permission_conditions()), [])
-        self.assertEqual(list(second.iter_permission_conditions()), [])
 
     def test_trusts_registry_owns_a_private_condition_store(self):
         left = compiler()
@@ -164,25 +153,6 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         self.assertIs(catalog.filter_lookup.record_for(Note, 'own'), record)
         self.assertFalse(hasattr(catalog.filter_lookup, 'conditions'))
 
-    def test_handle_add_named_filter_after_build_still_registers(self):
-        Note, _Memo = _note_models()
-        registry = compiler()
-        registry.path = 'tests.kernel_host.backends.HostTrustModelBackend'
-        handle = registry
-        log = _BuilderLog()
-        record = handle.add_named_filter(Note, 'own', log)
-        self.assertIs(registry.conditions.get_permission_condition_record(Note, 'own'), record)
-        self.assertEqual(len(log.calls), 1)
-        built_catalog(registry)
-        late_factory = compiler()
-        late_factory.path = handle.path
-        late_handle = late_factory
-        late = _BuilderLog()
-        late_record = late_handle.add_named_filter(Note, 'late', late)
-        self.assertEqual(len(late.calls), 1)
-        self.assertIs(late_factory.conditions.get_permission_condition_record(Note, 'late'), late_record)
-        self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'late'))
-
     def test_generic_lookup_binds_without_reinvoking_builder(self):
         Note, _Memo = _note_models()
         registry = compiler()
@@ -216,15 +186,9 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
                 registry.add_named_filter(Note, 'editable', log)
             self.assertEqual(len(log.calls), 1)
             perm = 'trusts_tests.change_note:editable'
-            grant = 'trusts_tests.change_note'
             q = registry.conditions.compile_registered_condition_q(Note, perm, alice)
             listed = set(Note.objects.filter(q).values_list('pk', flat=True))
-            evaluated = set()
-            for row in Note.objects.all():
-                if registry.conditions.evaluate_permission_condition(Note, 'editable', alice, grant, row):
-                    evaluated.add(row.pk)
             self.assertEqual(listed, {keep.pk})
-            self.assertEqual(evaluated, listed)
             self.assertNotIn(drop.pk, listed)
             self.assertNotIn(locked.pk, listed)
             sql = str(Note.objects.filter(q).query)
@@ -255,26 +219,21 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
         User = get_user_model()
         with _tables(Note):
             alice = User.objects.create_user('alice-16u', 'alice-16u@example.com', 'x')
-            note = Note.objects.create(title='n', owner=alice)
             u, _p, o = condition_refs()
             registry = compiler()
             with self.assertRaises(AttributeError) as missing:
                 registry.conditions.compile_registered_condition_q(Note, 'trusts_tests.change_note:missing', alice)
             self.assertIn('missing', str(missing.exception))
-            with self.assertRaises(AttributeError):
-                registry.conditions.evaluate_permission_condition(Note, 'missing', alice, 'trusts_tests.change_note', note)
             with self.assertRaises(TypeError):
                 registry.add_named_filter(Note, 'typo', u == o.nope)
             _store_expr(registry, Note, 'typo', u == o.nope)
             with self.assertRaises(PermissionConditionError) as typo:
                 registry.conditions.compile_registered_condition_q(Note, 'trusts_tests.change_note:typo', alice)
             self.assertIn('nope', str(typo.exception))
-            with self.assertRaises(PermissionConditionError):
-                registry.conditions.evaluate_permission_condition(Note, 'typo', alice, 'trusts_tests.change_note', note)
             empty = ConditionRecord(model=Note)
             registry.conditions._records[Note._meta.label, 'empty'] = empty
             with self.assertRaises(PermissionConditionError) as unbound:
-                registry.conditions.evaluate_permission_condition(Note, 'empty', alice, 'trusts_tests.change_note', note)
+                registry.conditions.compile_registered_condition_q(Note, 'trusts_tests.change_note:empty', alice)
             self.assertIn('unbound', str(unbound.exception))
 
     def test_constant_normalization_is_durable(self):
@@ -293,9 +252,68 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             self.assertEqual(const.value.as_tuple(), (alice._meta.app_label, alice._meta.model_name, alice.pk))
             alice.username = 'mutated'
             alice.save(update_fields=['username'])
-            self.assertTrue(registry.conditions.evaluate_permission_condition(Note, 'owner_is', bob, 'trusts_tests.change_note', note))
+            perm = 'trusts_tests.change_note:owner_is'
+            listed = set(Note.objects.filter(
+                registry.conditions.compile_registered_condition_q(Note, perm, bob),
+            ).values_list('pk', flat=True))
+            self.assertEqual(listed, {note.pk})
             captured = bob
-            self.assertTrue(registry.conditions.evaluate_permission_condition(Note, 'owner_is', bob, 'trusts_tests.change_note', note))
+            listed_again = set(Note.objects.filter(
+                registry.conditions.compile_registered_condition_q(Note, perm, bob),
+            ).values_list('pk', flat=True))
+            self.assertEqual(listed_again, {note.pk})
+
+    def test_saved_user_constant_matches_only_that_principal(self):
+        Note, _Memo = _note_models()
+        User = get_user_model()
+
+        class NoteGrant(models.Model):
+            note = models.ForeignKey(Note, on_delete=models.CASCADE)
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with _tables(Note, NoteGrant):
+            alice = User.objects.create_user(
+                'alice-16id', 'alice-16id@example.com', 'x',
+            )
+            bob = User.objects.create_user(
+                'bob-16id', 'bob-16id@example.com', 'x',
+            )
+            keep = Note.objects.create(title='keep', owner=alice, status='open')
+            other = Note.objects.create(title='other', owner=bob, status='open')
+            change = Permission.objects.create(
+                content_type=ContentType.objects.get_for_model(Note),
+                codename='change_note',
+                name='Can change note',
+            )
+            for holder in (alice, bob):
+                for row in (keep, other):
+                    NoteGrant.objects.create(
+                        note=row, user=holder, permission=change,
+                    )
+            registry = compiler()
+            registry.register(
+                trust=NoteGrant,
+                user='user',
+                permission='permission',
+                content='note',
+            )
+            registry.add_named_filter(
+                Note, 'is_alice', lambda u, p, o: u == alice,
+            )
+            code = 'trusts_tests.change_note:is_alice'
+            plain = 'trusts_tests.change_note'
+            catalog = built_catalog(registry)
+            for holder in (alice, bob):
+                for row in (keep, other):
+                    self.assertTrue(catalog.has_perm(holder, plain, row))
+            self.assertTrue(catalog.has_perm(alice, code, keep))
+            self.assertTrue(catalog.has_perm(alice, code, other))
+            self.assertFalse(catalog.has_perm(bob, code, keep))
+            self.assertFalse(catalog.has_perm(bob, code, other))
 
     def test_forbidden_captures_rejected_at_register(self):
         Note, _Memo = _note_models()

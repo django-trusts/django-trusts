@@ -9,8 +9,8 @@ fails closed; that shape is deferred, not a permanent rejection. The
 record shape is unchanged, ``via_group`` stays false, and the
 collection does not contribute to ``get_group_permissions()``.
 """
+import yaml
 from contextlib import contextmanager
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import Group, Permission
@@ -18,19 +18,14 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
-from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.models import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import (
     render_configured_policy,
     listed_relationship,
     built_catalog,
-    install_class_handle,
     compiler,
 )
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
@@ -142,9 +137,6 @@ def _pks(rows):
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class PermissionCollectionRegistrationTest(TestCase):
 
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue263', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue263', PAIR_KERNEL_SUITE)
 
     def test_direct_and_prefixed_collections_register_with_zero_sql(self):
         models_ = _collection_models()
@@ -488,9 +480,9 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         self._assert_unique(self._authorized(handle, self.alice, self.add), [self.spec])
 
     def test_policy_sql_describes_the_collection_without_a_group_leg(self):
-        org = _load_policy_sql_document(render_configured_policy(self.org_handle))
-        access = _load_policy_sql_document(render_configured_policy(self.access_handle))
-        classic = _load_policy_sql_document(render_configured_policy(self.classic))
+        org = yaml.safe_load(render_configured_policy(self.org_handle))
+        access = yaml.safe_load(render_configured_policy(self.access_handle))
+        classic = yaml.safe_load(render_configured_policy(self.classic))
         org_content = org['backends'][0]['contents'][0]
         access_content = access['backends'][0]['contents'][0]
         classic_content = classic['backends'][0]['contents'][0]

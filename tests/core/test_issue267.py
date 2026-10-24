@@ -10,8 +10,8 @@ keeps primary-key identity. ``user.has_perm`` is tested with permission
 strings. Permission instances are tested on the registry, ``.authorized()``,
 and reverse inquiries.
 """
+import yaml
 from contextlib import contextmanager
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import Group, Permission
@@ -21,14 +21,10 @@ from django.db import connection, models
 from django.http import HttpRequest
 from django.test import TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from trusts.plan.relations import PlanQueryCompiler
-from trusts.compile.factory import Compiler
 from trusts.decorators import _declared_authorization_guards, authorization_required
-from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.models import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.support import render_configured_policy, built_catalog, install_class_handle, compiler
+from tests.support import render_configured_policy, built_catalog, compiler
 
 
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
@@ -176,9 +172,6 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
             self.handle.register(trust=self.Ownership, user='user', permission='organization__owner_group__permissions', content='organization__repositories')
         self.users = _PermittedUsers(User)
 
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue267', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue267', PAIR_KERNEL_SUITE)
 
     def test_same_model_grants_and_crossed_pairs_deny(self):
         cases = ((self.manage_code, self.manage, self.acme, True), (self.read_code, self.read, self.specs, True), (self.read_code, self.read, self.acme, False), (self.manage_code, self.manage, self.specs, False), (self.manage_code, self.manage, self.team, False), (self.read_code, self.read, self.widget, False))
@@ -299,7 +292,7 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
             self.assertEqual(list(self.Organization.objects.authorized(root, self.read)), [])
 
     def test_policy_sql_requires_the_protected_models_content_type(self):
-        document = _load_policy_sql_document(render_configured_policy(self.handle))
+        document = yaml.safe_load(render_configured_policy(self.handle))
         by_model = {row['model']: row for row in document['backends'][0]['contents']}
         org = by_model['trusts_tests.Organization']
         repo = by_model['trusts_tests.Repository']
@@ -406,7 +399,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         self.assertTrue(built_catalog(registry).has_permission(self.owner, self.repo, operation))
         registry.path = 'tests.core.issue267-operation'
         handle = registry
-        document = _load_policy_sql_document(render_configured_policy(handle))
+        document = yaml.safe_load(render_configured_policy(handle))
         for content in document['backends'][0]['contents']:
             self.assertNotIn('django_content_type', content['has_perm']['sql'])
 
@@ -427,7 +420,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         self.assertTrue(built_catalog(registry).has_permission(self.owner, self.repo, org_permit))
         registry.path = 'tests.core.issue267-typed'
         handle = registry
-        document = _load_policy_sql_document(render_configured_policy(handle))
+        document = yaml.safe_load(render_configured_policy(handle))
         for content in document['backends'][0]['contents']:
             self.assertNotIn('django_content_type', content['has_perm']['sql'])
 

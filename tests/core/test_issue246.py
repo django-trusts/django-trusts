@@ -6,9 +6,9 @@ exclusive with ``group=``. Only explicit ``group=`` records feed
 ``get_group_permissions``; they also participate in ordinary
 authorization. Membership shape is not a group.
 """
+import yaml
 import re
 from contextlib import contextmanager
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import Group, Permission
@@ -16,7 +16,6 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from tests.support import (
     render_configured_policy,
@@ -26,11 +25,8 @@ from tests.support import (
     built_catalog,
     compiler,
 )
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
-from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.models import AuthorizedManager
 
 
@@ -134,9 +130,6 @@ def _behavior_models():
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ExplicitGroupRegistrationTest(SimpleTestCase):
 
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue246', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue246', PAIR_KERNEL_SUITE)
 
     def _grant_model(self):
 
@@ -357,8 +350,8 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         group_only.register(trust=self.GroupPaperGrant, user='group__user', group='group', content='paper')
         direct_only = _handle(path='tests.core.issue246-policy-direct')
         direct_only.register(trust=self.DirectPaperGrant, user='user', permission='permission', content='paper')
-        grouped = _load_policy_sql_document(render_configured_policy(group_only))
-        direct = _load_policy_sql_document(render_configured_policy(direct_only))
+        grouped = yaml.safe_load(render_configured_policy(group_only))
+        direct = yaml.safe_load(render_configured_policy(direct_only))
         group_content = grouped['backends'][0]['contents'][0]
         direct_content = direct['backends'][0]['contents'][0]
         group_trust = group_content['trusts'][0]
@@ -370,7 +363,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         for key in ('permitted', 'has_perm', 'get_all_permissions', 'get_group_permissions'):
             self.assertIn('auth_group_permissions', group_content[key]['sql'])
         self.assertNotIn('auth_group_permissions', direct_content['has_perm']['sql'])
-        mixed = _load_policy_sql_document(render_configured_policy(self.handle))
+        mixed = yaml.safe_load(render_configured_policy(self.handle))
         mixed_content = mixed['backends'][0]['contents'][0]
         group_sql = mixed_content['get_group_permissions']['sql']
         all_sql = mixed_content['get_all_permissions']['sql']
@@ -501,13 +494,13 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
                 self.assertEqual(len(_group_permission_aliases(sql)), 1, sql)
 
     def test_common_permissions_omit_change(self):
-        plan = built_catalog(self.registry).plan_for(self.paper, user=self.alice)
+        catalog = built_catalog(self.registry)
         for label, target in (('instance', self.paper), ('queryset', self.one)):
             with self.subTest(label):
-                self.assertEqual(self._permission_codes(plan.common_permissions(self.alice, target)), {self.read_code})
+                self.assertEqual(self._permission_codes(catalog.permissions_for(self.alice, target)), {self.read_code})
 
     def test_policy_sql_shares_one_group_permissions_alias(self):
-        document = _load_policy_sql_document(render_configured_policy(self.handle))
+        document = yaml.safe_load(render_configured_policy(self.handle))
         content = document['backends'][0]['contents'][0]
         for key in ('permitted', 'has_perm', 'get_all_permissions', 'get_group_permissions'):
             sql = content[key]['sql']

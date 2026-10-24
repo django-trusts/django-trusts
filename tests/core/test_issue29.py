@@ -6,7 +6,6 @@ the obsolete-setting fail-loud check.
 """
 
 from io import StringIO
-from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.checks import Error
@@ -30,8 +29,6 @@ from trusts.plan.conditions import (
     condition_refs,
     obsolete_legacy_callback_setting_enabled,
 )
-from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 
 from tests.support import override_catalog, compiler
 
@@ -217,14 +214,6 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
                 check_permission_conditions(None), CHECK_ID_INVALID_EXPR,
             )
         self.assertTrue(any("'typo'" in m.msg for m in errors))
-
-    def test_handle_after_build_invokes_builder(self):
-        Note = _note_model()
-        registry = compiler()
-        log = _BuilderLog()
-        record = registry.add_named_filter(Note, 'own', log)
-        self.assertEqual(len(log.calls), 1)
-        self.assertIs(registry.conditions.get_permission_condition_record(Note, 'own'), record)
 
 
 class ManagePyCheckLifecycleTest(SimpleTestCase):

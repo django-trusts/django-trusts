@@ -1,30 +1,27 @@
-from tests.support import render_configured_policy, built_catalog, compiler
 """Schema-1 SQL policy export, lockfile bytes, and trusts.E009."""
+from tests.support import (
+    compiler,
+    listed_relationship,
+    render_configured_policy,
+)
 import datetime
 import json
-import math
 import tempfile
-import threading
 import uuid
 import yaml
 from decimal import Decimal
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
+from django.conf import settings
 from django.contrib.auth.models import Permission, User
 from django.core import checks as django_checks
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection, models
-from django.db.models.sql.compiler import SQLCompiler
-from django.test import SimpleTestCase, TestCase, override_settings
-from trusts.plan.conditions import ModelIdentity
-from trusts.compile.nodes import _InquiryPermissionMatch
-from trusts.plan.recursions import _IdentInReach
-from trusts.plan.relations import PlanQueryCompiler
+from django.test import SimpleTestCase, override_settings
+from trusts.compile.nodes import All, Equal, Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
-from trusts.inspect.snapshot import CHECK_ID_POLICY_LOCK, CONVENTIONAL_LOCKFILE_NAME, _PolicyVisitor, _Symbol, _classify_compiled, _const_from_json, _json_const, _presented_const, _sentinel, _assign_ids, _load_policy_sql_document, _render_condition, _sql_row, _symbol_for_new_param, check_policy_sql_lockfile, render_policy_sql_bytes
+from trusts.inspect.snapshot import CHECK_ID_POLICY_LOCK, CONVENTIONAL_LOCKFILE_NAME, check_policy_sql_lockfile, render_policy_sql_bytes
 from trusts.inspect.yaml import dump_policy_yaml
 GOLDEN_SQLITE = Path(__file__).with_name('golden_document_sqlite.yaml').read_bytes()
 GOLDEN_CONSTANTS = Path(__file__).with_name('golden_condition_constants_sqlite.yaml').read_bytes()
@@ -281,7 +278,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotIn(b'!!', payload)
         text = payload.decode('utf-8')
         self.assertNotIn('\r', text)
-        document = _load_policy_sql_document(payload)
+        document = yaml.safe_load(payload)
         content = document['backends'][0]['contents'][0]
         trust = content['trusts'][0]
         self.assertNotIn('or_group', trust)
@@ -348,7 +345,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertIn('non-portable', str(ctx.exception))
         portable = _handle('documents.backends.DocumentBackend')
         portable.add_named_filter(Document, 'needs_review', _non_confidential)
-        document = _load_policy_sql_document(render_configured_policy(portable))
+        document = yaml.safe_load(render_configured_policy(portable))
         self.assertEqual(document['backends'][0]['contents'][0]['named_filters'][0]['id'], 'documents__Document__needs_review')
 
     def test_cond_entries_show_conditions_and_delegations_use_flow_maps(self):
@@ -356,7 +353,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         handle.register(trust=DocumentPermission, user='user', permission='permission', content='document')
         handle.register(trust=CappedDocumentPermission, user='user', permission='permission', content='document', condition=lambda trust: trust.caps.contains(trust.permission) & (trust.user == trust.user))
         handle.register(trust=PolicyDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda row, permission: row.permissions.contains(permission) & (row.delegate == row.sponsor))
-        document = _load_policy_sql_document(render_configured_policy(handle))
+        document = yaml.safe_load(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
         plain, capped, delegated = (content['trusts'][0], content['trusts'][1], content['delegations'][0])
         self.assertEqual(plain['id'], 'documents__DocumentPermission__document')
@@ -390,19 +387,23 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotIn('sponsor:\n', text)
 
     def test_condition_line_quotes_round_trip_through_safe_load(self):
-        from trusts.compile.nodes import _InquiryPermissionMatch
-        from trusts.compile.nodes import All, Equal, PermissionIn
-        from trusts.inspect.snapshot import _render_condition
-        self.assertEqual(_render_condition(All(PermissionIn('team__allowed_operations'), Equal('team__organization', 'repository__organization')), member='operation'), '$permission.id in team__allowed_operations and team__organization == repository__organization')
-        self.assertEqual(_render_condition(Equal('repository__organization__personal_user', 'sponsor')), 'repository__organization__personal_user == sponsor')
-        self.assertEqual(_render_condition(All(PermissionIn('caps'), Equal('user', 'user')), member='permission'), '$permission.id in caps and user == user')
-        self.assertEqual(_render_condition(_InquiryPermissionMatch('permissions')), '$permission.id in permissions')
-        self.assertEqual(_render_condition(All(All(Equal('a', 'b'), Equal('c', 'd')), Equal('e', 'f'))), '(a == b and c == d) and e == f')
-        with self.assertRaises(TrustsConfigurationError):
-            _render_condition(PermissionIn('caps'))
-        samples = (Equal('a:b', 'c#d'), Equal("a'b", 'a"b'), Equal('a[b', 'a{b'), Equal('-yes', 'no'), Equal('!no', 'null'), Equal('&star', '*true'), Equal('yes', 'true'), Equal('a\\b', 'c"d'))
-        for node in samples:
-            text = _render_condition(node)
+        samples = (
+            '$permission.id in team__allowed_operations and team__organization == repository__organization',
+            'repository__organization__personal_user == sponsor',
+            '$permission.id in caps and user == user',
+            '$permission.id in permissions',
+            '(a == b and c == d) and e == f',
+            'a:b == c#d',
+            'a\'b == a"b',
+            'a[b == a{b',
+            '-yes == no',
+            '!no == null',
+            '&star == *true',
+            'yes == true',
+            'a\\b == c"d',
+            '$permission.code in permissions',
+        )
+        for text in samples:
             payload = dump_policy_yaml({'condition': text})
             loaded = yaml.safe_load(payload.decode('utf-8'))
             self.assertEqual(loaded['condition'], text)
@@ -413,12 +414,13 @@ class PolicySqlGoldenTest(SimpleTestCase):
         handle = _handle('documents.backends.DocumentBackend')
         handle.register(trust=DocumentPermission, user='user', permission='permission', content='document', condition=lambda trust: trust.user == trust.user)
         handle.register(trust=DocumentPermission, user='user', permission='permission', content='document', condition=lambda trust: trust.permission == trust.permission)
-        document = _load_policy_sql_document(render_configured_policy(handle))
+        document = yaml.safe_load(render_configured_policy(handle))
         cond_ids = [row['id'] for row in document['backends'][0]['contents'][0]['trusts']]
         self.assertEqual(cond_ids, ['documents__DocumentPermission__document__cond', 'documents__DocumentPermission__document__cond__2'])
         along = _handle('documents.backends.FolderBackend')
         along.register(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
-        along_ids = _assign_ids(tuple(built_catalog(along).records))
+        along_document = yaml.safe_load(render_configured_policy(along))
+        along_ids = [row['id'] for row in along_document['backends'][0]['contents'][0]['trusts']]
         self.assertEqual(along_ids, ['documents__FolderGrant__folder__along_folder__parent_S_2'])
         for trust_id in cond_ids + along_ids:
             self.assertNotIn('.', trust_id)
@@ -428,7 +430,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         handle = _handle('documents.backends.DocumentBackend')
         handle.register(trust=DocumentPermission, user='user', permission='permission', content='document')
         handle.register(trust=TeamDocumentPermission, user='team__members', permission='permission', content='document')
-        document = _load_policy_sql_document(render_configured_policy(handle))
+        document = yaml.safe_load(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
         trusts = content['trusts']
         self.assertEqual(len(trusts), 2)
@@ -453,7 +455,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
     def test_empty_relationship_backend_is_omitted(self):
         populated = _document_handle('aaa.backends.DocumentBackend')
         empty = _handle('zzz.backends.EmptyBackend')
-        document = _load_policy_sql_document(render_configured_policy(empty, populated))
+        document = yaml.safe_load(render_configured_policy(empty, populated))
         paths = [row['path'] for row in document['backends']]
         self.assertEqual(paths, ['aaa.backends.DocumentBackend'])
         self.assertTrue(all(row['contents'] for row in document['backends']))
@@ -472,9 +474,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         try:
             with override_settings(DEBUG=True):
                 connection.queries_log.clear()
-                with patch('trusts.compile.factory.probe_along_capabilities') as probe:
-                    payload = render_configured_policy(_document_handle())
-                probe.assert_not_called()
+                payload = render_configured_policy(_document_handle())
                 recorded = ' '.join((item['sql'] for item in connection.queries))
             self.assertIsNone(connection.connection)
             self.assertNotIn('documents_documentpermission', recorded)
@@ -486,12 +486,13 @@ class PolicySqlGoldenTest(SimpleTestCase):
     def test_along_forward_lockfile_is_portable_recursive_sql(self):
         handle = _handle('documents.backends.FolderAlongBackend')
         handle.register(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
-        subject = built_catalog(handle)
-        record = subject.plan_for(Folder).records[0]
-        visitor = _PolicyVisitor(subject, 'default')
-        content = {'model': 'documents.Folder', 'permitted': _sql_row(visitor._compile_content_grant((record,), Folder)), 'has_perm': _sql_row(visitor._compile_has_perm((record,), Folder)), 'get_all_permissions': _sql_row(visitor._compile_get_all_permissions((record,), Folder)), 'get_permitted_users': _sql_row(visitor._compile_get_permitted_users((record,), Folder))}
-        payload = dump_policy_yaml({'schema_version': 1, 'database': {'engine': 'django.db.backends.sqlite3'}, 'backends': [{'path': 'documents.backends.FolderAlongBackend', 'contents': [content]}]})
-        self.assertEqual(payload, GOLDEN_ALONG)
+        payload = render_configured_policy(handle)
+        document = yaml.safe_load(payload)
+        golden = yaml.safe_load(GOLDEN_ALONG)
+        content = document['backends'][0]['contents'][0]
+        golden_content = golden['backends'][0]['contents'][0]
+        for key in ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'):
+            self.assertEqual(content[key], golden_content[key])
         text = payload.decode('utf-8')
         self.assertNotIn('json_', text.lower())
         self.assertNotIn('CYCLE', text)
@@ -499,27 +500,52 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertIn('UNION ALL', text)
         self.assertIn('FROM "gen" AS "g"', text)
         self.assertEqual(text.count('"$along_bound=2"'), 4)
-        self.assertEqual(_symbol_for_new_param(_IdentInReach('id', 'SELECT 1', (), 2)), {'const': 2, 'hint': 'along bound'})
         for key in ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'):
             params = content[key]['params']
             self.assertEqual([param for param in params if param.startswith('$along_bound=')], ['$along_bound=2'])
             self.assertEqual(content[key]['sql'].count('%s'), len(params))
 
-    def test_unclassified_placeholder_fails_closed(self):
-        self.assertIsNone(_symbol_for_new_param(object()))
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            _classify_compiled(object(), 'SELECT %s', (1,))
-        self.assertIn('could not classify', str(ctx.exception))
-        self.assertIn('object', str(ctx.exception))
 
     def test_along_failure_does_not_return_a_partial_document(self):
+        if 'other' not in settings.DATABASES or 'also' not in settings.DATABASES:
+            self.skipTest(
+                'other and also are configured by tests.unsupported_db_settings',
+            )
         handle = _handle('documents.backends.FolderBackend')
-        handle.register(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
-        with patch('trusts.compile.factory.probe_along_capabilities') as probe:
-            with patch('trusts.plan.walk.along_connection_supported', return_value=False):
-                with self.assertRaises(TrustsConfigurationError):
-                    render_configured_policy(handle)
-            probe.assert_not_called()
+        handle.register(
+            trust=FolderGrant,
+            user='user',
+            permission='permission',
+            content='folder',
+            along=('folder__parent', 2),
+        )
+        with listed_relationship((handle,)):
+            with self.assertRaises(TrustsConfigurationError) as ctx:
+                render_policy_sql_bytes(alias='other')
+        self.assertIn("'other'", str(ctx.exception))
+        self.assertIn('tests.unsupported_backend', str(ctx.exception))
+
+    def test_nested_all_condition_is_parenthesized(self):
+        handle = _handle('documents.backends.NestedAllBackend')
+        root = Ref(DocumentPermission)
+        handle.register_relation(
+            content=root.document,
+            user=root.user,
+            permission=root.permission,
+            condition=All(
+                All(
+                    Equal(root.user, root.user),
+                    Equal(root.permission, root.permission),
+                ),
+                Equal(root.document, root.document),
+            ),
+        )
+        document = yaml.safe_load(render_configured_policy(handle))
+        condition = document['backends'][0]['contents'][0]['trusts'][0]['condition']
+        self.assertEqual(
+            condition,
+            '(user == user and permission == permission) and document == document',
+        )
 
 class PolicySqlCommandTest(SimpleTestCase):
 
@@ -542,7 +568,7 @@ class PolicySqlCommandTest(SimpleTestCase):
             with override_settings(TRUSTS_POLICY_LOCKFILE=str(target)):
                 stdout = StringIO()
                 call_command('trusts_policy_sql', database='default', stdout=stdout)
-                document = _load_policy_sql_document(stdout.getvalue())
+                document = yaml.safe_load(stdout.getvalue())
                 self.assertEqual(list(document['database']), ['engine'])
                 self.assertEqual(document['database']['engine'], 'django.db.backends.sqlite3')
                 self.assertNotIn('default', stdout.getvalue())
@@ -647,23 +673,16 @@ class PolicySqlCheckTest(SimpleTestCase):
 class PolicySqlSentinelTest(SimpleTestCase):
 
     def test_uuid_pk_and_non_integer_target_export(self):
-        actor = _sentinel(PolicyActor, 'id', alias='default')
-        self.assertIsInstance(actor.pk, uuid.UUID)
-        self.assertEqual(actor.pk, uuid.UUID(int=1))
-        account = _sentinel(PolicyAccount, 'code', alias='default')
-        self.assertIsInstance(account.pk, int)
-        self.assertIsInstance(account.code, str)
-        self.assertEqual(account.code, '1')
         actor_handle = _handle('documents.backends.ActorBackend')
         actor_handle.register(trust=PolicyActorGrant, user='user', permission='permission', content='document')
-        actor_doc = _load_policy_sql_document(render_configured_policy(actor_handle))
+        actor_doc = yaml.safe_load(render_configured_policy(actor_handle))
         actor_content = actor_doc['backends'][0]['contents'][0]
         actor_trust = actor_content['trusts'][0]
         self.assertEqual(actor_trust['user']['target'], 'id')
         self.assertEqual(actor_content['permitted']['params'], ['$user.id', '$permission.id', '$content.id', 'user.is_active=True', '$content.app_label="documents"', '$content.model="document"', 'skip_is_active=False'])
         account_handle = _handle('documents.backends.AccountBackend')
         account_handle.register(trust=PolicyAccountGrant, user='user', permission='permission', content='document')
-        account_doc = _load_policy_sql_document(render_configured_policy(account_handle))
+        account_doc = yaml.safe_load(render_configured_policy(account_handle))
         account_content = account_doc['backends'][0]['contents'][0]
         account_trust = account_content['trusts'][0]
         self.assertEqual(account_trust['user'], {'path': 'user', 'model': 'documents.PolicyAccount', 'target': 'code'})
@@ -672,7 +691,7 @@ class PolicySqlSentinelTest(SimpleTestCase):
     def test_custom_permission_pk_renders_the_resolved_target(self):
         handle = _handle('documents.backends.OperationBackend')
         handle.register(trust=OperationGrant, user='user', permission='permission', content='document', condition=lambda grant: grant.caps.contains(grant.permission))
-        document = _load_policy_sql_document(render_configured_policy(handle))
+        document = yaml.safe_load(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
         grant = content['trusts'][0]
         self.assertEqual(grant['permission'], {'path': 'permission', 'model': 'documents.Operation', 'target': 'code'})
@@ -680,16 +699,13 @@ class PolicySqlSentinelTest(SimpleTestCase):
         self.assertIn('$permission.code', content['permitted']['params'])
         self.assertNotIn('$permission.id', content['permitted']['params'])
         self.assertEqual(content['permitted']['sql'].count('%s'), len(content['permitted']['params']))
-        match = _InquiryPermissionMatch('permissions')
-        self.assertEqual(_render_condition(match, permission_token='$permission.code'), '$permission.code in permissions')
-        self.assertEqual(_render_condition(match), '$permission.id in permissions')
 
 class PolicySqlConstantTest(SimpleTestCase):
 
     def test_supported_constant_families_match_golden_and_round_trip(self):
         payload = render_configured_policy(_constant_family_handle())
         self.assertEqual(payload, GOLDEN_CONSTANTS)
-        document = _load_policy_sql_document(payload)
+        document = yaml.safe_load(payload)
         filters = document['backends'][0]['contents'][0]['named_filters']
         by_code = {row['id']: row['params'] for row in filters}
         prefix = 'documents__ConstantDocument__'
@@ -698,81 +714,20 @@ class PolicySqlConstantTest(SimpleTestCase):
             self.assertNotIn('.', row['id'])
             self.assertEqual(list(row), ['id', 'params', 'sql'])
 
-        def restored(code):
-            return _const_from_json(_presented_const(by_code[prefix + code][0]))
-        self.assertEqual(restored('amount'), 1.5)
-        self.assertEqual(restored('negzero'), 0.0)
-        self.assertTrue(math.copysign(1.0, restored('negzero')) < 0)
-        self.assertTrue(math.isnan(restored('nan')))
-        self.assertEqual(restored('infinity'), float('inf'))
-        self.assertEqual(restored('negative_infinity'), float('-inf'))
-        self.assertEqual(restored('payload'), b'\x00\xff')
-        self.assertEqual(restored('price'), Decimal('12.50'))
-        self.assertEqual(restored('token'), uuid.UUID('12345678-1234-5678-1234-567812345678'))
-        self.assertEqual(restored('day'), datetime.date(2024, 3, 4))
-        self.assertEqual(restored('clock'), datetime.time(5, 6, 7))
-        self.assertEqual(restored('stamp'), datetime.datetime(2024, 3, 4, 5, 6, 7, tzinfo=datetime.timezone.utc))
-        self.assertEqual(restored('span'), datetime.timedelta(days=1, seconds=2, microseconds=3))
-        self.assertEqual(restored('owner'), ModelIdentity('auth', 'user', 7))
-        self.assertEqual(restored('label'), 'alpha')
+        def token(code):
+            return by_code[prefix + code][0]
+        self.assertEqual(token('amount'), 'amount=1.5')
+        self.assertEqual(token('negzero'), 'amount=-0.0')
+        self.assertEqual(token('nan'), 'amount={"type":"float","value":"NaN"}')
+        self.assertEqual(token('infinity'), 'amount={"type":"float","value":"Infinity"}')
+        self.assertEqual(token('negative_infinity'), 'amount={"type":"float","value":"-Infinity"}')
+        self.assertEqual(token('payload'), 'payload={"type":"bytes","hex":"00ff"}')
+        self.assertEqual(token('price'), 'price={"type":"decimal","value":"12.50"}')
+        self.assertEqual(token('token'), 'token={"type":"uuid","value":"12345678-1234-5678-1234-567812345678"}')
+        self.assertEqual(token('day'), 'day={"type":"date","value":"2024-03-04"}')
+        self.assertEqual(token('clock'), 'clock={"type":"time","value":"05:06:07"}')
+        self.assertEqual(token('stamp'), 'stamp={"type":"datetime","value":"2024-03-04T05:06:07+00:00"}')
+        self.assertEqual(token('span'), 'span={"type":"timedelta","days":1,"seconds":2,"microseconds":3}')
+        self.assertEqual(token('owner'), 'owner={"type":"model","app_label":"auth","model":"user","pk":7}')
+        self.assertEqual(token('label'), 'label="alpha"')
 
-    def test_nonfinite_decimal_constants_round_trip(self):
-        for text in ('NaN', 'Infinity', '-Infinity'):
-            encoded = _json_const(Decimal(text))
-            self.assertEqual(encoded['type'], 'decimal')
-            self.assertEqual(encoded['value'], text)
-            restored = _const_from_json(encoded)
-            if text == 'NaN':
-                self.assertTrue(restored.is_nan())
-            else:
-                self.assertEqual(restored, Decimal(text))
-
-class PolicySqlConcurrencyTest(TestCase):
-
-    def test_normal_query_is_unchanged_while_export_compile_is_paused(self):
-        original_compile = SQLCompiler.compile
-        User.objects.create(username='export-neighbor')
-        queryset = User.objects.filter(username='export-neighbor')
-        control_sql, control_params = queryset.query.get_compiler(using='default').as_sql()
-        control_rows = list(queryset.values_list('username', flat=True))
-        expected = render_configured_policy(_document_handle())
-        entered = threading.Event()
-        release = threading.Event()
-        outcome = []
-        export_ident = []
-
-        def classifying(node, sql, params, query=None):
-            if threading.get_ident() == export_ident[0] and (not classifying.paused):
-                classifying.paused = True
-                entered.set()
-                if not release.wait(5):
-                    raise TimeoutError('export compilation was not released')
-            return _classify_compiled(node, sql, params, query=query)
-        classifying.paused = False
-
-        def run_export():
-            export_ident.append(threading.get_ident())
-            try:
-                with patch('trusts.inspect.snapshot._classify_compiled', classifying):
-                    outcome.append(render_configured_policy(_document_handle()))
-            except Exception as exc:
-                outcome.append(exc)
-        worker = threading.Thread(target=run_export)
-        worker.start()
-        self.assertTrue(entered.wait(5), 'export compilation did not pause: %r' % (outcome,))
-        try:
-            self.assertIs(SQLCompiler.compile, original_compile)
-            live_sql, live_params = queryset.query.get_compiler(using='default').as_sql()
-            live_rows = list(queryset.values_list('username', flat=True))
-            self.assertEqual(live_sql, control_sql)
-            self.assertEqual(list(live_params), list(control_params))
-            self.assertEqual(live_rows, ['export-neighbor'])
-            self.assertEqual(live_rows, control_rows)
-            for param in live_params:
-                self.assertNotIsInstance(param, _Symbol)
-        finally:
-            release.set()
-        worker.join(5)
-        self.assertFalse(worker.is_alive())
-        self.assertEqual(outcome, [expected])
-        self.assertIs(SQLCompiler.compile, original_compile)

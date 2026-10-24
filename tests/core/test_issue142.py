@@ -13,7 +13,6 @@ from trusts.conditions import (
     permission_condition_code,
     permission_has_condition,
 )
-from trusts.compile.factory import Compiler
 from tests.support import compiler
 
 
@@ -63,27 +62,6 @@ class StageBPublicSurfaceTest(SimpleTestCase):
         self.assertTrue(permission_has_condition('change_note:own'))
         self.assertEqual(permission_condition_code('change_note:own'), 'own')
 
-    def test_former_public_construction_imports_fail(self):
-        import django_trusts
-        import trusts.conditions as conditions_mod
-
-        for name in HIDDEN_PUBLIC_NAMES:
-            self.assertFalse(hasattr(conditions_mod, name), name)
-            self.assertNotIn(name, conditions_mod.__all__)
-            self.assertFalse(hasattr(django_trusts, name), name)
-
-        with self.assertRaises(ImportError):
-            from trusts.conditions import Expr  # noqa: F401
-        with self.assertRaises(ImportError):
-            from trusts.conditions import condition_refs  # noqa: F401
-        with self.assertRaises(ImportError):
-            from trusts.conditions import ConditionRegistry  # noqa: F401
-        with self.assertRaises(ImportError):
-            from trusts.conditions import validate_expression  # noqa: F401
-        with self.assertRaises(ImportError):
-            from django_trusts import TQ  # noqa: F401
-        with self.assertRaises(ImportError):
-            from django_trusts import condition_refs  # noqa: F401
 
     def test_private_ir_remains_importable_for_compiler_tests(self):
         from trusts.plan.conditions import Expr, TQ, condition_refs

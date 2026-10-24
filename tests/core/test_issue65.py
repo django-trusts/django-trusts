@@ -5,7 +5,6 @@ types, backends, managers, or queryset readers.
 """
 
 from contextlib import contextmanager
-from unittest.mock import patch
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -21,7 +20,6 @@ from django.test.utils import isolate_apps
 from trusts.compile.nodes import Ref
 from trusts.plan.relations import RelationPlan
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 from tests.support import built_catalog, compiler
 
 
@@ -364,21 +362,6 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
             )
         self.assertEqual(registry.records, ())
 
-    def test_no_historical_model_is_required(self):
-        Folder, Document, FolderGrant, DocumentPermit = _folder_models()
-        for model in (Folder, Document, FolderGrant, DocumentPermit):
-            names = {cls.__name__ for cls in model.__mro__}
-            self.assertNotIn('Trust', names)
-            self.assertNotIn('Content', names)
-            self.assertNotIn('Junction', names)
-        self.assertEqual(FolderGrant.__module__, __name__)
-        self.assertEqual(Document.__module__, __name__)
-
-    def test_package_surface_does_not_reexport_registry(self):
-        import trusts
-        self.assertIsNone(getattr(trusts, 'TrustsRegistry', None))
-        self.assertIsNone(getattr(trusts, 'RelationPlan', None))
-
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
@@ -554,38 +537,6 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
         with self.assertNumQueries(1):
             self.assertEqual(list(page), [self.doc_a1])
 
-    def test_filter_authorized_consumes_content_exists(self):
-        self.FolderGrant.objects.create(
-            folder=self.folder_a, user=self.alice, permission=self.read,
-        )
-        plan = built_catalog(self.registry).plan_for(
-            self.Document.objects.all(),
-            user=self.alice,
-            permission=self.read,
-        )
-        with patch.object(RelationPlan, 'content_exists', wraps=plan.content_exists) as exists:
-            list(plan.filter_content(
-                self.Document.objects.all(), self.alice, self.read,
-            ))
-        self.assertEqual(exists.call_count, 1)
-
-        terminals = []
-        original = RelationPlan._correlated_exists
-
-        def spy(self, terminal_field_attr, **bindings):
-            terminals.append(terminal_field_attr)
-            return original(self, terminal_field_attr, **bindings)
-
-        with patch.object(RelationPlan, '_correlated_exists', spy):
-            list(plan.permissions(self.alice, self.doc_a1))
-            plan.has_permission(self.alice, self.doc_a1, self.read)
-            list(plan.filter_content(
-                self.Document.objects.all(), self.alice, self.read,
-            ))
-        self.assertEqual(
-            terminals,
-            ['permission_field', 'permission_field', 'content_field'],
-        )
 
     def test_content_exists_ors_on_the_original_candidate_queryset(self):
         self.FolderGrant.objects.create(

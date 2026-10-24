@@ -1,27 +1,23 @@
 """Delegated authority registration and one-level correlated grants (#266)."""
+import yaml
 from contextlib import contextmanager
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import PermissionsMixin
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
-from django.test import SimpleTestCase, TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase
 from django.test.utils import isolate_apps, override_settings
 from tests.core import kernel_host_listed
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.compile.factory import RegisteredDelegation
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.backends import compile_permitted_users
-from trusts.compile.factory import Compiler
-from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.models import PermittedManager, PermittedQuerySet, PermittedUsersMixin
-from tests.support import render_configured_policy, built_catalog, install_class_handle, compiler
+from tests.support import render_configured_policy, built_catalog, compiler
 
 
 def _handle(path='tests.core.issue266'):
@@ -119,11 +115,6 @@ def _contribute_m2m(field, model):
     if not hasattr(field, 'm2m_field_name'):
         field.contribute_to_related_class(model, field.remote_field)
 
-class DelegationSuiteRegistrationTest(SimpleTestCase):
-
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue266', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue266', PAIR_KERNEL_SUITE)
 
 class DelegationRegistrationTest(TestCase):
 
@@ -266,7 +257,7 @@ class ReverseOneToOneDelegationQueryTest(TransactionTestCase):
         with _listed(self.handle):
             self.assertIn(self.code, self.delegate.get_all_permissions(self.repository))
             self.assertNotIn(self.code, self.delegate_without_personal_org.get_all_permissions(self.repository))
-        document = _load_policy_sql_document(render_configured_policy(self.handle))
+        document = yaml.safe_load(render_configured_policy(self.handle))
         content = document['backends'][0]['contents'][0]
         delegation = content['delegations'][0]
         self.assertEqual(delegation['content']['path'], 'sponsor__personal_organization_issue266_query__repositories')
@@ -487,7 +478,7 @@ class TwoRootDelegationTest(TransactionTestCase):
             self.assertNotIn(self.code, self.delegate.get_all_permissions(self.sibling))
             self.assertEqual(set(self.own.get_permitted_users(self.read)), {self.sponsor, self.delegate})
             self.assertIn(self.delegate, set(self.foreign.get_permitted_users(self.read)))
-        document = _load_policy_sql_document(render_configured_policy(self.handle))
+        document = yaml.safe_load(render_configured_policy(self.handle))
         by_model = {row['model']: row for row in document['backends'][0]['contents']}
         content = by_model[self.Repository._meta.label]
         delegations = content['delegations']
@@ -603,7 +594,7 @@ class OrdinaryReverseOneToOneGrantTest(TransactionTestCase):
             self.assertEqual(list(self.Repository.objects.permitted(self.read, bare)), [])
 
     def test_policy_lock_uses_the_prefix_and_has_no_delegation(self):
-        document = _load_policy_sql_document(render_configured_policy(self.handle))
+        document = yaml.safe_load(render_configured_policy(self.handle))
         content = document['backends'][0]['contents'][0]
         trust = content['trusts'][0]
         self.assertEqual(trust['root'], self.ProfileGrant._meta.label)
@@ -830,7 +821,7 @@ class DelegatedAuthorityLiveTest(TestCase):
         handle = _handle('tests.core.issue266.policy')
         handle.register(trust=DocumentGrant, user='user', permission='permission', content='document')
         handle.register(trust=DocumentDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
-        document = _load_policy_sql_document(render_configured_policy(handle))
+        document = yaml.safe_load(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
         delegation = content['delegations'][0]
         self.assertEqual(delegation['delegate']['path'], 'delegate')

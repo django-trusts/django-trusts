@@ -9,18 +9,13 @@ owner. Registration after the catalog is built is refused.
 
 Missing-declaration E003 on Content/Junction stays on Zero ``tests/legacy/``.
 """
-from unittest.mock import patch
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
-from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.backends import ModelBackend
 from django.test import SimpleTestCase, TestCase, override_settings
 from tests.support import (
     configured_catalog,
-    empty_catalogs,
-    live_config,
-    override_apps_ready,
     sweep_listed_backends,
     built_catalog,
     compiler,
@@ -31,11 +26,9 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.backends import TrustModelBackendMixin
-from trusts.compile.factory import Compiler
 HOST = HOST_BACKEND
 DOCUMENT = DOCUMENT_BACKEND
 MIXIN = 'tests.backends.MixinOnlyBackend'
@@ -63,7 +56,7 @@ class StandaloneIndependenceTest(SimpleTestCase):
         self.assertEqual(built_catalog(first).records, first.records)
         self.assertIsNot(first.records[0], second.records[0])
 
-    def test_build_is_repeatable_and_register_does_not_inspect_apps_ready(self):
+    def test_build_is_repeatable_and_register_after_build_is_refused(self):
         registry = compiler()
         _contribute_document(registry)
         before = registry.records
@@ -73,9 +66,12 @@ class StandaloneIndependenceTest(SimpleTestCase):
         self.assertEqual(first_build.records, before)
         self.assertEqual(second_build.records, before)
         self.assertTrue(apps.ready)
-        with patch.object(apps, 'ready', True):
-            with self.assertRaises(TrustsConfigurationError):
-                registry.register_relation(content=Ref(DocumentGrant).document, user=Ref(DocumentGrant).user, permission=Ref(DocumentGrant).permission)
+        with self.assertRaises(TrustsConfigurationError):
+            registry.register_relation(
+                content=Ref(DocumentGrant).document,
+                user=Ref(DocumentGrant).user,
+                permission=Ref(DocumentGrant).permission,
+            )
         self.assertEqual(registry.records, before)
         self.assertIs(built_catalog(registry).plan_for(Document).records[0], before[0])
 

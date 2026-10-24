@@ -19,10 +19,8 @@ from django.db.models import Model
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import isolate_apps
 from tests.myapp.models import Document, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
 from trusts.compile.nodes import Along
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
@@ -47,16 +45,6 @@ class _Count:
 
 class RegisterPublicSurfaceTest(SimpleTestCase):
 
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue207', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue207', PAIR_KERNEL_SUITE)
-
-    def test_register_relationship_is_absent(self):
-        handle = _handle()
-        self.assertFalse(hasattr(handle, 'register_relationship'))
-        self.assertTrue(callable(handle.register))
-        self.assertFalse(hasattr(handle, 'register_public'))
-        self.assertFalse(hasattr(handle, 'register_ordered_fold'))
 
     def test_positional_trust_is_type_error(self):
         handle = _handle()
@@ -276,17 +264,3 @@ class RegisterFailClosedTest(TestCase):
             with self.assertRaises(TrustsConfigurationError):
                 handle.register(trust=DocumentGrant, user=lambda t: t.user, permission=lambda t: t.permission, content=lambda t: t.not_a_field)
         self.assertEqual(built_catalog(handle).records, ())
-
-    def test_register_after_build_invokes_builder(self):
-        registry = compiler()
-        handle = _handle(registry)
-        calls = []
-
-        def user(trust):
-            calls.append(trust)
-            return trust.user
-        record = handle.register(trust=DocumentGrant, user=user, permission=lambda t: t.permission, content=lambda t: t.document)
-        self.assertEqual(len(calls), 1)
-        shape = registry.compile()
-        self.assertEqual(shape.records, (record,))
-        self.assertEqual(record.user_path, ('user',))

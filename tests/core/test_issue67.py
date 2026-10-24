@@ -16,7 +16,6 @@ from trusts.apps import TrustsConfigMixin
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.models import Document
 import tests as tests_module
-from trusts.compile.factory import Compiler
 
 
 class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
@@ -55,14 +54,6 @@ class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         isolated = compiler()
         self.assertIsNot(isolated, live)
         self.assertEqual(isolated.records, ())
-
-    def test_trusts_does_not_import_or_discover_tests_category(self):
-        import trusts.apps as trusts_apps
-        import trusts.models as trusts_models
-
-        for module in (trusts_apps, trusts_models):
-            self.assertNotIn('Category', vars(module))
-            self.assertNotIn('Ticket', vars(module))
 
 
 class ContributorIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):

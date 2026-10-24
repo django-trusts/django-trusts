@@ -1,5 +1,7 @@
 """One placeholder per inquiry value, and ``is_active`` in the statement (#300)."""
+import json
 import re
+import yaml
 from collections import Counter
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -14,22 +16,36 @@ from django.test.utils import CaptureQueriesContext, isolate_apps
 from tests.core import KernelHostRequiredMixin
 from tests.core.test_issue147.test_sql_export import Document as GuideDocument, _document_handle
 from tests.myapp.models import Document
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 import trusts.plan.rewrites as bind_once_module
 from trusts.plan.rewrites import BIND_ALIAS, BindRef, BindTable, SqlInt, bind_once, strip_exists_marker, trusts_bind_once
 from trusts.plan.walk import _render_reach_sql
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
-from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.plan.users import _trusts_eligibility_q
 from tests.support import render_configured_policy, built_catalog, compiler
 from django.contrib.auth import get_user_model
 
 
+def _lockfile_constant(token):
+    """Python value of one ``source=value`` lockfile token."""
+    if not isinstance(token, str) or '=' not in token:
+        return None
+    literal = token.split('=', 1)[1]
+    if literal == 'True':
+        return True
+    if literal == 'False':
+        return False
+    if literal == 'null':
+        return None
+    if literal[:1] in '"{[':
+        return json.loads(literal)
+    if literal.lstrip('-').isdigit():
+        return int(literal)
+    return float(literal)
+
+
 def _document_rows():
-    document = _load_policy_sql_document(render_configured_policy(_document_handle()))
+    document = yaml.safe_load(render_configured_policy(_document_handle()))
     return document['backends'][0]['contents'][0]
 
 def _repeat_count(params):
@@ -40,11 +56,6 @@ def _repeat_count(params):
     counts = Counter(params)
     return sum((count - 1 for count in counts.values() if count > 1))
 
-class Issue300SuiteRegistrationTest(SimpleTestCase):
-
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue300', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue300', PAIR_KERNEL_SUITE)
 
 class Issue300LockfileTest(SimpleTestCase):
 
@@ -215,9 +226,9 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
 
     def test_literal_one_is_standard_sql_on_sqlite_mysql_and_postgresql(self):
         from django.db.models import Exists
-        from trusts.plan.rewrites import LiteralExists
         inner = User.objects.filter(pk=1)
-        exists = LiteralExists(inner)
+        exists = Exists(inner)
+        strip_exists_marker(exists.query)
         self.assertIsInstance(exists.query.annotations['a'], SqlInt)
         bare = Exists(User.objects.filter(pk=1))
         self.assertEqual(bare.query.annotations['a'].value, 1)
@@ -462,14 +473,14 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
                     plain_rows = list(plain)
                     plain_sql = plain.query.sql_with_params()
                     plain_has = built_catalog(handle).has_perm(user, '%s.%s' % (permission.content_type.app_label, permission.codename), node)
-                    plain_doc = _load_policy_sql_document(render_configured_policy(handle))
+                    plain_doc = yaml.safe_load(render_configured_policy(handle))
                 bind_once_module._warned = False
                 with self.assertLogs('trusts', level='WARNING') as logs:
                     bound = built_catalog(handle).filter_authorized(candidates, user, permission)
                     bound_rows = list(bound)
                     bound_sql = bound.query.sql_with_params()
                     bound_has = built_catalog(handle).has_perm(user, '%s.%s' % (permission.content_type.app_label, permission.codename), node)
-                    bound_doc = _load_policy_sql_document(render_configured_policy(handle))
+                    bound_doc = yaml.safe_load(render_configured_policy(handle))
                     list(built_catalog(handle).filter_authorized(candidates, user, permission))
                     render_configured_policy(handle)
             self.assertEqual(len(logs.records), 1)
@@ -518,24 +529,21 @@ def _published(user, permission, obj):
 class Issue300ManagerAnnotationTest(SimpleTestCase):
 
     def test_value_annotation_stays_in_the_lockfile_for_both_settings(self):
-        from trusts.plan.contents import _compile_granted
-        from trusts.inspect.snapshot import _content_manager, _role_sentinel
         for enabled in (True, False):
             with self.subTest(TRUSTS_SQL_BIND_ONCE=enabled):
                 with override_settings(TRUSTS_SQL_BIND_ONCE=enabled):
                     handle = compiler(path='documents.backends.ReviewBackend')
                     handle.register(trust=ReviewGrant, user='user', permission='permission', content='document')
                     handle.add_named_filter(ReviewDocument, 'published', _published)
-                    document = _load_policy_sql_document(render_configured_policy(handle))
+                    document = yaml.safe_load(render_configured_policy(handle))
                     content = document['backends'][0]['contents'][0]
                     permitted = content['permitted']
                     named = content['named_filters'][0]
-                    records = built_catalog(handle).plan_for(ReviewDocument).records
-                    user = _role_sentinel(records[0], 'user', 'default')
-                    permission = _role_sentinel(records[0], 'permission', 'default')
-                    queryset = _content_manager(ReviewDocument).all()
-                    granted = _compile_granted(built_catalog(handle), queryset, user, permission, kind='complete')
-                    raw_sql, raw_params = bind_once(queryset.filter(granted).distinct(), user_model=get_user_model()).query.sql_with_params()
+                    user = User(pk=1)
+                    permission = Permission(pk=1)
+                    raw_sql, raw_params = built_catalog(handle).filter_authorized(
+                        ReviewDocument.objects.all(), user, permission,
+                    ).query.sql_with_params()
                     self._assert_cardinality_and_order(permitted, raw_params)
                     self.assertEqual(raw_sql.count('%s'), len(raw_params))
                     self.assertIn('review_annotation=1', permitted['params'])
@@ -553,8 +561,4 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
         for token, raw in zip(tokens, raw_params):
             if '=' not in token:
                 continue
-            self.assertEqual(_presented_const_for(token), raw)
-
-def _presented_const_for(token):
-    from trusts.inspect.snapshot import _presented_const
-    return _presented_const(token)
+            self.assertEqual(_lockfile_constant(token), raw)

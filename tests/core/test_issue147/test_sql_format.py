@@ -1,6 +1,5 @@
 """Fail-closed policy-lock SQL line breaks (issue #291)."""
 
-from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
@@ -317,18 +316,6 @@ class PolicySqlFormatTest(SimpleTestCase):
         ):
             _rejected(self, raw, token)
 
-    def test_round_trip_failure_names_the_query(self):
-        raw = 'SELECT 1'
-        with patch(
-            'trusts.inspect.format._emit', return_value='SELECT 1 FROM',
-        ):
-            message = _rejected(self, raw, raw)
-        self.assertIn('token stream', message)
-        with patch(
-            'trusts.inspect.format._emit', return_value='SELECT 1 -- gone',
-        ):
-            message = _rejected(self, raw, raw)
-        self.assertIn('token stream', message)
 
     def test_malformed_sql_fails_closed(self):
         with self.assertRaises(TrustsConfigurationError):

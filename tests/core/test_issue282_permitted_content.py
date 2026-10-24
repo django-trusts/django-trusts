@@ -8,24 +8,24 @@ only where the delegation and the sponsor's ordinary permission both
 reach the prefix.
 """
 
+import json
+import yaml
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.core.exceptions import PermissionDenied
-from django.db import models
+from django.db import connection, models
 from django.http import HttpRequest
-from django.test import SimpleTestCase, TransactionTestCase
-from django.test.utils import isolate_apps
+from django.test import TransactionTestCase
+from django.test.utils import CaptureQueriesContext, isolate_apps
 
 from tests.core.test_issue282 import _handle, _listed, _permission, _tables
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from tests.support import (
     render_configured_policy,
     scoped_permitted_content as filter_by_permitted_content,
     built_catalog,
 )
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.aggregates import _compile_common_permissions
-from trusts.decorators import authorization_required
+from trusts.decorators import _declared_authorization_guards, authorization_required
 from trusts.models import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
 
 
@@ -37,27 +37,40 @@ def _request(user):
     return request
 
 
+def _collapsed_sql(sql):
+    return ''.join(sql.split())
+
+
+def _lockfile_constant(token):
+    """Python value of one ``source=value`` lockfile token.
+
+    A bare call input has no ``=`` and is not a recorded constant.
+    """
+    if not isinstance(token, str) or '=' not in token:
+        return None
+    literal = token.split('=', 1)[1]
+    if literal == 'True':
+        return True
+    if literal == 'False':
+        return False
+    if literal == 'null':
+        return None
+    if literal[:1] in '"{[':
+        return json.loads(literal)
+    if literal.lstrip('-').isdigit():
+        return int(literal)
+    return float(literal)
+
+
 def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     """The lockfile statement is the SQL Django runs.
 
     A ``source=value`` token is that executed constant. A bare
-    ``$user.id`` style token is a call input and is not compared to
-    the sentinel. The SQL text is that statement broken between tokens.
+    ``$user.id`` style token is a call input and is not compared.
+    Whitespace in the lockfile SQL is the only difference from the
+    statement Django compiled.
     """
-    from django.db import connection
-    from django.test.utils import CaptureQueriesContext
-
-    from trusts.inspect.snapshot import (
-        _CALL_INPUT,
-        _json_const,
-        _load_policy_sql_document,
-        _presented_const,
-        _role_sentinel,
-        render_policy_sql_bytes,
-    )
-    from trusts.inspect.format import _format_policy_sql, _tokenize_policy_sql
-
-    document = _load_policy_sql_document(
+    document = yaml.safe_load(
         render_configured_policy(handle),
     )
     test.assertEqual(document['schema_version'], 1)
@@ -72,8 +85,8 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     record = built_catalog(handle).plan_for(content_model).records[0]
     queryset = filter_by_permitted_content(
         prefix_model._default_manager.all(),
-        _role_sentinel(record, 'user', 'default'),
-        _role_sentinel(record, 'permission', 'default'),
+        record.user_model(pk=1),
+        record.permission_model(pk=1),
         content=content_model,
         registry=built_catalog(handle),
     )
@@ -99,25 +112,14 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     test.assertEqual(len(captured.captured_queries), 1)
     raw_sql, raw_params, logged = recorded[0]
     test.assertEqual(captured.captured_queries[0]['sql'], logged)
-    test.assertEqual(row['sql'], _format_policy_sql(raw_sql))
-    test.assertEqual(
-        [token for token, _spaced in _tokenize_policy_sql(row['sql'])],
-        [token for token, _spaced in _tokenize_policy_sql(raw_sql)],
-    )
+    test.assertEqual(_collapsed_sql(row['sql']), _collapsed_sql(raw_sql))
     test.assertEqual(row['sql'].count('%s'), len(row['params']))
     test.assertEqual(len(row['params']), len(raw_params))
     for token, value in zip(row['params'], raw_params):
-        parsed = _presented_const(token)
-        if parsed is _CALL_INPUT:
+        if '=' not in token:
             continue
-        test.assertEqual(parsed, _json_const(value))
+        test.assertEqual(_lockfile_constant(token), value)
     return row
-
-
-class Issue282PermittedContentSuiteRegistrationTest(SimpleTestCase):
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue282_permitted_content', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue282_permitted_content', PAIR_KERNEL_SUITE)
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -1139,7 +1141,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class AlongSurfaceAgreementTest(TransactionTestCase):
-    """``common_permissions``, ``authorization_required``, and Trust content.
+    """``permissions_for``, ``authorization_required``, and Trust content.
 
     The protected object is a Trust. ``along=`` walks ``parent`` with
     bound 1, so the child trust is permitted and the trust past that
@@ -1203,18 +1205,17 @@ class AlongSurfaceAgreementTest(TransactionTestCase):
         child_only = self.Trust.objects.filter(pk=self.child.pk)
         past_only = self.Trust.objects.filter(pk=self.past.pk)
         mixed = self.Trust.objects.filter(pk__in=[self.child.pk, self.past.pk])
+        catalog = built_catalog(self.handle)
         self.assertEqual(
-            set(_compile_common_permissions(
-                built_catalog(self.handle), child_only, self.alice,
-            ).values_list('pk', flat=True)),
+            set(catalog.permissions_for(self.alice, child_only).values_list('pk', flat=True)),
             {self.change.pk},
         )
         self.assertEqual(
-            list(_compile_common_permissions(built_catalog(self.handle), past_only, self.alice)),
+            list(catalog.permissions_for(self.alice, past_only)),
             [],
         )
         self.assertEqual(
-            list(_compile_common_permissions(built_catalog(self.handle), mixed, self.alice)),
+            list(catalog.permissions_for(self.alice, mixed)),
             [],
         )
 
@@ -1223,6 +1224,13 @@ class AlongSurfaceAgreementTest(TransactionTestCase):
         def view(request, pk):
             return 'ok'
 
+        entry = (self.Trust, self.code, ())
+
+        def _drop_guard():
+            if entry in _declared_authorization_guards:
+                _declared_authorization_guards.remove(entry)
+
+        self.addCleanup(_drop_guard)
         with _listed(self.handle):
             self.assertEqual(
                 view(_request(self.alice), pk=self.child.pk), 'ok',

@@ -1,5 +1,4 @@
 """#194: protected family factories and family-local Core aggregates."""
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
@@ -16,13 +15,11 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
 from trusts.apps import TrustsConfigMixin, installed_catalogs
-from trusts.backends import TrustModelBackendMixin
 from tests.support import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import QueryCompiler
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
-from trusts.plan.aggregates import _compiler_applies
 from trusts.decorators import _declared_authorization_guards, authorization_required
 HOST = HOST_BACKEND
 DOCUMENT = DOCUMENT_BACKEND
@@ -76,14 +73,6 @@ def _request(user):
 
 class ProtectedFactorySurfaceTest(SimpleTestCase):
 
-    def test_default_family_and_factories_are_protected(self):
-        self.assertEqual(TrustsConfigMixin.family, 'relationship')
-        self.assertFalse(hasattr(TrustsConfigMixin, '_authorization_family'))
-        self.assertFalse(hasattr(TrustsConfigMixin, 'authorization_family'))
-        self.assertFalse(hasattr(TrustsConfigMixin, '_create_registry'))
-        self.assertFalse(hasattr(TrustsConfigMixin, '_create_handle'))
-        self.assertTrue(callable(QueryCompiler().applies))
-        self.assertTrue(callable(PlanQueryCompiler().applies))
 
     def test_relationship_applies_is_records_only(self):
         compiler = PlanQueryCompiler()
@@ -97,7 +86,6 @@ class ProtectedFactorySurfaceTest(SimpleTestCase):
         self.assertTrue(protocol.applies(filled))
         self.assertFalse(compiler.applies(strategy_only))
         self.assertFalse(protocol.applies(strategy_only))
-        self.assertFalse(_compiler_applies(compiler, strategy_only))
 
     def test_ready_stores_the_built_registry_on_the_catalog(self):
         from tests.kernel_host.backends import HostTrustModelBackend

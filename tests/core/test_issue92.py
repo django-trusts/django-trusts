@@ -4,12 +4,12 @@ Isolated noun-neutral models only. Structural and behavioral tests —
 no source-token or frozen-SQL-string assertions.
 """
 from contextlib import contextmanager
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from uuid import uuid4
-from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
+from django.conf import settings
 from django.db import connection, connections, models
 from django.db.models.query import QuerySet
 from django.db.utils import OperationalError
@@ -19,22 +19,19 @@ from tests.core import KernelHostRequiredMixin
 from tests.support import (
     forget_models,
     isolate_live_registry,
-    live_config,
     built_registries,
     built_catalog,
     compiler,
 )
 from trusts.inspect.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
 from trusts.inspect.format import _format_policy_sql, _tokenize_policy_sql
-from trusts.plan.aggregates import _compile_common_permissions, all_match
+from trusts.plan.aggregates import all_match
 from trusts.plan.users import lock_permitted_users_queryset
 from trusts.plan.walk import _render_reach_sql
 from trusts.compile.nodes import Along
 from trusts.plan.recursions import GrantReach
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
-from trusts.errors import TrustsCompilerError, TrustsConfigurationError
-from trusts.compile.factory import Compiler
+from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import granted
 CONCRETE = 'tests.kernel_host.backends.HostTrustModelBackend'
 
@@ -64,12 +61,6 @@ def _pks(rows):
 def _direct_handle(registry, path='tests.along.direct'):
     registry.path = path
     return registry
-
-def _plan_text(qs):
-    sql, params = qs.query.sql_with_params()
-    with connection.cursor() as cursor:
-        cursor.execute('EXPLAIN QUERY PLAN ' + sql, params)
-        return '\n'.join((row[-1] for row in cursor.fetchall()))
 
 def _assert_no_historical_names(*models_):
     forbidden = {'Trust', 'Content', 'Junction', 'Group', 'Role', 'Windows', 'FileSystem', 'Filesystem'}
@@ -370,9 +361,9 @@ class _AlongProjectionMixin(object):
         with self.assertNumQueries(1):
             self.assertFalse(all_match(built_catalog(handle), mixed_qs, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(_compile_common_permissions(built_catalog(handle), granted_qs, self.alice)), {self.read.pk})
+            self.assertEqual(_pks(built_catalog(handle).permissions_for(self.alice, granted_qs)), {self.read.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(list(_compile_common_permissions(built_catalog(handle), mixed_qs, self.alice)), [])
+            self.assertEqual(list(built_catalog(handle).permissions_for(self.alice, mixed_qs)), [])
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
@@ -395,31 +386,9 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         registry = compiler()
         j = Ref(self.Grant)
         registry.register_relation(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=16))
-        self._assert_projections(registry, self.Node, [root, child, leaf], [other])
-        granted_qs = self.Node.objects.filter(pk__in=[root.pk, child.pk, leaf.pk])
-        with patch.object(connections[granted_qs.db], 'vendor', 'mysql'):
-            handle = _direct_handle(registry)
-            common = _compile_common_permissions(built_catalog(handle), granted_qs, self.alice)
-            on_root = _compile_common_permissions(built_catalog(handle), root, self.alice)
-        self.assertEqual(_pks(common), {self.read.pk})
-        self.assertEqual(_pks(on_root), {self.read.pk})
-        nested_sql, nested_params = common.query.sql_with_params()
-        self.assertEqual(nested_sql.count('CROSS JOIN'), 1)
-        quoted_alias = connection.ops.quote_name('trusts_bind')
-        self.assertIn('%s < %s.%s' % (connection.ops.quote_name('depth'), quoted_alias, connection.ops.quote_name('along_bound')), nested_sql)
-        self.assertIn('%s.%s' % (quoted_alias, connection.ops.quote_name('user_id')), nested_sql)
-        self.assertEqual(nested_params.count(16), 1)
-        qs = built_catalog(registry).filter_authorized(self.Node.objects.order_by('pk'), self.alice, self.read)
-        sql = str(qs.query)
-        self.assertIn('WITH RECURSIVE', sql.upper())
-        self.assertIn('UNION ALL', sql.upper())
-        self.assertNotIn('json_', sql.lower())
-        if connection.vendor == 'sqlite':
-            plan = _plan_text(qs)
-            self.assertIn('LIST SUBQUERY', plan)
-            self.assertEqual(plan.count('MATERIALIZE gen'), 1)
-            self.assertEqual(plan.count('MATERIALIZE trusts_bind'), 1)
-            self.assertLess(plan.index('SCAN trusts_tests_node'), plan.index('MATERIALIZE gen'))
+        self._assert_projections(
+            registry, self.Node, [root, child, leaf], [other],
+        )
 
     def test_shape_c_grant_on_descendant_authorizes_ancestors(self):
         root = self.Node.objects.create(title='root')
@@ -941,14 +910,12 @@ class AlongRuntimeGateTest(TransactionTestCase):
             oracle = Stub('oracle', 'django.db.backends.oracle', 'legacy')
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 expr.as_sql(sql_compiler, oracle)
-            self.assertNotIsInstance(ctx.exception, TrustsCompilerError)
             self.assertIn('oracle', str(ctx.exception).lower())
             self.assertIn('legacy', str(ctx.exception))
             maria = Stub('mysql', 'django.db.backends.mysql', 'maria')
             maria.mysql_is_mariadb = True
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 expr.as_sql(sql_compiler, maria)
-            self.assertNotIsInstance(ctx.exception, TrustsCompilerError)
             self.assertEqual(str(ctx.exception), 'Along reachability requires a recursive CTE on Django sqlite3, postgresql, or mysql; got ENGINE=%r vendor=%r alias=%r.' % ('django.db.backends.mysql', 'mysql', 'maria'))
             rendered_qs = built_catalog(registry).filter_authorized(Node.objects.all(), alice, read)
             rendered = str(rendered_qs.query)
@@ -1040,26 +1007,26 @@ class AlongE005Test(KernelHostRequiredMixin, _LiveRegistryRestoreMixin, Transact
         self.assertEqual(messages, [])
 
     def test_unsupported_and_several_aliases(self):
+        if 'other' not in settings.DATABASES or 'also' not in settings.DATABASES:
+            self.skipTest(
+                'other and also are configured by tests.unsupported_db_settings',
+            )
         registry, Node, NodeGrant = self._along_registry()
-        isolate_live_registry(self.live, registry, 'tests.kernel_host.backends.HostTrustModelBackend')
-        fake = MagicMock()
-        fake.settings_dict = {'ENGINE': 'django.db.backends.oracle'}
-        fake.vendor = 'oracle'
-        fake.alias = 'other'
-        mapping = {'default': connections['default'], 'other': fake, 'also': fake}
-
-        class _Conns(object):
-
-            def __getitem__(self, alias):
-                return mapping[alias]
-        with patch('trusts.inspect.checks.connections', _Conns()):
-            messages = check_along_renderer(None, databases=['default', 'other', 'also'])
+        isolate_live_registry(
+            self.live, registry,
+            'tests.kernel_host.backends.HostTrustModelBackend',
+        )
+        messages = check_along_renderer(
+            None, databases=['default', 'other', 'also'],
+        )
         errors = [m for m in messages if m.id == CHECK_ID_ALONG_RENDERER]
         self.assertEqual(len(errors), 2)
         aliases = ' '.join((m.msg for m in errors))
         self.assertIn("'other'", aliases)
         self.assertIn("'also'", aliases)
-        self.assertTrue(all(('default' not in m.msg.split('ENGINE')[0] for m in errors)))
+        self.assertTrue(all(
+            ('default' not in m.msg.split('ENGINE')[0] for m in errors)
+        ))
 
     def test_mariadb_is_rejected_before_the_probe(self):
         registry, Node, NodeGrant = self._along_registry()

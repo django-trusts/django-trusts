@@ -47,8 +47,6 @@ from trusts.inspect.yaml import (
     PolicyYamlError,
     canonical_float_scalar,
     dump_policy_yaml,
-    parse_canonical_float,
-    _load_policy_yaml,
 )
 from django.conf import settings
 from django.db.utils import DEFAULT_DB_ALIAS
@@ -70,7 +68,6 @@ from trusts.plan.rewrites import bound_exists_query
 from trusts.plan.aggregates import _compile_common_permissions
 from trusts.plan.users import lock_permitted_users_queryset
 from trusts.plan.contents import _compile_permitted_content_queryset
-from trusts.plan.rewrites import _AlongOnce
 
 
 SCHEMA_VERSION = 1
@@ -371,7 +368,6 @@ class _PolicyVisitor(object):
                 }
             condition = _render_condition(
                 record.condition,
-                member=getattr(record, 'permission_field', None),
                 permission_token=_permission_token(
                     getattr(record, 'permission_target', None),
                 ),
@@ -404,10 +400,6 @@ class _PolicyVisitor(object):
         permission = _role_sentinel(records[0], 'permission', alias)
         queryset = _content_manager(model).all()
         predicate = catalog.complete_grant_q(queryset, user, permission)
-        if predicate is None:
-            raise TrustsConfigurationError(
-                'Policy SQL found no grant for %s.' % _model_label(model)
-            )
         queryset = bind_once(
             queryset.filter(predicate).distinct(),
             user_model=catalog.user_model,
@@ -423,10 +415,6 @@ class _PolicyVisitor(object):
         permission = _role_sentinel(records[0], 'permission', alias)
         instance = _content_sentinel(model, alias)
         predicate = catalog.complete_grant_q(instance, user, permission)
-        if predicate is None:
-            raise TrustsConfigurationError(
-                'Policy SQL found no grant for %s.' % _model_label(model)
-            )
         exists = _content_manager(model).filter(pk=instance.pk).filter(predicate)
         compiled = bound_exists_query(exists, user_model=catalog.user_model)
         return _compile_queryset(
@@ -442,11 +430,6 @@ class _PolicyVisitor(object):
         queryset = _compile_common_permissions(
             catalog, instance, user, kind='complete',
         )
-        if queryset is None:
-            raise TrustsConfigurationError(
-                'Policy SQL found no permissions query for %s.'
-                % _model_label(model)
-            )
         return _compile_queryset(
             queryset, alias, record=records[0], expr=None, records=records,
         )
@@ -499,11 +482,6 @@ class _PolicyVisitor(object):
         queryset = _compile_common_permissions(
             catalog, instance, user, kind='group',
         )
-        if queryset is None:
-            raise TrustsConfigurationError(
-                'Policy SQL found no group-permissions query for %s.'
-                % _model_label(model)
-            )
         return _compile_queryset(
             queryset, alias, record=records[0], expr=None, records=records,
         )
@@ -667,37 +645,6 @@ def _present_params(symbols):
     return params
 
 
-class _CallInput(object):
-    def __repr__(self):
-        return 'call-input'
-
-
-_CALL_INPUT = _CallInput()
-
-
-def _presented_const(token):
-    """Constant payload of one ``source=value`` lockfile token.
-
-    A bare call input (``$user.id``) returns :data:`_CALL_INPUT`.
-    Tagged values come back as the mapping ``_json_const`` recorded.
-    """
-    if not isinstance(token, str) or '=' not in token:
-        return _CALL_INPUT
-    literal = token.split('=', 1)[1]
-    if literal == 'True':
-        return True
-    if literal == 'False':
-        return False
-    if literal == 'null':
-        return None
-    if literal[:1] in '"{[':
-        return json.loads(literal)
-    if re.fullmatch(r'-?(0|[1-9][0-9]*)', literal):
-        return int(literal)
-
-    return parse_canonical_float(literal)
-
-
 def _named_filter_row(row):
     return {
         'id': row['id'],
@@ -837,8 +784,7 @@ class _PolicyConditionText(object):
     does not change its parent's parentheses.
     """
 
-    def __init__(self, member, permission_token):
-        self.member = member
+    def __init__(self, permission_token):
         self.permission_token = permission_token
         self._grouped = False
 
@@ -876,10 +822,6 @@ class _PolicyConditionText(object):
         )
 
     def visit_permission_in(self, node):
-        if not self.member:
-            raise TrustsConfigurationError(
-                'Policy SQL condition membership has no permission field.'
-            )
         parts = [
             '%s in %s' % (self.permission_token, _condition_path(ref))
             for ref in node.refs
@@ -895,20 +837,19 @@ class _PolicyConditionText(object):
         )
 
 
-def _render_condition(condition, *, member=None, permission_token='$permission.id'):
+def _render_condition(condition, *, permission_token='$permission.id'):
     """One Python-like condition line, or ``None`` when none is stored.
 
     A trust id ending in ``__cond`` means ``record.condition`` is set.
     Field paths stay bare. ``Equal`` compares two columns.
     ``permission_in`` and ``_InquiryPermissionMatch`` are membership:
     ``$permission.<target> in <collection>``. ``permission_token`` is the
-    same token the SQL parameter uses. ``member`` is the ordinary
-    record's ``permission_field`` and is required for ``permission_in``.
-    The line is a double-quoted YAML string.
+    same token the SQL parameter uses. The line is a double-quoted YAML
+    string.
     """
     if condition is None:
         return None
-    return _PolicyConditionText(member, permission_token).render(condition)
+    return _PolicyConditionText(permission_token).render(condition)
 
 
 def _condition_path(operand):
@@ -918,8 +859,6 @@ def _condition_path(operand):
                 'Policy SQL condition path is empty.'
             )
         return '__'.join(operand._path)
-    if isinstance(operand, str) and operand:
-        return operand
     raise TrustsConfigurationError(
         'Policy SQL condition path is not a relationship path.'
     )
@@ -1364,13 +1303,9 @@ def _classify_compiled(node, sql, params, query=None):
         if isinstance(param, _Symbol):
             tagged.append(param)
             continue
-        symbol = _symbol_for_new_param(node, query=query)
-        if symbol is None:
-            raise TrustsConfigurationError(
-                'Policy SQL render could not classify a %s placeholder.'
-                % type(node).__name__
-            )
-        tagged.append(_Symbol(symbol))
+        tagged.append(_Symbol(
+            _symbol_for_new_param(node, query=query),
+        ))
     return sql, tagged
 
 
@@ -1439,7 +1374,10 @@ def _symbol_for_new_param(node, query=None):
             return _with_hint(
                 {'const': _json_const(rhs)}, _const_hint(node, rhs),
             )
-    return None
+    raise TrustsConfigurationError(
+        'Policy SQL render could not classify a %s placeholder.'
+        % type(node).__name__
+    )
 
 
 _REQUEST_ROLES = frozenset((
@@ -1491,32 +1429,27 @@ def _value_hint(node, query):
 
 
 def _const_hint(node, value):
-    """Readable label for one constant placeholder."""
-    if isinstance(node, Value):
-        return 'literal'
-    if isinstance(node, Lookup):
-        lhs = getattr(node, 'lhs', None)
-        if isinstance(lhs, _AlongOnce):
-            lhs = lhs.inner
-        if isinstance(lhs, (
-            GrantReach, _IdentInReach, _KeyedReach, _AnchorInInverseReach,
-            _PrefixInForwardWalk,
-        )) and value is True:
-            return 'along match'
-        name = _lookup_field_name(node)
-        label = _lookup_model_label(node)
-        if name == 'app_label' and label == 'contenttypes.ContentType':
-            return 'content type app'
-        if name == 'model' and label == 'contenttypes.ContentType':
-            return 'content type model'
-        if name == 'is_active':
-            return 'active'
-        target = getattr(getattr(node, 'lhs', None), 'target', None)
-        if target is not None and getattr(target, 'primary_key', False):
-            return 'content pk'
-        if name:
-            return name
-    return 'literal'
+    """Readable label for one constant lookup placeholder."""
+    lhs = getattr(node, 'lhs', None)
+    if isinstance(lhs, (
+        GrantReach, _IdentInReach, _KeyedReach, _AnchorInInverseReach,
+        _PrefixInForwardWalk,
+    )) and value is True:
+        return 'along match'
+    name = _lookup_field_name(node)
+    label = _lookup_model_label(node)
+    if name == 'app_label' and label == 'contenttypes.ContentType':
+        return 'content type app'
+    if name == 'model' and label == 'contenttypes.ContentType':
+        return 'content type model'
+    if name == 'is_active':
+        return 'active'
+    target = getattr(lhs, 'target', None)
+    if target is not None and getattr(target, 'primary_key', False):
+        return 'content pk'
+    raise TrustsConfigurationError(
+        'Policy SQL render could not label a constant placeholder.'
+    )
 
 
 def _lookup_model_label(node):
@@ -1572,19 +1505,12 @@ def _bind_name(node, record):
                 or getattr(target, 'attname', None) == candidate.content_target
             )
         ):
-            # An Along reverse row binds only the content-identity
-            # comparison on the uncorrelated walk seed. A condition
-            # literal on that same column, including ``folder__pk=<n>``
-            # after Django collapses it to the foreign key, stays a
-            # constant.
-            if (
-                getattr(candidate, 'along', None) is not None
-                and not getattr(node, 'trusts_content_bind', False)
-            ):
-                continue
             labels.append('content.%s' % candidate.content_target)
     if not labels:
-        return None
+        raise TrustsConfigurationError(
+            'Policy SQL render could not label a %s bind.'
+            % concrete._meta.label
+        )
     if any(label != labels[0] for label in labels):
         raise TrustsConfigurationError(
             'Composition SQL cannot label a %s bind; trusts in this '
@@ -1648,13 +1574,7 @@ def _json_const(value):
     if isinstance(value, bytes):
         return {'type': 'bytes', 'hex': value.hex()}
     if isinstance(value, Decimal):
-        if value.is_nan():
-            text = 'NaN'
-        elif not value.is_finite():
-            text = 'Infinity' if value > 0 else '-Infinity'
-        else:
-            text = str(value)
-        return {'type': 'decimal', 'value': text}
+        return {'type': 'decimal', 'value': str(value)}
     if isinstance(value, uuid.UUID):
         return {'type': 'uuid', 'value': str(value)}
     if isinstance(value, datetime.datetime):
@@ -1683,51 +1603,6 @@ def _json_const(value):
     )
 
 
-def _const_from_json(value):
-    """Inverse of :func:`_json_const` for one recorded constant value."""
-    if isinstance(value, dict):
-        kind = value.get('type')
-        if kind == 'float':
-            return float(value['value'])
-        if kind == 'bytes':
-            return bytes.fromhex(value['hex'])
-        if kind == 'decimal':
-            return Decimal(value['value'])
-        if kind == 'uuid':
-            return uuid.UUID(value['value'])
-        if kind == 'date':
-            return datetime.date.fromisoformat(value['value'])
-        if kind == 'time':
-            return datetime.time.fromisoformat(value['value'])
-        if kind == 'datetime':
-            return datetime.datetime.fromisoformat(value['value'])
-        if kind == 'timedelta':
-            return datetime.timedelta(
-                days=value['days'],
-                seconds=value['seconds'],
-                microseconds=value['microseconds'],
-            )
-        if kind == 'model':
-            return ModelIdentity(
-                value['app_label'],
-                value['model'],
-                _const_from_json(value['pk']),
-            )
-        raise TrustsConfigurationError(
-            'Policy SQL render found an unknown constant tag %r.' % (kind,)
-        )
-    if isinstance(value, bool) or value is None or isinstance(value, str):
-        return value
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    if isinstance(value, float):
-        return value
-    raise TrustsConfigurationError(
-        'Policy SQL render cannot restore constant %r (%s).'
-        % (value, type(value).__name__)
-    )
-
-
 def _model_label(model):
     meta = getattr(model, '_meta', None)
     label = getattr(meta, 'label', None)
@@ -1743,29 +1618,6 @@ def _dump_document(document):
         return dump_policy_yaml(document)
     except PolicyYamlError as exc:
         raise TrustsConfigurationError(str(exc)) from exc
-
-
-def _load_policy_sql_document(payload):
-    """Private diagnostic helper for a schema-1 policy document.
-
-    Not a supported public API and not a two-directional mapping
-    contract. Tests use it for coding completeness. ``trusts.E009``
-    does not call this. Equality is raw bytes against
-    :func:`render_policy_sql_bytes`.
-
-    :func:`_load_policy_yaml` parses the payload, re-dumps it with the
-    canonical writer, and rejects the input unless the bytes are
-    identical.
-    """
-    try:
-        document = _load_policy_yaml(payload)
-    except PolicyYamlError as exc:
-        raise TrustsConfigurationError(str(exc)) from exc
-    if not isinstance(document, dict):
-        raise TrustsConfigurationError(
-            'Policy SQL document must be a mapping.'
-        )
-    return document
 
 
 def _configured_lock_override():

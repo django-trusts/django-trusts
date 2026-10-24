@@ -4,38 +4,29 @@ Zero-owned pair/live Trust proofs stay on ``tests/legacy/test_issue54.py``.
 """
 
 from contextlib import contextmanager
-from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser, Permission
+from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.db.models import Q
 from django.db.models.query import QuerySet
-from django.test import SimpleTestCase, TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
 from tests.support import (
     built_catalog,
     listed_relationship,
-    live_config,
     scoped_permitted_content,
     compiler,
 )
 from tests.core import kernel_host_listed
-from tests.kernel_host.apps import KernelHostConfig
 from tests.myapp.models import Document, DocumentGrant
-from trusts.apps import TrustsConfigMixin
 from trusts.decorators import filter_by_permitted_content
 from trusts.plan.conditions import FrozenConditionLookup
-from trusts.compile.catalogs import Catalog
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-import trusts.models as models_mod
-from trusts.compile.factory import Compiler
 from trusts.models import (
-    AuthorizedManager,
     AuthorizedManagerMixin,
     AuthorizedQuerySet,
 )
@@ -120,28 +111,6 @@ def _register_payload(registry, grant):
     )
 
 
-class KernelConfigTest(SimpleTestCase):
-    def test_live_owner_is_host_and_kernel_config_is_gone(self):
-        if not kernel_host_listed():
-            self.skipTest('kernel-only host path is not listed on the pair')
-        import trusts.apps as apps_mod
-
-        from django.apps import apps as django_apps
-
-        config = django_apps.get_app_config('trusts_kernel_host')
-        self.assertIsInstance(config, TrustsConfigMixin)
-        self.assertIsNot(type(config), TrustsConfigMixin)
-        self.assertFalse(hasattr(apps_mod, 'kernel_config'))
-        self.assertFalse(hasattr(apps_mod, 'AppConfig'))
-
-    def test_legacy_query_helpers_are_removed(self):
-        self.assertFalse(hasattr(models_mod, 'trust_grant_q'))
-        self.assertFalse(hasattr(models_mod, 'historical_group_grant_exists'))
-        self.assertFalse(hasattr(models_mod, 'group_local_grant_exists'))
-        self.assertFalse(hasattr(models_mod, 'permission_granted_via_group_exists'))
-        self.assertTrue(callable(filter_by_permitted_content))
-
-
 class ConditionLookupBindTest(TestCase):
     def test_build_freezes_one_lookup_at_zero_sql(self):
         registry = compiler()
@@ -187,38 +156,6 @@ class ConditionLookupBindTest(TestCase):
                 empty.compile_q(Document, 'myapp.change_document:named', None)
 
 
-class AuthorizedQuerySetSurfaceTest(SimpleTestCase):
-    def test_manager_mixin_preserves_application_manager_behavior(self):
-        class DocumentManager(AuthorizedManagerMixin, models.Manager):
-            def application_method(self):
-                return 'application-owned'
-
-        manager = DocumentManager()
-        queryset = Mock()
-        with (
-            patch.object(manager, 'get_queryset', return_value=queryset),
-            patch.object(
-                AuthorizedQuerySet, 'authorized', return_value='authorized',
-            ) as authorized,
-        ):
-            self.assertEqual(
-                manager.authorized('user', 'permission', extra_q='extra'),
-                'authorized',
-            )
-        authorized.assert_called_once_with(
-            queryset, 'user', 'permission', extra_q='extra',
-        )
-        self.assertEqual(manager.application_method(), 'application-owned')
-
-    def test_no_permitted_or_get_permission_on_generic_surface(self):
-        self.assertFalse(hasattr(AuthorizedQuerySet, 'permitted'))
-        self.assertFalse(hasattr(AuthorizedQuerySet, 'get_permission'))
-        self.assertFalse(hasattr(AuthorizedManager, 'permitted'))
-        self.assertFalse(hasattr(AuthorizedManager, 'get_permission'))
-        self.assertTrue(hasattr(AuthorizedManager, 'authorized'))
-        self.assertTrue(issubclass(Document._default_manager._queryset_class, AuthorizedQuerySet))
-
-
 class AuthorizedQuerySetLiveTest(TestCase):
     def setUp(self):
         if not kernel_host_listed():
@@ -231,6 +168,28 @@ class AuthorizedQuerySetLiveTest(TestCase):
         self.doc_b = Document.objects.create(title='b')
         DocumentGrant.objects.create(
             document=self.doc_a, user=self.alice, permission=self.change,
+        )
+
+    def test_manager_mixin_preserves_application_manager_behavior(self):
+        class DocumentManager(AuthorizedManagerMixin, models.Manager):
+            def application_method(self):
+                return 'application-owned'
+
+            def get_queryset(self):
+                return AuthorizedQuerySet(Document, using=self._db)
+
+        manager = DocumentManager()
+        manager.model = Document
+        bound = manager.db_manager(Document.objects.db)
+        self.assertEqual(bound.application_method(), 'application-owned')
+        self.assertEqual(
+            _pks(bound.authorized(self.alice, self.change)),
+            _pks(Document.objects.all().authorized(self.alice, self.change)),
+        )
+        narrowed = Q(pk=self.doc_a.pk)
+        self.assertEqual(
+            _pks(bound.authorized(self.alice, self.change, extra_q=narrowed)),
+            {self.doc_a.pk},
         )
 
     def test_wrong_permission_type_is_zero_sql_configuration_error(self):
@@ -284,19 +243,6 @@ class AuthorizedQuerySetLiveTest(TestCase):
         self.assertIsNone(qs._result_cache)
         with self.assertNumQueries(0):
             self.assertFalse(qs.exists())
-
-    def test_non_instance_user_is_configuration_error(self):
-        with self.assertNumQueries(0):
-            with patch('trusts.plan.contents.granted') as compiled:
-                denied = Document.objects.authorized(AnonymousUser(), self.change)
-                audited = Document.objects.authorized(
-                    AnonymousUser(), self.change, skip_is_active=True,
-                )
-                self.assertFalse(denied.exists())
-                self.assertFalse(audited.exists())
-            compiled.assert_not_called()
-            with self.assertRaises((TrustsConfigurationError, TypeError, AttributeError)):
-                Document.objects.authorized(None, self.change)
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')

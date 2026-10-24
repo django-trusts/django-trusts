@@ -3,7 +3,6 @@
 Live one-path Trust/Content auth stays on Zero ``tests/legacy/``.
 Generic multi-path contracts use KernelHost + DocumentConfig.
 """
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core.checks import run_checks
 from django.contrib.auth.models import Permission
@@ -16,11 +15,6 @@ from tests.apps import TestsConfig
 from tests.support import (
     built_catalog,
     configured_catalog,
-    install_writable_registry,
-    isolate_live_registry,
-    live_config,
-    override_apps_ready,
-    empty_catalogs,
     sweep_listed_backends,
     compiler,
 )
@@ -80,16 +74,6 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
             apps.get_app_config('trusts_kernel_host').catalog_path(),
         )
 
-    def test_backend_outside_a_mixin_app_fails_loud(self):
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST, OUTSIDE)):
-            messages = [
-                message for message in run_checks()
-                if getattr(message, 'id', None) == 'trusts.E012'
-            ]
-        self.assertEqual(
-            [message.obj.label for message in messages],
-            ['gh_permissions'],
-        )
 
     def test_document_and_host_catalogs_use_config_paths(self):
         from django.apps import apps

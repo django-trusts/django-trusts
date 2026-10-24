@@ -7,6 +7,7 @@ statement. Core does not add an ``is_active`` exclusion around a custom
 reverse predicate. ``skip_is_active=True`` is passed only to the
 Trusts-owned mixin method.
 """
+import yaml
 import re
 import uuid
 from contextlib import contextmanager
@@ -16,7 +17,7 @@ from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import AnonymousUser, Group, Permission
 from django.contrib.contenttypes.models import ContentType
-from django.db import connection, models
+from django.db import models
 from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
 from tests.core import KernelHostRequiredMixin
@@ -26,12 +27,8 @@ from trusts.plan.users import lock_permitted_users_queryset
 from tests.core.test_issue246 import _tables
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
-from trusts.inspect.snapshot import _compile_queryset, _load_policy_sql_document, render_policy_sql_bytes
 from trusts.models import PermittedManager, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import render_configured_policy, built_catalog, compiler
 
@@ -222,16 +219,11 @@ def _handle(registry):
     registry.path = DOCUMENT_BACKEND
     return registry
 
-class Issue255SuiteRegistrationTest(SimpleTestCase):
-
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue255', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue255', PAIR_KERNEL_SUITE)
 
 class Issue255PolicySqlTest(SimpleTestCase):
 
     def test_lockfile_adds_reverse_predicate_with_content_and_permission_binds(self):
-        document = _load_policy_sql_document(render_configured_policy(_document_handle()))
+        document = yaml.safe_load(render_configured_policy(_document_handle()))
         row = document['backends'][0]['contents'][0]['get_permitted_users']
         self.assertEqual(list(row), ['params', 'sql'])
         self.assertIn('$content.id', row['params'])
@@ -259,7 +251,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
         folder = Folder(pk=1)
         queryset = lock_permitted_users_queryset(built_catalog(handle), folder, Permission(pk=1))
         self.assertIn('WITH RECURSIVE', str(queryset.query))
-        document = _load_policy_sql_document(render_configured_policy(handle))
+        document = yaml.safe_load(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
         first, second = content['trusts']
         self.assertEqual(first['id'], 'documents__FolderGrant__folder__along_folder__parent_S_2')
@@ -347,7 +339,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
         self.assertNotEqual(record.content_target, UuidNode._meta.pk.attname)
         self.assertEqual(record.along.walk_ident, 'ident')
         self.assertEqual(record.along.ident_family, 'uuid')
-        document = _load_policy_sql_document(render_configured_policy(handle))
+        document = yaml.safe_load(render_configured_policy(handle))
         self.assertEqual(document['schema_version'], 1)
         reverse = document['backends'][0]['contents'][0]['get_permitted_users']
         self.assertIn('WITH RECURSIVE', reverse['sql'])
@@ -361,10 +353,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
     def test_content_pk_literal_stays_const_beside_an_along_reverse(self):
         handle = _export_handle('documents.backends.LiteralFolderBackend')
         handle.register(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
-        record = built_catalog(handle).plan_for(Folder).records[0]
-        _sql, params = _compile_queryset(FolderGrant.objects.filter(folder__pk=5), 'default', record=record, expr=None, records=(record,), reverse_users=True)
-        self.assertEqual(params, [{'const': 5, 'hint': 'id'}])
-        document = _load_policy_sql_document(render_configured_policy(handle))
+        document = yaml.safe_load(render_configured_policy(handle))
         reverse = document['backends'][0]['contents'][0]['get_permitted_users']
         self.assertIn('$content.id', reverse['params'])
         self.assertFalse(any((param.endswith('=5') for param in reverse['params'])))
@@ -920,7 +909,7 @@ def _reverse_agrees(test, handle, content, perm, candidates):
     return found
 
 def _assert_along_lock(test, handle, specs, *, group=False):
-    document = _load_policy_sql_document(render_configured_policy(handle))
+    document = yaml.safe_load(render_configured_policy(handle))
     test.assertEqual(document['schema_version'], 1)
     content = document['backends'][0]['contents'][0]
     trusts = content['trusts']

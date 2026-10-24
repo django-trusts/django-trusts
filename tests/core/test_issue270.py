@@ -1,7 +1,6 @@
 from tests.support import listed_relationship, replay_recorder, unbound_named_filters, compiler
 """#270: queryset.permitted(permission, user, conditions=())."""
 from contextlib import contextmanager
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser, Permission
 from django.contrib.contenttypes.models import ContentType
@@ -14,11 +13,8 @@ from django.test.utils import isolate_apps
 from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 from trusts.decorators import _declared_authorization_guards, authorization_required
 import trusts.models as query_mod
 from trusts.models import AuthorizedManager, AuthorizedQuerySet, PermittedManager, PermittedQuerySet, PermittedQuerySetMixin
@@ -459,8 +455,3 @@ class PermittedPermissionExactnessTest(KernelHostRequiredMixin, TestCase):
             with self.assertRaises(TypeError):
                 self.docs.permitted(row, self.alice)
 
-class Issue270SuiteRegistrationTest(SimpleTestCase):
-
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue270', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue270', PAIR_KERNEL_SUITE)

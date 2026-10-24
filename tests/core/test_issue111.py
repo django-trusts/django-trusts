@@ -6,7 +6,6 @@ Historical concrete imports fail. Supported owners subclass
 ``trusts.backends``; ``trusts.core_backends`` is gone.
 """
 
-from unittest.mock import patch
 
 from django.apps import apps
 from django.core.checks import run_checks
@@ -54,45 +53,8 @@ def _bind(config_cls, configs=None, ready=True):
     return config
 
 
-class LibraryIdentityTest(SimpleTestCase):
-    def test_kernel_config_and_appconfig_are_gone(self):
-        import trusts.apps as apps_mod
-
-        self.assertFalse(hasattr(apps_mod, 'kernel_config'))
-        self.assertFalse(hasattr(apps_mod, 'KERNEL_CONFIG_TOMBSTONE'))
-        self.assertFalse(hasattr(apps_mod, 'AppConfig'))
-        labels = {config.label for config in apps.get_app_configs()}
-        names = {config.name for config in apps.get_app_configs()}
-        self.assertNotIn('trusts', labels)
-        self.assertNotIn('trusts_core', labels)
-        self.assertNotIn('trusts', names)
-        with self.assertRaises(LookupError):
-            apps.get_app_config('trusts')
-        with self.assertRaises(LookupError):
-            apps.get_app_config('trusts_core')
-
-
 class HistoricalImportCutoverTest(SimpleTestCase):
-    def test_models_module_is_inert(self):
-        import trusts.models as models_mod
 
-        self.assertFalse(hasattr(models_mod, 'Trust'))
-        self.assertFalse(hasattr(models_mod, 'Content'))
-        self.assertNotIn('Trust', dir(models_mod))
-        with self.assertRaises(ImportError):
-            from trusts.models import Trust  # noqa: F401
-        with self.assertRaises(AttributeError):
-            getattr(models_mod, 'Trust')
-
-    def test_historical_backend_imports_fail(self):
-        import trusts.backends as backends_mod
-
-        self.assertFalse(hasattr(backends_mod, 'TrustModelBackend'))
-        self.assertFalse(hasattr(backends_mod, 'HistoricalGroupQueryCompiler'))
-        with self.assertRaises(ImportError):
-            from trusts.backends import TrustModelBackend  # noqa: F401
-        with self.assertRaises(ImportError):
-            from trusts.backends import HistoricalGroupQueryCompiler  # noqa: F401
 
     def test_mixin_lives_only_on_trusts_backends(self):
         import importlib

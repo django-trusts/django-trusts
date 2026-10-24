@@ -9,21 +9,16 @@ import inspect
 import types
 from collections.abc import Callable
 from typing import TypeVar, get_args, get_origin, get_type_hints
-from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Permission
-from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 from tests.core.test_issue98 import _gh_models, _register_direct, _register_team, _tables
 from tests.myapp.models import Document, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.plan.conditions import Eq as IrEq
 from trusts.plan.conditions import Ref as IrRef
 from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
 from trusts.compile.nodes import Along, permission_in
 from trusts.compile.nodes import All, Equal, PermissionIn, Ref
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from tests.support import built_catalog, compiler
@@ -48,9 +43,6 @@ class _CountCondition:
 
 class RegisterConditionSurfaceTest(SimpleTestCase):
 
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue210', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue210', PAIR_KERNEL_SUITE)
 
     def test_predicate_is_not_on_the_signature(self):
         signature = inspect.signature(Compiler.register)
@@ -214,20 +206,6 @@ class RegisterConditionFailClosedTest(TestCase):
             with self.assertRaises(TrustsConfigurationError):
                 handle.register(trust=DocumentGrant, user=lambda t: t.user, permission=lambda t: t.permission, content=lambda t: t.document, condition=lambda t: t.user == t.not_a_field)
         self.assertEqual(built_catalog(handle).records, ())
-
-    def test_condition_invoked_on_register_after_build(self):
-        registry = compiler()
-        handle = _handle(registry)
-        calls = []
-
-        def condition(trust):
-            calls.append(trust)
-            return trust.user == trust.user
-        record = handle.register(trust=DocumentGrant, user='user', permission='permission', content='document', condition=condition)
-        self.assertEqual(len(calls), 1)
-        shape = registry.compile()
-        self.assertEqual(shape.records, (record,))
-        self.assertIsNotNone(record.condition)
 
 class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
 

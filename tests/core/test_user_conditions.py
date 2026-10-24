@@ -1,5 +1,6 @@
 """Named user conditions compiled into permission SQL (#312)."""
 import inspect
+import yaml
 from asgiref.sync import async_to_sync
 from django.contrib import admin
 from django.contrib.auth import get_user_model
@@ -16,16 +17,12 @@ from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.plan.rewrites import bind_once
 from tests.support import scoped_permitted_content as filter_by_permitted_content
-from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
 from trusts.decorators import _declared_authorization_guards, authorization_required
-from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.models import PermittedQuerySet, PermittedUsersManagerMixin
 urlpatterns = [path('admin/', admin.site.urls)]
 
@@ -34,11 +31,6 @@ def _permission(model, codename):
     permission, _created = Permission.objects.get_or_create(content_type=ct, codename=codename, defaults={'name': codename})
     return permission
 
-class UserConditionSuiteTest(TestCase):
-
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_user_conditions', KERNEL_SUITE)
-        self.assertIn('tests.core.test_user_conditions', PAIR_KERNEL_SUITE)
 
 class UserConditionRegistrationTest(TransactionTestCase):
 
@@ -1067,7 +1059,7 @@ class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
         handle = configured_catalog(DOCUMENT_BACKEND)
         self.assertIsNone(registry.compile().user_override)
         raw = render_configured_policy(registry)
-        document = _load_policy_sql_document(raw)
+        document = yaml.safe_load(raw)
         for content in document['backends'][0]['contents']:
             for row in content.values():
                 if not isinstance(row, dict) or 'sql' not in row:

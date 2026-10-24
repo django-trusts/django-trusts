@@ -14,7 +14,6 @@ from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase, override_settings
 from tests.kernel_host.backends import HostTrustModelBackend
-from tests.backends import MixinOnlyBackend
 from trusts.backends import TrustModelBackendMixin
 from django.contrib.auth.backends import ModelBackend
 from tests.core import KernelHostRequiredMixin
@@ -24,8 +23,6 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
 from tests.support import built_catalog, compiler
 
-from trusts.plan.relations import PlanQueryCompiler
-from trusts.compile.factory import Compiler
 PERM = 'myapp.change_document'
 FILTERED = 'myapp.change_document:non_confidential'
 WRONG = 'myapp.add_document'

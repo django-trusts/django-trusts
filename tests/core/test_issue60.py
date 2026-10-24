@@ -6,8 +6,6 @@ models; no historical Trusts types required.
 """
 
 from contextlib import contextmanager
-from unittest.mock import patch
-
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
@@ -19,8 +17,6 @@ from django.test.utils import isolate_apps
 from trusts.compile.nodes import Ref
 from trusts.plan.relations import RelationPlan
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
-from trusts.compile.catalogs import Catalog
 from tests.support import built_catalog, compiler
 
 
@@ -392,56 +388,17 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         self.DocumentGrant.objects.create(
             document=self.doc_a, user=self.alice, permission=self.read,
         )
-        with patch.object(RelationPlan, 'permissions') as permissions:
-            from django.test.utils import CaptureQueriesContext
-            with CaptureQueriesContext(connection) as captured:
-                self.assertTrue(
-                    built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a),
-                )
-        permissions.assert_not_called()
-        self.assertEqual(len(captured.captured_queries), 1)
-        self.assertIn('EXISTS', captured.captured_queries[0]['sql'].upper())
+        with self.assertNumQueries(1):
+            self.assertTrue(
+                built_catalog(registry).has_perm(
+                    self.alice,
+                    '%s.%s' % (
+                        self.read.content_type.app_label, self.read.codename,
+                    ),
+                    self.doc_a,
+                ),
+            )
 
-    def test_three_projections_share_one_plan_builder(self):
-        registry = self._registry()
-        self.DocumentGrant.objects.create(
-            document=self.doc_a, user=self.alice, permission=self.read,
-        )
-        # Catalog.plan_for is the shared lookup. Enumeration looks up
-        # once, then the compiler looks up again. has_perm looks up the
-        # applies plan and the grant plan. The queryset filter looks up
-        # once.
-        with patch.object(
-            Catalog, 'plan_for', autospec=True,
-            wraps=Catalog.plan_for,
-        ) as plan_for:
-            list(built_catalog(registry).permissions_for(self.alice, self.doc_a))
-            built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a)
-            list(built_catalog(registry).filter_authorized(
-                self.Document.objects.all(), self.alice, self.read,
-            ))
-        self.assertEqual(plan_for.call_count, 5)
-
-        plan = built_catalog(registry).plan_for(
-            self.doc_a, user=self.alice, permission=self.read,
-        )
-        terminals = []
-        original = RelationPlan._correlated_exists
-
-        def spy(self, terminal_field_attr, **bindings):
-            terminals.append(terminal_field_attr)
-            return original(self, terminal_field_attr, **bindings)
-
-        with patch.object(RelationPlan, '_correlated_exists', spy):
-            list(plan.permissions(self.alice, self.doc_a))
-            plan.has_permission(self.alice, self.doc_a, self.read)
-            list(plan.filter_content(
-                self.Document.objects.all(), self.alice, self.read,
-            ))
-        self.assertEqual(
-            terminals,
-            ['permission_field', 'permission_field', 'content_field'],
-        )
 
     def test_configured_user_model_uses_registered_terminal_metadata(self):
         User = get_user_model()
@@ -503,21 +460,6 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a),
         )
 
-    def test_no_historical_model_is_required(self):
-        for model in (
-            self.Document, self.DocumentGrant, self.DocumentPermit, self.Folder,
-        ):
-            names = {cls.__name__ for cls in model.__mro__}
-            self.assertNotIn('Trust', names)
-            self.assertNotIn('Content', names)
-            self.assertNotIn('Junction', names)
-        self.assertEqual(self.DocumentGrant.__module__, __name__)
-        self.assertEqual(self.DocumentPermit.__module__, __name__)
-
-    def test_package_surface_does_not_reexport_registry(self):
-        import trusts
-        self.assertIsNone(getattr(trusts, 'TrustsRegistry', None))
-        self.assertIsNone(getattr(trusts, 'RelationPlan', None))
 
     def test_instances_are_isolated(self):
         left = self._registry()

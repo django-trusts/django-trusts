@@ -9,8 +9,6 @@ from pathlib import Path
 
 from django.test import SimpleTestCase
 
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-
 
 ROOT = Path(__file__).resolve().parents[2]
 ZERO_CANDIDATE = '849baad6109425dc0f35e43ca2f1cf1ee310742c'
@@ -61,25 +59,7 @@ def _init_git_checkout(root):
 
 
 class ExactZeroCandidatePinTest(SimpleTestCase):
-    def test_suite_lists_this_module(self):
-        self.assertIn('tests.core.test_issue149', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue149', PAIR_KERNEL_SUITE)
 
-    def test_ci_and_verifier_pin_the_exact_zero_candidate(self):
-        ci = (ROOT / '.github' / 'workflows' / 'ci.yml').read_text()
-        wheels = (ROOT / 'scripts' / 'verify-companion-wheels.py').read_text()
-        self.assertIn('COMPANION_ZERO_SHA: %s' % ZERO_CANDIDATE, ci)
-        self.assertIn("ZERO_HEAD = '%s'" % ZERO_CANDIDATE, wheels)
-        self.assertNotIn(STALE_ZERO_R5A, ci)
-        self.assertNotIn(STALE_ZERO_R5A, wheels)
-        self.assertNotIn(STALE_ZERO_38, ci)
-        self.assertNotIn(STALE_ZERO_38, wheels)
-        self.assertNotIn('Zero #38 register()', ci)
-        self.assertNotIn('Zero #38 register()', wheels)
-        wheels_mod = _load_companion_wheels()
-        self.assertEqual(wheels_mod.ZERO_HEAD, ZERO_CANDIDATE)
-        self.assertIn('assert_zero_checkout_matches_head(zero_root)', wheels)
-        self.assertNotIn("print('zero_head', ZERO_HEAD)", wheels)
 
     def test_verifier_fails_when_checkout_head_does_not_match(self):
         wheels_mod = _load_companion_wheels()

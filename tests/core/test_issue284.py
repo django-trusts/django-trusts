@@ -6,27 +6,26 @@ unauthenticated users stay denied when it is true. Superuser shortcuts
 and explicit conditions stay in place.
 """
 import datetime
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import AnonymousUser, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
-from django.db.models import Q
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import isolate_apps, override_settings
 from tests.core import KernelHostRequiredMixin, kernel_host_listed
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from tests.support import scoped_permitted_content as filter_by_permitted_content, built_catalog, compiler
-from trusts.plan.relations import PlanQueryCompiler
+from tests.support import (
+    scoped_permitted_content as filter_by_permitted_content,
+    built_catalog,
+    compiler,
+    listed_relationship,
+)
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import Compiler
 from trusts.models import AuthorizedQuerySet, PermittedQuerySet, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.support import install_class_handle
 
 PERM = 'myapp.change_document'
 
@@ -38,11 +37,6 @@ def _permission(model, codename):
 def _pks(queryset):
     return set(queryset.values_list('pk', flat=True))
 
-class Issue284SuiteRegistrationTest(TestCase):
-
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue284', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue284', PAIR_KERNEL_SUITE)
 
 class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
 
@@ -95,12 +89,12 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
         with self.assertNumQueries(0):
             self.assertEqual(_pks(permitted.permitted(self.change, anonymous, skip_is_active=True)), set())
             self.assertFalse(self.backend.has_perm(anonymous, PERM, self.open_doc, skip_is_active=True))
-            with patch('trusts.compile.catalogs.granted') as compiled:
-                denied = Document.objects.authorized(anonymous, self.change)
-                audited = Document.objects.authorized(anonymous, self.change, skip_is_active=True)
-                self.assertEqual(_pks(denied), set())
-                self.assertEqual(_pks(audited), set())
-            compiled.assert_not_called()
+            denied = Document.objects.authorized(anonymous, self.change)
+            audited = Document.objects.authorized(anonymous, self.change, skip_is_active=True)
+            self.assertEqual(_pks(denied), set())
+            self.assertEqual(_pks(audited), set())
+            with self.assertRaises(TrustsConfigurationError):
+                Document.objects.authorized(None, self.change)
 
     def test_superuser_shortcut_is_unchanged(self):
         self.assertTrue(self.superuser.has_perm(PERM, self.open_doc))
@@ -313,7 +307,18 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
 
             class Meta:
                 app_label = 'trusts_tests'
-        models_ = (Note, Folder, Row, LocalUser, Bare, LocalUserGrant, FolderGrant)
+
+        class BareGrant(models.Model):
+            note = models.ForeignKey(Note, on_delete=models.CASCADE)
+            holder = models.ForeignKey(Bare, on_delete=models.CASCADE)
+            action = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+        models_ = (
+            Note, Folder, Row, LocalUser, Bare,
+            LocalUserGrant, FolderGrant, BareGrant,
+        )
         with connection.schema_editor() as editor:
             for model in models_:
                 editor.create_model(model)
@@ -329,17 +334,26 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             for holder in (visible, anonymous, guest):
                 LocalUserGrant.objects.create(note=note, holder=holder, action=read)
                 FolderGrant.objects.create(folder=folder, holder=holder, permission=read)
-            with patch('trusts.compile.catalogs.granted', return_value=Q(pk=note.pk)) as compiled:
-                kept = AuthorizedQuerySet(Note).authorized(bare, read)
-                self.assertEqual(_pks(kept), {note.pk})
-            compiled.assert_called()
-            with patch('trusts.compile.catalogs.granted') as compiled:
-                with self.assertNumQueries(0):
-                    for holder in (anonymous, guest):
-                        for include_inactive in (False, True):
-                            rows = AuthorizedQuerySet(Note).authorized(holder, read, skip_is_active=include_inactive)
-                            self.assertEqual(list(rows), [])
-            compiled.assert_not_called()
+            BareGrant.objects.create(note=note, holder=bare, action=read)
+            bare_registry = compiler()
+            bare_grant = Ref(BareGrant)
+            bare_registry.register_relation(
+                content=bare_grant.note,
+                user=bare_grant.holder,
+                permission=bare_grant.action,
+            )
+            with listed_relationship((bare_registry,)):
+                self.assertEqual(
+                    _pks(AuthorizedQuerySet(Note).authorized(bare, read)),
+                    {note.pk},
+                )
+            with self.assertNumQueries(0):
+                for holder in (anonymous, guest):
+                    for include_inactive in (False, True):
+                        rows = AuthorizedQuerySet(Note).authorized(
+                            holder, read, skip_is_active=include_inactive,
+                        )
+                        self.assertEqual(list(rows), [])
             registry = compiler()
             grant = Ref(LocalUserGrant)
             registry.register_relation(content=grant.note, user=grant.holder, permission=grant.action)
