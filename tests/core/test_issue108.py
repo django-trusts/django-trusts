@@ -14,7 +14,9 @@ import tests as tests_module
 from tests.apps import TestsConfig
 from tests.core import KernelHostRequiredMixin, kernel_host_listed
 from tests.kernel_host.apps import HOST_BACKEND
-from tests.support import configured_catalog, sweep_listed_backends
+from tests.support import (
+    app_catalog_path, configured_catalog, read_catalog, sweep_listed_backends,
+)
 from trusts.apps import TrustsConfigMixin
 from trusts.models import PermittedUsersManagerMixin
 
@@ -25,8 +27,10 @@ OUTSIDE = 'tests.gh_permissions.backends.OutsideBackend'
 
 def _app_catalogs():
     return tuple(
-        config.catalog for config in apps.get_app_configs()
+        catalog for config in apps.get_app_configs()
         if isinstance(config, TrustsConfigMixin)
+        for catalog in (read_catalog(config),)
+        if catalog is not None
     )
 
 
@@ -34,8 +38,8 @@ class ImplementationRoutingTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_exact_path_routing_is_the_owning_config(self):
         host = configured_catalog(HOST)
         owner = apps.get_app_config('trusts_kernel_host')
-        self.assertEqual(host.path, owner.catalog_path())
-        self.assertIs(host, owner.catalog)
+        self.assertEqual(host.path, app_catalog_path(owner))
+        self.assertIs(host, read_catalog(owner))
         self.assertEqual(host.family, 'relationship')
 
     def test_backend_outside_a_mixin_app_fails_loud(self):
@@ -60,7 +64,7 @@ class ImplementationReadyTest(KernelHostRequiredMixin, SimpleTestCase):
             before,
         )
         self.assertIn(
-            apps.get_app_config('trusts_kernel_host').catalog_path(),
+            app_catalog_path(apps.get_app_config('trusts_kernel_host')),
             before,
         )
 
@@ -88,9 +92,9 @@ class ImplementationReadyTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_listed_path_is_the_config_label(self):
         catalog = configured_catalog(HOST)
         owner = apps.get_app_config('trusts_kernel_host')
-        self.assertIs(catalog, owner.catalog)
-        self.assertEqual(catalog.path, owner.catalog_path())
-        self.assertEqual(catalog.records, owner.catalog.records)
+        self.assertIs(catalog, read_catalog(owner))
+        self.assertEqual(catalog.path, app_catalog_path(owner))
+        self.assertEqual(catalog.records, read_catalog(owner).records)
 
 
 class MixinCatalogResolveTest(SimpleTestCase):
@@ -119,7 +123,7 @@ class MixinCatalogResolveTest(SimpleTestCase):
 
         manager = GrantUsers()
         manager.model = User
-        held = manager.with_perm('myapp.change_document')
+        held = manager.permitted(object(), 'myapp.change_document')
         self.assertIsInstance(held, QuerySet)
         self.assertIs(held.model, User)
         self.assertEqual(backend.get_all_permissions(object(), None), set())
@@ -128,13 +132,7 @@ class MixinCatalogResolveTest(SimpleTestCase):
         with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
             found = _app_catalogs()
         self.assertIn(host, found)
-        self.assertEqual(
-            len(found),
-            len([
-                config for config in apps.get_app_configs()
-                if isinstance(config, TrustsConfigMixin)
-            ]),
-        )
+        self.assertEqual(len(found), len(_app_catalogs()))
 
     def test_listed_host_catalog_path_is_the_config_class(self):
         if not kernel_host_listed():
@@ -142,10 +140,10 @@ class MixinCatalogResolveTest(SimpleTestCase):
         catalog = configured_catalog(HOST)
         self.assertEqual(
             catalog.path,
-            apps.get_app_config('trusts_kernel_host').catalog_path(),
+            app_catalog_path(apps.get_app_config('trusts_kernel_host')),
         )
         self.assertIs(
-            catalog, apps.get_app_config('trusts_kernel_host').catalog,
+            catalog, read_catalog(apps.get_app_config('trusts_kernel_host')),
         )
 
     def test_live_host_is_the_kernel_suite_catalog(self):

@@ -106,7 +106,7 @@ class ImportOrderStandaloneConstructionTest(SimpleTestCase):
 
     def test_rewrites_import_does_not_load_the_factory(self):
         source = (ROOT / 'trusts' / 'plan' / 'rewrites.py').read_text()
-        self.assertNotIn('trusts.compile.factory', source)
+        self.assertNotIn('trusts.compile.compilers', source)
         stdout = self._run_isolated(
             'from django.conf import settings\n'
             'settings.configure(\n'
@@ -125,10 +125,10 @@ class ImportOrderStandaloneConstructionTest(SimpleTestCase):
             'django.setup()\n'
             'import sys\n'
             'import trusts.plan.rewrites\n'
-            'assert "trusts.compile.factory" not in sys.modules\n'
+            'assert "trusts.compile.compilers" not in sys.modules\n'
             'from trusts.plan.rewrites import bind_once\n'
             'assert bind_once is trusts.plan.rewrites.bind_once\n'
-            'assert "trusts.compile.factory" not in sys.modules\n'
+            'assert "trusts.compile.compilers" not in sys.modules\n'
             'print("rewrites-without-factory")\n'
         )
         self.assertIn('rewrites-without-factory', stdout)
@@ -139,7 +139,7 @@ class LiveEnsureSelfBindTest(KernelHostRequiredMixin, SimpleTestCase):
         catalog = configured_catalog(DOCUMENT_BACKEND)
         found = {
             (model, code)
-            for model, code, record in catalog.iter_permission_conditions()
+            for (_label, code), (model, _tree) in catalog.named_filters.items()
         }
         self.assertIn((Document, 'non_confidential'), found)
 
@@ -182,7 +182,8 @@ class NamedConditionCompilationTest(TransactionTestCase):
             )
             built = built_catalog(registry)
         found = {
-            code for model, code, _tree in built.iter_permission_conditions()
+            code
+            for (_label, code), (model, _tree) in built.named_filters.items()
             if model is Note
         }
         self.assertIn('owned', found)

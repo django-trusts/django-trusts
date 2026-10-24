@@ -23,7 +23,7 @@ from django.test.utils import isolate_apps
 import trusts
 from tests.support import scoped_permitted_content as filter_by_permitted_content, built_catalog, compiler
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import granted
 from trusts.plan.aggregates import all_match, instance_match

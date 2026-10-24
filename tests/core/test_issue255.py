@@ -1,8 +1,8 @@
 """Reverse permission inquiry (#255).
 
-One saved content object and one permission. The private compiler and
-both public adapters return the same rows as ``user.has_perm`` for the
-candidate user queryset. Construction is zero SQL. Evaluation is one
+One saved content object and one permission. ``Catalog.permitted_users``
+and both public adapters return the same rows as ``user.has_perm`` for
+the candidate user queryset. Construction is zero SQL. Evaluation is one
 statement. Core does not add an ``is_active`` exclusion around a custom
 reverse predicate. ``skip_is_active=True`` is passed only to the
 Trusts-owned mixin method.
@@ -23,7 +23,6 @@ from django.test.utils import isolate_apps
 from tests.core import KernelHostRequiredMixin
 from tests.core.test_issue147.test_sql_export import Folder, FolderGrant, _document_handle, _handle as _export_handle
 from tests.myapp.backends import DocumentBackend
-from trusts.plan.users import lock_permitted_users_queryset
 from tests.core.test_issue246 import _tables
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
@@ -190,16 +189,20 @@ def _seal_document_factory(factory):
         built_catalog,
         config_for_class,
         mixin_configs,
+        read_catalog,
+        read_family,
         snapshot_config_catalogs,
+        write_catalog,
     )
     saved = snapshot_config_catalogs()
-    previous = config_for_class(DocumentBackend).catalog
-    family = config_for_class(DocumentBackend).family if previous is None else previous.family
+    owner = config_for_class(DocumentBackend)
+    previous = read_catalog(owner)
+    family = read_family(owner) if previous is None else previous.family
     factory.path = DOCUMENT_BACKEND
     factory.family = family
     catalog = built_catalog(factory)
     for config in mixin_configs():
-        config.catalog = catalog
+        write_catalog(config, catalog)
     return saved
 
 @contextmanager
@@ -249,7 +252,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
         handle.register(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
         handle.register(trust=FolderPermit, user='user', permission='permission', content='directory', along=('directory__parent', 2))
         folder = Folder(pk=1)
-        queryset = lock_permitted_users_queryset(built_catalog(handle), folder, Permission(pk=1))
+        queryset = built_catalog(handle).permitted_users(folder, Permission(pk=1))
         self.assertIn('WITH RECURSIVE', str(queryset.query))
         document = yaml.safe_load(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
@@ -839,7 +842,7 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
                     found = _pks(folder.get_permitted_users(permission))
                 expected = {user.pk for user in candidates if _object_backend_allows(user, permission.user_perm_str, folder)}
                 self.assertEqual(found, expected)
-                locked = _pks(lock_permitted_users_queryset(built_catalog(self.handle), folder, permission))
+                locked = _pks(built_catalog(self.handle).permitted_users(folder, permission))
                 self.assertEqual(locked, found)
         self.assertIn(self.alice.pk, _pks(at_bound.get_permitted_users(permission)))
         self.assertNotIn(self.alice.pk, _pks(beyond.get_permitted_users(permission)))
@@ -898,7 +901,7 @@ def _reverse_agrees(test, handle, content, perm, candidates):
     expected = {user.pk for user in candidates if _object_backend_allows(user, code, content)}
     test.assertEqual(found, expected)
     test.assertEqual(_pks(_user_manager().permitted(content, perm)), found)
-    test.assertEqual(_pks(lock_permitted_users_queryset(built_catalog(handle), content, perm)), found)
+    test.assertEqual(_pks(built_catalog(handle).permitted_users(content, perm)), found)
     return found
 
 def _assert_along_lock(test, handle, specs, *, group=False):

@@ -9,7 +9,7 @@ from django.test.utils import isolate_apps
 from tests.apps import TestsConfig
 from django.apps import apps
 
-from tests.support import configured_catalog, compiler
+from tests.support import app_catalog_path, configured_catalog, compiler
 from tests.core import KernelHostRequiredMixin, kernel_host_listed
 from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
 from trusts.apps import TrustsConfigMixin
@@ -74,7 +74,7 @@ class ContributorIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_host_ready_does_not_replace_or_donate_document(self):
         host = apps.get_app_config('trusts_kernel_host')
         self.assertEqual(
-            configured_catalog(HOST_BACKEND).path, host.catalog_path(),
+            configured_catalog(HOST_BACKEND).path, app_catalog_path(host),
         )
         catalog = configured_catalog(HOST_BACKEND)
         before = catalog.records

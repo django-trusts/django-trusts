@@ -23,7 +23,6 @@ from trusts.inspect.checks import (
     CHECK_ID_OBSOLETE_CALLBACK_SETTING,
     check_obsolete_legacy_callback_setting,
 )
-from trusts.plan.conditions import obsolete_legacy_callback_setting_enabled
 from trusts.plan.grammar import Tree
 
 
@@ -442,10 +441,8 @@ class NamedFilterCheckTest(SimpleTestCase):
         registry.add_named_filter(Note, 'missing', lambda u, p, o: u == o.owner)
 
     def test_obsolete_setting_is_check_error_and_does_not_enable_callbacks(self):
-        self.assertFalse(obsolete_legacy_callback_setting_enabled())
         self.assertEqual(check_obsolete_legacy_callback_setting(None), [])
         with override_settings(TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS=True):
-            self.assertTrue(obsolete_legacy_callback_setting_enabled())
             messages = check_obsolete_legacy_callback_setting(None)
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0].id, CHECK_ID_OBSOLETE_CALLBACK_SETTING)
@@ -462,15 +459,19 @@ class NamedFilterCheckTest(SimpleTestCase):
         owner_b = compiler()
         owner_a.add_named_filter(Note, 'own', lambda u, p, o: u == o.owner)
         owner_b.add_named_filter(Note, 'own', lambda u, p, o: o.title == 'keep')
-        with override_catalog(
-            HostTrustModelBackend, owner_a,
+        with override_settings(AUTHENTICATION_BACKENDS=(
             'tests.kernel_host.backends.HostTrustModelBackend',
-        ):
+            'tests.backends.MixinOnlyBackend',
+        )):
             with override_catalog(
-                MixinOnlyBackend, owner_b,
-                'tests.backends.MixinOnlyBackend',
+                HostTrustModelBackend, owner_a,
+                'tests.kernel_host.backends.HostTrustModelBackend',
             ):
-                document = policy_document()
+                with override_catalog(
+                    MixinOnlyBackend, owner_b,
+                    'tests.backends.MixinOnlyBackend',
+                ):
+                    document = policy_document()
         own_sql = [
             named['sql']
             for row in document['backends']

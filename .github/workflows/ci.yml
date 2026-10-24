@@ -9,10 +9,10 @@ permissions:
   contents: read
 
 env:
-  # Zero registry-at-models, PR #54, CI run 39756967058.
-  COMPANION_ZERO_SHA: 66f21235988264f0ea23f3da45efb54cb768bf29
-  # Exact GH Permissions candidate companion.
-  COMPANION_GH_SHA: 3bd80f82199b37cd34c1028ecd669e88711c3270
+  # Zero #57.
+  COMPANION_ZERO_SHA: 3d91640a38933a70b6c0ffdd9ce0878d323185be
+  # gh-permissions #56.
+  COMPANION_GH_SHA: e22b81764b658df5da65e5b57420d6d6578377c9
 
 jobs:
   tests:

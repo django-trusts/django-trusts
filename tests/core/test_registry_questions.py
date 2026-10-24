@@ -9,6 +9,7 @@ handle-based aggregate is the comparison
 (the handle is the subject there), SQL is compared literally;
 otherwise results are compared.
 """
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
@@ -16,7 +17,8 @@ from django.db import models
 from django.test import TransactionTestCase
 from django.test.utils import isolate_apps
 from tests.core.test_issue282 import _tables
-from trusts.compile.nodes import Ref
+from tests.myapp.backends import DocumentBackend
+from trusts.compile.graph import Ref
 from trusts.plan.aggregates import instance_match
 from trusts.compile.catalogs import Question
 from tests.support import built_catalog, compiler
@@ -209,6 +211,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.assertEqual([q.name for q in seen], ['permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users', 'filter_by_permitted_content'])
         prefix_q = seen[-1]
         self.assertIs(prefix_q.content_model, self.Document)
+        self.assertEqual(prefix_q.prefixes, (self.Folder,))
         self.assertEqual(_pks(prefix_q.question(self.Folder.objects.all(), self.alice, self.read)), {self.folder_a.pk})
         delegated = self._registry(delegated=True)
         self.Grant.objects.create(user=self.alice, document=self.doc_b, permission=self.read)
@@ -225,6 +228,41 @@ class RegistryQuestionsTest(TransactionTestCase):
         by_name = {q.name: q for q in seen2}
         self.assertEqual(len(by_name['permitted'].delegations), 1)
         self.assertTrue(by_name['has_perm'].question(self.bob, self.doc_b, self.read))
+
+    def test_named_filter_question_follows_content_questions(self):
+        registry = self._registry()
+        registry.add_named_filter(self.Document, 'open', lambda u, p, o: o.title == 'a')
+        built = built_catalog(registry)
+        seen = []
+
+        class _Visitor(object):
+
+            def visit(self, question):
+                seen.append(question)
+                return question.name
+        names = built.walk_questions(_Visitor())
+        self.assertEqual(names[:-1], ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'))
+        named = seen[-1]
+        self.assertEqual(named.name, 'named_filter')
+        self.assertEqual(named.code, 'open')
+        self.assertIs(named.content_model, self.Document)
+        self.assertEqual(named.records, ())
+        self.assertEqual(_pks(named.question(self.alice, self.read)), {self.doc_a.pk})
+
+    def test_backend_walk_questions_includes_named_filter(self):
+        if not apps.is_installed('tests.myapp'):
+            self.skipTest('document app is not installed')
+        seen = []
+
+        class _Visitor(object):
+
+            def visit(self, question):
+                seen.append(question)
+                return question.name
+        names = DocumentBackend().walk_questions(_Visitor())
+        self.assertIn('permitted', names)
+        self.assertIn('named_filter', names)
+        self.assertTrue(all(isinstance(item, Question) for item in seen))
 
     def test_group_kind_and_empty_registry(self):
         registry = self._registry(group=True)

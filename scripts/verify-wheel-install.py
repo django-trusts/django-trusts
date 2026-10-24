@@ -170,7 +170,7 @@ def main() -> int:
     import trusts.apps as apps_mod
     from trusts.apps import TrustsConfigMixin
     from trusts.backends import TrustModelBackendMixin
-    from trusts.apps import Recorder
+    from trusts.backends import Recorder
     from trusts.decorators import filter_by_permitted_content
     from trusts.errors import PermissionConditionError
     from trusts.models import AuthorizedManager, AuthorizedManagerMixin, AuthorizedQuerySet

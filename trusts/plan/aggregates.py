@@ -5,9 +5,11 @@ __all__ = []
 from functools import reduce
 from operator import or_
 
+from django.db import router
 from django.db.models import Count, Exists, OuterRef, Q
+from django.db.models.sql.constants import SINGLE
 
-from trusts.plan.rewrites import bind_once
+from trusts.plan.rewrites import bind_once, bound_exists_query
 from trusts.plan.hops import require_instance
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import (
@@ -57,12 +59,28 @@ def all_match(catalog, candidates, user, permission, *, kind='complete',
     return stats['total'] > 0 and stats['lacking'] == 0
 
 
-def instance_match(catalog, obj, user, permission, *, kind='complete', extra_q=None,
-                   permission_model=None, skipped=()):
-    """One grant EXISTS for ``obj`` through ``catalog`` only.
+class _ExistsQuery(object):
+    """The exists statement ``bound_exists_query`` built for one instance.
 
-    ``None`` when the catalog is inapplicable. ``extra_q`` is an optional
-    overlay (AND); it never creates a grant.
+    Policy rendering compiles ``query``. Evaluating the object runs that
+    same statement and is true when a row is held.
+    """
+
+    def __init__(self, query, model):
+        self.query = query
+        self.model = model
+
+    def __bool__(self):
+        compiler = self.query.get_compiler(using=router.db_for_read(self.model))
+        return bool(compiler.execute_sql(SINGLE))
+
+
+def _instance_exists_query(catalog, obj, user, permission, *, kind='complete',
+                           extra_q=None, permission_model=None, skipped=()):
+    """Exists query for one saved ``obj``, or ``None`` when inapplicable.
+
+    This is the statement the ``has_perm`` entry returns and the statement
+    ``instance_match`` runs.
     """
     granted_q = _compile_granted(
         catalog, obj, user, permission, kind=kind,
@@ -73,9 +91,26 @@ def instance_match(catalog, obj, user, permission, *, kind='complete', extra_q=N
         return None
     if extra_q is not None:
         granted_q = granted_q & extra_q
-    return bind_once(obj._meta.concrete_model._default_manager.filter(
+    model = obj._meta.concrete_model
+    return _ExistsQuery(bound_exists_query(model._default_manager.filter(
         pk=obj.pk,
-    ).filter(granted_q), user_model=catalog.user_model).exists()
+    ).filter(granted_q), user_model=catalog.user_model), model)
+
+
+def instance_match(catalog, obj, user, permission, *, kind='complete', extra_q=None,
+                   permission_model=None, skipped=()):
+    """One grant EXISTS for ``obj`` through ``catalog`` only.
+
+    ``None`` when the catalog is inapplicable. ``extra_q`` is an optional
+    overlay (AND); it never creates a grant.
+    """
+    inquiry = _instance_exists_query(
+        catalog, obj, user, permission, kind=kind, extra_q=extra_q,
+        permission_model=permission_model, skipped=skipped,
+    )
+    if inquiry is None:
+        return None
+    return bool(inquiry)
 
 
 def _compile_common_permissions(catalog, candidates, user, *, kind='complete',

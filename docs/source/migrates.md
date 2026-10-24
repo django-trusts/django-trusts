@@ -106,12 +106,12 @@ Migration-bot checklist:
 
 ## `Meta.permission_conditions` removed (#330)
 
-Named filters are not a model `Meta` option. Register the predicate on
-the app config's recorder.
+Named filters are not a model `Meta` option. Register the predicate with
+`get_registry().add_named_filter(...)`.
 
 | | Old | New |
 | --- | --- | --- |
-| Named filter | `class Meta: permission_conditions = (('name', predicate),)` | `recorder.add_named_filter(Model, 'name', predicate)` in `AppConfig.ready()` |
+| Named filter | `class Meta: permission_conditions = (('name', predicate),)` | `get_registry().add_named_filter(Model, 'name', predicate)` before `super().ready()` |
 
 django-trusts does not append `permission_conditions` to
 `django.db.models.options.DEFAULT_NAMES`.
@@ -125,24 +125,24 @@ Migration-bot checklist:
 `TrustsImplementationConfig` is gone. Subclass `TrustsConfigMixin`.
 List the backend's dotted path in `AUTHENTICATION_BACKENDS`. That
 module must live in the app whose config extends `TrustsConfigMixin`.
-Call `self.recorder.register(...)` and `self.recorder.add_named_filter(...)`
-before `super().ready()`. `ready()` freezes the recorder and builds
-the catalog. A call after `super().ready()` raises
-`TrustsConfigurationError`.
+Call `Backend().get_registry().register(...)` and
+`get_registry().add_named_filter(...)` before `super().ready()`.
+`ready()` freezes that log and builds the catalog. A call after
+`super().ready()` raises `TrustsConfigurationError`.
 
 | | Old | New |
 | --- | --- | --- |
 | App config | `class DocumentsConfig(TrustsImplementationConfig)` | `class DocumentsConfig(TrustsConfigMixin)` |
 | Which backend | `trusts_backend_paths = ("documents.backends.DocumentBackend",)` | Delete `trusts_backend_paths`. The same path belongs in `AUTHENTICATION_BACKENDS`. |
-| Registration | `backend = self.configured_backend()` then `backend.register(...)` | `self.recorder.register(...)` before `super().ready()` |
+| Registration | `backend = self.configured_backend()` then `backend.register(...)` | `Backend().get_registry().register(...)` before `super().ready()` |
 | Handle list | `configured_handles()` | Gone. Each listed Trusts backend answers from its app's catalog. |
-| Config does not extend the mixin | Ownership was `trusts_backend_paths` on `TrustsImplementationConfig` | Constructing the backend raises `TrustsMixinRequired`. `manage.py check` reports `trusts.E012` (`Extend TrustsConfigMixin on the app config.` or `Move the backend into an app whose config extends TrustsConfigMixin.`). |
+| Config does not extend the mixin | Ownership was `trusts_backend_paths` on `TrustsImplementationConfig` | Constructing the backend does not check the mixin. `manage.py check` reports `trusts.E012` when that app config has no `get_or_create_config` (`Extend TrustsConfigMixin on the app config.` or `Move the backend into an app whose config extends TrustsConfigMixin.`). |
 | Backend does not construct | Import or construction failure inside `ready()` | `trusts.E011`: `Authentication backend %s could not be built`. Hint: `Fix AUTHENTICATION_BACKENDS so the backend constructs.` |
 | Queryset classes | `from trusts.query import AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager` | `from trusts.models import AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager`. `trusts.query` is gone. |
 | `is_active_principal` | `trusts.query.is_active_principal` | Removed with that module. |
-| Backend compiler | `query_compiler = PlanQueryCompiler()` on the backend class. `compiler_for_class` required `complete_exists` and `group_exists`. | Remove it from the backend. An optional `query_compiler` belongs on the `TrustsConfigMixin` subclass (`None` uses the default). |
+| Backend compiler | `query_compiler = PlanQueryCompiler()` on the backend class. `compiler_for_class` required `complete_exists` and `group_exists`. | An optional `query_compiler` belongs on the backend class (`None` uses the default). |
 | Compiler check | `trusts.E004` from `check_query_compilers` | Removed, along with `compiler_for_class`. Drop `trusts.E004` from `SILENCED_SYSTEM_CHECKS`. |
-| Family override | `_authorization_family` on `TrustsImplementationConfig` | `family` on `TrustsConfigMixin` (default `'relationship'`) |
+| Family override | `_authorization_family` on `TrustsImplementationConfig` | `family` on the backend class (default `'relationship'`) |
 | `filter_authorized_scopes(..., handles=)` | Backend objects, or every relationship-family handle | `filter_by_permitted_content(..., backend=)` in `trusts.decorators`. See the next section. `handles=` is not accepted. |
 | `authorization_required` when no listed backend has a plan for the model | `TrustsConfigurationError` at request time (`authorization_required has no applicable auth.Permission plan`) | `PermissionDenied` when the row exists, `Http404` when it does not. A catalog that did not register the model contributes nothing and does not raise. `trusts.E008` still reports the gap from `manage.py check`. Selected condition names that no participating backend owns together still raise `TrustsConfigurationError` before a grant query. |
 
@@ -169,7 +169,7 @@ class DocumentsConfig(TrustsConfigMixin):
     name = "documents"
 
     def ready(self):
-        self.recorder.register(
+        DocumentBackend().get_registry().register(
             trust=DocumentPermission,
             user=lambda t: t.user,
             permission=lambda t: t.permission,

@@ -10,7 +10,9 @@ from typing import TypeVar
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 
-from django.core.exceptions import FieldDoesNotExist
+from django.apps import apps as django_apps
+from django.conf import settings
+from django.core.exceptions import AppRegistryNotReady, FieldDoesNotExist
 from django.db.models import Model, Q
 
 from trusts.plan.hops import (
@@ -21,8 +23,9 @@ from trusts.plan.hops import (
     require_instance,
     resolved_hop,
 )
-from trusts.compile.nodes import (
+from trusts.compile.graph import (
     Along,
+    AlongWalk,
     Ref,
     _is_model_class,
     _require_ref,
@@ -30,15 +33,12 @@ from trusts.compile.nodes import (
 from trusts.plan.grammar import (
     Symbol,
     Tree,
-    inquiry_partner,
     invoke,
-    is_inquiry,
     is_predicate,
     symbol_path,
     symbol_token,
     unsupported,
 )
-from trusts.compile.paths import AlongWalk
 from trusts.compile.resolution import (
     _SUFFIX_KINDS,
     _append_group_permissions,
@@ -330,20 +330,24 @@ def _invoke(linked, name, head, kw, *args, **kwargs):
     return getattr(linked[0], name)(*head, *args, **{**kw, **kwargs})
 
 
-def question_descriptors(records, delegations, linked):
+def question_descriptors(records, delegations, linked, named_filters):
     """Questions for one built catalog, in document order.
 
     ``linked`` is a one-item list. ``Compiler.compile`` stores the catalog
     there before returning it, so each question calls that catalog.
+    Content-group questions come first. Named-filter questions follow,
+    in registration order.
     """
-    questions, prefixes = [], {}
+    questions = []
     for model, group_records, group_delegations in content_groups(
         records, delegations,
     ):
         found = prefix_models(group_records, group_delegations)
-        prefixes[model] = found
         questions.extend(
-            Question(name, model, group_records, group_delegations, fn)
+            Question(
+                name, model, group_records, group_delegations, fn,
+                prefixes=found if name == 'filter_by_permitted_content' else (),
+            )
             for name, fn, keep in (
                 (
                     'permitted',
@@ -354,7 +358,7 @@ def question_descriptors(records, delegations, linked):
                 ),
                 (
                     'has_perm',
-                    partial(_invoke, linked, 'has_permission', (), {}),
+                    partial(_invoke, linked, '_question_has_perm', (), {}),
                     True,
                 ),
                 (
@@ -385,7 +389,15 @@ def question_descriptors(records, delegations, linked):
             )
             if keep
         )
-    return tuple(questions), prefixes
+    for (_label, code), (model, tree) in named_filters.items():
+        questions.append(Question(
+            'named_filter', model, (), (),
+            partial(
+                _invoke, linked, '_question_named_filter', (model, tree), {},
+            ),
+            code=code, expr=tree,
+        ))
+    return tuple(questions)
 
 
 def _prepare_conditions(filters, user_model):
@@ -1037,8 +1049,8 @@ class Compiler(object):
             self.records, self.delegations, model, stored, rules, override_q,
             self.query_compiler)
         linked = []
-        questions, prefixes = question_descriptors(
-            self.records, self.delegations, linked)
+        questions = question_descriptors(
+            self.records, self.delegations, linked, self._named_filters)
         self._catalog = Catalog(
             records=self.records, delegations=self.delegations,
             named_filters=MappingProxyType(dict(self._named_filters)),
@@ -1047,7 +1059,6 @@ class Compiler(object):
             user_rules=rules, override_q=override_q,
             plans=MappingProxyType(dict(plans)),
             questions=questions,
-            content_prefixes=MappingProxyType(dict(prefixes)),
             prepared_conditions=MappingProxyType(
                 _prepare_conditions(self._named_filters, model),
             ),
@@ -1076,17 +1087,6 @@ class Compiler(object):
                 'Record user conditions and the override before '
                 'register().'
             )
-
-
-def probe_along_capabilities(connection):
-    """Execute a plain recursive CTE. Raises on failure."""
-    with connection.cursor() as cursor:
-        cursor.execute(
-            'WITH RECURSIVE t(n) AS ('
-            'SELECT 0 UNION ALL SELECT n + 1 FROM t WHERE n < 0'
-            ') SELECT n FROM t'
-        )
-        cursor.fetchone()
 
 
 def _validate_equal_paths(left_path, right_path, root):
@@ -1134,10 +1134,6 @@ def _row_paths_comparable(left_path, right_path, root):
             raise
         return False
     return True
-
-
-def _compares_bare_inquiry(node):
-    return is_inquiry(node.left) or is_inquiry(node.right)
 
 
 def _require_row_field(node):
@@ -1216,9 +1212,9 @@ def _validate_row_comparison(node, root, *, delegated, matches):
     where = _relation_where(delegated)
     _reject_inquiry_hop(node.left, where, member=False)
     _reject_inquiry_hop(node.right, where, member=False)
-    if _compares_bare_inquiry(node):
-        column = inquiry_partner(node)
-        if column is None or column.kind != 'field' or not column.path:
+    column = node.inquiry_partner()
+    if column is not None:
+        if column.kind != 'field' or not column.path:
             raise unsupported(
                 'Comparing the requested permission to a constant',
                 where,
@@ -1254,7 +1250,7 @@ def _validate_row_contains(node, root, permission_model, *,
     if member.kind == 'const':
         check_const_member(root, node.left.path, node.right.value)
         return
-    if is_inquiry(member):
+    if node.inquiry_partner() is not None:
         _path, model, _field, target = _resolve_permission_path(
             root, node.left.path,
         )
@@ -1836,3 +1832,72 @@ def _bind_public_along(root, along):
         )
     path, bound = along
     return Along(_public_ref(root, path, 'along'), bound)
+
+
+class RegistrationListener(object):
+    """Checks one registration call, then lets the log record it.
+
+    A missing field, a reverse relation, or a model that is not loaded
+    yet is left for ``ready``. Anything else raises at this call.
+    """
+
+    def __init__(self):
+        self._inner, self._saw_register = None, False
+
+    def register(self, **kwargs):
+        self._run('register', (), kwargs)
+
+    def add_named_filter(self, model, code, predicate):
+        self._run('add_named_filter', (model, code, predicate), {})
+
+    def set_user_condition(self, name, expr, on='*'):
+        self._run('set_user_condition', (name, expr), {'on': on})
+
+    def set_user_override(self, name, expr, on='user'):
+        self._run('set_user_override', (name, expr), {'on': on})
+
+    def _run(self, name, args, kwargs):
+        if name in ('set_user_condition', 'set_user_override') and self._saw_register:
+            raise TrustsConfigurationError(
+                'Record user conditions and the override before register().'
+            )
+        try:
+            inner = self._compiler()
+            if inner is None and name == 'register':
+                Compiler.build_public_registration(**kwargs)
+            elif inner is not None:
+                getattr(inner, name)(*args, **kwargs)
+        except (TrustsConfigurationError, AppRegistryNotReady) as exc:
+            if not _deferrable(exc):
+                raise
+        if name == 'register':
+            self._saw_register = True
+
+    def _compiler(self):
+        if self._inner is not None:
+            return self._inner
+        user = _loaded_user_model()
+        if user is None:
+            return None
+        self._inner = Compiler(
+            user_model=user, path='trusts.compile.compilers',
+            family='relationship',
+            query_compiler=Compiler.default_query_compiler(),
+        )
+        return self._inner
+
+
+def _deferrable(exc):
+    text = str(exc)
+    return isinstance(exc, AppRegistryNotReady) or any(
+        piece in text for piece in (
+            'missing field', 'reverse', 'does not terminate on a model',
+        ))
+
+
+def _loaded_user_model():
+    try:
+        return django_apps.get_model(
+            *settings.AUTH_USER_MODEL.split('.'), require_ready=False)
+    except (LookupError, ValueError):
+        return None

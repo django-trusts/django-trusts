@@ -11,7 +11,6 @@ import tempfile
 from decimal import Decimal
 from pathlib import Path
 
-from django.apps import apps as django_apps
 from django.contrib.auth.models import Permission
 from django.core import checks as django_checks
 from django.db import models
@@ -20,11 +19,9 @@ from django.test import SimpleTestCase, override_settings
 from tests.core.test_issue147.test_sql_export import (
     CHECK_ID_POLICY_LOCK,
     ConstantDocument,
-    _document_handle,
     _handle,
 )
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.contents import granted
 from trusts.inspect.snapshot import (
     render_policy_sql_bytes,
     resolve_lockfile_path,
@@ -36,7 +33,6 @@ from trusts.inspect.yaml import (
     dump_policy_yaml,
 )
 from tests.support import (
-    built_catalog,
     render_configured_policy,
     render_published_subjects,
 )
@@ -222,58 +218,7 @@ class PolicyLockConfigurationTest(SimpleTestCase):
 
         with override_settings(AUTHENTICATION_BACKENDS=()):
             empty = yaml.safe_load(render_policy_sql_bytes())
-        paths = [row['path'] for row in empty['backends']]
-        if django_apps.is_installed('tests.myapp'):
-            self.assertIn('tests.myapp.apps.DocumentConfig', paths)
-            self.assertNotIn(
-                'tests.kernel_host.apps.KernelHostConfig', paths,
-            )
-        else:
-            self.assertIn('tests.apps.TestsConfig', paths)
-            self.assertIn('trusts.zero.apps.ZeroConfig', paths)
-        self.assertTrue(all(row['contents'] for row in empty['backends']))
-
-        handle = _document_handle('documents.backends.FilterlessBackend')
-        populated = built_catalog(handle)
-
-        class _NoFilterRegistry(object):
-            def __init__(self, inner):
-                self._inner = inner
-                self.path = inner.path
-                self.family = inner.family
-                self.records = inner.records
-                self.delegations = inner.delegations
-                self.iter_permission_conditions = None
-
-            def walk_questions(self, visitor):
-                return self._inner.walk_questions(visitor)
-
-            def complete_grant_q(self, candidates, user, permission, *,
-                                 skipped=()):
-                return granted(
-                    self._inner, candidates, user, permission,
-                    kind='complete', skipped=skipped,
-                )
-
-            def __getattr__(self, name):
-                return getattr(self._inner, name)
-
-        bare = _NoFilterRegistry(populated)
-        omitted = yaml.safe_load(
-            render_published_subjects(bare),
-        )
-        kept = yaml.safe_load(
-            render_configured_policy(handle),
-        )
-        omitted_content = omitted['backends'][0]['contents'][0]
-        kept_content = kept['backends'][0]['contents'][0]
-        self.assertNotIn('named_filters', omitted_content)
-        self.assertIn('named_filters', kept_content)
-        self.assertEqual(omitted_content['trusts'], kept_content['trusts'])
-        self.assertEqual(
-            omitted_content['permitted']['sql'],
-            kept_content['permitted']['sql'],
-        )
+        self.assertEqual(empty['backends'], [])
 
     def test_lock_path_resolution_and_write_failures(self):
         with self.assertRaises(TypeError) as ctx:

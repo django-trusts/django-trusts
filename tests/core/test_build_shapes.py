@@ -19,14 +19,14 @@ from django.test.utils import isolate_apps
 
 from trusts.compile.catalogs import Catalog
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan
-from trusts.compile.factory import (
+from trusts.compile.compilers import (
     relation_plan,
     PublicRegistration,
     RegisteredDelegation,
     RegisteredRelation,
     Compiler,
 )
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
 from tests.support import built_catalog, forget_models, compiler
 
@@ -311,7 +311,10 @@ class BuildCatalogShapeTest(SimpleTestCase):
         self.assertEqual(catalog.records, registry.records)
         self.assertEqual(catalog.delegations, ())
         self.assertEqual(
-            list(catalog.iter_permission_conditions()),
+            [
+                (model, code, tree)
+                for (_label, code), (model, tree) in catalog.named_filters.items()
+            ],
             [(Document, 'owned', condition)],
         )
         again = registry.compile()

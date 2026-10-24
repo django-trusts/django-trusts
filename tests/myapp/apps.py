@@ -21,9 +21,13 @@ class DocumentConfig(trusts_apps.TrustsConfigMixin):
         # models.py already logged this process. override_settings builds
         # a new config and does not re-import models.py, so only an empty
         # config is filled here, before the freeze.
-        if self.catalog is None and not getattr(
+        from tests.support import read_catalog
+
+        if read_catalog(self) is None and not getattr(
             self, '_registered_from_models', False,
         ):
+            from tests.myapp.backends import DocumentBackend
             from tests.myapp.models import register_document_app
-            register_document_app(self.recorder)
+            register_document_app(DocumentBackend().get_registry())
+            self._registered_from_models = True
         super().ready()

@@ -13,8 +13,10 @@ from django.test.utils import isolate_apps
 from tests.core import KernelHostRequiredMixin
 from tests.apps import TestsConfig
 from tests.support import (
+    app_catalog_path,
     built_catalog,
     configured_catalog,
+    read_catalog,
     sweep_listed_backends,
     compiler,
 )
@@ -40,7 +42,7 @@ def _change_document():
     return permission
 
 def _contribute_document(registry):
-    from trusts.compile.nodes import Ref
+    from trusts.compile.graph import Ref
     j = Ref(DocumentGrant)
     registry.register_relation(content=j.document, user=j.user, permission=j.permission)
 
@@ -56,10 +58,10 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         catalog = configured_catalog(HOST)
         self.assertEqual(
             catalog.path,
-            apps.get_app_config('trusts_kernel_host').catalog_path(),
+            app_catalog_path(apps.get_app_config('trusts_kernel_host')),
         )
         self.assertIs(
-            catalog, apps.get_app_config('trusts_kernel_host').catalog,
+            catalog, read_catalog(apps.get_app_config('trusts_kernel_host')),
         )
 
     def test_duplicate_identical_paths_do_not_raise(self):
@@ -69,7 +71,7 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
             sweep_listed_backends()
         self.assertEqual(
             configured_catalog(HOST).path,
-            apps.get_app_config('trusts_kernel_host').catalog_path(),
+            app_catalog_path(apps.get_app_config('trusts_kernel_host')),
         )
 
 
@@ -78,14 +80,14 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
 
         self.assertEqual(
             configured_catalog(HOST).path,
-            apps.get_app_config('trusts_kernel_host').catalog_path(),
+            app_catalog_path(apps.get_app_config('trusts_kernel_host')),
         )
         handle_doc = configured_catalog(DOCUMENT)
         self.assertEqual(
             handle_doc.path,
-            apps.get_app_config('myapp').catalog_path(),
+            app_catalog_path(apps.get_app_config('myapp')),
         )
-        self.assertIs(handle_doc, apps.get_app_config('myapp').catalog)
+        self.assertIs(handle_doc, read_catalog(apps.get_app_config('myapp')))
 
     def test_ready_does_not_replace_store_or_registry(self):
         from django.apps import apps

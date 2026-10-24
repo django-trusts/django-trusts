@@ -11,3 +11,8 @@ class KernelHostConfig(trusts_apps.TrustsConfigMixin):
     label = 'trusts_kernel_host'
     default = False
     default_auto_field = 'django.db.models.AutoField'
+
+    def ready(self):
+        from tests.kernel_host.backends import HostTrustModelBackend
+        HostTrustModelBackend().get_registry()
+        super().ready()

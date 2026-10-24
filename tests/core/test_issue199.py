@@ -20,6 +20,7 @@ from tests.core import KernelHostRequiredMixin
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import TrustsConfigMixin
+from trusts.compile.appbuild import build_app_catalog
 
 
 PERM = 'myapp.change_document'
@@ -214,7 +215,15 @@ class ImplementationOwnershipReadyTest(TestCase):
     def test_non_mixin_path_is_skipped_at_ready_with_zero_sql(self):
         from django.apps import apps
 
+        from tests.support import read_catalog
+        from trusts.backends import RELATIONSHIP_BACKEND_KEY, RelationshipBackend
+
         config = _bind(NonMixinOwnerConfig, ready=False)
+        config.get_or_create_config(
+            RELATIONSHIP_BACKEND_KEY,
+            RelationshipBackend,
+            on_ready=build_app_catalog,
+        )
         before = configured_catalog(HOST)
         self.assertFalse(hasattr(config, 'registries'))
         with override_settings(AUTHENTICATION_BACKENDS=(MODEL_BACKEND, HOST)):
@@ -222,14 +231,17 @@ class ImplementationOwnershipReadyTest(TestCase):
                 config.ready()
         self.assertIs(configured_catalog(HOST), before)
         paths = [
-            installed.catalog.path
+            catalog.path
             for installed in apps.get_app_configs()
             if isinstance(installed, TrustsConfigMixin)
+            for catalog in (read_catalog(installed),)
+            if catalog is not None
         ]
-        self.assertEqual(config.catalog.records, ())
-        self.assertEqual(config.catalog.delegations, ())
+        built = read_catalog(config)
+        self.assertEqual(built.records, ())
+        self.assertEqual(built.delegations, ())
         self.assertEqual(
-            config.catalog.path,
+            built.path,
             'tests.core.test_issue199.NonMixinOwnerConfig',
         )
         self.assertNotIn(MODEL_BACKEND, paths)

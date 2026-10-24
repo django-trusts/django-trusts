@@ -1,9 +1,12 @@
-"""Near-final registration nodes.
+"""Registration graph: root-relative refs and resolved along-walks.
 
-Root-relative ``Ref`` and ``Along``. Conditions are ``trusts.plan.grammar.Tree``.
+Conditions are ``trusts.plan.grammar.Tree``. This module does not
+import the compiler or the catalog.
 """
 
 __all__ = []
+
+from dataclasses import dataclass
 
 from django.db.models.base import ModelBase
 
@@ -110,3 +113,23 @@ def _require_ref(value, role):
         )
     return value
 
+
+@dataclass(frozen=True, slots=True)
+class AlongWalk:
+    """Immutable walk metadata resolved from ``Along`` at ``register()``."""
+
+    path: tuple
+    bound: int
+    shape: str
+    walk_path: tuple
+    walk_model: type
+    walk_ident: str
+    walk_field: str
+    suffix_path: tuple
+    suffix_field: str
+    ident_family: str
+    parent_attname: str | None
+    edge_model: type | None
+    edge_parent_attname: str | None
+    edge_child_attname: str | None
+    rewrite_attname: str | None
