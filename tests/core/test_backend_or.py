@@ -389,8 +389,12 @@ class ListedBackendOrTest(TestCase):
             label = 'pair_alpha_unlisted'
             default = False
 
+        from trusts.backends import RELATIONSHIP_BACKEND_KEY, RelationshipBackend
+
         config = Unlisted('tests.core.pair_alpha', pair_alpha)
-        config.recorder.register(
+        config.get_or_create_config(
+            RELATIONSHIP_BACKEND_KEY, RelationshipBackend,
+        ).recorder.register(
             trust=NoteGrant, user='user', permission='permission',
             content='shelf',
         )
@@ -497,15 +501,8 @@ class ListedBackendOrTest(TestCase):
             'Backend %s is not inside an app whose config extends '
             'TrustsConfigMixin.'
         )
-        with self.assertRaises(ImproperlyConfigured) as raised:
-            first_cls()
-        self.assertEqual(str(raised.exception), wording % first)
-        with self.assertRaises(ImproperlyConfigured) as raised:
-            OutsideBackend()
-        self.assertEqual(
-            str(raised.exception),
-            'App gh_permissions must extend TrustsConfigMixin.',
-        )
+        self.assertIsNone(first_cls()._catalog())
+        self.assertIsNone(OutsideBackend()._catalog())
         with override_settings(
             AUTHENTICATION_BACKENDS=(HOST, first, first, second),
         ):

@@ -23,7 +23,7 @@ from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
 from trusts.compile.nodes import Along
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.apps import Recorder, Registry
+from trusts.backends import Recorder, Registry
 from trusts.compile.factory import Compiler
 from tests.support import built_catalog, compiler
 ROOT = Path(__file__).resolve().parents[2]

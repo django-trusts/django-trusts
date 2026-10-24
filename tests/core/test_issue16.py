@@ -459,15 +459,19 @@ class NamedFilterCheckTest(SimpleTestCase):
         owner_b = compiler()
         owner_a.add_named_filter(Note, 'own', lambda u, p, o: u == o.owner)
         owner_b.add_named_filter(Note, 'own', lambda u, p, o: o.title == 'keep')
-        with override_catalog(
-            HostTrustModelBackend, owner_a,
+        with override_settings(AUTHENTICATION_BACKENDS=(
             'tests.kernel_host.backends.HostTrustModelBackend',
-        ):
+            'tests.backends.MixinOnlyBackend',
+        )):
             with override_catalog(
-                MixinOnlyBackend, owner_b,
-                'tests.backends.MixinOnlyBackend',
+                HostTrustModelBackend, owner_a,
+                'tests.kernel_host.backends.HostTrustModelBackend',
             ):
-                document = policy_document()
+                with override_catalog(
+                    MixinOnlyBackend, owner_b,
+                    'tests.backends.MixinOnlyBackend',
+                ):
+                    document = policy_document()
         own_sql = [
             named['sql']
             for row in document['backends']

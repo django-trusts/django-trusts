@@ -60,7 +60,8 @@ django-trusts requires Python 3.12--3.14 and Django 6.1.
    python -m pip install "django-trusts @ git+https://github.com/django-trusts/django-trusts@dev"
 
 Every app that hosts Trusts registrations or a Trusts backend must extend
-``TrustsConfigMixin`` on its Django ``AppConfig``, so the app owns its catalog.
+``TrustsConfigMixin`` on its Django ``AppConfig``. The config stores the
+backend's state and relays ``ready`` to it.
 
 Define the models
 -----------------

@@ -16,6 +16,8 @@ from tests.support import (
     replay_recorder,
     bound_handle,
     compiler,
+    read_catalog,
+    read_family,
 )
 from tests.kernel_host.backends import HostTrustModelBackend
 from tests.core import KernelHostRequiredMixin
@@ -43,7 +45,7 @@ def _replay_listed(path):
 
     factory = compiler(
         path=path,
-        family=config_for_class(cls).family,
+        family=read_family(config_for_class(cls)),
         query_compiler=(
             getattr(cls, 'query_compiler', None)
             or Compiler.default_query_compiler()
@@ -97,7 +99,7 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
         from django.apps import apps
         from trusts.apps import TrustsConfigMixin
         handles = tuple(
-            config.catalog for config in apps.get_app_configs()
+            read_catalog(config) for config in apps.get_app_configs()
             if isinstance(config, TrustsConfigMixin)
         )
         self.assertGreaterEqual(len(handles), 2)

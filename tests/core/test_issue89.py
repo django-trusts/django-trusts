@@ -15,7 +15,10 @@ from django.contrib.auth.models import Permission
 from django.contrib.auth.backends import ModelBackend
 from django.test import SimpleTestCase, TestCase, override_settings
 from tests.support import (
+    app_catalog_path,
     configured_catalog,
+    read_catalog,
+    read_recorder,
     sweep_listed_backends,
     built_catalog,
     compiler,
@@ -136,15 +139,15 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
 
         document = configured_catalog(DOCUMENT)
         host = configured_catalog(HOST)
-        self.assertEqual(document.path, apps.get_app_config('myapp').catalog_path())
-        self.assertEqual(host.path, apps.get_app_config('trusts_kernel_host').catalog_path())
+        self.assertEqual(document.path, app_catalog_path(apps.get_app_config('myapp')))
+        self.assertEqual(host.path, app_catalog_path(apps.get_app_config('trusts_kernel_host')))
         self.assertIsInstance(document.records, tuple)
         self.assertIsInstance(host.records, tuple)
         with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
             sweep_listed_backends()
         self.assertIs(
             configured_catalog(HOST),
-            apps.get_app_config('trusts_kernel_host').catalog,
+            read_catalog(apps.get_app_config('trusts_kernel_host')),
         )
 
     def test_ready_does_not_replace_stored_objects(self):
@@ -161,7 +164,7 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
 
     def test_registration_does_not_resolve_the_user_model(self):
         from django.contrib.auth import get_user_model
-        from trusts.apps import Recorder
+        from trusts.backends import Recorder
         from trusts.compile.factory import Compiler
         from trusts.compile.listener import RegistrationListener
 
@@ -187,7 +190,7 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
 
         owner = apps.get_app_config('trusts_tests')
         backend = MixinOnlyBackend()
-        self.assertIs(backend.get_registry(), owner.recorder)
+        self.assertIs(backend.get_registry(), read_recorder(owner))
         with self.assertRaises(TrustsConfigurationError):
             _contribute_recorder(backend.get_registry())
 

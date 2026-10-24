@@ -7,6 +7,7 @@ from types import MappingProxyType
 
 from django.test import SimpleTestCase
 
+import trusts.apps as apps_module
 import trusts.backends as backends
 import trusts.compile.catalogs as catalogs
 import trusts.compile.factory as factory
@@ -49,6 +50,11 @@ class CatalogFactoryBoundaryTest(SimpleTestCase):
             self.assertNotIn('trusts.compile.factory', found)
             self.assertFalse(any(name.endswith('.factory') for name in found))
         self.assertNotIn('trusts.backends', _imported_modules(snapshot))
+        app_imports = _imported_modules(apps_module)
+        self.assertFalse(any(
+            name == 'trusts' or name.startswith('trusts.')
+            for name in app_imports
+        ))
 
     def test_catalog_methods_do_not_assign_fields(self):
         tree = ast.parse(inspect.getsource(catalogs.Catalog))

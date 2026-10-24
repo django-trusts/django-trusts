@@ -50,6 +50,8 @@ class TestsConfig(trusts_apps.TrustsConfigMixin):
             Ticket = self.get_model('Ticket')
             TestGroupJunction = self.get_model('TestGroupJunction')
         except LookupError:
+            from tests.backends import TestsTrustBackend
+            TestsTrustBackend().get_registry()
             super().ready()
             return
         self._donate_tup(

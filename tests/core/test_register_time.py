@@ -25,6 +25,13 @@ def _probe():
     return _Probe('tests.core', tests_core)
 
 
+def _recorder(config):
+    from trusts.backends import RELATIONSHIP_BACKEND_KEY, RelationshipBackend
+    return config.get_or_create_config(
+        RELATIONSHIP_BACKEND_KEY, RelationshipBackend,
+    ).recorder
+
+
 def _grant(**kwargs):
     base = dict(
         trust=DocumentGrant,
@@ -40,10 +47,10 @@ class RegisterTimeCheckTest(TestCase):
 
     def test_duplicate_raises_at_the_register_call(self):
         config = _probe()
-        config.recorder.register(**_grant())
+        _recorder(config).register(**_grant())
         line = inspect.currentframe().f_lineno + 2
         try:
-            config.recorder.register(**_grant())
+            _recorder(config).register(**_grant())
         except TrustsConfigurationError as exc:
             frames = traceback.extract_tb(exc.__traceback__)
             message = str(exc)
@@ -54,14 +61,14 @@ class RegisterTimeCheckTest(TestCase):
 
     def test_user_override_after_register_raises(self):
         config = _probe()
-        config.recorder.register(**_grant())
+        _recorder(config).register(**_grant())
         with self.assertRaises(TrustsConfigurationError) as caught:
-            config.recorder.set_user_condition(
+            _recorder(config).set_user_condition(
                 'active', lambda user: user.is_active,
             )
         self.assertIn('before register()', str(caught.exception))
         with self.assertRaises(TrustsConfigurationError) as caught:
-            config.recorder.set_user_override(
+            _recorder(config).set_user_override(
                 'active', lambda user: user.is_active,
             )
         self.assertIn('before register()', str(caught.exception))
@@ -70,21 +77,21 @@ class RegisterTimeCheckTest(TestCase):
         config = _probe()
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError) as caught:
-                config.recorder.register(**_grant(
+                _recorder(config).register(**_grant(
                     condition=lambda trust: trust.user + trust.permission,
                 ))
         self.assertNotIn('frozen', str(caught.exception).lower())
 
     def test_missing_field_is_raised_by_ready(self):
         config = _probe()
-        config.recorder.register(**_grant(content='not_a_field'))
+        _recorder(config).register(**_grant(content='not_a_field'))
         with self.assertRaises(TrustsConfigurationError) as caught:
             config.ready()
         self.assertIn('missing field', str(caught.exception))
 
     def test_ready_raises_when_no_backend_resolves_to_the_app(self):
         config = _probe()
-        config.recorder.register(**_grant())
+        _recorder(config).register(**_grant())
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError) as caught:
                 config.ready()

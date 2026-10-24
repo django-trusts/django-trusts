@@ -9,7 +9,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 import tests as tests_module
 from tests.support import (
     built_catalog, bound_handle, replay_recorder, config_for_class, compiler,
-    configured_catalog,
+    configured_catalog, read_catalog, write_catalog,
 )
 from tests.backends import MixinOnlyBackend
 from tests.core import KernelHostRequiredMixin
@@ -18,6 +18,7 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
 from trusts.apps import TrustsConfigMixin
+from trusts.backends import TrustModelBackendMixin
 from tests.support import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.factory import Compiler
@@ -118,14 +119,14 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         self.fold_handle.register(trust=DocumentAltGrant, user='user', permission='permission', content='document')
         self.fold_owner = _bind(FoldFamilyConfig, ready=False)
         self._fold_config = config_for_class(MixinOnlyBackend)
-        self._saved_fold_catalog = self._fold_config.catalog
+        self._saved_fold_catalog = read_catalog(self._fold_config)
         self.fold_handle = built_catalog(self.fold_registry)
-        self._fold_config.catalog = self.fold_handle
+        write_catalog(self._fold_config, self.fold_handle)
         self.mixin = MixinOnlyBackend()
         self.document_backend = DocumentBackend()
 
     def tearDown(self):
-        self._fold_config.catalog = self._saved_fold_catalog
+        write_catalog(self._fold_config, self._saved_fold_catalog)
         super().tearDown()
 
     def _family_patches(self):
@@ -148,7 +149,7 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
             self.assertEqual(list(fold_scopes), [])
             from django.apps import apps
             listed = tuple(
-                config.catalog for config in apps.get_app_configs()
+                read_catalog(config) for config in apps.get_app_configs()
                 if isinstance(config, TrustsConfigMixin)
             )
             self.assertIn(configured_catalog(DOCUMENT), listed)
@@ -197,7 +198,7 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
         factory = compiler(
             query_compiler=_NeverAppliesCompiler(),
             path=DOCUMENT_BACKEND,
-            family=TrustsConfigMixin.family,
+            family=TrustModelBackendMixin.family,
             user_model=get_user_model(),
         )
         replay_recorder(factory, DocumentBackend)

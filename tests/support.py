@@ -10,7 +10,11 @@ from django.test import override_settings
 from django.utils.module_loading import import_string
 
 from trusts.apps import TrustsConfigMixin
-from trusts.backends import TrustModelBackendMixin
+from trusts.backends import (
+    RELATIONSHIP_BACKEND_KEY,
+    RelationshipBackend,
+    TrustModelBackendMixin,
+)
 from trusts.compile.factory import Compiler
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import render_policy_sql_bytes
@@ -55,6 +59,54 @@ def config_for_class(backend_cls, apps_registry=None):
     return registry.get_containing_app_config(backend_cls.__module__)
 
 
+def app_catalog_path(config):
+    """Catalog path stored for ``config``: its class module and qualname."""
+    return '%s.%s' % (type(config).__module__, type(config).__qualname__)
+
+
+def backend_state(config):
+    """State object for ``config``, or ``None`` when unset."""
+    states = getattr(config, '_states', None)
+    if not isinstance(states, dict):
+        return None
+    return states.get(RELATIONSHIP_BACKEND_KEY)
+
+
+def ensure_backend_state(config):
+    """Return the relationship state, creating it when ``ready`` has not."""
+    state = backend_state(config)
+    if state is not None:
+        return state
+    return config.get_or_create_config(
+        RELATIONSHIP_BACKEND_KEY, RelationshipBackend,
+    )
+
+
+def read_catalog(config):
+    state = backend_state(config)
+    if state is None:
+        return None
+    return state.catalog
+
+
+def write_catalog(config, catalog):
+    ensure_backend_state(config).catalog = catalog
+
+
+def read_family(config):
+    state = backend_state(config)
+    if state is None:
+        return TrustModelBackendMixin.family
+    return state.family
+
+
+def read_recorder(config):
+    state = backend_state(config)
+    if state is None:
+        return None
+    return state.recorder
+
+
 def compiler(**kwargs):
     """Standalone ``Compiler``. The user model is already known."""
     kwargs.setdefault('user_model', get_user_model())
@@ -76,17 +128,17 @@ def _publish_built(built):
     if not configs:
         raise TrustsConfigurationError(
             'listed_relationship needs a TrustsConfigMixin app.')
-    saved = [(config, config.catalog) for config in configs]
+    saved = [(config, read_catalog(config)) for config in configs]
     try:
         for config, catalog in zip(configs, built):
-            config.catalog = catalog
+            write_catalog(config, catalog)
         for config in configs[len(built):]:
-            config.catalog = built_catalog(Compiler(
-                path='%s.empty' % config.catalog_path(),
-                family=config.family,
+            write_catalog(config, built_catalog(Compiler(
+                path='%s.empty' % app_catalog_path(config),
+                family=read_family(config),
                 query_compiler=Compiler.default_query_compiler(),
                 user_model=get_user_model(),
-            ))
+            )))
         owners = configs[:len(built)] or configs[:1]
         paths = tuple(
             '%s.%s' % (cls.__module__, cls.__name__)
@@ -95,7 +147,7 @@ def _publish_built(built):
             yield tuple(built)
     finally:
         for config, catalog in saved:
-            config.catalog = catalog
+            write_catalog(config, catalog)
 
 
 @contextmanager
@@ -103,23 +155,24 @@ def override_catalog(backend_cls, factory, path):
     """Publish one catalog for the app that contains ``backend_cls``."""
 
     config = config_for_class(backend_cls)
-    saved = config.catalog
+    saved = read_catalog(config)
     factory.path = path
-    config.catalog = built_catalog(factory)
+    published = built_catalog(factory)
+    write_catalog(config, published)
     try:
         with override_settings(AUTHENTICATION_BACKENDS=tuple(
             settings.AUTHENTICATION_BACKENDS,
         )):
-            yield config.catalog
+            yield published
     finally:
-        config.catalog = saved
+        write_catalog(config, saved)
 
 
 def configured_catalog(path):
     """Catalog of the app that contains the backend class at ``path``."""
 
     cls = import_string(path)
-    return config_for_class(cls).catalog
+    return read_catalog(config_for_class(cls))
 
 
 @contextmanager
@@ -142,19 +195,19 @@ def _publish_catalog(backend_cls, factory, *, path=None):
 
     config = config_for_class(backend_cls)
     if factory is None:
-        config.catalog = built_catalog(Compiler(
-            path=path or config.catalog_path(),
-            family=config.family,
+        write_catalog(config, built_catalog(Compiler(
+            path=path or app_catalog_path(config),
+            family=read_family(config),
             query_compiler=Compiler.default_query_compiler(),
             user_model=get_user_model(),
-        ))
+        )))
         return None
     published = path or factory.path or (
         '%s.%s' % (backend_cls.__module__, backend_cls.__qualname__)
     )
     factory.path = published
     catalog = built_catalog(factory)
-    config.catalog = catalog
+    write_catalog(config, catalog)
     return catalog
 
 
@@ -163,12 +216,12 @@ def bound_handle(backend, factory):
     """Publish ``factory`` as this backend's app catalog for one block."""
 
     config = config_for_class(type(backend))
-    previous = config.catalog
+    previous = read_catalog(config)
     _publish_catalog(type(backend), factory)
     try:
         yield
     finally:
-        config.catalog = previous
+        write_catalog(config, previous)
 
 
 def push_catalog(backend_cls, factory):
@@ -178,16 +231,16 @@ def push_catalog(backend_cls, factory):
     """
 
     config = config_for_class(backend_cls)
-    saved = config.catalog
+    saved = read_catalog(config)
     if not factory.path:
         factory.path = '%s.%s' % (
             backend_cls.__module__, backend_cls.__qualname__,
         )
-    factory.family = config.family
-    config.catalog = built_catalog(factory)
+    factory.family = read_family(config)
+    write_catalog(config, built_catalog(factory))
 
     def restore():
-        config.catalog = saved
+        write_catalog(config, saved)
 
     return restore
 
@@ -198,7 +251,7 @@ def published_class_catalog(backend_cls, factory):
 
     restore = push_catalog(backend_cls, factory)
     try:
-        yield config_for_class(backend_cls).catalog
+        yield read_catalog(config_for_class(backend_cls))
     finally:
         restore()
 
@@ -206,14 +259,14 @@ def published_class_catalog(backend_cls, factory):
 def snapshot_config_catalogs():
     """``(config, catalog)`` pairs for the installed mixin configs."""
 
-    return tuple((config, config.catalog) for config in mixin_configs())
+    return tuple((config, read_catalog(config)) for config in mixin_configs())
 
 
 def restore_config_catalogs(saved):
     """Put back catalogs captured by ``snapshot_config_catalogs``."""
 
     for config, catalog in saved:
-        config.catalog = catalog
+        write_catalog(config, catalog)
 
 
 def render_configured_policy(*subjects):
@@ -257,7 +310,7 @@ def install_writable_registry(config, path, contribute=None):
 
     registry = Compiler(
         path=path,
-        family=config.family,
+        family=read_family(config),
         query_compiler=Compiler.default_query_compiler(),
         user_model=get_user_model(),
     )
@@ -309,11 +362,11 @@ def register_installed_document_app():
     from tests.myapp.models import register_document_app
 
     config = apps.get_app_config('myapp')
-    if config.catalog is not None or getattr(
+    if read_catalog(config) is not None or getattr(
         config, '_registered_from_models', False,
     ):
         return
-    register_document_app(config.recorder)
+    register_document_app(read_recorder(config) or ensure_backend_state(config).recorder)
 
 
 @contextmanager
@@ -323,19 +376,20 @@ def unbound_named_filters(backend_cls):
     from tests.myapp.models import register_document_grants
 
     config = config_for_class(backend_cls)
-    saved = config.catalog
+    saved = read_catalog(config)
     compiler = Compiler(
         query_compiler=Compiler.default_query_compiler(),
         path=saved.path,
-        family=config.family,
+        family=read_family(config),
         user_model=saved.user_model or get_user_model(),
     )
     register_document_grants(compiler)
-    config.catalog = compiler.compile()
+    published = compiler.compile()
+    write_catalog(config, published)
     try:
-        yield config.catalog
+        yield published
     finally:
-        config.catalog = saved
+        write_catalog(config, saved)
 
 
 def _inquiry_backend_classes(configs):

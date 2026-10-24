@@ -8,7 +8,7 @@ from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
 from tests.apps import TestsConfig
-from tests.support import configured_catalog, compiler
+from tests.support import app_catalog_path, configured_catalog, compiler
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.models import Document
@@ -22,7 +22,7 @@ class IsolatedHostDoesNotReceiveDocumentContributionTest(
     def test_host_registry_stays_empty_of_document_terminal(self):
         host = apps.get_app_config('trusts_kernel_host')
         self.assertEqual(
-            configured_catalog(HOST_BACKEND).path, host.catalog_path(),
+            configured_catalog(HOST_BACKEND).path, app_catalog_path(host),
         )
         registry = configured_catalog(HOST_BACKEND)
         self.assertFalse(registry.plan_for(Document).records)
