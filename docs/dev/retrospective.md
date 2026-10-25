@@ -59,8 +59,8 @@ before the code is written.
 
 Measured on 2026-10-24 from `dev` at `57a6e9d` (the merge of
 [#320](https://github.com/django-trusts/django-trusts/pull/320))
-to the tip of
-[#344](https://github.com/django-trusts/django-trusts/pull/344).
+to `a50f714`, the tip of
+[#344](https://github.com/django-trusts/django-trusts/pull/344) on that date.
 271 non-merge commits, 165 files, +19,775/−28,238. Sixteen stacked
 code pull requests:
 [#321](https://github.com/django-trusts/django-trusts/pull/321),
