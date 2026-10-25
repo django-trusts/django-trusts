@@ -35,12 +35,11 @@ import uuid
 from decimal import Decimal
 from pathlib import Path
 
-from django.apps import apps
+from django.contrib.auth import load_backend
 from django.core import checks as django_checks
 from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
-from trusts.apps import TrustsConfigMixin
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.format import _format_policy_sql
 from trusts.inspect.yaml import (
@@ -170,18 +169,35 @@ def resolve_policy_database(override=None):
 
 
 def _installed_document(*, alias=None):
-    """Policy document for every installed Trusts config."""
-    return _build_document(tuple(
-        config.catalog for config in apps.get_app_configs()
-        if isinstance(config, TrustsConfigMixin)
-    ), resolve_policy_database(alias))
+    """Policy document for every configured Trusts backend.
+
+    Each listed backend contributes its own catalog. Two backends that
+    share one catalog contribute that catalog once. A backend with no
+    catalog contributes nothing.
+    """
+    chosen = []
+    seen = set()
+    for path in settings.AUTHENTICATION_BACKENDS:
+        backend = load_backend(path)
+        read = getattr(backend, '_catalog', None)
+        if not callable(read):
+            continue
+        catalog = read()
+        if catalog is None:
+            continue
+        marker = id(catalog)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        chosen.append(catalog)
+    return _build_document(tuple(chosen), resolve_policy_database(alias))
 
 
 def render_policy_sql_bytes(*, alias=None):
     """Return the schema-1 policy SQL document as UTF-8 bytes.
 
     ``alias`` overrides ``TRUSTS_POLICY_DATABASE`` for this call only.
-    The document is ``_installed_document()`` for the installed configs.
+    The document is ``_installed_document()`` for the configured backends.
     Compilation uses ``as_sql()`` / ``sql_with_params()`` and does not
     execute the exported statements. A failure raises before a partial
     document is returned.

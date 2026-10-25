@@ -11,6 +11,7 @@ from django.test import TestCase
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import TrustsConfigMixin
+from trusts.compile.appbuild import build_app_catalog
 from trusts.errors import TrustsConfigurationError
 
 
@@ -23,6 +24,15 @@ class _Probe(TrustsConfigMixin):
 def _probe():
     import tests.core as tests_core
     return _Probe('tests.core', tests_core)
+
+
+def _recorder(config):
+    from trusts.backends import RELATIONSHIP_BACKEND_KEY, RelationshipBackend
+    return config.get_or_create_config(
+        RELATIONSHIP_BACKEND_KEY,
+        RelationshipBackend,
+        on_ready=build_app_catalog,
+    ).recorder
 
 
 def _grant(**kwargs):
@@ -40,10 +50,10 @@ class RegisterTimeCheckTest(TestCase):
 
     def test_duplicate_raises_at_the_register_call(self):
         config = _probe()
-        config.recorder.register(**_grant())
+        _recorder(config).register(**_grant())
         line = inspect.currentframe().f_lineno + 2
         try:
-            config.recorder.register(**_grant())
+            _recorder(config).register(**_grant())
         except TrustsConfigurationError as exc:
             frames = traceback.extract_tb(exc.__traceback__)
             message = str(exc)
@@ -54,14 +64,14 @@ class RegisterTimeCheckTest(TestCase):
 
     def test_user_override_after_register_raises(self):
         config = _probe()
-        config.recorder.register(**_grant())
+        _recorder(config).register(**_grant())
         with self.assertRaises(TrustsConfigurationError) as caught:
-            config.recorder.set_user_condition(
+            _recorder(config).set_user_condition(
                 'active', lambda user: user.is_active,
             )
         self.assertIn('before register()', str(caught.exception))
         with self.assertRaises(TrustsConfigurationError) as caught:
-            config.recorder.set_user_override(
+            _recorder(config).set_user_override(
                 'active', lambda user: user.is_active,
             )
         self.assertIn('before register()', str(caught.exception))
@@ -70,21 +80,21 @@ class RegisterTimeCheckTest(TestCase):
         config = _probe()
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError) as caught:
-                config.recorder.register(**_grant(
+                _recorder(config).register(**_grant(
                     condition=lambda trust: trust.user + trust.permission,
                 ))
         self.assertNotIn('frozen', str(caught.exception).lower())
 
     def test_missing_field_is_raised_by_ready(self):
         config = _probe()
-        config.recorder.register(**_grant(content='not_a_field'))
+        _recorder(config).register(**_grant(content='not_a_field'))
         with self.assertRaises(TrustsConfigurationError) as caught:
             config.ready()
         self.assertIn('missing field', str(caught.exception))
 
     def test_ready_raises_when_no_backend_resolves_to_the_app(self):
         config = _probe()
-        config.recorder.register(**_grant())
+        _recorder(config).register(**_grant())
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError) as caught:
                 config.ready()
@@ -107,23 +117,25 @@ class RegisterTimeCheckTest(TestCase):
             'The catalog is already built.',
         )
 
-    def test_listener_import_loads_no_models(self):
+    def test_app_config_import_does_not_load_the_compiler(self):
         script = (
             'import os\n'
             'os.environ["DJANGO_SETTINGS_MODULE"] = "tests.settings"\n'
+            'import sys\n'
             'from django.apps import apps\n'
             'before = {app: set(models) for app, models in apps.all_models.items()}\n'
-            'import trusts.compile.listener\n'
+            'import trusts.apps\n'
             'after = {app: set(models) for app, models in apps.all_models.items()}\n'
             'assert before == after, (before, after)\n'
             'assert apps.ready is False\n'
-            'print("listener-import-ok")\n'
+            'assert "trusts.compile.compilers" not in sys.modules\n'
+            'print("apps-import-ok")\n'
         )
         completed = subprocess.run(
             [sys.executable, '-c', script],
             check=True, capture_output=True, text=True,
         )
-        self.assertIn('listener-import-ok', completed.stdout)
+        self.assertIn('apps-import-ok', completed.stdout)
 
 
 class DotlessHasPermTest(TestCase):

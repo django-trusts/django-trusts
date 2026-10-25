@@ -18,7 +18,7 @@ from trusts.plan.hops import (
     path_text,
     resolved_hop,
 )
-from trusts.compile.nodes import _is_model_class
+from trusts.compile.graph import _is_model_class
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.grammar import missing_field
 

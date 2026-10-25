@@ -19,12 +19,12 @@ from django.db.models import Model
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import isolate_apps
 from tests.myapp.models import Document, DocumentGrant
-from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
-from trusts.compile.nodes import Along
-from trusts.compile.nodes import Ref
+from trusts.compile.compilers import RegisteredDelegation, RegisteredRelation
+from trusts.compile.graph import Along
+from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.apps import Recorder
-from trusts.compile.factory import Compiler
+from trusts.backends import Recorder, Registry
+from trusts.compile.compilers import Compiler
 from tests.support import built_catalog, compiler
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -107,7 +107,9 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         self.assertEqual(names, ['trust', 'user', 'permission', 'content', 'group', 'delegate', 'sponsor', 'condition', 'along'])
         for name in names:
             self.assertEqual(signature.parameters[name].kind, inspect.Parameter.KEYWORD_ONLY, name)
-        public = inspect.signature(Recorder.register)
+        self.assertIs(Recorder.register, Registry.register)
+        self.assertTrue(issubclass(Recorder, Registry))
+        public = inspect.signature(Registry.register)
         public_names = [name for name in public.parameters if name != 'self']
         self.assertEqual(public_names, names)
         for name in public_names:

@@ -27,7 +27,7 @@ def _change_document():
     return permission
 
 def _contribute_document(registry):
-    from trusts.compile.nodes import Ref
+    from trusts.compile.graph import Ref
     j = Ref(DocumentGrant)
     registry.register_relation(content=j.document, user=j.user, permission=j.permission)
 

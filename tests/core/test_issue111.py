@@ -14,7 +14,7 @@ from django.test import SimpleTestCase, override_settings
 import tests as tests_module
 from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
 from tests.kernel_host.backends import HostTrustModelBackend
-from tests.support import configured_catalog
+from tests.support import app_catalog_path, configured_catalog, read_catalog
 from trusts.apps import TrustsConfigMixin
 from trusts.backends import TrustModelBackendMixin
 from trusts.decorators import filter_by_permitted_content
@@ -86,25 +86,27 @@ class OwnerResolutionTest(SimpleTestCase):
         owner = apps.get_app_config('trusts_kernel_host')
         self.assertIsInstance(owner, TrustsConfigMixin)
         handle = configured_catalog(HOST_BACKEND)
-        self.assertEqual(handle.path, owner.catalog_path())
+        self.assertEqual(handle.path, app_catalog_path(owner))
         from django.contrib.auth.models import AnonymousUser
         self.assertFalse(HostTrustModelBackend().has_perm(
             AnonymousUser(), 'auth.view_user', None,
         ))
         self.assertIn(handle, tuple(
-            config.catalog for config in apps.get_app_configs()
+            read_catalog(config) for config in apps.get_app_configs()
             if isinstance(config, TrustsConfigMixin)
         ))
 
     def test_authorized_and_filter_scopes_use_owners(self):
         registries = tuple(
-            config.catalog for config in apps.get_app_configs()
+            catalog for config in apps.get_app_configs()
             if isinstance(config, TrustsConfigMixin)
+            for catalog in (read_catalog(config),)
+            if catalog is not None
         )
         self.assertTrue(registries)
         self.assertEqual(
             registries[0].path,
-            apps.get_app_config('trusts_kernel_host').catalog_path(),
+            app_catalog_path(apps.get_app_config('trusts_kernel_host')),
         )
         self.assertTrue(issubclass(AuthorizedQuerySet, object))
         self.assertTrue(callable(filter_by_permitted_content))
@@ -127,7 +129,7 @@ class OwnerResolutionTest(SimpleTestCase):
         catalog = configured_catalog(HOST_BACKEND)
         self.assertEqual(
             catalog.path,
-            apps.get_app_config('trusts_kernel_host').catalog_path(),
+            app_catalog_path(apps.get_app_config('trusts_kernel_host')),
         )
         self.assertFalse(HostTrustModelBackend().has_perm(
             AnonymousUser(), 'auth.view_user', None,

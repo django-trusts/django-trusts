@@ -10,7 +10,7 @@ permissions:
 
 env:
   # Zero #57.
-  COMPANION_ZERO_SHA: ceb576c7cf494ca28f4a6f4ccb47d30971ce23a0
+  COMPANION_ZERO_SHA: 3d91640a38933a70b6c0ffdd9ce0878d323185be
   # gh-permissions #56.
   COMPANION_GH_SHA: e22b81764b658df5da65e5b57420d6d6578377c9
 

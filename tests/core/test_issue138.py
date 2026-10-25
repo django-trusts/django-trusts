@@ -205,12 +205,12 @@ def _document_backend():
 
     from tests.myapp.backends import DocumentBackend
 
-    from tests.support import config_for_class
-    from trusts.compile.factory import Compiler
+    from tests.support import config_for_class, read_family
+    from trusts.compile.compilers import Compiler
 
     factory = compiler(
         path=DOCUMENT_BACKEND,
-        family=config_for_class(DocumentBackend).family,
+        family=read_family(config_for_class(DocumentBackend)),
         query_compiler=Compiler.default_query_compiler(),
         user_model=get_user_model(),
     )

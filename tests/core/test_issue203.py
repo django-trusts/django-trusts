@@ -25,7 +25,6 @@ from django.test import TransactionTestCase
 from django.test.utils import isolate_apps
 from django.utils.functional import SimpleLazyObject
 from django.utils.translation import gettext_lazy
-from trusts.apps import TrustsConfigMixin
 from trusts.backends import TrustModelBackendMixin
 from trusts.errors import PermissionConditionError
 from trusts.plan.relations import PlanQueryCompiler
@@ -47,17 +46,22 @@ class _BoundBackend(TrustModelBackendMixin, ModelBackend):
 
     def has_perm(self, user_obj, perm, obj=None, **skip_flags):
         if not getattr(self, '_sealed', False):
+            from tests.support import config_for_class, read_catalog, write_catalog
+
             self._factory.path = 'tests.core.issue203'
-            self._factory.family = TrustsConfigMixin.family
+            self._factory.family = TrustModelBackendMixin.family
             built = built_catalog(self._factory)
-            self._previous_catalog = self._config.catalog
-            self._config.catalog = built
+            self._owner = config_for_class(type(self))
+            self._previous_catalog = read_catalog(self._owner)
+            write_catalog(self._owner, built)
             self._sealed = True
         return super().has_perm(user_obj, perm, obj, **skip_flags)
 
     def restore(self):
         if getattr(self, '_sealed', False):
-            self._config.catalog = self._previous_catalog
+            from tests.support import write_catalog
+
+            write_catalog(self._owner, self._previous_catalog)
             self._sealed = False
 
 class _BuilderLog(object):

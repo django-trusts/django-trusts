@@ -189,16 +189,20 @@ def _seal_document_factory(factory):
         built_catalog,
         config_for_class,
         mixin_configs,
+        read_catalog,
+        read_family,
         snapshot_config_catalogs,
+        write_catalog,
     )
     saved = snapshot_config_catalogs()
-    previous = config_for_class(DocumentBackend).catalog
-    family = config_for_class(DocumentBackend).family if previous is None else previous.family
+    owner = config_for_class(DocumentBackend)
+    previous = read_catalog(owner)
+    family = read_family(owner) if previous is None else previous.family
     factory.path = DOCUMENT_BACKEND
     factory.family = family
     catalog = built_catalog(factory)
     for config in mixin_configs():
-        config.catalog = catalog
+        write_catalog(config, catalog)
     return saved
 
 @contextmanager

@@ -84,9 +84,8 @@ def register_document_app(registry):
 
 
 _config = apps.get_containing_app_config(DocumentBackend.__module__)
-if (
-    _config is not None and _config.label == 'myapp'
-    and not _config.recorder.frozen
-):
-    register_document_app(_config.recorder)
-    _config._registered_from_models = True
+if _config is not None and _config.label == 'myapp':
+    _registry = DocumentBackend().get_registry()
+    if not _registry.frozen:
+        register_document_app(_registry)
+        _config._registered_from_models = True

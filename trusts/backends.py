@@ -1,73 +1,205 @@
 """Generic Trusts backend mixin.
 
-The backend reads the catalog of the app config that contains its
-class. That config is a ``TrustsConfigMixin``. ``get_registry()`` is
+The app config holds one state object per key. ``get_registry()`` is
 how an application registers. Each listed backend answers from that
-catalog only. A miss returns nothing. Callers OR the grant ``Q``
-objects.
+state's catalog only. A miss returns nothing. Callers OR the grant
+``Q`` objects.
 """
+
+from collections.abc import Callable
+from typing import Protocol, TypeVar, runtime_checkable
 
 from django.apps import apps
 from django.contrib.auth import get_backends, get_user_model, load_backend
 from django.contrib.auth.models import Permission
 from django.db.models import Model, QuerySet, Subquery
 
-from trusts.apps import Recorder, TrustsConfigMixin
+from trusts.compile.appbuild import build_app_catalog
 from trusts.compile.catalogs import compile_catalog_users, filter_catalogs
-from trusts.errors import TrustsConfigurationError, TrustsMixinRequired
+from trusts.compile.compilers import RegistrationListener
+from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import (
     _build_document,
     _installed_document,
     resolve_policy_database,
 )
 
+T = TypeVar('T', bound=Model)
+RELATIONSHIP_BACKEND_KEY = 'relationship_backend'
+
+
+@runtime_checkable
+class Registry(Protocol):
+    """Registration calls returned by ``get_registry()``."""
+
+    def register(
+        self, *,
+        trust: type[T],
+        user: str | Callable[[T], object] | None = None,
+        permission: str | Callable[[T], object] | None = None,
+        content: str | Callable[[T], object],
+        group: str | Callable[[T], object] | None = None,
+        delegate: str | Callable[[T], object] | None = None,
+        sponsor: str | Callable[[T], object] | None = None,
+        condition: (
+            Callable[[T], object] | Callable[[T, object], object] | None
+        ) = None,
+        along=None,
+    ):
+        self._accept('register', (), {
+            'trust': trust,
+            'user': user,
+            'permission': permission,
+            'content': content,
+            'group': group,
+            'delegate': delegate,
+            'sponsor': sponsor,
+            'condition': condition,
+            'along': along,
+        })
+
+    def add_named_filter(self, model, code, predicate):
+        """Record a named-filter builder. The compiler parses it at build."""
+        self._accept('add_named_filter', (model, code, predicate), {})
+
+    def set_user_condition(self, name, expr, on='*'):
+        self._accept('set_user_condition', (name, expr), {'on': on})
+
+    def set_user_override(self, name, expr, on='user'):
+        self._accept('set_user_override', (name, expr), {'on': on})
+
+    def _accept(self, name, args, kwargs):
+        """Store one registration call. ``Recorder`` implements this."""
+
+
+class Recorder(Registry):
+    """Ordered log of registration calls for one app.
+
+    ``play`` replays each call, in order, as the same method on
+    ``target``. The log must already be frozen. A later ``play``
+    replays those same calls onto the new target.
+    """
+
+    def __init__(self, listener: Registry):
+        self._rows = []
+        self.frozen = False
+        self._listener = listener
+
+    def _accept(self, name, args, kwargs):
+        self._open(name)
+        getattr(self._listener, name)(*args, **kwargs)
+        self._rows.append((name, args, kwargs))
+
+    def freeze(self):
+        self.frozen = True
+
+    def play(self, target: Registry):
+        """Replay this log on ``target``.
+
+        The caller freezes the log first. A second play replays the
+        same calls onto that target.
+        """
+        for name, args, kwargs in self._rows:
+            getattr(target, name)(*args, **kwargs)
+
+    def _open(self, method):
+        if self.frozen:
+            raise TrustsConfigurationError(
+                '%s refused: this registry is frozen. '
+                'The catalog is already built.' % method
+            )
+
+
+class RelationshipBackend:
+    """Registration log and catalog for one app config.
+
+    ``family`` and ``query_compiler`` come from the backend class that
+    first created this state. The catalog path is the app config class.
+    """
+
+    def __init__(self, family='relationship', query_compiler=None):
+        self.family = family
+        self.query_compiler = query_compiler
+        self.recorder = Recorder(RegistrationListener())
+        self.catalog = None
+
 
 class TrustModelBackendMixin(object):
-    """Object-permission backend. The catalog belongs to the app config."""
+    """Object-permission backend. The app config holds this backend's state."""
+
+    family = 'relationship'
+    query_compiler = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        config = apps.get_containing_app_config(type(self).__module__)
-        if not isinstance(config, TrustsConfigMixin):
-            raise TrustsMixinRequired(_mixin_required_message(
-                config,
-                '%s.%s' % (type(self).__module__, type(self).__qualname__),
-            ))
-        self._config = config
 
-    def get_registry(self) -> Recorder:
+    def get_registry(self) -> Registry:
         """Open registration log for this backend's app.
 
         Not the built catalog. Registration does not resolve the user
         model and does not build the catalog.
         """
-        return self._config.recorder
+        config = apps.get_containing_app_config(type(self).__module__)
+        backend_type = type(self)
+        state = config.get_or_create_config(
+            RELATIONSHIP_BACKEND_KEY,
+            lambda: RelationshipBackend(
+                family=backend_type.family,
+                query_compiler=backend_type.query_compiler,
+            ),
+            on_ready=build_app_catalog,
+        )
+        return state.recorder
+
+    def _state(self):
+        config = apps.get_containing_app_config(type(self).__module__)
+        if config is None:
+            return None
+        lookup = getattr(config, 'get_config', None)
+        if not callable(lookup):
+            return None
+        return lookup(RELATIONSHIP_BACKEND_KEY)
 
     def _catalog(self):
-        """Catalog this instance answers from. The app config owns it."""
-        return self._config.catalog
+        """Catalog this backend answers from, or ``None`` when unset."""
+        state = self._state()
+        if state is None:
+            return None
+        return state.catalog
 
     def walk_questions(self, visitor):
         """Walk this catalog's questions in document order."""
-        return self._catalog().walk_questions(visitor)
+        catalog = self._catalog()
+        if catalog is None:
+            return None
+        return catalog.walk_questions(visitor)
 
     def has_perm(self, user_obj, permext, obj=None, **skip_flags):
-        """Object check. No object denies."""
+        """Object check. No object denies. No catalog denies."""
         if obj is None or not isinstance(obj, (QuerySet, Model)):
             return False
-        return self._catalog().has_perm(user_obj, permext, obj, **skip_flags)
+        catalog = self._catalog()
+        if catalog is None:
+            return False
+        return catalog.has_perm(user_obj, permext, obj, **skip_flags)
 
     def get_all_permissions(self, user_obj, obj=None, **skip_flags):
         """Permissions this catalog grants on the object."""
         if obj is None or not isinstance(obj, (QuerySet, Model)):
             return set()
-        return self._catalog().get_all_permissions(user_obj, obj, **skip_flags)
+        catalog = self._catalog()
+        if catalog is None:
+            return set()
+        return catalog.get_all_permissions(user_obj, obj, **skip_flags)
 
     def get_group_permissions(self, user_obj, obj=None, **skip_flags):
         """Group permissions this catalog grants on the object."""
         if obj is None or not isinstance(obj, (QuerySet, Model)):
             return set()
-        return self._catalog().get_group_permissions(user_obj, obj, **skip_flags)
+        catalog = self._catalog()
+        if catalog is None:
+            return set()
+        return catalog.get_group_permissions(user_obj, obj, **skip_flags)
 
     def singular_permission_accepted(self, perm):
         """``auth.Permission`` only, unless a backend overrides this."""
@@ -75,21 +207,30 @@ class TrustModelBackendMixin(object):
 
     def permitted_users_predicate(self, content, perm, *, skipped=()):
         """``Q`` over candidate users, or ``None`` when this path does not apply."""
-        return self._catalog().permitted_users_predicate(
+        catalog = self._catalog()
+        if catalog is None:
+            return None
+        return catalog.permitted_users_predicate(
             content, perm, skipped=skipped,
             accepts_permission=self.singular_permission_accepted,
         )
 
     def authorized_grant_q(self, subject, user, permission, *, skipped=()):
         """Grant for an authorized-row filter."""
-        return self._catalog().complete_grant_q(
+        catalog = self._catalog()
+        if catalog is None:
+            return None
+        return catalog.complete_grant_q(
             subject, user, permission, skipped=skipped)
 
     def permitted_grant_q(self, subject, user, permission, *, skipped=(),
                           conditions=(), binding=None, api=None):
         """Grant for a permitted-row filter."""
+        catalog = self._catalog()
+        if catalog is None:
+            return None
         model = subject.model if isinstance(subject, QuerySet) else subject
-        predicate, _owned = self._catalog().authorization_grant(
+        predicate, _owned = catalog.authorization_grant(
             subject, user, model, permission, conditions, binding,
             api=api, skipped=skipped)
         return predicate
@@ -108,6 +249,8 @@ class TrustModelBackendMixin(object):
         ):
             return queryset.none()
         catalog = self._catalog()
+        if catalog is None:
+            return queryset.none()
         has_plan, owns = catalog.authorization_preflight(
             queryset.model, conditions)
         if not has_plan or not owns:
@@ -129,7 +272,10 @@ class TrustModelBackendMixin(object):
         No applicable plan, or a user or permission that is not a saved
         model instance, returns an empty queryset and does not raise.
         """
-        return self._catalog().filter_by_permitted_content(
+        catalog = self._catalog()
+        if catalog is None:
+            return queryset.none()
+        return catalog.filter_by_permitted_content(
             queryset, user, permission, content=content, **skip_flags,
         )
 
@@ -141,13 +287,15 @@ class TrustModelBackendMixin(object):
         ``alias`` overrides ``TRUSTS_POLICY_DATABASE`` for this call.
         """
         resolved = resolve_policy_database(alias)
-        return _build_document((self._catalog(),), resolved)
+        catalog = self._catalog()
+        catalogs = () if catalog is None else (catalog,)
+        return _build_document(catalogs, resolved)
 
 
 def policy_document(backend=None, *, alias=None):
     """Policy document for one backend, or the whole project.
 
-    ``backend=None`` is every installed Trusts config, the document
+    ``backend=None`` is every configured Trusts backend, the document
     ``trusts_policy_sql`` renders. A dotted path is loaded the way
     ``User.objects.with_perm(..., backend=)`` loads one backend, and
     the result is that backend's ``policy_document()``.
@@ -228,19 +376,16 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     )
 
 
-def _mixin_required_message(config, backend_path):
-    return (
-        'Backend %s is not inside an app whose config extends '
-        'TrustsConfigMixin.' % backend_path
-        if config is None else
-        'App %s must extend TrustsConfigMixin.' % config.label)
-
-
 def _catalogs(backend):
-    """Listed backends, one entry per catalog object, in list order."""
+    """Listed backends, one entry per catalog object, in list order.
+
+    A backend with no catalog contributes nothing.
+    """
     chosen, seen = [], set()
     for item in trusts_backends(backend):
         catalog = item._catalog()
+        if catalog is None:
+            continue
         marker = id(catalog)
         if marker in seen:
             continue

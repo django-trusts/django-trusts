@@ -7,9 +7,10 @@ from types import MappingProxyType
 
 from django.test import SimpleTestCase
 
+import trusts.apps as apps_module
 import trusts.backends as backends
 import trusts.compile.catalogs as catalogs
-import trusts.compile.factory as factory
+import trusts.compile.compilers as compilers
 import trusts.decorators as decorators
 import trusts.inspect.checks as checks
 import trusts.inspect.snapshot as snapshot
@@ -32,11 +33,11 @@ def _imported_modules(module):
 class CatalogFactoryBoundaryTest(SimpleTestCase):
     def test_import_direction(self):
         catalog_imports = _imported_modules(catalogs)
-        factory_imports = _imported_modules(factory)
-        self.assertNotIn('trusts.compile.factory', catalog_imports)
+        compiler_imports = _imported_modules(compilers)
+        self.assertNotIn('trusts.compile.compilers', catalog_imports)
         self.assertNotIn('trusts.plan.rewrites', catalog_imports)
-        self.assertFalse(any(name.endswith('.factory') for name in catalog_imports))
-        self.assertIn('trusts.compile.catalogs', factory_imports)
+        self.assertFalse(any(name.endswith('.compilers') for name in catalog_imports))
+        self.assertIn('trusts.compile.catalogs', compiler_imports)
         for module in (backends, snapshot):
             found = _imported_modules(module)
             self.assertFalse(any(name.startswith('trusts.plan') for name in found))
@@ -44,11 +45,16 @@ class CatalogFactoryBoundaryTest(SimpleTestCase):
             self.assertFalse(any(
                 name.startswith('trusts.compile') for name in _imported_modules(module)
             ))
-        for module in (models, decorators, backends, checks, snapshot):
+        for module in (models, decorators, checks, snapshot):
             found = _imported_modules(module)
-            self.assertNotIn('trusts.compile.factory', found)
-            self.assertFalse(any(name.endswith('.factory') for name in found))
+            self.assertNotIn('trusts.compile.compilers', found)
+            self.assertFalse(any(name.endswith('.compilers') for name in found))
         self.assertNotIn('trusts.backends', _imported_modules(snapshot))
+        app_imports = _imported_modules(apps_module)
+        self.assertFalse(any(
+            name == 'trusts' or name.startswith('trusts.')
+            for name in app_imports
+        ))
 
     def test_catalog_methods_do_not_assign_fields(self):
         tree = ast.parse(inspect.getsource(catalogs.Catalog))

@@ -11,11 +11,13 @@ from tests.support import (
     configured_catalog,
     isolate_live_registry,
     compiler,
+    read_catalog,
+    write_catalog,
 )
 from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.models import Document, DocumentGrant
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Ref
 
 
 class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
@@ -27,11 +29,11 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
         self.contributor = apps.get_app_config('myapp')
         self.assertIsInstance(self.contributor, DocumentConfig)
         self._document_config = config_for_class(DocumentBackend)
-        self.saved_catalog = self._document_config.catalog
+        self.saved_catalog = read_catalog(self._document_config)
         self.live_catalog = configured_catalog(DOCUMENT_BACKEND)
 
     def tearDown(self):
-        self._document_config.catalog = self.saved_catalog
+        write_catalog(self._document_config, self.saved_catalog)
 
     def test_reenter_same_contributor_ready_is_noop(self):
         before = self.live_catalog.records

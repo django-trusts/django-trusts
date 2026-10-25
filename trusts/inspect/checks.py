@@ -19,7 +19,6 @@ from django.db import connections
 
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
-from trusts.backends import TrustModelBackendMixin
 from trusts.errors import (
     TrustsConfigurationError,
     TrustsMixinRequired,
@@ -110,8 +109,25 @@ def _load_listed():
                 id=CHECK_ID_UNBUILDABLE_BACKEND,
             ))
             continue
-        if isinstance(backend, TrustModelBackendMixin):
-            catalogs.setdefault(id(backend._catalog()), backend._catalog())
+        if not callable(getattr(backend, '_catalog', None)):
+            continue
+        if config is None or not callable(getattr(
+            config, 'get_or_create_config', None,
+        )):
+            _require_mixin(
+                errors, config, path,
+                (
+                    'Backend %s is not inside an app whose config extends '
+                    'TrustsConfigMixin.' % path
+                    if config is None else
+                    'App %s must extend TrustsConfigMixin.' % config.label
+                ),
+            )
+            continue
+        catalog = backend._catalog()
+        if catalog is None:
+            continue
+        catalogs.setdefault(id(catalog), catalog)
     return tuple(catalogs.values()), errors
 
 

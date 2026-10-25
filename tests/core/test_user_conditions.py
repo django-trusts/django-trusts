@@ -19,7 +19,7 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from trusts.plan.rewrites import bind_once
 from tests.support import scoped_permitted_content as filter_by_permitted_content
-from trusts.compile.nodes import Ref
+from trusts.compile.graph import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import granted
 from trusts.decorators import authorization_required
@@ -791,7 +791,8 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
         from django.apps import apps
         from tests.support import config_for_class
         self.config = apps.get_app_config('myapp')
-        self.original = config_for_class(DocumentBackend).catalog
+        from tests.support import read_catalog
+        self.original = read_catalog(config_for_class(DocumentBackend))
         self.original_sentinel = getattr(self.config, '_document_grant_registry_id', None)
         registry = compiler(path=DOCUMENT_BACKEND, user_model=get_user_model())
         registry.set_user_condition('staff', lambda u: u.is_staff)
@@ -947,25 +948,28 @@ def _seal_document_factory(factory):
     from tests.support import (
         config_for_class,
         mixin_configs,
+        read_catalog,
+        read_family,
         snapshot_config_catalogs,
+        write_catalog,
     )
     saved = snapshot_config_catalogs()
     config = config_for_class(DocumentBackend)
-    previous = config.catalog
-    family = config.family if previous is None else previous.family
+    previous = read_catalog(config)
+    family = read_family(config) if previous is None else previous.family
     factory.path = DOCUMENT_BACKEND
     factory.family = family
     catalog = built_catalog(factory)
     for installed in mixin_configs():
-        installed.catalog = catalog
+        write_catalog(installed, catalog)
     return saved
 
 def _restore_document_catalog(previous):
-    from tests.support import config_for_class, restore_config_catalogs
+    from tests.support import config_for_class, restore_config_catalogs, write_catalog
     if isinstance(previous, tuple) and previous and isinstance(previous[0], tuple):
         restore_config_catalogs(previous)
         return
-    config_for_class(DocumentBackend).catalog = previous
+    write_catalog(config_for_class(DocumentBackend), previous)
 _CATALOG_UNSET = object()
 
 def _donate_document(registry):
@@ -995,9 +999,9 @@ def _restore_document_registry(config, original, sentinel, saved_catalog=_CATALO
 
 def _install_document_registry(*, override):
     from django.apps import apps
-    from tests.support import config_for_class
+    from tests.support import config_for_class, read_catalog
     config = apps.get_app_config('myapp')
-    original = config_for_class(DocumentBackend).catalog
+    original = read_catalog(config_for_class(DocumentBackend))
     sentinel = getattr(config, '_document_grant_registry_id', None)
     registry = compiler(path=DOCUMENT_BACKEND, user_model=get_user_model())
     if override:
@@ -1248,9 +1252,9 @@ class PlainUserWithoutSuperuserTest(KernelHostRequiredMixin, TransactionTestCase
                 app_label = 'trusts_tests'
         self.assertFalse(any((field.name == 'is_superuser' for field in PlainPrincipal._meta.local_fields)))
         from django.apps import apps
-        from tests.support import config_for_class
+        from tests.support import config_for_class, read_catalog
         config = apps.get_app_config('myapp')
-        original = config_for_class(DocumentBackend).catalog
+        original = read_catalog(config_for_class(DocumentBackend))
         sentinel = getattr(config, '_document_grant_registry_id', None)
         saved_catalog = original
         with connection.schema_editor() as editor:

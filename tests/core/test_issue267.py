@@ -424,5 +424,5 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         self.assertFalse(catalog.has_perm(self.owner, _code(read), self.org))
 
     def _ref(self, model):
-        from trusts.compile.nodes import Ref
+        from trusts.compile.graph import Ref
         return Ref(model)
