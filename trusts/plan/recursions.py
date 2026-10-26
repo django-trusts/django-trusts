@@ -18,7 +18,26 @@ from trusts.plan.walk import (
     _render_reach_sql,
     _require_along_renderer,
     _unwrap_seed_sql,
+    _walk_identity_column,
 )
+
+
+def _grant_walk_membership(query, record, w_sql, w_params):
+    """``Q`` requiring this row's walk identity to be in ``W``.
+
+    One hop compares the root column. A longer path joins through every
+    hop and compares the walk-site column, the same lookup the forward
+    seed selects.
+    """
+    walk = record.along
+    if len(walk.walk_path) == 1:
+        return Q(_IdentInReach(
+            _grant_walk_attname(record), w_sql, w_params, walk.bound,
+        ))
+    return Q(_JoinedIdentInReach(
+        _walk_identity_column(query, walk),
+        w_sql, w_params, walk.bound,
+    ))
 
 
 class _IdentInReach(Expression):
@@ -36,6 +55,34 @@ class _IdentInReach(Expression):
         alias = compiler.query.get_initial_alias()
         sql = '%s.%s IN (%s)' % (qn(alias), qn(self.attname), self.w_sql)
         return sql, tuple(self.w_params)
+
+
+class _JoinedIdentInReach(Expression):
+    """Walk-site column ``IN (W)`` after the full path has been joined.
+
+    ``col`` is the identity on the walk site, not a column of the grant
+    root. One hop keeps ``_IdentInReach`` so that statement stays the
+    same. This node is built while ``GrantReach`` compiles, and the
+    outer walk owns the depth cap.
+    """
+
+    def __init__(self, col, w_sql, w_params, bound):
+        super().__init__(output_field=BooleanField())
+        self.col = col
+        self.w_sql = w_sql
+        self.w_params = w_params
+        self.along_bound = bound
+
+    def get_source_expressions(self):
+        return [self.col]
+
+    def set_source_expressions(self, exprs):
+        self.col = exprs[0]
+
+    def as_sql(self, compiler, connection):
+        lhs_sql, lhs_params = compiler.compile(self.col)
+        sql = '%s IN (%s)' % (lhs_sql, self.w_sql)
+        return sql, tuple(lhs_params) + tuple(self.w_params)
 
 
 class GrantReach(Expression):
@@ -158,10 +205,9 @@ class GrantReach(Expression):
             neighbor=_inverse_neighbor_sql,
         )
         inner = self.grant_query.clone()
-        inner.add_q(Q(_IdentInReach(
-            _grant_walk_attname(self.record),
-            w_sql, w_params, self.record.along.bound,
-        )))
+        inner.add_q(_grant_walk_membership(
+            inner, self.record, w_sql, w_params,
+        ))
         return Exists(inner).as_sql(compiler, connection)
 
 
@@ -223,6 +269,7 @@ class _AnchorInInverseReach(Expression):
         self.record = record
         self.along_bound = record.along.bound
         self.seed_query = _content_walk_seed(record.along, content)
+        self.identity_col = None
 
     def copy(self):
         clone = super().copy()
@@ -230,10 +277,31 @@ class _AnchorInInverseReach(Expression):
         return clone
 
     def get_source_expressions(self):
-        return [self.seed_query]
+        if self.identity_col is None:
+            return [self.seed_query]
+        return [self.seed_query, self.identity_col]
 
     def set_source_expressions(self, exprs):
         self.seed_query = exprs[0]
+        self.identity_col = exprs[1] if len(exprs) > 1 else None
+
+    def resolve_expression(
+        self, query=None, allow_joins=True, reuse=None,
+        summarize=False, for_save=False,
+    ):
+        clone = super().resolve_expression(
+            query, allow_joins, reuse, summarize, for_save,
+        )
+        if (
+            query is None
+            or len(self.record.along.walk_path) == 1
+            or self.identity_col is not None
+        ):
+            return clone
+        clone.identity_col = _walk_identity_column(
+            query, self.record.along, reuse,
+        )
+        return clone
 
     def as_sql(self, compiler, connection):
         _require_along_renderer(connection)
@@ -244,6 +312,10 @@ class _AnchorInInverseReach(Expression):
             self.record.along, seed_sql, seed_params, connection,
             neighbor=_inverse_neighbor_sql,
         )
+        if self.identity_col is not None:
+            lhs_sql, lhs_params = compiler.compile(self.identity_col)
+            sql = '%s IN (%s)' % (lhs_sql, w_sql)
+            return sql, tuple(lhs_params) + tuple(w_params)
         qn = connection.ops.quote_name
         alias = compiler.query.get_initial_alias()
         attname = _grant_walk_attname(self.record)

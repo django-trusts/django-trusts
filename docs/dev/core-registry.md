@@ -220,9 +220,9 @@ non-empty suffix selects the walk-site rows related to the bound
 content, such as Cabinet identities for a Sheet. The recursive member
 does not reference the outer user. Shape S walks to parents, shape C
 walks to children, and shape E walks from child to parent. Eligible
-grants and candidate users join that walk outside the CTE, and the
-grant query is correlated to the outer candidate user only after the
-walk. PostgreSQL still appends the one `CYCLE` clause. SQLite and MySQL
+grants and candidate users join that walk outside the CTE along the
+full path from the grant row to the walk site, and the grant query is
+correlated to the outer candidate user only after the walk. PostgreSQL still appends the one `CYCLE` clause. SQLite and MySQL
 8.4+ keep the plain statement. MariaDB still fails closed before that
 SQL. The lockfile records the plain reverse statement with the forward
 statements.
