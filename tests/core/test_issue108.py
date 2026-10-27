@@ -1,274 +1,159 @@
-"""#108 / #111: implementation-owned registry after the library cutover.
+"""#108 / #111: each app config owns its catalog.
 
-Helper + owner resolvers stay. Core ships no ``kernel_config()``.
-Mixin identity stays. Historical core backend is gone.
+Core ships no ``kernel_config()``. Mixin identity stays.
+Historical core backend is gone. A backend outside a
+``TrustsConfigMixin`` app is ``trusts.E012``.
 """
 
-from unittest.mock import patch
-
-from django.apps import AppConfig as DjangoAppConfig
-from django.core.exceptions import ImproperlyConfigured
+from django.apps import apps
+from django.core.checks import run_checks
 from django.test import SimpleTestCase, override_settings
 from django.test.utils import isolate_apps
 
 import tests as tests_module
-from tests.apps import TestsConfig, live_config
-from tests.backends import HostTrustModelBackend, MixinOnlyBackend
+from tests.apps import TestsConfig
+from tests.core import KernelHostRequiredMixin, kernel_host_listed
 from tests.kernel_host.apps import HOST_BACKEND
-from trusts.apps import (
-    TrustsImplementationConfig,
-    _listed_mixin_paths,
-    implementation_configs,
-    implementation_for_class,
-    implementation_for_path,
+from tests.support import (
+    app_catalog_path, configured_catalog, read_catalog, sweep_listed_backends,
 )
-from trusts.backends import TrustModelBackendMixin
-from trusts.core import TrustsConfigurationError, TrustsRegistry
+from trusts.apps import TrustsConfigMixin
+from trusts.models import PermittedUsersManagerMixin
 
 
-HOST = 'tests.backends.HostTrustModelBackend'
-MIXIN = 'tests.backends.MixinOnlyBackend'
-ALIASED = 'tests.backends.AliasedTrustModelBackend'
+HOST = 'tests.kernel_host.backends.HostTrustModelBackend'
+OUTSIDE = 'tests.gh_permissions.backends.OutsideBackend'
 
 
-class HostImplConfig(TrustsImplementationConfig):
-    name = 'tests'
-    label = 'trusts_impl_host'
-    trusts_backend_paths = (HOST,)
-
-
-class MixinImplConfig(TrustsImplementationConfig):
-    name = 'tests'
-    label = 'trusts_impl_mixin'
-    trusts_backend_paths = (MIXIN,)
-
-
-class EmptyImplConfig(TrustsImplementationConfig):
-    name = 'tests'
-    label = 'trusts_impl_empty'
-    trusts_backend_paths = ()
-
-
-class DuplicatePathImplConfig(TrustsImplementationConfig):
-    name = 'tests'
-    label = 'trusts_impl_dup_path'
-    trusts_backend_paths = (HOST, HOST)
-
-
-class _AppsView(object):
-    def __init__(self, configs, ready=True):
-        self._configs = list(configs)
-        self.ready = ready
-
-    def get_app_configs(self):
-        return tuple(self._configs)
-
-    def is_installed(self, name):
-        return False
-
-
-def _bind(config_cls, configs=None, ready=True):
-    config = config_cls('tests', tests_module)
-    view = _AppsView(
-        configs if configs is not None else [config],
-        ready=ready,
+def _app_catalogs():
+    return tuple(
+        catalog for config in apps.get_app_configs()
+        if isinstance(config, TrustsConfigMixin)
+        for catalog in (read_catalog(config),)
+        if catalog is not None
     )
-    config.apps = view
-    if configs is None:
-        view._configs = [config]
-    return config
 
 
-class ImplementationHelperSurfaceTest(SimpleTestCase):
-    def test_core_is_not_an_implementation_appconfig(self):
-        import trusts.apps as apps_mod
+class ImplementationRoutingTest(KernelHostRequiredMixin, SimpleTestCase):
+    def test_exact_path_routing_is_the_owning_config(self):
+        host = configured_catalog(HOST)
+        owner = apps.get_app_config('trusts_kernel_host')
+        self.assertEqual(host.path, app_catalog_path(owner))
+        self.assertIs(host, read_catalog(owner))
+        self.assertEqual(host.family, 'relationship')
 
-        self.assertFalse(hasattr(apps_mod, 'AppConfig'))
-        self.assertFalse(hasattr(apps_mod, 'kernel_config'))
-        self.assertFalse(TrustsImplementationConfig.default)
-        self.assertIsInstance(live_config(), TrustsImplementationConfig)
-        self.assertIn(live_config(), implementation_configs())
-
-    def test_helper_and_resolvers_import(self):
-        self.assertTrue(issubclass(TrustsImplementationConfig, DjangoAppConfig))
-        self.assertTrue(callable(implementation_for_path))
-        self.assertTrue(callable(implementation_for_class))
-        self.assertTrue(callable(implementation_configs))
-
-    def test_mixin_lives_only_on_trusts_backends(self):
+    def test_backend_outside_a_mixin_app_fails_loud(self):
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, OUTSIDE)):
+            messages = [
+                message for message in run_checks()
+                if getattr(message, 'id', None) == 'trusts.E012'
+            ]
         self.assertEqual(
-            TrustModelBackendMixin.__module__, 'trusts.backends',
+            [message.obj.label for message in messages],
+            ['gh_permissions'],
         )
 
-    def test_historical_backend_no_longer_imports(self):
-        import trusts.backends as backends_mod
 
-        self.assertFalse(hasattr(backends_mod, 'TrustModelBackend'))
-        self.assertFalse(hasattr(backends_mod, 'HistoricalGroupQueryCompiler'))
-
-    def test_generic_declarations_import_without_kernel_config(self):
-        import trusts.apps as apps_mod
-        from trusts.core import Ref, TrustsRegistry, filter_by_permitted_content
-        from trusts.query import AuthorizedManager, AuthorizedQuerySet
-
-        self.assertFalse(hasattr(apps_mod, 'kernel_config'))
-        self.assertTrue(callable(filter_by_permitted_content))
-        self.assertTrue(issubclass(AuthorizedQuerySet, object))
-        self.assertTrue(issubclass(AuthorizedManager, object))
-        registry = TrustsRegistry()
-        self.assertEqual(registry.records, ())
-        self.assertIsNotNone(Ref)
-
-
-class ImplementationRoutingTest(SimpleTestCase):
-    def test_exact_path_routing_is_independent_of_app_order(self):
-        host = _bind(HostImplConfig)
-        mixin = _bind(MixinImplConfig)
-        for order in ((host, mixin), (mixin, host)):
-            view = _AppsView(order)
-            host.apps = view
-            mixin.apps = view
-            self.assertIs(implementation_for_path(HOST, view), host)
-            self.assertIs(implementation_for_path(MIXIN, view), mixin)
-            self.assertIs(
-                implementation_for_class(HostTrustModelBackend, view), host,
-            )
-            self.assertIs(
-                implementation_for_class(MixinOnlyBackend, view), mixin,
-            )
-
-    def test_missing_owner_fails_loud_before_sql(self):
-        view = _AppsView([])
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            implementation_for_path(HOST, view)
-        self.assertIn('No implementation owns', str(ctx.exception))
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            implementation_for_class(HostTrustModelBackend, view)
-        self.assertIn('no implementation owner', str(ctx.exception))
-        self.assertIsNone(
-            implementation_for_class(
-                HostTrustModelBackend, view, required=False,
-            )
+class ImplementationReadyTest(KernelHostRequiredMixin, SimpleTestCase):
+    def test_empty_authentication_backends_still_build_installed_configs(self):
+        before = [catalog.path for catalog in _app_catalogs()]
+        with override_settings(AUTHENTICATION_BACKENDS=()):
+            sweep_listed_backends()
+        self.assertEqual(
+            [catalog.path for catalog in _app_catalogs()],
+            before,
+        )
+        self.assertIn(
+            app_catalog_path(apps.get_app_config('trusts_kernel_host')),
+            before,
         )
 
-    def test_duplicate_owner_fails_loud(self):
-        first = _bind(HostImplConfig)
-        second = _bind(HostImplConfig)
-        view = _AppsView([first, second])
-        first.apps = view
-        second.apps = view
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            implementation_for_path(HOST, view)
-        self.assertIn('multiple implementation owners', str(ctx.exception))
-        with self.assertRaises(TrustsConfigurationError):
-            implementation_for_class(HostTrustModelBackend, view)
+    def test_duplicate_backend_listing_does_not_add_a_catalog(self):
+        before = _app_catalogs()
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
+            sweep_listed_backends()
+        after = _app_catalogs()
+        self.assertEqual(
+            [catalog.path for catalog in after],
+            [catalog.path for catalog in before],
+        )
 
-    def test_class_path_identity_mismatch_fails_loud(self):
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST, ALIASED)):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                _listed_mixin_paths()
-            self.assertIn('multiple paths', str(ctx.exception))
+    def test_second_ready_does_not_replace_catalogs(self):
+        config = apps.get_app_config('trusts_kernel_host')
+        before = configured_catalog(HOST)
+        config.ready()
+        config.ready()
+        rebuilt = configured_catalog(HOST)
+        self.assertEqual(rebuilt.records, before.records)
+        self.assertEqual(rebuilt.path, before.path)
+        self.assertFalse(hasattr(config, 'registries'))
+        self.assertFalse(hasattr(config, 'trusts_backend_paths'))
 
-
-class ImplementationReadyTest(SimpleTestCase):
-    def test_empty_owned_paths_fail_at_startup(self):
-        config = _bind(EmptyImplConfig)
-        with self.assertRaises(ImproperlyConfigured) as ctx:
-            config.ready()
-        self.assertIn('trusts_backend_paths', str(ctx.exception))
-
-    def test_repeated_owned_path_fails_at_startup(self):
-        config = _bind(DuplicatePathImplConfig)
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
-            with self.assertRaises(ImproperlyConfigured) as ctx:
-                config.ready()
-        self.assertIn('must not repeat', str(ctx.exception))
-
-    def test_owned_path_missing_from_settings_fails_at_startup(self):
-        config = _bind(HostImplConfig)
-        with override_settings(AUTHENTICATION_BACKENDS=(MIXIN,)):
-            with self.assertRaises(ImproperlyConfigured) as ctx:
-                config.ready()
-        self.assertIn('not listed in AUTHENTICATION_BACKENDS', str(ctx.exception))
-
-    def test_duplicate_owner_fails_at_startup(self):
-        first = _bind(HostImplConfig)
-        second = _bind(HostImplConfig)
-        view = _AppsView([first, second], ready=False)
-        first.apps = view
-        second.apps = view
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                first.ready()
-        self.assertIn('multiple implementation owners', str(ctx.exception))
-
-    def test_ready_is_idempotent_and_does_not_replace_registries(self):
-        config = _bind(HostImplConfig, ready=False)
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
-            config.ready()
-            first = config.registries[HOST]
-            holder = config.registries
-            config.ready()
-            self.assertIs(config.registries, holder)
-            self.assertIs(config.registries[HOST], first)
-
-    def test_donation_uses_implementation_for_path(self):
-        config = _bind(HostImplConfig, ready=False)
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
-            config.ready()
-            owner = implementation_for_path(HOST, config.apps)
-            self.assertIs(owner, config)
-            handle = owner.configured_backend(HOST)
-            before = handle.registry.records
-            handle.registry.register  # surface exists
-            self.assertIs(handle.registry, config.registries[HOST])
-            self.assertEqual(handle.registry.records, before)
+    def test_listed_path_is_the_config_label(self):
+        catalog = configured_catalog(HOST)
+        owner = apps.get_app_config('trusts_kernel_host')
+        self.assertIs(catalog, read_catalog(owner))
+        self.assertEqual(catalog.path, app_catalog_path(owner))
+        self.assertEqual(catalog.records, read_catalog(owner).records)
 
 
-class MixinOwnerResolveTest(SimpleTestCase):
-    def test_owner_absent_is_configuration_error(self):
+class MixinCatalogResolveTest(SimpleTestCase):
+    def test_outside_backend_is_not_constructed(self):
+        if not apps.is_installed('tests.gh_permissions'):
+            self.skipTest('gh_permissions is not installed on the pair')
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, OUTSIDE, OUTSIDE)):
+            messages = [
+                message for message in run_checks()
+                if getattr(message, 'id', None) == 'trusts.E012'
+            ]
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].obj.label, 'gh_permissions')
+
+    def test_app_catalogs_follow_installed_apps_not_backend_duplicates(self):
+        from django.contrib.auth import get_user_model
+        from django.db.models.query import QuerySet
+
+        from tests.backends import MixinOnlyBackend
+
         backend = MixinOnlyBackend()
-        with patch('trusts.apps.implementation_configs', return_value=()):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                backend._trusts_config()
-            self.assertIn('no implementation owner', str(ctx.exception))
+        User = get_user_model()
 
-    def test_owner_present_resolves(self):
-        owner = _bind(HostImplConfig, ready=False)
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
-            owner.ready()
-            backend = HostTrustModelBackend()
-            with patch(
-                'trusts.apps.implementation_configs',
-                return_value=(owner,),
-            ):
-                config = backend._trusts_config()
-                self.assertIs(config, owner)
-                handle = backend._own_handle()
-                self.assertEqual(handle.path, HOST)
-                self.assertIs(handle.registry, owner.registries[HOST])
+        class GrantUsers(PermittedUsersManagerMixin, User._default_manager.__class__):
+            pass
 
-    def test_duplicate_owner_fails_without_fallback(self):
-        first = _bind(HostImplConfig)
-        second = _bind(HostImplConfig)
-        backend = HostTrustModelBackend()
-        with patch(
-            'trusts.apps.implementation_configs',
-            return_value=(first, second),
-        ):
-            with self.assertRaises(TrustsConfigurationError):
-                backend._trusts_config()
+        manager = GrantUsers()
+        manager.model = User
+        held = manager.permitted(object(), 'myapp.change_document')
+        self.assertIsInstance(held, QuerySet)
+        self.assertIs(held.model, User)
+        self.assertEqual(backend.get_all_permissions(object(), None), set())
+        self.assertEqual(backend.get_group_permissions(object(), None), set())
+        host = configured_catalog(HOST)
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
+            found = _app_catalogs()
+        self.assertIn(host, found)
+        self.assertEqual(len(found), len(_app_catalogs()))
 
-    def test_live_host_is_the_kernel_suite_owner(self):
+    def test_listed_host_catalog_path_is_the_config_class(self):
+        if not kernel_host_listed():
+            self.skipTest('kernel-only host path is not listed on the pair')
+        catalog = configured_catalog(HOST)
+        self.assertEqual(
+            catalog.path,
+            app_catalog_path(apps.get_app_config('trusts_kernel_host')),
+        )
+        self.assertIs(
+            catalog, read_catalog(apps.get_app_config('trusts_kernel_host')),
+        )
+
+    def test_live_host_is_the_kernel_suite_catalog(self):
         from django.conf import settings
 
-        if HOST_BACKEND not in (getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ()):
-            self.skipTest('kernel-only host path is not listed on the IIa pair')
-        owner = live_config()
-        self.assertEqual(implementation_for_path(HOST_BACKEND), owner)
-        self.assertIs(
-            implementation_for_class(HostTrustModelBackend), owner,
-        )
+        if HOST_BACKEND not in settings.AUTHENTICATION_BACKENDS:
+            self.skipTest('kernel-only host path is not listed on the pair')
+        catalog = configured_catalog(HOST_BACKEND)
+        self.assertIs(catalog, configured_catalog(HOST))
+        self.assertIn(catalog, _app_catalogs())
 
 
 @isolate_apps(
@@ -279,34 +164,26 @@ class MixinOwnerResolveTest(SimpleTestCase):
 )
 class IsolatedImplementationStoreTest(SimpleTestCase):
     def test_implementation_registry_does_not_touch_live_owner(self):
-        live = live_config()
-        before = dict(live.registries)
-        before_records = {
-            path: registry.records for path, registry in before.items()
-        }
-        impl = _bind(HostImplConfig, ready=False)
-        impl.apps = self.isolated_apps
+        if not kernel_host_listed():
+            self.skipTest('kernel-only host path is not listed on the pair')
+        before = configured_catalog(HOST)
+        before_records = before.records
         contributor = TestsConfig('tests', tests_module)
         contributor.apps = self.isolated_apps
         contributor.ready()
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
-            view = _AppsView([impl], ready=False)
-            impl.apps = view
-            impl.ready()
-            isolated = impl.registries[HOST]
-            self.assertIsInstance(isolated, TrustsRegistry)
-        self.assertEqual(
-            {path: registry.records for path, registry in live.registries.items()},
-            before_records,
-        )
-        for path, registry in before.items():
-            self.assertIs(live.registries[path], registry)
+        config = apps.get_app_config('trusts_kernel_host')
+        config.ready()
+        rebuilt = configured_catalog(HOST)
+        self.assertEqual(rebuilt.records, before_records)
+        self.assertEqual(rebuilt.path, before.path)
+        self.assertIs(rebuilt, before)
+        self.assertFalse(hasattr(config, 'registries'))
 
     def test_isolate_apps_without_implementation_does_not_donate(self):
-        live = live_config()
-        before = live.registry.records
+        live = configured_catalog(HOST)
+        before = live.records
         self.assertFalse(self.isolated_apps.is_installed('trusts'))
-        impl = HostImplConfig('tests', tests_module)
-        impl.apps = self.isolated_apps
-        self.assertEqual(implementation_configs(self.isolated_apps), ())
-        self.assertEqual(live.registry.records, before)
+        contributor = TestsConfig('tests', tests_module)
+        contributor.apps = self.isolated_apps
+        contributor.ready()
+        self.assertEqual(live.records, before)

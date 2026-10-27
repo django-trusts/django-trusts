@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Installed-wheel Pyright proof for public ``configured_backend()`` inference.
+"""Installed-wheel Pyright proof for ``get_registry().register`` inference.
 
 Must run from outside the checkout after installing the built wheel.
 A valid consumer must be clean; ``t.not_a_field`` must be a diagnostic.
-The consumer uses the documented ``TrustsImplementationConfig`` path and
+The consumer registers through ``DocumentBackend().get_registry()`` and
 does not import or annotate ``BackendHandle``.
 """
 
@@ -21,7 +21,8 @@ from pathlib import Path
 OK_SOURCE = '''\
 from django.db import models
 
-from trusts.apps import TrustsImplementationConfig
+from documents.backends import DocumentBackend
+from trusts.apps import TrustsConfigMixin
 
 
 class AnnotatedGrant(models.Model):
@@ -34,28 +35,26 @@ class AnnotatedGrant(models.Model):
         app_label = "pyright_proof"
 
 
-class DocumentsConfig(TrustsImplementationConfig):
+class DocumentsConfig(TrustsConfigMixin):
     name = "pyright_proof"
-    trusts_backend_paths = (
-        "documents.backends.DocumentBackend",
-    )
+    label = "pyright_proof"
 
     def ready(self):
-        super().ready()
-        backend = self.configured_backend()
-        backend.register(
+        DocumentBackend().get_registry().register(
             trust=AnnotatedGrant,
             user=lambda t: t.user,
             permission=lambda t: t.permission,
             content=lambda t: t.document,
             condition=lambda t: t.team == t.document,
         )
+        super().ready()
 '''
 
 MISSING_SOURCE = '''\
 from django.db import models
 
-from trusts.apps import TrustsImplementationConfig
+from documents.backends import DocumentBackend
+from trusts.apps import TrustsConfigMixin
 
 
 class AnnotatedGrant(models.Model):
@@ -68,38 +67,43 @@ class AnnotatedGrant(models.Model):
         app_label = "pyright_proof"
 
 
-class DocumentsConfig(TrustsImplementationConfig):
+class DocumentsConfig(TrustsConfigMixin):
     name = "pyright_proof"
-    trusts_backend_paths = (
-        "documents.backends.DocumentBackend",
-    )
+    label = "pyright_proof"
 
     def ready(self):
-        super().ready()
-        backend = self.configured_backend()
-        backend.register(
+        DocumentBackend().get_registry().register(
             trust=AnnotatedGrant,
             user=lambda t: t.user,
             permission=lambda t: t.permission,
             content=lambda t: t.document,
             condition=lambda t: t.not_a_field == t.document,
         )
+        super().ready()
+'''
+
+# Host app the consumer imports. It is not part of the consumer.
+FIXTURE_BACKEND = '''\
+from django.contrib.auth.backends import ModelBackend
+
+from trusts.backends import TrustModelBackendMixin
+
+
+class DocumentBackend(TrustModelBackendMixin, ModelBackend):
+    pass
 '''
 
 CONFIG = '''\
 {
   "typeCheckingMode": "basic",
   "pythonVersion": "3.12",
-  "reportMissingImports": "warning"
+  "reportMissingImports": "warning",
+  "extraPaths": ["fixture"],
+  "executionEnvironments": [
+    {"root": ".", "extraPaths": ["fixture"]}
+  ]
 }
 '''
-
-
-def _reject_handle_annotation(source: str, label: str) -> None:
-    if 'BackendHandle' in source:
-        raise SystemExit(
-            '%s consumer must not import or annotate BackendHandle' % label
-        )
 
 
 def main() -> int:
@@ -114,13 +118,14 @@ def main() -> int:
             % cwd
         )
 
-    _reject_handle_annotation(OK_SOURCE, 'valid')
-    _reject_handle_annotation(MISSING_SOURCE, 'missing-attribute')
-
     ok = Path('register_ok.py')
     missing = Path('register_missing.py')
     ok.write_text(OK_SOURCE)
     missing.write_text(MISSING_SOURCE)
+    fixture = Path('fixture') / 'documents'
+    fixture.mkdir(parents=True)
+    (fixture / '__init__.py').write_text('')
+    (fixture / 'backends.py').write_text(FIXTURE_BACKEND)
     Path('pyrightconfig.json').write_text(CONFIG)
 
     pyright = shutil.which('pyright')
@@ -137,7 +142,8 @@ def main() -> int:
         text=True,
         env=env,
     )
-    if ok_run.returncode != 0:
+    ok_diagnostics = _diagnostics(ok_run)
+    if ok_run.returncode != 0 or ok_diagnostics:
         raise SystemExit(
             'valid consumer failed Pyright:\n%s\n%s'
             % (ok_run.stdout, ok_run.stderr)
@@ -150,30 +156,20 @@ def main() -> int:
         text=True,
         env=env,
     )
-    payload = json.loads(miss_run.stdout or '{}')
-    diagnostics = payload.get('generalDiagnostics') or []
-    texts = [
-        '%s %s' % (item.get('message', ''), item.get('rule', ''))
-        for item in diagnostics
-    ]
-    joined = '\n'.join(texts)
-    if miss_run.returncode == 0:
+    diagnostics = _diagnostics(miss_run)
+    if len(diagnostics) != 1 or 'not_a_field' not in diagnostics[0].get('message', ''):
         raise SystemExit(
-            'missing-attribute consumer was clean; expected a diagnostic'
+            'missing-attribute consumer diagnostics: %r'
+            % diagnostics
         )
-    if 'not_a_field' not in joined and not any(
-        'not_a_field' in (item.get('file', '') + item.get('message', ''))
-        for item in diagnostics
-    ):
-        raw_messages = [item.get('message', '') for item in diagnostics]
-        if not any('not_a_field' in msg for msg in raw_messages):
-            raise SystemExit(
-                'missing-attribute consumer failed, but not for not_a_field: %r'
-                % raw_messages
-            )
     print('pyright valid consumer clean')
     print('pyright missing attribute diagnostic')
     return 0
+
+
+def _diagnostics(run: subprocess.CompletedProcess[str]) -> list:
+    payload = json.loads(run.stdout or '{}')
+    return list(payload.get('generalDiagnostics') or [])
 
 
 if __name__ == '__main__':

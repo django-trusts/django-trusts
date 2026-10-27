@@ -8,23 +8,25 @@ only where the delegation and the sponsor's ordinary permission both
 reach the prefix.
 """
 
+import json
+import yaml
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.core.exceptions import PermissionDenied
-from django.db import models
+from django.db import connection, models
 from django.http import HttpRequest
-from django.test import SimpleTestCase, TransactionTestCase
-from django.test.utils import isolate_apps
+from django.test import TransactionTestCase
+from django.test.utils import CaptureQueriesContext, isolate_apps
 
 from tests.core.test_issue282 import _handle, _listed, _permission, _tables
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.core import (
-    TrustsConfigurationError,
-    common_permissions,
-    filter_by_permitted_content,
+from tests.support import (
+    render_configured_policy,
+    scoped_permitted_content as filter_by_permitted_content,
+    built_catalog,
 )
+from trusts.errors import TrustsConfigurationError
 from trusts.decorators import authorization_required
-from trusts.query import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
+from trusts.models import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
 
 
 def _request(user):
@@ -35,28 +37,41 @@ def _request(user):
     return request
 
 
+def _collapsed_sql(sql):
+    return ''.join(sql.split())
+
+
+def _lockfile_constant(token):
+    """Python value of one ``source=value`` lockfile token.
+
+    A bare call input has no ``=`` and is not a recorded constant.
+    """
+    if not isinstance(token, str) or '=' not in token:
+        return None
+    literal = token.split('=', 1)[1]
+    if literal == 'True':
+        return True
+    if literal == 'False':
+        return False
+    if literal == 'null':
+        return None
+    if literal[:1] in '"{[':
+        return json.loads(literal)
+    if literal.lstrip('-').isdigit():
+        return int(literal)
+    return float(literal)
+
+
 def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     """The lockfile statement is the SQL Django runs.
 
     A ``source=value`` token is that executed constant. A bare
-    ``$user.id`` style token is a call input and is not compared to
-    the sentinel. The SQL text is that statement broken between tokens.
+    ``$user.id`` style token is a call input and is not compared.
+    Whitespace in the lockfile SQL is the only difference from the
+    statement Django compiled.
     """
-    from django.db import connection
-    from django.test.utils import CaptureQueriesContext
-
-    from trusts.policy_lock import (
-        _CALL_INPUT,
-        _json_const,
-        _load_policy_sql_document,
-        _presented_const,
-        _role_sentinel,
-        render_policy_sql_bytes,
-    )
-    from trusts.policy_sql_format import _format_policy_sql, _tokenize_policy_sql
-
-    document = _load_policy_sql_document(
-        render_policy_sql_bytes(handles=[handle]),
+    document = yaml.safe_load(
+        render_configured_policy(handle),
     )
     test.assertEqual(document['schema_version'], 1)
     content = document['backends'][0]['contents'][0]
@@ -67,13 +82,13 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     ]
     test.assertEqual(len(rows), 1)
     row = rows[0]
-    record = handle.registry.plan_for(content_model).records[0]
+    record = built_catalog(handle).plan_for(content_model).records[0]
     queryset = filter_by_permitted_content(
         prefix_model._default_manager.all(),
-        _role_sentinel(record, 'user', 'default'),
-        _role_sentinel(record, 'permission', 'default'),
+        record.user_model(pk=1),
+        record.permission_model(pk=1),
         content=content_model,
-        handles=(handle,),
+        registry=built_catalog(handle),
     )
     recorded = []
 
@@ -97,25 +112,14 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     test.assertEqual(len(captured.captured_queries), 1)
     raw_sql, raw_params, logged = recorded[0]
     test.assertEqual(captured.captured_queries[0]['sql'], logged)
-    test.assertEqual(row['sql'], _format_policy_sql(raw_sql))
-    test.assertEqual(
-        [token for token, _spaced in _tokenize_policy_sql(row['sql'])],
-        [token for token, _spaced in _tokenize_policy_sql(raw_sql)],
-    )
+    test.assertEqual(_collapsed_sql(row['sql']), _collapsed_sql(raw_sql))
     test.assertEqual(row['sql'].count('%s'), len(row['params']))
     test.assertEqual(len(row['params']), len(raw_params))
     for token, value in zip(row['params'], raw_params):
-        parsed = _presented_const(token)
-        if parsed is _CALL_INPUT:
+        if '=' not in token:
             continue
-        test.assertEqual(parsed, _json_const(value))
+        test.assertEqual(_lockfile_constant(token), value)
     return row
-
-
-class Issue282PermittedContentSuiteRegistrationTest(SimpleTestCase):
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue282_permitted_content', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue282_permitted_content', PAIR_KERNEL_SUITE)
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -212,7 +216,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
                skip_is_active=False):
         sheets = list(self.Sheet.objects.all())
         with _listed(handle):
-            authorized = set(handle.registry.filter_authorized(
+            authorized = set(built_catalog(handle).filter_authorized(
                 self.Sheet.objects.all(), user, permission,
                 skip_is_active=skip_is_active,
             ).values_list('pk', flat=True))
@@ -227,7 +231,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
                 )
             listed = filter_by_permitted_content(
                 self.Cabinet.objects.all(), user, permission,
-                content=self.Sheet, handles=(handle,),
+                content=self.Sheet, registry=built_catalog(handle),
                 skip_is_active=skip_is_active,
             )
             self.assertIsNone(listed._result_cache)
@@ -317,7 +321,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
                 user=self.alice, folder=root, permission=change,
             )
             with _listed(handle):
-                authorized = set(handle.registry.filter_authorized(
+                authorized = set(built_catalog(handle).filter_authorized(
                     Payload.objects.all(), self.alice, change,
                 ).values_list('pk', flat=True))
             self.assertEqual(
@@ -326,12 +330,12 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
             )
             folders = set(filter_by_permitted_content(
                 Folder.objects.all(), self.alice, change,
-                content=Payload, handles=(handle,),
+                content=Payload, registry=built_catalog(handle),
             ).values_list('pk', flat=True))
             self.assertEqual(folders, {root.pk, child.pk})
             found_rows = set(filter_by_permitted_content(
                 Row.objects.all(), self.alice, change,
-                content=Payload, handles=(handle,),
+                content=Payload, registry=built_catalog(handle),
             ).values_list('pk', flat=True))
             self.assertEqual(
                 found_rows, {rows[root.pk].pk, rows[child.pk].pk},
@@ -416,7 +420,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
                 user=self.alice, office=office, permission=change,
             )
             with _listed(handle):
-                authorized = set(handle.registry.filter_authorized(
+                authorized = set(built_catalog(handle).filter_authorized(
                     AncSheet.objects.all(), self.alice, change,
                 ).values_list('pk', flat=True))
             self.assertEqual(
@@ -425,13 +429,13 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
             )
             offices = set(filter_by_permitted_content(
                 Office.objects.all(), self.alice, change,
-                content=AncSheet, handles=(handle,),
+                content=AncSheet, registry=built_catalog(handle),
             ).values_list('pk', flat=True))
             self.assertEqual(offices, {office.pk})
             self.assertNotIn(other.pk, offices)
             cabinets = set(filter_by_permitted_content(
                 AncCabinet.objects.all(), self.alice, change,
-                content=AncSheet, handles=(handle,),
+                content=AncSheet, registry=built_catalog(handle),
             ).values_list('pk', flat=True))
             self.assertEqual(cabinets, {root.pk, child.pk})
             self.assertNotIn(past.pk, cabinets)
@@ -551,7 +555,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
     def _permitted_content(self, handle, user, *, skip_is_active=False):
         return set(filter_by_permitted_content(
             self.Cabinet.objects.all(), user, self.change,
-            content=self.Sheet, handles=(handle,),
+            content=self.Sheet, registry=built_catalog(handle),
             skip_is_active=skip_is_active,
         ).values_list('pk', flat=True))
 
@@ -736,7 +740,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             with self.assertRaises(TrustsConfigurationError):
                 filter_by_permitted_content(
                     self.Cabinet.objects.all(), self.delegate, change,
-                    content=Attachment, handles=(handle,),
+                    content=Attachment, registry=built_catalog(handle),
                 )
 
     def test_delegation_without_an_ordinary_grant_lists_nothing(self):
@@ -860,13 +864,13 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             self.assertEqual(authorized, {sheets[root.pk].pk})
             offices = set(filter_by_permitted_content(
                 Office.objects.all(), self.delegate, change,
-                content=AncSheet, handles=(handle,),
+                content=AncSheet, registry=built_catalog(handle),
             ).values_list('pk', flat=True))
             self.assertEqual(offices, {office.pk})
             self.assertNotIn(other.pk, offices)
             cabinets = set(filter_by_permitted_content(
                 AncCabinet.objects.all(), self.delegate, change,
-                content=AncSheet, handles=(handle,),
+                content=AncSheet, registry=built_catalog(handle),
             ).values_list('pk', flat=True))
             self.assertEqual(cabinets, {root.pk})
             self.assertNotIn(child.pk, cabinets)
@@ -983,13 +987,13 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             self.assertIn(self.delegate.pk, permitted)
             offices = set(filter_by_permitted_content(
                 Office.objects.all(), self.delegate, change,
-                content=WalkSheet, handles=(handle,),
+                content=WalkSheet, registry=built_catalog(handle),
             ).values_list('pk', flat=True))
             self.assertEqual(offices, {office.pk})
             self.assertNotIn(other.pk, offices)
             cabinets = set(filter_by_permitted_content(
                 WalkCabinet.objects.all(), self.delegate, change,
-                content=WalkSheet, handles=(handle,),
+                content=WalkSheet, registry=built_catalog(handle),
             ).values_list('pk', flat=True))
             self.assertEqual(cabinets, {root.pk})
             both = _handle('tests.core.issue282-sponsor-ancestor-both')
@@ -1017,7 +1021,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             )
             both_offices = set(filter_by_permitted_content(
                 Office.objects.all(), self.delegate, change,
-                content=WalkSheet, handles=(both,),
+                content=WalkSheet, registry=built_catalog(both),
             ).values_list('pk', flat=True))
             self.assertEqual(both_offices, {office.pk})
             self.assertNotIn(other.pk, both_offices)
@@ -1118,7 +1122,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
                 with self.assertRaises(TrustsConfigurationError):
                     filter_by_permitted_content(
                         model.objects.all(), self.delegate, change,
-                        content=Payload, handles=(handle,),
+                        content=Payload, registry=built_catalog(handle),
                     )
 
     def test_delegated_grant_lockfile_matches_the_executed_statement(self):
@@ -1137,7 +1141,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class AlongSurfaceAgreementTest(TransactionTestCase):
-    """``common_permissions``, ``authorization_required``, and Trust content.
+    """``permissions_for``, ``authorization_required``, and Trust content.
 
     The protected object is a Trust. ``along=`` walks ``parent`` with
     bound 1, so the child trust is permitted and the trust past that
@@ -1201,18 +1205,17 @@ class AlongSurfaceAgreementTest(TransactionTestCase):
         child_only = self.Trust.objects.filter(pk=self.child.pk)
         past_only = self.Trust.objects.filter(pk=self.past.pk)
         mixed = self.Trust.objects.filter(pk__in=[self.child.pk, self.past.pk])
+        catalog = built_catalog(self.handle)
         self.assertEqual(
-            set(common_permissions(
-                (self.handle,), child_only, self.alice,
-            ).values_list('pk', flat=True)),
+            set(catalog.permissions_for(self.alice, child_only).values_list('pk', flat=True)),
             {self.change.pk},
         )
         self.assertEqual(
-            list(common_permissions((self.handle,), past_only, self.alice)),
+            list(catalog.permissions_for(self.alice, past_only)),
             [],
         )
         self.assertEqual(
-            list(common_permissions((self.handle,), mixed, self.alice)),
+            list(catalog.permissions_for(self.alice, mixed)),
             [],
         )
 
@@ -1229,7 +1232,7 @@ class AlongSurfaceAgreementTest(TransactionTestCase):
                 view(_request(self.alice), pk=self.past.pk)
 
     def test_trust_content_follows_along(self):
-        found = set(self.handle.registry.filter_authorized(
+        found = set(built_catalog(self.handle).filter_authorized(
             self.Trust.objects.all(), self.alice, self.change,
         ).values_list('pk', flat=True))
         self.assertEqual(found, {self.root.pk, self.child.pk})

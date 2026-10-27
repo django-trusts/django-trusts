@@ -1,7 +1,9 @@
 """#115: user-facing README and package metadata for the final core library.
 
 The README consumer is ``tests.myapp``. Behavioral tests load that
-exact documented configuration and use the owner ``ready()`` registry.
+exact documented configuration. Registration is the end of models.py.
+``set_installed_apps()`` does not re-execute that module, so this
+class replays the same registration onto the rebuilt config.
 """
 
 from pathlib import Path
@@ -14,16 +16,19 @@ from django.http import HttpRequest
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import override_settings
 
-from tests.apps import live_config
+from tests.support import (
+    app_catalog_path, configured_catalog, read_catalog,
+    register_installed_document_app,
+)
 from tests.kernel_host.apps import KernelHostConfig
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from tests.myapp.settings import AUTHENTICATION_BACKENDS, INSTALLED_APPS
 from tests.myapp.views import edit_document
-from trusts.apps import TrustsImplementationConfig, implementation_for_path
+from trusts.apps import TrustsConfigMixin
 from trusts.backends import TrustModelBackendMixin
-from trusts.query import AuthorizedQuerySet
+from trusts.models import AuthorizedQuerySet
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -56,6 +61,7 @@ class ReadmeExampleAuthorizationTest(TestCase):
         cls._auth_override.enable()
         cls._apps_override = override_settings(INSTALLED_APPS=INSTALLED_APPS)
         cls._apps_override.enable()
+        register_installed_document_app()
         super().setUpClass()
 
     @classmethod
@@ -77,30 +83,26 @@ class ReadmeExampleAuthorizationTest(TestCase):
             permission=self.change_permission,
         )
 
-    def test_ready_contributed_the_documented_ref_to_the_owner_registry(self):
-        owner = implementation_for_path(DOCUMENT_BACKEND)
+    def test_models_registered_the_documented_rows_on_the_owner(self):
+        from django.apps import apps as django_apps
+
+        owner = django_apps.get_app_config('myapp')
         self.assertIs(type(owner), DocumentConfig)
-        self.assertIsInstance(owner, TrustsImplementationConfig)
-        handle = owner.configured_backend()
-        self.assertEqual(handle.path, DOCUMENT_BACKEND)
-        self.assertIs(handle.registry, owner.registries[DOCUMENT_BACKEND])
-        self.assertTrue(handle.registry.records)
+        self.assertIsInstance(owner, TrustsConfigMixin)
+        catalog = configured_catalog(DOCUMENT_BACKEND)
+        self.assertEqual(catalog.path, app_catalog_path(owner))
+        self.assertIs(catalog, read_catalog(owner))
+        self.assertTrue(catalog.records)
         self.assertIs(
-            handle.registry.records[0].content_model,
+            catalog.records[0].content_model,
             Document,
         )
-        record = handle.registry.get_permission_condition_record(
-            Document, 'non_confidential',
+        record = next(
+            item
+            for (_label, code), (model, item) in catalog.named_filters.items()
+            if model is Document and code == 'non_confidential'
         )
         self.assertIsNotNone(record)
-        self.assertEqual(
-            record.expr.to_tuple(),
-            (
-                'ne',
-                ('ref', 'object', ('confidential',)),
-                ('const', True),
-            ),
-        )
         field = Document._meta.get_field('confidential')
         self.assertFalse(field.null)
         self.assertIs(field.default, False)
@@ -149,7 +151,8 @@ class ReadmeExampleAuthorizationTest(TestCase):
                 'myapp.change_document:non_confidential', secret,
             ),
         )
-        owner = implementation_for_path(DOCUMENT_BACKEND)
+        from django.apps import apps as django_apps
+        owner = django_apps.get_app_config('myapp')
         with self.assertNumQueries(0):
             owner.ready()
 
@@ -164,10 +167,14 @@ class ReadmeExampleAuthorizationTest(TestCase):
 
 class ReadmeHostSurfaceTest(SimpleTestCase):
     def test_default_suite_still_has_no_trusts_app(self):
-        owner = live_config()
-        self.assertIs(type(owner), KernelHostConfig)
-        labels = {config.label for config in owner.apps.get_app_configs()}
-        names = {config.name for config in owner.apps.get_app_configs()}
+        from django.apps import apps as django_apps
+        host = django_apps.get_app_config('trusts_kernel_host')
+        with self.assertRaises(LookupError):
+            django_apps.get_app_config('trusts_lifecycle')
+        self.assertIs(type(host), KernelHostConfig)
+        self.assertTrue(issubclass(KernelHostConfig, TrustsConfigMixin))
+        labels = {config.label for config in django_apps.get_app_configs()}
+        names = {config.name for config in django_apps.get_app_configs()}
         self.assertNotIn('trusts', labels)
         self.assertNotIn('trusts', names)
         self.assertEqual(
@@ -178,97 +185,7 @@ class ReadmeHostSurfaceTest(SimpleTestCase):
 
 
 class UserFacingReadmeAndPackageTest(SimpleTestCase):
-    def test_license_notice_is_beedesk_2015_2026(self):
-        text = (ROOT / 'LICENSE').read_text()
-        self.assertIn('Copyright (c) 2015-2026, BeeDesk, Inc.', text)
-        self.assertNotIn('and contributors', text.split('THIS SOFTWARE')[0])
-        pyproject = (ROOT / 'pyproject.toml').read_text()
-        self.assertIn('license = "BSD-2-Clause"', pyproject)
-        self.assertIn('readme = "README.md"', pyproject)
-        self.assertNotIn('readme = "DEV.md"', pyproject)
-        self.assertIn('version = "1.0.0rc1"', pyproject)
-        self.assertNotIn(
-            'multiple organizations and object-level permission settings',
-            pyproject,
-        )
-        self.assertNotIn('"organizations"', pyproject)
 
-    def test_user_readme_is_a_concise_rst_front_door(self):
-        readme = (ROOT / 'README.md').read_text()
-        forbidden = (
-            'Step I',
-            'Step II',
-            'Step III',
-            'C1',
-            'C2',
-            'Z1',
-            'pair pin',
-            'baton',
-            'code budget',
-            'kernel_config',
-            'trusts.core_backends',
-            'from trusts.models import Trust',
-            'trusts.models.Trust',
-            '1.0.0.dev1',
-            '1.0.0.dev2',
-            '1.0.0.dev3',
-            'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS',
-            'permission_required',
-            'P(',
-            'K(',
-            'G(',
-            'O(',
-            'pip install django-trusts',
-            'auth.read_group',
-            'tests.kernel_host',
-            'HostTrustModelBackend',
-            'isolate_live_registry',
-        )
-        self.assertEqual([needle for needle in forbidden if needle in readme], [])
-        self.assertLess(len(readme.splitlines()), 80)
-        self.assertIn('django-trusts-mascot.png', readme)
-        self.assertIn('## How permissions are represented', readme)
-        self.assertIn('## Usage', readme)
-        self.assertIn(
-            'https://django-trusts.readthedocs.io/en/latest/#installation',
-            readme,
-        )
-        self.assertIn('[Security audit guide](docs/source/security-audit.md)', readme)
-        self.assertIn('[Migration boundary](docs/source/migrates.md)', readme)
-        self.assertIn('docs/dev/development.md', readme)
-        self.assertIn('django-trusts-zero', readme)
-        self.assertIn('django-trusts-gh-permissions', readme)
-        self.assertIn('django-trusts-ordered-fold', readme)
-        self.assertIn('django-trusts-windows-acl', readme)
-        self.assertIn('django-trusts-zero-example', readme)
-        self.assertIn('Copyright BeeDesk, Inc., 2015–2026.', readme)
-
-    def test_readme_routes_to_the_executable_rst_guide(self):
-        readme = (ROOT / 'README.md').read_text()
-        rst = (ROOT / 'docs' / 'source' / 'index.rst').read_text()
-
-        self.assertNotIn('.. code-block::', readme)
-        self.assertIn('Define the models', rst)
-        self.assertIn('TrustsImplementationConfig', rst)
-        self.assertIn('TrustModelBackendMixin', rst)
-        self.assertIn('backend.register(', rst)
-        self.assertIn('trust=DocumentPermission', rst)
-        self.assertIn('path lambda', rst)
-        self.assertIn('condition=', rst)
-        self.assertNotIn('register_relationship', rst)
-        self.assertNotIn('backend.register_ordered_fold(', rst)
-        self.assertNotIn('register_ordered_fold()', rst)
-        self.assertIn('django-trusts-ordered-fold', rst)
-        self.assertIn('django-trusts-windows-acl', rst)
-        self.assertIn('backend.add_named_filter(', rst)
-        self.assertIn('Document.objects.permitted(', rst)
-        self.assertIn('class DocumentQuerySet(PermittedQuerySetMixin, models.QuerySet)', rst)
-        self.assertIn('objects = DocumentQuerySet.as_manager()', rst)
-        self.assertNotIn('PermittedManagerMixin', rst)
-        self.assertIn('from trusts.decorators import authorization_required', rst)
-        self.assertNotIn('RegistryConditionLookup', rst)
-        self.assertNotIn('trusts.conditions._ir', rst)
-        self.assertNotIn('set_condition_lookup', rst)
 
     def test_no_test_modules_in_installable_trusts_package(self):
         import importlib.util

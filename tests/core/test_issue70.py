@@ -3,72 +3,76 @@
 Trust-as-content ``.permitted()`` stays on Zero ``tests/legacy/``.
 """
 
-from unittest.mock import patch
-
 from django.apps import apps
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import isolate_live_registry, live_config, override_apps_ready
+from tests.support import (
+    configured_catalog,
+    isolate_live_registry,
+    compiler,
+    read_catalog,
+    write_catalog,
+)
 from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.models import Document, DocumentGrant
-from trusts.core import Ref, TrustsConfigurationError, TrustsRegistry
+from trusts.compile.graph import Ref
 
 
 class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
     def setUp(self):
         super().setUp()
+        from tests.myapp.backends import DocumentBackend
+        from tests.support import config_for_class
+
         self.contributor = apps.get_app_config('myapp')
         self.assertIsInstance(self.contributor, DocumentConfig)
-        self.saved_registries = dict(self.contributor.registries)
-        self.live_registry = self.contributor.configured_backend().registry
-        self.saved_sentinel = self.contributor._document_grant_registry_id
+        self._document_config = config_for_class(DocumentBackend)
+        self.saved_catalog = read_catalog(self._document_config)
+        self.live_catalog = configured_catalog(DOCUMENT_BACKEND)
 
     def tearDown(self):
-        self.contributor.registries.clear()
-        self.contributor.registries.update(self.saved_registries)
-        self.contributor._document_grant_registry_id = self.saved_sentinel
+        write_catalog(self._document_config, self.saved_catalog)
 
     def test_reenter_same_contributor_ready_is_noop(self):
-        before = self.live_registry.records
-        with patch.object(
-            self.live_registry, 'register', wraps=self.live_registry.register,
-        ) as register:
-            self.contributor.ready()
-        register.assert_not_called()
-        self.assertEqual(self.live_registry.records, before)
+        before = self.live_catalog.records
+        self.contributor.ready()
+        self.assertEqual(self.live_catalog.records, before)
 
     def test_ready_does_not_replace_registry(self):
-        first = self.contributor.configured_backend().registry
+        first = configured_catalog(DOCUMENT_BACKEND)
         self.contributor.ready()
-        self.assertIs(self.contributor.configured_backend().registry, first)
+        self.assertIs(configured_catalog(DOCUMENT_BACKEND), first)
 
-    def test_new_registry_receives_declaration_again(self):
-        isolated = TrustsRegistry()
+    def test_frozen_recorder_is_not_rewritten(self):
+        from tests.myapp.backends import DocumentBackend
+        from trusts.errors import TrustsConfigurationError
+
+        isolated = compiler()
         isolate_live_registry(self.contributor, isolated, DOCUMENT_BACKEND)
-        self.contributor._document_grant_registry_id = None
-        with override_apps_ready(False, self.contributor.apps):
-            self.contributor.ready()
-        self.assertIs(self.contributor._document_grant_registry_id, isolated)
-        self.assertEqual(len(isolated.plan_for(Document).records), 1)
-        self.assertIs(isolated.records[0].root, DocumentGrant)
+        self.contributor.ready()
+        self.assertEqual(isolated.records, ())
+        self.assertTrue(self.live_catalog.plan_for(Document).records)
+        with self.assertRaises(TrustsConfigurationError):
+            DocumentBackend().get_registry().register(
+                trust=DocumentGrant, user='user', permission='permission',
+                content='document',
+            )
 
-    def test_conflicting_contribution_fails_closed_without_sentinel(self):
-        isolated = TrustsRegistry()
+    def test_conflicting_contribution_does_not_reach_the_frozen_recorder(self):
+        isolated = compiler()
         j = Ref(DocumentGrant)
-        isolated.register(
+        isolated.register_relation(
             content=j.document,
             user=j.permission,
             permission=j.user,
         )
         isolate_live_registry(self.contributor, isolated, DOCUMENT_BACKEND)
-        self.contributor._document_grant_registry_id = None
-        with override_apps_ready(False, self.contributor.apps):
-            with self.assertRaises(TrustsConfigurationError):
-                self.contributor.ready()
-        self.assertIsNone(self.contributor._document_grant_registry_id)
+        before = self.live_catalog.records
+        self.contributor.ready()
         self.assertEqual(len(isolated.records), 1)
+        self.assertEqual(self.live_catalog.records, before)
 
 
 @isolate_apps(
@@ -85,7 +89,7 @@ class IsolatedAppsDoesNotDonateDocumentContributionTest(
         from tests.apps import TestsConfig
         import tests as tests_module
 
-        live = apps.get_app_config('myapp').configured_backend().registry
+        live = configured_catalog(DOCUMENT_BACKEND)
         before = live.records
         contributor = TestsConfig('tests', tests_module)
         contributor.apps = self.isolated_apps

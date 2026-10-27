@@ -1,18 +1,18 @@
-from trusts.apps import TrustsImplementationConfig
+import trusts.apps as trusts_apps
 
 
-HOST_BACKEND = 'tests.backends.HostTrustModelBackend'
+HOST_BACKEND = 'tests.kernel_host.backends.HostTrustModelBackend'
 
 
-class KernelHostConfig(TrustsImplementationConfig):
-    """Kernel-only test implementation owner.
-
-    Owns the mixin host backend for the library-only suite. Pair
-    settings omit this app; supported Zero is the sole owner there.
-    """
+class KernelHostConfig(trusts_apps.TrustsConfigMixin):
+    """Kernel-only test app. The host backend lives in this package."""
 
     name = 'tests.kernel_host'
     label = 'trusts_kernel_host'
     default = False
     default_auto_field = 'django.db.models.AutoField'
-    trusts_backend_paths = (HOST_BACKEND,)
+
+    def ready(self):
+        from tests.kernel_host.backends import HostTrustModelBackend
+        HostTrustModelBackend().get_registry()
+        super().ready()

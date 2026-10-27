@@ -1,7 +1,8 @@
+from django.apps import apps
 from django.contrib.auth.models import Permission
 from django.db import models
 
-from trusts.query import AuthorizedManager, PermittedUsersMixin
+from trusts.models import AuthorizedManager, PermittedUsersMixin
 
 
 class Document(PermittedUsersMixin, models.Model):
@@ -48,3 +49,43 @@ class DocumentDelegation(models.Model):
 
     class Meta:
         app_label = 'myapp'
+
+
+from tests.myapp.backends import DocumentBackend
+
+
+def register_document_grants(registry):
+    """Document grant rows. The named filter is registered beside them."""
+    registry.register(
+        trust=DocumentGrant,
+        user='user',
+        permission='permission',
+        content='document',
+    )
+    registry.register(
+        trust=DocumentDelegation,
+        delegate='delegate',
+        sponsor='sponsor',
+        content='document',
+        condition=lambda relationship, permission: (
+            relationship.allowed_permissions.contains(permission)
+        ),
+    )
+
+
+def register_document_app(registry):
+    """Everything this app registers. Called from the end of this module."""
+    register_document_grants(registry)
+    registry.add_named_filter(
+        Document,
+        'non_confidential',
+        lambda u, p, o: o.confidential != True,
+    )
+
+
+_config = apps.get_containing_app_config(DocumentBackend.__module__)
+if _config is not None and _config.label == 'myapp':
+    _registry = DocumentBackend().get_registry()
+    if not _registry.frozen:
+        register_document_app(_registry)
+        _config._registered_from_models = True

@@ -15,13 +15,14 @@ from django.contrib.auth.models import AnonymousUser, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase, override_settings
 
-from tests.backends import HostTrustModelBackend, MixinOnlyBackend
+from tests.kernel_host.backends import HostTrustModelBackend
+from tests.backends import MixinOnlyBackend
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
-from trusts.apps import implementation_for_path
+
 
 
 PERM = 'myapp.change_document'
@@ -148,14 +149,10 @@ class KernelMixinEnumerationTest(KernelHostRequiredMixin, TestCase):
 
     def test_other_path_and_duplicate_path_stay_empty_or_one_sql(self):
         qs = self._granted_qs(self.document)
-        owner = implementation_for_path(DOCUMENT_BACKEND)
-        saved = owner.trusts_backend_paths
         mixin = MixinOnlyBackend()
-        try:
-            owner.trusts_backend_paths = (DOCUMENT_BACKEND, MIXIN)
-            with override_settings(AUTHENTICATION_BACKENDS=(
-                HOST_BACKEND, DOCUMENT_BACKEND, MIXIN,
-            )):
+        with override_settings(AUTHENTICATION_BACKENDS=(
+            HOST_BACKEND, DOCUMENT_BACKEND, MIXIN,
+        )):
                 with self.assertNumQueries(1):
                     self.assertEqual(
                         self.document_backend.get_all_permissions(self.alice, qs),
@@ -166,8 +163,6 @@ class KernelMixinEnumerationTest(KernelHostRequiredMixin, TestCase):
                     self.assertEqual(mixin.get_group_permissions(self.alice, qs), set())
                     self.assertFalse(mixin.has_perm(self.alice, PERM, qs))
                 self.assertEqual(self.alice.get_all_permissions(qs), {PERM})
-        finally:
-            owner.trusts_backend_paths = saved
 
         # Repeated path string → two Django instances, not two registrations.
         # The one-SQL bound is per backend evaluation. Public dispatch

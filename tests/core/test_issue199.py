@@ -1,33 +1,32 @@
+from tests.support import configured_catalog, unbound_named_filters
 """#199 / #189 B1: backend principal, object, and ownership fail-closed.
 
-Public ``TrustModelBackendMixin`` methods, ``set_condition_lookup``,
-and ``TrustsImplementationConfig.ready()`` only. Does not invent a
+Public ``TrustModelBackendMixin`` methods and
+``TrustsConfigMixin.ready()`` only. Does not invent a
 ``Permission``-instance ``has_perm`` contract, assert
 ``_trust_perm_cache`` shape, or patch private match/compiler helpers.
 """
 
-from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser, Permission
 from django.contrib.contenttypes.models import ContentType
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.test import TestCase, override_settings
 
 import tests as tests_module
-from tests.backends import HostTrustModelBackend, MixinOnlyBackend
+from tests.kernel_host.backends import HostTrustModelBackend
+from tests.backends import MixinOnlyBackend
 from tests.core import KernelHostRequiredMixin
-from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.apps import TrustsImplementationConfig, implementation_for_path
-from trusts.core import TrustsConfigurationError
+from trusts.apps import TrustsConfigMixin
+from trusts.compile.appbuild import build_app_catalog
 
 
 PERM = 'myapp.change_document'
 FILTERED = 'myapp.change_document:non_confidential'
 MODEL_BACKEND = 'django.contrib.auth.backends.ModelBackend'
-HOST = 'tests.backends.HostTrustModelBackend'
+HOST = 'tests.kernel_host.backends.HostTrustModelBackend'
 
 
 class _UnauthenticatedPrincipal(object):
@@ -38,10 +37,9 @@ class _UnauthenticatedPrincipal(object):
     is_active = True
 
 
-class NonMixinOwnerConfig(TrustsImplementationConfig):
+class NonMixinOwnerConfig(TrustsConfigMixin):
     name = 'tests'
     label = 'trusts_impl_199_nonmixin'
-    trusts_backend_paths = (MODEL_BACKEND,)
 
 
 class _AppsView(object):
@@ -116,8 +114,7 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
         backend = MixinOnlyBackend()
         anonymous = AnonymousUser()
         unauthenticated = _UnauthenticatedPrincipal()
-        with patch('trusts.apps.implementation_configs', return_value=()):
-            with self.assertNumQueries(0):
+        with self.assertNumQueries(0):
                 self.assertFalse(
                     backend.has_perm(None, PERM, self.document),
                 )
@@ -172,30 +169,25 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
                 self.document_backend.has_perm(self.alice, PERM, mapping),
             )
 
-    def test_owned_unbound_named_condition_raises_on_instance_at_zero_sql(self):
-        registry = implementation_for_path(DOCUMENT_BACKEND).configured_backend().registry
-        previous = registry.condition_lookup
+    def test_missing_named_condition_denies_on_instance_at_zero_sql(self):
+        from tests.myapp.backends import DocumentBackend
+
         qs = Document.objects.filter(pk=self.document.pk)
-        try:
-            registry.set_condition_lookup(None)
+        with unbound_named_filters(DocumentBackend):
+            document_backend = DocumentBackend()
             with self.assertNumQueries(0):
-                with self.assertRaises(AttributeError) as ctx:
-                    self.document_backend.has_perm(
+                self.assertFalse(
+                    document_backend.has_perm(
                         self.alice, FILTERED, self.document,
-                    )
-                self.assertIn('not associate', str(ctx.exception))
-                self.assertIn('non_confidential', str(ctx.exception))
+                    ),
+                )
                 self.assertFalse(
                     self.host.has_perm(self.alice, FILTERED, self.document),
                 )
-                with self.assertRaises(AttributeError):
-                    self.alice.has_perm(FILTERED, self.document)
+                self.assertFalse(self.alice.has_perm(FILTERED, self.document))
                 self.assertFalse(
-                    self.document_backend.has_perm(self.alice, FILTERED, qs),
+                    document_backend.has_perm(self.alice, FILTERED, qs),
                 )
-        finally:
-            registry.set_condition_lookup(previous)
-        self.assertIs(registry.condition_lookup, previous)
 
         with self.assertNumQueries(1):
             self.assertTrue(
@@ -220,19 +212,40 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
 
 
 class ImplementationOwnershipReadyTest(TestCase):
-    def test_owned_non_mixin_path_fails_at_ready_with_zero_sql(self):
+    def test_non_mixin_path_is_skipped_at_ready_with_zero_sql(self):
+        from django.apps import apps
+
+        from tests.support import read_catalog
+        from trusts.backends import RELATIONSHIP_BACKEND_KEY, RelationshipBackend
+
         config = _bind(NonMixinOwnerConfig, ready=False)
-        self.assertEqual(config.registries, {})
+        config.get_or_create_config(
+            RELATIONSHIP_BACKEND_KEY,
+            RelationshipBackend,
+            on_ready=build_app_catalog,
+        )
+        before = configured_catalog(HOST)
+        self.assertFalse(hasattr(config, 'registries'))
         with override_settings(AUTHENTICATION_BACKENDS=(MODEL_BACKEND, HOST)):
             with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    config.ready()
-        self.assertIn('not a TrustModelBackendMixin', str(ctx.exception))
-        self.assertIn(MODEL_BACKEND, str(ctx.exception))
-        self.assertEqual(config.registries, {})
+                config.ready()
+        self.assertIs(configured_catalog(HOST), before)
+        paths = [
+            catalog.path
+            for installed in apps.get_app_configs()
+            if isinstance(installed, TrustsConfigMixin)
+            for catalog in (read_catalog(installed),)
+            if catalog is not None
+        ]
+        built = read_catalog(config)
+        self.assertEqual(built.records, ())
+        self.assertEqual(built.delegations, ())
+        self.assertEqual(
+            built.path,
+            'tests.core.test_issue199.NonMixinOwnerConfig',
+        )
+        self.assertNotIn(MODEL_BACKEND, paths)
+        self.assertFalse(hasattr(config, 'registries'))
+        self.assertFalse(hasattr(config, 'trusts_backend_paths'))
 
 
-class Issue199SuiteRegistrationTest(SimpleTestCase):
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue199', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue199', PAIR_KERNEL_SUITE)

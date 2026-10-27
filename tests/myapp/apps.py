@@ -1,45 +1,33 @@
-from trusts.apps import TrustsImplementationConfig
+from django.apps import apps as django_apps
+
+import trusts.apps as trusts_apps
 
 DOCUMENT_BACKEND = 'tests.myapp.backends.DocumentBackend'
 
 
-class DocumentConfig(TrustsImplementationConfig):
+class DocumentConfig(trusts_apps.TrustsConfigMixin):
     name = 'tests.myapp'
     label = 'myapp'
     default = False
     default_auto_field = 'django.db.models.AutoField'
-    trusts_backend_paths = (DOCUMENT_BACKEND,)
 
     def ready(self):
-        super().ready()
-        from tests.myapp.models import (
-            Document,
-            DocumentDelegation,
-            DocumentGrant,
-        )
-
-        handle = self.configured_backend()
-        registry = handle.registry
-        if getattr(self, '_document_grant_registry_id', None) is registry:
+        # Registration lives at the end of models.py. isolate_apps()
+        # uses another registry; only the process registry imports checks.
+        # override_settings builds a new config and does not re-import
+        # models.py, so an empty log is filled here before the freeze.
+        if self.apps is not django_apps:
             return
-        handle.register(
-            trust=DocumentGrant,
-            user='user',
-            permission='permission',
-            content='document',
-        )
-        handle.register(
-            trust=DocumentDelegation,
-            delegate='delegate',
-            sponsor='sponsor',
-            content='document',
-            condition=lambda relationship, permission: (
-                relationship.allowed_permissions.contains(permission)
-            ),
-        )
-        handle.add_named_filter(
-            Document,
-            'non_confidential',
-            lambda u, p, o: o.confidential != True,
-        )
-        self._document_grant_registry_id = registry
+        # models.py already logged this process. override_settings builds
+        # a new config and does not re-import models.py, so only an empty
+        # config is filled here, before the freeze.
+        from tests.support import read_catalog
+
+        if read_catalog(self) is None and not getattr(
+            self, '_registered_from_models', False,
+        ):
+            from tests.myapp.backends import DocumentBackend
+            from tests.myapp.models import register_document_app
+            register_document_app(DocumentBackend().get_registry())
+            self._registered_from_models = True
+        super().ready()

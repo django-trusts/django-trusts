@@ -1,0 +1,1684 @@
+"""SQL-first authorization policy export and lockfile check.
+
+``trusts_policy_sql`` renders schema version 1 as canonical YAML.
+Each backend lists ``contents`` by model. A content owns its trust
+legs, the compiled SQL for ``permitted``, ``has_perm``,
+``get_all_permissions``, and ``get_permitted_users`` when it has trusts,
+``filter_by_permitted_content`` when the content path has a proper prefix,
+``get_group_permissions`` when a trust was registered with ``group=``,
+and its named filters. ``get_permitted_users`` is the reverse
+content-and-permission-to-users predicate for that backend, not
+Django's outer superuser rule and not other backends.
+``permitted`` is the artifact name for today's ``.authorized()`` list
+query. The runtime API is not renamed. The alias is not stored.
+Each ``sql`` value is broken between tokens onto predictable lines.
+The token sequence is the statement Django compiled.
+``trusts.E009`` compares the rendered bytes to the committed file and
+does not parse them. It is the only lockfile enforcement.
+"""
+
+from __future__ import annotations
+
+__all__ = []
+
+import contextvars
+import datetime
+import errno
+import json
+import math
+import os
+import re
+import stat
+import tempfile
+import threading
+import uuid
+from decimal import Decimal
+from pathlib import Path
+
+from django.contrib.auth import load_backend
+from django.core import checks as django_checks
+from django.db.models.expressions import Value
+from django.db.models.lookups import Lookup
+
+from trusts.errors import TrustsConfigurationError
+from trusts.inspect.format import _format_policy_sql
+from trusts.inspect.yaml import (
+    PolicyYamlError,
+    canonical_float_scalar,
+    dump_policy_yaml,
+)
+from django.conf import settings
+from django.db.utils import DEFAULT_DB_ALIAS
+from django.contrib.auth.models import Permission
+from django.db import connections
+
+
+SCHEMA_VERSION = 1
+CHECK_ID_POLICY_LOCK = 'trusts.E009'
+CONVENTIONAL_LOCKFILE_NAME = 'trusts-policy.lock.yaml'
+# One id segment. Trust and named-filter ids are these segments joined
+# by ``__``. Export rejects any other named-filter code.
+_PORTABLE_ID_SEGMENT = re.compile(r'[A-Za-z0-9_]+')
+
+_INTEGER_SENTINEL_TYPES = frozenset((
+    'AutoField',
+    'BigAutoField',
+    'SmallAutoField',
+    'IntegerField',
+    'BigIntegerField',
+    'SmallIntegerField',
+    'PositiveIntegerField',
+    'PositiveBigIntegerField',
+    'PositiveSmallIntegerField',
+))
+_TEXT_SENTINEL_TYPES = frozenset((
+    'CharField',
+    'TextField',
+    'SlugField',
+    'EmailField',
+    'URLField',
+    'FileField',
+    'FilePathField',
+    'GenericIPAddressField',
+))
+
+# Set only while this task is compiling an export. Classification runs
+# on compilers built for that connection proxy, and only when this
+# context var is set, so another thread's SQLCompiler.compile is the
+# Django method.
+_export_scope = contextvars.ContextVar(
+    'trusts_policy_sql_export', default=None,
+)
+_classifying_classes = {}
+_classifying_class_lock = threading.Lock()
+_ctx = threading.local()
+
+
+class PolicyLockLocation(object):
+    """Exact lockfile path plus how presence was classified.
+
+    ``path`` is absolute. ``explicit`` is true when the path came from
+    ``TRUSTS_POLICY_LOCKFILE`` or a command override. ``state`` is
+    ``absent``, ``present``, ``missing_parent``, ``not_a_directory``, or
+    ``permission``. Classification inspects this path and its immediate
+    parent only.
+    """
+
+    __slots__ = ('path', 'explicit', 'state')
+
+    def __init__(self, path, explicit, state):
+        self.path = path
+        self.explicit = explicit
+        self.state = state
+
+    def __repr__(self):
+        return '<PolicyLockLocation %s explicit=%s %s>' % (
+            self.state, self.explicit, self.path,
+        )
+
+
+class _Symbol(object):
+    """One classified placeholder. Not a runtime value."""
+    __slots__ = ('payload',)
+
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __repr__(self):
+        return '<Symbol %r>' % (self.payload,)
+
+    def __hash__(self):
+        return hash(id(self))
+
+    def __eq__(self, other):
+        return self is other
+
+
+def resolve_policy_database(override=None):
+    """Return the database alias used to render policy SQL.
+
+    ``override`` is the ``--database`` value for one command process.
+    Otherwise ``settings.TRUSTS_POLICY_DATABASE`` is used. Unset or
+    ``None`` selects Django's ``default`` alias. A non-empty
+    ``DATABASES`` key selects that alias. Any other value is a
+    configuration error. The alias is not written into the document.
+    """
+
+    if override is not None:
+        alias = override
+    elif not settings.configured:
+        alias = DEFAULT_DB_ALIAS
+    else:
+        alias = getattr(settings, 'TRUSTS_POLICY_DATABASE', None)
+        if alias is None:
+            alias = DEFAULT_DB_ALIAS
+    databases = {}
+    if settings.configured:
+        databases = getattr(settings, 'DATABASES', None) or {}
+    if (
+        isinstance(alias, bool)
+        or not isinstance(alias, str)
+        or alias == ''
+        or alias not in databases
+    ):
+        raise TrustsConfigurationError(
+            'TRUSTS_POLICY_DATABASE must be unset or a configured '
+            'DATABASES alias, not %r.' % (alias,)
+        )
+    return alias
+
+
+def _installed_document(*, alias=None):
+    """Policy document for every configured Trusts backend.
+
+    Each listed backend contributes its own catalog. Two backends that
+    share one catalog contribute that catalog once. A backend with no
+    catalog contributes nothing.
+    """
+    chosen = []
+    seen = set()
+    for path in settings.AUTHENTICATION_BACKENDS:
+        backend = load_backend(path)
+        read = getattr(backend, '_catalog', None)
+        if not callable(read):
+            continue
+        catalog = read()
+        if catalog is None:
+            continue
+        marker = id(catalog)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        chosen.append(catalog)
+    return _build_document(tuple(chosen), resolve_policy_database(alias))
+
+
+def render_policy_sql_bytes(*, alias=None):
+    """Return the schema-1 policy SQL document as UTF-8 bytes.
+
+    ``alias`` overrides ``TRUSTS_POLICY_DATABASE`` for this call only.
+    The document is ``_installed_document()`` for the configured backends.
+    Compilation uses ``as_sql()`` / ``sql_with_params()`` and does not
+    execute the exported statements. A failure raises before a partial
+    document is returned.
+    """
+    return _dump_document(_installed_document(alias=alias))
+
+
+def write_policy_lock(payload, *, override=None):
+    """Write ``payload`` to the resolved lockfile path.
+
+    Parent directories are not created. The payload is the same byte
+    string printed to stdout. This does not compare an existing file.
+    """
+    if not isinstance(payload, bytes):
+        raise TypeError(
+            'Policy lock payload must be bytes, not %s.'
+            % type(payload).__name__
+        )
+    location = resolve_lockfile_path(override=override)
+    _require_writable_parent(location)
+    if location.state == 'present' and _lockfile_is_directory(location.path):
+        raise TrustsConfigurationError(
+            'Policy lock path is a directory: %s.' % location.path
+        )
+    _atomic_write(location.path, payload)
+    return location.path
+
+
+def resolve_lockfile_path(*, override=None):
+    """Return the lockfile location. Never consults the process CWD.
+
+    ``override`` is an explicit path. When it is omitted, a set
+    ``settings.TRUSTS_POLICY_LOCKFILE`` (anything other than ``None``)
+    is the explicit path. Otherwise the conventional path is
+    ``settings.BASE_DIR / "trusts-policy.lock.yaml"`` when ``BASE_DIR``
+    is an absolute path string or ``Path``. A missing or relative
+    ``BASE_DIR`` is not usable and requires an explicit absolute path.
+    Relative explicit paths fail closed. This function does not create
+    directories, read the file, or issue SQL.
+    """
+    if override is not None:
+        path = _absolute_lock_path(override)
+        explicit = True
+    else:
+        configured = _configured_lock_override()
+        if configured is not None:
+            path = _absolute_lock_path(configured)
+            explicit = True
+        else:
+            base = _usable_base_dir()
+            if base is None:
+                raise TrustsConfigurationError(
+                    'Policy lock requires an absolute TRUSTS_POLICY_LOCKFILE '
+                    'when BASE_DIR is unset or not absolute. The process '
+                    'working directory is not used.'
+                )
+            path = base / CONVENTIONAL_LOCKFILE_NAME
+            explicit = False
+    return PolicyLockLocation(path, explicit, _classify_lockfile(path))
+
+
+class _PolicyVisitor(object):
+    """Snapshot visitor: renders each walked question to policy SQL.
+
+    Supplies the alias and the user/permission/content sentinels for one
+    catalog. ``visit(question)`` calls that question and renders the
+    queryset or exists query it returns.
+    """
+
+    def __init__(self, catalog, alias, *, trust_ids=None):
+        self.alias = alias
+        self.catalog = catalog
+        self._trust_ids = dict(trust_ids or {})
+        self._contents = {}
+        self._order = []
+        self._classifier_records = {}
+
+    def contents(self):
+        return [self._contents[label] for label in self._order]
+
+    def visit(self, question):
+        if question.name == 'named_filter':
+            return self._visit_named_filter(question)
+        content = self._ensure_content(
+            question.content_model, question.records, question.delegations,
+        )
+        label = _model_label(question.content_model)
+        records = self._classifier_records[label]
+        model = question.content_model
+        alias = self.alias
+        user = _role_sentinel(records[0], 'user', alias)
+        permission = _role_sentinel(records[0], 'permission', alias)
+        if question.name == 'filter_by_permitted_content':
+            rows = []
+            for prefix in question.prefixes:
+                queryset = question.question(
+                    _content_manager(prefix).all(), user, permission,
+                )
+                if queryset.query.is_empty():
+                    continue
+                sql, symbols = _compile_queryset(
+                    queryset, alias, record=records[0], expr=None,
+                    records=records,
+                )
+                rows.append({
+                    'model': _model_label(prefix),
+                    'params': _present_params(symbols),
+                    'sql': _format_policy_sql(sql),
+                })
+            if rows:
+                content['filter_by_permitted_content'] = rows
+            return content
+        if question.name == 'permitted':
+            queryset = question.question(user, permission)
+        elif question.name == 'has_perm':
+            queryset = question.question(
+                user, _content_sentinel(model, alias), permission,
+            )
+        elif question.name in ('get_all_permissions', 'get_group_permissions'):
+            queryset = question.question(
+                user, _content_sentinel(model, alias),
+            )
+        elif question.name == 'get_permitted_users':
+            instance = _content_sentinel(model, alias)
+            _populate_reverse_along_identity(instance, records, alias)
+            queryset = question.question(instance, permission)
+        else:
+            raise TrustsConfigurationError(
+                'Policy SQL visitor cannot render question %r.'
+                % (question.name,)
+            )
+        content[question.name] = _sql_row(_compile_queryset(
+            queryset, alias, record=records[0], expr=None, records=records,
+            reverse_users=question.name == 'get_permitted_users',
+        ))
+        return content
+
+    def _visit_named_filter(self, question):
+        model = question.content_model
+        label = _model_label(model)
+        code = question.code
+        if (
+            not isinstance(code, str)
+            or _PORTABLE_ID_SEGMENT.fullmatch(code) is None
+        ):
+            raise TrustsConfigurationError(
+                'Named filter on %s has a non-portable code %r.'
+                % (label, code)
+            )
+        queryset = question.question(
+            _any_sentinel_user(self.alias, self.catalog.user_model),
+            _any_sentinel_permission(self.alias),
+        )
+        row = {
+            'id': _dotless_id(label, code),
+            **_sql_row(_compile_queryset(
+                queryset, self.alias, record=None, expr=question.expr,
+            )),
+        }
+        content = self._contents.get(label)
+        if content is None:
+            content = {'model': label}
+            self._contents[label] = content
+            self._order.append(label)
+        content.setdefault('named_filters', []).append(row)
+        return content
+
+    def _ensure_content(self, model, records, delegations):
+
+        label = _model_label(model)
+        existing = self._contents.get(label)
+        if existing is not None:
+            return existing
+        records = tuple(records)
+        delegations = tuple(delegations)
+        if records:
+            _require_shared_terminals(records, label)
+        legs = records + delegations
+        multi = len(legs) > 1
+        trusts = []
+        delegated_rows = []
+        for record in legs:
+            trust_id = self._trust_ids[id(record)]
+            if record in delegations:
+                row = {
+                    'id': trust_id,
+                    'root': _model_label(record.root),
+                    'delegate': _delegation_relation(record, 'delegate'),
+                    'sponsor': _delegation_relation(record, 'sponsor'),
+                    'content': _relation(record, 'content'),
+                }
+                condition = _render_condition(
+                    record.condition,
+                    permission_token=_permission_token(
+                        getattr(record, 'condition_permission_target', None),
+                    ),
+                )
+                if condition is not None:
+                    row['condition'] = condition
+                along = getattr(record, 'along', None)
+                if along is not None:
+                    row['along'] = {
+                        'path': '__'.join(along.path),
+                        'shape': along.shape,
+                        'bound': along.bound,
+                    }
+                if multi:
+                    row['or_group'] = True
+                delegated_rows.append(row)
+                continue
+            row = {
+                'id': trust_id,
+                'root': _model_label(record.root),
+                'user': _relation(record, 'user'),
+            }
+            if getattr(record, 'via_group', False):
+                row['group'] = _relation(record, 'group')
+            row['permission'] = _relation(record, 'permission')
+            row['content'] = _relation(record, 'content')
+            along = getattr(record, 'along', None)
+            if along is not None:
+                row['along'] = {
+                    'path': '__'.join(along.path),
+                    'shape': along.shape,
+                    'bound': along.bound,
+                }
+            condition = _render_condition(
+                record.condition,
+                permission_token=_permission_token(
+                    getattr(record, 'permission_target', None),
+                ),
+            )
+            if condition is not None:
+                row['condition'] = condition
+            if multi:
+                row['or_group'] = True
+            trusts.append(row)
+        classifier_records = _policy_classifier_records(
+            records, delegations, model,
+        )
+        _require_shared_terminals(classifier_records, label)
+        content = {'model': label}
+        if trusts:
+            content['trusts'] = trusts
+        if delegated_rows:
+            content['delegations'] = delegated_rows
+        self._contents[label] = content
+        self._classifier_records[label] = classifier_records
+        self._order.append(label)
+        return content
+
+
+def _build_document(catalogs, alias):
+
+    engine = (settings.DATABASES.get(alias) or {}).get('ENGINE')
+    if not isinstance(engine, str) or engine == '':
+        raise TrustsConfigurationError(
+            'Policy SQL render alias %r has no DATABASES ENGINE.' % (alias,)
+        )
+    projected, seen = [], set()
+    for catalog in catalogs:
+        row = _project_backend(catalog, alias)
+        if row['path'] in seen:
+            raise TrustsConfigurationError('Policy SQL render found duplicate backend paths.')
+        seen.add(row['path'])
+        if row['contents']:
+            projected.append(row)
+    projected.sort(key=lambda row: row['path'])
+    return {
+        'schema_version': SCHEMA_VERSION,
+        'database': {'engine': engine},
+        'backends': projected,
+    }
+
+
+def _project_backend(catalog, alias):
+    path = catalog.path
+    if not isinstance(path, str) or path == '':
+        raise TrustsConfigurationError(
+            'Policy SQL render catalog is missing a configured path: %r.'
+            % (path,)
+        )
+    family = catalog.family
+    if family != 'relationship':
+        raise TrustsConfigurationError(
+            'Policy SQL render only serializes family %r; backend path '
+            '%r has unsupported family %r.'
+            % ('relationship', path, family)
+        )
+    records = tuple(catalog.records)
+    delegations = tuple(catalog.delegations)
+    all_records = records + delegations
+    ids = _assign_ids(all_records)
+    return {
+        'path': path,
+        'contents': _project_contents(catalog, alias, all_records, ids),
+    }
+
+
+def _project_contents(catalog, alias, records, ids):
+    visitor = _PolicyVisitor(
+        catalog, alias,
+        trust_ids={
+            id(record): trust_id for record, trust_id in zip(records, ids)
+        },
+    )
+    catalog.walk_questions(visitor)
+    return visitor.contents()
+
+
+_CONST_SOURCE = {
+    'content type app': '$content.app_label',
+    'content type model': '$content.model',
+    'active': 'user.is_active',
+    'along bound': '$along_bound',
+    'along match': '$along_match',
+}
+
+
+def _token_literal(value):
+    """Python spelling of one bound constant, inside a ``source=value`` token."""
+    if isinstance(value, bool):
+        return 'True' if value else 'False'
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return json.dumps(_json_const(value), separators=(',', ':'))
+        return canonical_float_scalar(value)
+    if value is None:
+        return 'null'
+    if isinstance(value, dict):
+        return json.dumps(value, separators=(',', ':'), ensure_ascii=False)
+    return json.dumps(_json_const(value), separators=(',', ':'), ensure_ascii=False)
+
+
+def _present_param(symbol):
+    """One lockfile entry for one compilation symbol.
+
+    Call inputs are bare tokens (``$user.id``). Bound constants are
+    ``source=value`` (``$content.app_label="documents"``,
+    ``user.is_active=True``, ``$along_bound=2``). Every symbol is kept:
+    a literal ``EXISTS`` marker has already been removed from the
+    placeholder list, and a caller ``Value(1)`` is a real parameter.
+    """
+    if 'bind' in symbol:
+        return '$' + symbol['bind']
+    hint = symbol.get('hint') or 'literal'
+    source = _CONST_SOURCE.get(hint, hint)
+    return '%s=%s' % (source, _token_literal(symbol.get('const')))
+
+
+def _present_params(symbols):
+    params = []
+    for symbol in symbols:
+        token = _present_param(symbol)
+        if token is not None:
+            params.append(token)
+    return params
+
+
+def _sql_row(compiled):
+    sql, symbols = compiled
+    return {
+        'params': _present_params(symbols),
+        'sql': _format_policy_sql(sql),
+    }
+
+
+def _require_shared_terminals(records, label):
+    first = records[0]
+    for role in ('user', 'permission'):
+        model = getattr(first, '%s_model' % role)._meta.concrete_model
+        target = getattr(first, '%s_target' % role)
+        for record in records[1:]:
+            other = getattr(record, '%s_model' % role)._meta.concrete_model
+            if (
+                other is not model
+                or getattr(record, '%s_target' % role) != target
+            ):
+                raise TrustsConfigurationError(
+                    'Policy SQL on %s requires one %s model and target.'
+                    % (label, role)
+                )
+
+
+def _delegation_relation(record, role):
+    return {
+        'path': getattr(record, '%s_field' % role),
+        'model': _model_label(getattr(record, '%s_model' % role)),
+        'target': getattr(record, '%s_target' % role),
+    }
+
+
+def _policy_classifier_records(records, delegations, model):
+    """Ordinary records that classify policy-lock bind placeholders.
+
+    A delegation-only content group has no permission terminal of its
+    own. Sentinels come from this catalog's ordinary records. A
+    delegated row is not a sponsor record.
+    """
+    selected = tuple(records)
+    if not selected:
+        raise TrustsConfigurationError(
+            'Policy SQL found no ordinary sponsor grant for delegated '
+            'content %s.' % _model_label(model)
+        )
+    for delegation in delegations:
+        first = selected[0]
+        if (
+            delegation.delegate_model._meta.concrete_model
+            is not first.user_model._meta.concrete_model
+            or delegation.delegate_target != first.user_target
+        ):
+            raise TrustsConfigurationError(
+                'Policy SQL on %s requires delegate and ordinary user '
+                'terminals to share one model and target.'
+                % _model_label(model)
+            )
+    return selected
+
+
+def _content_manager(model):
+    return model._meta.concrete_model._default_manager
+
+
+def _content_sentinel(model, alias):
+    return _sentinel(model, model._meta.pk.attname, alias=alias)
+
+
+def _populate_reverse_along_identity(content, records, alias):
+    """Fill non-PK Along identities on the unsaved reverse sentinel.
+
+    ``_content_sentinel`` sets the primary key. A walk identity that is
+    a different column, such as a UUID ``to_field``, has to be present
+    so the reverse lookup classifies ``content.<target>``.
+    """
+    pk_attname = content._meta.pk.attname
+    for record in records:
+        along = getattr(record, 'along', None)
+        if along is None or along.suffix_path:
+            continue
+        if along.walk_ident == pk_attname:
+            continue
+        if getattr(content, along.walk_ident, None) is not None:
+            continue
+        field = _concrete_target_field(along.walk_model, along.walk_ident)
+        setattr(content, field.attname, _sentinel_value(field, alias))
+
+
+def _role_sentinel(record, role, alias):
+    return _sentinel(
+        getattr(record, '%s_model' % role),
+        getattr(record, '%s_target' % role),
+        alias=alias,
+    )
+
+
+def _relation(record, role):
+    return {
+        'path': getattr(record, '%s_field' % role),
+        'model': _model_label(getattr(record, '%s_model' % role)),
+        'target': getattr(record, '%s_target' % role),
+    }
+
+
+def _permission_token(target):
+    """Lockfile token for the resolved permission identity.
+
+    ``id`` and a custom primary key or ``to_field`` use the same spelling
+    as the SQL parameter (``$permission.id``, ``$permission.code``).
+    """
+    name = target or 'id'
+    if name == 'pk':
+        name = 'id'
+    return '$permission.%s' % name
+
+
+class _PolicyConditionText(object):
+    """Render one stored predicate as a policy-lock condition line.
+
+    Text stays here. Nested ``and`` inside ``and``, and ``or`` inside
+    ``or``, print as one flat chain. Parentheses stay for mixed
+    ``and``/``or`` and for the operand of ``not``.
+    """
+
+    def __init__(self, permission_token):
+        self.permission_token = permission_token
+        self._grouped = False
+
+    def render(self, node, *, grouped=False):
+        previous = self._grouped
+        self._grouped = grouped
+        try:
+            if node.kind in ('and', 'or'):
+                return self._join(node, node.kind)
+            if node.kind == 'eq':
+                return self._eq(node)
+            if node.kind == 'ne':
+                return self._pair(node, '!=')
+            if node.kind == 'contains':
+                return self._contains(node)
+            if node.kind == 'not':
+                return 'not %s' % self.render(node.item, grouped=True)
+            return _condition_path(node.item)
+        finally:
+            self._grouped = previous
+
+    def _join(self, node, word):
+        text = '%s %s %s' % (
+            self.render(node.left, grouped=node.left.kind != word),
+            word,
+            self.render(node.right, grouped=node.right.kind != word),
+        )
+        if self._grouped:
+            return '(%s)' % text
+        return text
+
+    def _eq(self, node):
+        row = node.inquiry_partner()
+        if row is not None:
+            return self._membership(row)
+        return self._pair(node, '==')
+
+    def _pair(self, node, operator):
+        return '%s %s %s' % (
+            _operand_text(node.left),
+            operator,
+            _operand_text(node.right),
+        )
+
+    def _contains(self, node):
+        if node.right.kind == 'const':
+            return '%s in %s' % (
+                _constant_text(node.right.value),
+                _condition_path(node.left),
+            )
+        return self._membership(node.left)
+
+    def _membership(self, collection):
+        return '%s in %s' % (
+            self.permission_token, _condition_path(collection),
+        )
+
+
+def _render_condition(condition, *, permission_token='$permission.id'):
+    """One Python-like condition line, or ``None`` when none is stored.
+
+    A trust id ending in ``__cond`` means ``record.condition`` is set.
+    Field paths stay bare. Equality compares two columns. Membership is
+    ``$permission.<target> in <collection>``. ``permission_token`` is the
+    same token the SQL parameter uses. The line is a double-quoted YAML
+    string.
+    """
+    if condition is None:
+        return None
+    return _PolicyConditionText(permission_token).render(condition)
+
+
+def _condition_path(operand):
+    return '__'.join(operand.path)
+
+
+def _operand_text(operand):
+    if operand.kind == 'field':
+        return _condition_path(operand)
+    return _constant_text(operand.value)
+
+
+def _constant_text(value):
+    as_tuple = getattr(value, 'as_tuple', None)
+    if as_tuple is not None and not isinstance(value, Decimal):
+        return str(as_tuple()[2])
+    if value is None:
+        return 'None'
+    if isinstance(value, bool):
+        return 'True' if value else 'False'
+    return repr(value)
+
+
+def _assign_ids(records):
+    bases = [_base_id(record) for record in records]
+    totals = {}
+    for base in bases:
+        totals[base] = totals.get(base, 0) + 1
+    seen = {}
+    labels = []
+    for base in bases:
+        seen[base] = seen.get(base, 0) + 1
+        number = seen[base]
+        if totals[base] == 1 or number == 1:
+            labels.append(base)
+        else:
+            labels.append('%s__%s' % (base, number))
+    return labels
+
+
+def _dotless_id(*parts):
+    """Join id parts with ``__`` and fold qname dots into ``__``.
+
+    Artifact ids use ``_`` and ``__`` only. Django paths keep their dots
+    on ``root``, relation ``model``, content ``model``, and backend path.
+    """
+    return '__'.join(parts).replace('.', '__')
+
+
+def _base_id(record):
+    """Stable leg id. The root qname's dots become ``__``.
+
+    ``documents.DocumentPermission`` plus content field ``document`` is
+    ``documents__DocumentPermission__document``. ``:``, ``+``, and ``#``
+    are not used.
+    """
+    label = _dotless_id(_model_label(record.root), record.content_field)
+    if getattr(record, 'condition', None) is not None:
+        label += '__cond'
+    along = getattr(record, 'along', None)
+    if along is not None:
+        label += '__along_%s_%s_%s' % (
+            '__'.join(along.path),
+            getattr(along, 'shape', None),
+            getattr(along, 'bound', None),
+        )
+    return label.replace('.', '__')
+
+
+def _any_sentinel_user(alias, user_model):
+    return _sentinel(user_model, user_model._meta.pk.attname, alias=alias)
+
+
+def _any_sentinel_permission(alias):
+
+    return _sentinel(Permission, Permission._meta.pk.attname, alias=alias)
+
+
+def _sentinel(model, target_attname, *, alias):
+    """Unsaved instance whose PK and target field preparation succeeds.
+
+    The value is deterministic for a concrete field and is never written.
+    Django rejects related lookups whose primary key is unset, so the PK
+    is populated even when the comparison target is a different column.
+    """
+    instance = model()
+    pk_field = model._meta.pk
+    setattr(instance, pk_field.attname, _sentinel_value(pk_field, alias))
+    if target_attname and target_attname != pk_field.attname:
+        target = _concrete_target_field(model, target_attname)
+        setattr(instance, target.attname, _sentinel_value(target, alias))
+    return instance
+
+
+def _concrete_target_field(model, attname):
+    field = model._meta.get_field(attname)
+    concrete = getattr(field, 'attname', None)
+    if concrete == attname and not getattr(field, 'is_relation', False):
+        return field
+    for candidate in model._meta.concrete_fields:
+        if candidate.attname == attname:
+            return candidate
+    return field
+
+
+def _sentinel_value(field, alias):
+    """Deterministic Python value ``field`` preparation accepts."""
+    internal = field.get_internal_type()
+    if internal in _INTEGER_SENTINEL_TYPES:
+        return 1
+    if internal == 'BooleanField':
+        return True
+    if internal == 'UUIDField':
+        return uuid.UUID(int=1)
+    if internal in _TEXT_SENTINEL_TYPES:
+        return _text_sentinel(field)
+    if internal == 'DecimalField':
+        return Decimal('1')
+    if internal == 'FloatField':
+        return 1.0
+    if internal == 'BinaryField':
+        return b'\x01'
+    if internal == 'DateField':
+        return datetime.date(2000, 1, 1)
+    if internal == 'DateTimeField':
+        return _datetime_sentinel()
+    if internal == 'TimeField':
+        return datetime.time(0, 0)
+    if internal == 'DurationField':
+        return datetime.timedelta(seconds=1)
+    if internal == 'JSONField':
+        return {'sentinel': 1}
+    return _fallback_sentinel(field, alias)
+
+
+def _text_sentinel(field):
+    internal = field.get_internal_type()
+    if internal == 'EmailField':
+        value = 's@e.test'
+    elif internal == 'URLField':
+        value = 'https://e.test/'
+    elif internal == 'GenericIPAddressField':
+        value = '127.0.0.1'
+    else:
+        value = '1'
+    max_length = getattr(field, 'max_length', None)
+    if (
+        isinstance(max_length, int)
+        and max_length >= 0
+        and len(value) > max_length
+    ):
+        if max_length == 0:
+            return ''
+        return '1'[:max_length]
+    return value
+
+
+def _datetime_sentinel():
+
+    if getattr(settings, 'USE_TZ', False):
+        return datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)
+    return datetime.datetime(2000, 1, 1)
+
+
+def _fallback_sentinel(field, alias):
+
+    connection = connections[alias]
+    candidates = (
+        1,
+        '1',
+        True,
+        1.0,
+        Decimal('1'),
+        b'\x01',
+        uuid.UUID(int=1),
+        datetime.date(2000, 1, 1),
+        _datetime_sentinel(),
+        datetime.time(0, 0),
+        datetime.timedelta(seconds=1),
+    )
+    for candidate in candidates:
+        try:
+            field.get_db_prep_value(
+                field.get_prep_value(candidate), connection, prepared=True,
+            )
+        except Exception:
+            continue
+        return candidate
+    model = getattr(field, 'model', None)
+    label = model._meta.label if model is not None else '?'
+    raise TrustsConfigurationError(
+        'Policy SQL render could not build an unsaved sentinel for %s.%s '
+        '(%s).' % (label, field.attname, field.get_internal_type())
+    )
+
+
+def _compile_queryset(
+    queryset, alias, *, record, expr, records=None, reverse_users=False,
+):
+
+    _ctx.record = record
+    _ctx.composition_records = tuple(records) if records else None
+    _ctx.filter_queues = None if expr is None else _filter_queues(expr)
+    _ctx.reverse_users = reverse_users
+    token = _export_scope.set(object())
+    try:
+        compiler = queryset.query.get_compiler(
+            connection=_ExportConnection(connections[alias]),
+        )
+        sql, params = compiler.as_sql()
+    finally:
+        _export_scope.reset(token)
+        _ctx.record = None
+        _ctx.composition_records = None
+        _ctx.filter_queues = None
+        _ctx.reverse_users = False
+    if not isinstance(sql, str):
+        raise TrustsConfigurationError(
+            'Policy SQL render produced a non-text statement.'
+        )
+    return sql, _symbols_from_params(params)
+
+
+@django_checks.register(django_checks.Tags.models)
+def check_policy_sql_lockfile(app_configs, **kwargs):
+    """Compare the rendered policy SQL document to the lockfile.
+
+    Registered as a model check, so plain ``manage.py check`` and
+    ``manage.py check --tag models`` run it. A missing conventional
+    file reports nothing, even when ``TRUSTS_POLICY_DATABASE`` is
+    invalid: the check does not apply until that file is present or an
+    explicit path is configured. When the check applies, a bad database
+    alias, an explicit missing or unreadable file, and a byte mismatch
+    report ``trusts.E009``. This is not a request-time authorization gate.
+    """
+    del app_configs, kwargs
+    try:
+        message = _lockfile_check_message()
+    except TrustsConfigurationError as exc:
+        message = str(exc)
+    if message is None:
+        return []
+    return [django_checks.Error(
+        message,
+        hint=(
+            'Silencing trusts.E009 removes the only lockfile enforcement. '
+            'Regenerate the file with trusts_policy_sql --lock after '
+            'reviewing the SQL.'
+        ),
+        obj=None,
+        id=CHECK_ID_POLICY_LOCK,
+    )]
+
+
+def _lockfile_check_message():
+    """Return an E009 message, or None when the check does not apply.
+
+    Conventional absence is decided before the database alias is
+    resolved. An invalid ``TRUSTS_POLICY_DATABASE`` is reported only
+    when a conventional file is present or an explicit path is
+    configured.
+    """
+    try:
+        location = resolve_lockfile_path()
+    except TrustsConfigurationError as exc:
+        if _configured_lock_override() is None:
+            return None
+        resolve_policy_database(None)
+        return str(exc)
+    if not _lockfile_enforcement_applies(location):
+        return None
+    resolve_policy_database(None)
+    action = _presence_action(location, writing=False)
+    if action == 'inactive':
+        return None
+    raw = _read_lock_bytes(location)
+    if raw is None:
+        return None
+    live = render_policy_sql_bytes()
+    if raw == live:
+        return None
+    return 'Policy lock bytes differ: %s.' % location.path
+
+
+def _lockfile_enforcement_applies(location):
+    """True when this location is in the lockfile check's scope.
+
+    An explicit path always applies. A conventional path applies only
+    when the file is present (or cannot be classified as absence).
+    """
+    if location.explicit:
+        return True
+    return location.state not in (
+        'absent', 'missing_parent', 'not_a_directory',
+    )
+
+
+def _filter_queues(expr):
+
+    queues = {}
+
+    def add(path, symbol):
+        queues.setdefault(path, []).append(symbol)
+
+    def walk(node):
+        if node.kind in ('and', 'or'):
+            walk(node.left)
+            walk(node.right)
+            return
+        if node.kind in ('eq', 'ne'):
+            pair = _comparison_symbol(node)
+            if pair is not None:
+                add(pair[0], pair[1])
+
+    if expr is not None:
+        walk(expr)
+    return queues
+
+
+def _comparison_symbol(node):
+
+    left = node.left
+    right = node.right
+    object_ref = None
+    other = None
+    for side in (left, right):
+        if side.kind == 'field' and side.root == 'object':
+            if object_ref is None:
+                object_ref = side
+            else:
+                return None
+        else:
+            other = side
+    if object_ref is None or other is None:
+        return None
+    if other.kind == 'field' and other.root == 'object':
+        return None
+    path = '__'.join(object_ref.path)
+    if other.kind == 'const':
+        return path, _with_hint(
+            {'const': _json_const(other.value)}, path or 'literal',
+        )
+    if other.kind == 'field' and other.root == 'user':
+        if other.path:
+            bind = 'user.%s' % '__'.join(other.path)
+        else:
+            bind = 'user.id'
+        return path, _with_hint({'bind': bind}, _request_hint(bind))
+    if other.kind == 'field' and other.root == 'permission':
+        return path, _with_hint(
+            {'bind': 'permission.id'}, _request_hint('permission.id'),
+        )
+    return None
+
+
+class _ExportOps(object):
+    """Database operations that build export-scoped compilers only."""
+    def __init__(self, ops):
+        self._ops = ops
+
+    def compiler(self, compiler_name):
+        return _classifying_compiler(self._ops.compiler(compiler_name))
+
+    def __getattr__(self, name):
+        return getattr(self._ops, name)
+
+
+class _ExportConnection(object):
+    """Connection proxy whose compilers classify export placeholders.
+
+    The real connection object is not mutated, and ``SQLCompiler.compile``
+    is not replaced. Nested subquery compilers receive this same proxy,
+    so they classify too. Other threads keep using Django's compiler.
+    """
+
+    def __init__(self, connection):
+        self._connection = connection
+        self.ops = _ExportOps(connection.ops)
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+    def __setattr__(self, name, value):
+        if name in ('_connection', 'ops'):
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._connection, name, value)
+
+
+def _classifying_compiler(base):
+    cached = _classifying_classes.get(base)
+    if cached is not None:
+        return cached
+    with _classifying_class_lock:
+        cached = _classifying_classes.get(base)
+        if cached is not None:
+            return cached
+
+        class ClassifyingCompiler(base):
+            def compile(self, node):
+                if _export_scope.get() is None:
+                    return super().compile(node)
+                sql, params = super().compile(node)
+                return _classify_compiled(
+                    node, sql, params, query=self.query,
+                )
+
+        ClassifyingCompiler.__name__ = 'Classifying%s' % base.__name__
+        _classifying_classes[base] = ClassifyingCompiler
+        return ClassifyingCompiler
+
+
+def _classify_compiled(node, sql, params, query=None):
+    if isinstance(params, tuple):
+        params = list(params)
+    else:
+        params = list(params or ())
+    tagged = []
+    for param in params:
+        if isinstance(param, _Symbol):
+            tagged.append(param)
+            continue
+        tagged.append(_Symbol(
+            _symbol_for_new_param(node, query=query),
+        ))
+    return sql, tagged
+
+
+def _symbol_for_new_param(node, query=None):
+
+    next_column = getattr(node, 'next_column', None)
+    if next_column is not None:
+        column = next_column()
+        if column.kind == 'bind':
+            return _with_hint({'bind': column.label}, _request_hint(column.label))
+        if column.label == 'content pk':
+            attname = (
+                getattr(column.output_field, 'attname', None)
+                or getattr(column.output_field, 'name', None)
+                or 'id'
+            )
+            return _with_hint(
+                {'bind': 'content.%s' % attname},
+                '$content.%s' % attname,
+            )
+        return _with_hint(
+            {'const': _json_const(column.value)}, column.label,
+        )
+    along_bound = getattr(node, 'along_bound', None)
+    if along_bound is not None:
+        return _with_hint(
+            {'const': _json_const(along_bound)}, 'along bound',
+        )
+    hint = getattr(node, 'hint', None)
+    if hint is not None:
+        return _with_hint(
+            {'const': _json_const(node.value)}, hint,
+        )
+    if isinstance(node, Value):
+        return _with_hint(
+            {'const': _json_const(node.value)},
+            _value_hint(node, query),
+        )
+    record = getattr(_ctx, 'record', None)
+    if record is not None and isinstance(node, Lookup):
+        bind = _bind_name(node, record)
+        if bind is not None:
+            return _with_hint({'bind': bind}, _request_hint(bind))
+    queues = getattr(_ctx, 'filter_queues', None)
+    if queues and isinstance(node, Lookup):
+        path = _lookup_field_name(node)
+        pending = queues.get(path) if path else None
+        if pending:
+            return pending.pop(0)
+    if isinstance(node, Lookup):
+        rhs = getattr(node, 'rhs', None)
+        if rhs is not None and not hasattr(rhs, 'as_sql'):
+            return _with_hint(
+                {'const': _json_const(rhs)}, _const_hint(node, rhs),
+            )
+    raise TrustsConfigurationError(
+        'Policy SQL render could not classify a %s placeholder.'
+        % type(node).__name__
+    )
+
+
+_REQUEST_ROLES = frozenset((
+    'user', 'permission', 'content', 'sponsor', 'delegate',
+))
+
+
+def _request_hint(bind):
+    """``$user`` / ``$permission`` / ``$content`` for a request-time bind.
+
+    A non-id target stays on the marker (``$user.code``) so the column
+    is still visible. Field paths are not rewritten here.
+    """
+    role, _dot, rest = bind.partition('.')
+    if role not in _REQUEST_ROLES:
+        return '$' + bind
+    if rest in ('', 'id', 'pk'):
+        return '$' + role
+    return '$%s.%s' % (role, rest)
+
+
+def _with_hint(symbol, hint):
+    annotated = dict(symbol)
+    annotated['hint'] = hint
+    return annotated
+
+
+def _value_hint(node, query):
+    """Label for one ``Value`` placeholder.
+
+    The ``EXISTS`` sentinel is the annotation named ``a`` on that
+    existence query. Any other ``Value``, including ``Value(1)``, keeps
+    its annotation alias so the lockfile does not call it a marker.
+    """
+    annotations = {}
+    if query is not None:
+        annotations = getattr(query, 'annotations', None) or {}
+    sentinel = annotations.get('a')
+    if (
+        sentinel is node
+        and node.value == 1
+        and not isinstance(node.value, bool)
+    ):
+        return 'exists marker'
+    for alias, annotation in annotations.items():
+        if annotation is node:
+            return alias
+    return 'literal'
+
+
+def _const_hint(node, value):
+    """Readable label for one constant lookup placeholder."""
+    lhs = getattr(node, 'lhs', None)
+    if getattr(lhs, 'along_bound', None) is not None and value is True:
+        return 'along match'
+    name = _lookup_field_name(node)
+    label = _lookup_model_label(node)
+    if name == 'app_label' and label == 'contenttypes.ContentType':
+        return 'content type app'
+    if name == 'model' and label == 'contenttypes.ContentType':
+        return 'content type model'
+    if name == 'is_active':
+        return 'active'
+    target = getattr(lhs, 'target', None)
+    if target is not None and getattr(target, 'primary_key', False):
+        return 'content pk'
+    raise TrustsConfigurationError(
+        'Policy SQL render could not label a constant placeholder.'
+    )
+
+
+def _lookup_model_label(node):
+    lhs = getattr(node, 'lhs', None)
+    target = getattr(lhs, 'target', None)
+    model = getattr(target, 'model', None)
+    meta = getattr(model, '_meta', None)
+    return getattr(meta, 'label', None)
+
+
+def _bind_name(node, record):
+    target = getattr(getattr(node, 'lhs', None), 'target', None)
+    if target is None:
+        return None
+    remote = getattr(target, 'remote_field', None)
+    model = getattr(remote, 'model', None) if remote is not None else None
+    direct_content = False
+    if (
+        model is None
+        and getattr(_ctx, 'reverse_users', False)
+        and getattr(node, 'trusts_content_bind', False)
+    ):
+        model = getattr(target, 'model', None)
+        direct_content = model is not None
+    if model is None:
+        return None
+    concrete = model._meta.concrete_model
+    candidates = []
+    if record is not None:
+        candidates.append(record)
+    extra = getattr(_ctx, 'composition_records', None)
+    if extra:
+        for item in extra:
+            if item is not record:
+                candidates.append(item)
+    labels = []
+    for candidate in candidates:
+        if (
+            not direct_content
+            and concrete is candidate.user_model._meta.concrete_model
+        ):
+            labels.append('user.%s' % candidate.user_target)
+        elif (
+            not direct_content
+            and concrete is candidate.permission_model._meta.concrete_model
+        ):
+            labels.append('permission.%s' % candidate.permission_target)
+        elif (
+            getattr(_ctx, 'reverse_users', False)
+            and concrete is candidate.content_model._meta.concrete_model
+            and (
+                not direct_content
+                or getattr(target, 'attname', None) == candidate.content_target
+            )
+        ):
+            labels.append('content.%s' % candidate.content_target)
+    if not labels:
+        raise TrustsConfigurationError(
+            'Policy SQL render could not label a %s bind.'
+            % concrete._meta.label
+        )
+    if any(label != labels[0] for label in labels):
+        raise TrustsConfigurationError(
+            'Composition SQL cannot label a %s bind; trusts in this '
+            'group do not share a target.' % (concrete._meta.label,)
+        )
+    return labels[0]
+
+
+def _lookup_field_name(node):
+    """Field name that matches a condition path for this lookup.
+
+    Relation lookups compile against the remote target column. The
+    output field keeps the relation name (``owner``), which is the path
+    stored on the condition. Scalar lookups use that same output field.
+    """
+    lhs = getattr(node, 'lhs', None)
+    for attr in ('output_field', 'target'):
+        field = getattr(lhs, attr, None)
+        name = getattr(field, 'name', None)
+        if isinstance(name, str) and name != '':
+            return name
+    return None
+
+
+def _symbols_from_params(params):
+    symbols = []
+    for param in params:
+        if not isinstance(param, _Symbol):
+            raise TrustsConfigurationError(
+                'Policy SQL render left an unclassified placeholder.'
+            )
+        symbols.append(param.payload)
+    return symbols
+
+
+def _json_const(value):
+    """In-document value for one condition constant.
+
+    ``null``, booleans, strings, integers, and finite floats stay bare
+    scalars. ``1`` and ``1.0`` stay distinct, and ``-0.0`` keeps its
+    sign. Bytes, ``Decimal``, ``UUID``, dates, times, datetimes,
+    timedeltas, non-finite floats, and ``ModelIdentity`` use a tagged
+    mapping (``type`` plus fields). The YAML codec writes those
+    mappings as ordinary mappings and quotes every string inside them,
+    so YAML 1.1 does not reinterpret dates, bool words, or decimals.
+    """
+
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        if math.isnan(value):
+            return {'type': 'float', 'value': 'NaN'}
+        if math.isinf(value):
+            return {
+                'type': 'float',
+                'value': 'Infinity' if value > 0 else '-Infinity',
+            }
+        return value
+    if isinstance(value, bytes):
+        return {'type': 'bytes', 'hex': value.hex()}
+    if isinstance(value, Decimal):
+        return {'type': 'decimal', 'value': str(value)}
+    if isinstance(value, uuid.UUID):
+        return {'type': 'uuid', 'value': str(value)}
+    if isinstance(value, datetime.datetime):
+        return {'type': 'datetime', 'value': value.isoformat()}
+    if isinstance(value, datetime.date):
+        return {'type': 'date', 'value': value.isoformat()}
+    if isinstance(value, datetime.time):
+        return {'type': 'time', 'value': value.isoformat()}
+    if isinstance(value, datetime.timedelta):
+        return {
+            'type': 'timedelta',
+            'days': value.days,
+            'seconds': value.seconds,
+            'microseconds': value.microseconds,
+        }
+    as_tuple = getattr(value, 'as_tuple', None)
+    if as_tuple is not None:
+        app_label, model_name, pk = as_tuple()
+        return {
+            'type': 'model',
+            'app_label': app_label,
+            'model': model_name,
+            'pk': _json_const(pk),
+        }
+    raise TrustsConfigurationError(
+        'Policy SQL render cannot record constant %r (%s).'
+        % (value, type(value).__name__)
+    )
+
+
+def _model_label(model):
+    meta = getattr(model, '_meta', None)
+    label = getattr(meta, 'label', None)
+    if not isinstance(label, str) or label == '':
+        raise TrustsConfigurationError(
+            'Policy SQL render expected a model, not %r.' % (model,)
+        )
+    return label
+
+
+def _dump_document(document):
+    try:
+        return dump_policy_yaml(document)
+    except PolicyYamlError as exc:
+        raise TrustsConfigurationError(str(exc)) from exc
+
+
+def _configured_lock_override():
+
+    if not settings.configured:
+        return None
+    return getattr(settings, 'TRUSTS_POLICY_LOCKFILE', None)
+
+
+def _usable_base_dir():
+
+    if not settings.configured:
+        return None
+    base = getattr(settings, 'BASE_DIR', None)
+    if base is None or isinstance(base, bool):
+        return None
+    if not isinstance(base, (str, os.PathLike)):
+        return None
+    text = os.fspath(base)
+    if not isinstance(text, str) or text == '':
+        return None
+    path = Path(text)
+    if not path.is_absolute():
+        return None
+    return path
+
+
+def _absolute_lock_path(value):
+    if isinstance(value, bool) or not isinstance(value, (str, os.PathLike)):
+        raise TrustsConfigurationError(
+            'Policy lock path must be an absolute path, not %s. It is not '
+            'resolved against the process working directory.'
+            % type(value).__name__
+        )
+    text = os.fspath(value)
+    if not isinstance(text, str):
+        raise TrustsConfigurationError(
+            'Policy lock path must be an absolute path, not %s. It is not '
+            'resolved against the process working directory.'
+            % type(text).__name__
+        )
+    if not Path(text).is_absolute():
+        raise TrustsConfigurationError(
+            'Policy lock path must be absolute, not %r. It is not resolved '
+            'against the process working directory.' % (text,)
+        )
+    return Path(text)
+
+
+def _classify_lockfile(path):
+    """Classify ``path`` without searching parents for a lockfile."""
+    parent = path.parent
+    try:
+        parent_mode = os.stat(parent).st_mode
+    except FileNotFoundError:
+        return 'missing_parent'
+    except PermissionError:
+        return 'permission'
+    except OSError as exc:
+        if exc.errno in (errno.EACCES, errno.EPERM):
+            return 'permission'
+        raise
+    if not stat.S_ISDIR(parent_mode):
+        return 'not_a_directory'
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return 'absent'
+    except PermissionError:
+        return 'permission'
+    except OSError as exc:
+        if exc.errno in (errno.EACCES, errno.EPERM):
+            return 'permission'
+        raise
+    return 'present'
+
+
+def _presence_action(location, *, writing):
+    """Map presence to inactive, create, or present. Fail closed otherwise."""
+    state = location.state
+    path = location.path
+    if state == 'permission':
+        raise TrustsConfigurationError(
+            'Policy lock permission denied: %s.' % path
+        )
+    if state == 'missing_parent':
+        if location.explicit or writing:
+            raise TrustsConfigurationError(
+                'Policy lock parent directory is missing: %s.' % path.parent
+            )
+        return 'inactive'
+    if state == 'not_a_directory':
+        if location.explicit or writing:
+            raise TrustsConfigurationError(
+                'Policy lock parent is not a directory: %s.' % path.parent
+            )
+        return 'inactive'
+    if state == 'absent':
+        if writing:
+            return 'create'
+        if location.explicit:
+            raise TrustsConfigurationError(
+                'Policy lock file is missing: %s.' % path
+            )
+        return 'inactive'
+    if state == 'present':
+        return 'present'
+    raise TrustsConfigurationError(
+        'Policy lock path state %r is unsupported.' % (state,)
+    )
+
+
+def _require_writable_parent(location):
+    action = _presence_action(location, writing=True)
+    if action not in ('create', 'present'):
+        raise TrustsConfigurationError(
+            'Policy lock path %s cannot be written (state %s).'
+            % (location.path, location.state)
+        )
+    return action
+
+
+def _lockfile_is_directory(path):
+    try:
+        mode = os.lstat(path).st_mode
+    except OSError:
+        return False
+    return stat.S_ISDIR(mode)
+
+
+def _read_lock_bytes(location):
+    """Return lockfile bytes, or None if a conventional file vanished.
+
+    A directory path, permission failure, and an explicit missing file
+    fail closed. A conventional file that disappears between classify
+    and read is absence, not drift. This does not search parent
+    directories and does not issue SQL.
+    """
+    if _lockfile_is_directory(location.path):
+        raise TrustsConfigurationError(
+            'Policy lock path is a directory: %s.' % location.path
+        )
+    try:
+        return location.path.read_bytes()
+    except PermissionError as exc:
+        raise TrustsConfigurationError(
+            'Policy lock permission denied: %s.' % location.path
+        ) from exc
+    except FileNotFoundError:
+        if location.explicit:
+            raise TrustsConfigurationError(
+                'Policy lock file is missing: %s.' % location.path
+            )
+        return None
+
+
+def _atomic_write(path, payload):
+    """Replace ``path`` via a temp file in the same directory. No CWD."""
+    parent = path.parent
+    fd = None
+    tmp_name = None
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix='.trusts-policy.',
+            suffix='.tmp',
+            dir=os.fspath(parent),
+        )
+        with os.fdopen(fd, 'wb') as handle:
+            fd = None
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_name, 0o644)
+        os.replace(tmp_name, os.fspath(path))
+        tmp_name = None
+    except PermissionError as exc:
+        raise TrustsConfigurationError(
+            'Policy lock permission denied: %s.' % path
+        ) from exc
+    except OSError as exc:
+        if exc.errno in (errno.EACCES, errno.EPERM):
+            raise TrustsConfigurationError(
+                'Policy lock permission denied: %s.' % path
+            ) from exc
+        if exc.errno in (errno.EISDIR, errno.ENOTDIR):
+            raise TrustsConfigurationError(
+                'Policy lock path is a directory: %s.' % path
+            ) from exc
+        raise TrustsConfigurationError(
+            'Policy lock could not be written: %s.' % (exc,)
+        ) from exc
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if tmp_name is not None:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass

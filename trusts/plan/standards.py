@@ -1,7 +1,6 @@
 """Named user conditions compiled once into each check.
 
-``trusts.user_rules`` re-exports these names. ``Bit`` and ``Proxy`` are
-the tree names; the shim still exposes ``_Bit`` and ``_Proxy``.
+The shared grammar builds the expression. ``Tree`` is the stored node.
 
 Each condition is ``(skip_<name> OR condition)``. The override is
 ``(NOT skip_<override> AND override)``, ORed with ordinary grants and
@@ -14,28 +13,42 @@ __all__ = []
 import copy
 from collections import namedtuple
 
-from django.contrib.auth import get_user_model
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import BooleanField, Q
+from django.db.models import BooleanField, F, Q
 from django.db.models.expressions import RawSQL
 
-from trusts.errors import TrustsConfigurationError
-
-_MSG = 'User conditions only support concrete boolean fields, &, and ~.'
+from trusts.plan.conditions import (
+    require_boolean_field,
+    normalize_expression,
+    validate_expression,
+)
+from trusts.plan.grammar import Tree, invoke, unsupported
+from trusts.plan.writers import (
+    boolean_q,
+    negate_q,
+    column_q,
+    columns_q,
+    contains_q,
+    member_pk,
+)
+from trusts.errors import PermissionConditionError, TrustsConfigurationError
 
 # ``skip_<name>`` must not reuse an inquiry parameter. ``skip_is_active``
 # is absent: it is the keyword for the ``is_active`` condition.
 _RESERVED = frozenset({
     'user', 'user_obj', 'permission', 'perm', 'permext', 'content', 'obj',
     'extra_q', 'conditions', 'queryset', 'handles', 'kind', 'candidates',
-    'plan', 'sponsor_handles', 'permission_model', 'skipped', 'skip_flags',
+    'plan', 'permission_model', 'skipped', 'skip_flags',
 })
 
-Node = namedtuple('Node', 'kind name left right')
 UserCondition = namedtuple('UserCondition', 'name expr on')
 
+_IS_ACTIVE = Tree(
+    'bare', item=Tree('field', root='user', path=('is_active',)),
+)
+
 BUILTIN_USER_CONDITIONS = (
-    UserCondition('is_active', Node('field', 'is_active', None, None), '*'),
+    UserCondition('is_active', _IS_ACTIVE, '*'),
 )
 
 
@@ -97,32 +110,6 @@ def condition_names(conditions, override=None):
     return frozenset(names)
 
 
-class Bit(object):
-    def __init__(self, node):
-        self.node = node
-
-    def __and__(self, other):
-        if not isinstance(other, Bit):
-            raise TrustsConfigurationError(_MSG)
-        return Bit(Node('and', None, self.node, other.node))
-
-    def __invert__(self):
-        return Bit(Node('not', None, self.node, None))
-
-    def _reject(self, *args, **kwargs):
-        raise TrustsConfigurationError(_MSG)
-
-    __rand__ = __and__
-    __bool__ = __eq__ = __or__ = __call__ = _reject
-
-
-class Proxy(object):
-    def __getattr__(self, name):
-        if name.startswith('_'):
-            raise AttributeError(name)
-        return Bit(Node('field', name, None, None))
-
-
 def walk_user_lambda(expr):
     """Walk ``lambda u: ...`` once. Does not call it with a user instance."""
     if not callable(expr):
@@ -130,67 +117,112 @@ def walk_user_lambda(expr):
             'User condition expression must be a callable or None, not %r.'
             % (expr,)
         )
-    try:
-        result = expr(Proxy())
-    except TrustsConfigurationError:
-        raise
-    except Exception as exc:
-        raise TrustsConfigurationError(_MSG) from exc
-    if not isinstance(result, Bit):
-        raise TrustsConfigurationError(_MSG)
-    return result.node
+    return normalize_expression(invoke(expr, ('user',)))
 
 
-def _fields(expr):
-    if expr.kind == 'field':
-        yield expr.name
-        return
-    if expr.left is not None:
-        yield from _fields(expr.left)
-    if expr.right is not None:
-        yield from _fields(expr.right)
-
-
-def field_state(model, expr):
-    """``ok``, ``missing``, or raise when a present field is not boolean."""
-    for field_name in _fields(expr):
-        try:
-            field = model._meta.get_field(field_name)
-        except FieldDoesNotExist:
-            return 'missing'
-        if (
-            not getattr(field, 'concrete', False)
-            or field.get_internal_type() != 'BooleanField'
-        ):
-            raise TrustsConfigurationError(
-                '%s.%s must be a concrete BooleanField.'
-                % (model._meta.label, field_name)
-            )
-    return 'ok'
-
-
-def assert_concrete_booleans(model, expr, name):
-    if field_state(model, expr) != 'ok':
-        raise TrustsConfigurationError(
-            'User condition %r needs a concrete BooleanField on %s.'
+def _require_user_boolean(model, node, name):
+    """The terminal of a bare user field must be a concrete boolean."""
+    if node.kind != 'field' or node.root != 'user' or not node.path:
+        raise PermissionConditionError(
+            'User condition %r needs a boolean field on %s.'
             % (name, model._meta.label)
         )
+    require_boolean_field(
+        model, node.path, 'principal', name=name,
+    )
 
 
-def concrete_rule(expr, name):
-    """Walk ``expr`` and require concrete booleans on the user model."""
+def validate_user_rule(model, expr, name):
+    """Check user rule ``name`` against ``model``.
+
+    A bare field must be a concrete boolean, including one reached
+    through a relation. Comparisons and ``.contains()`` use the shared
+    expression checker. ``model`` is the principal model.
+    """
+    if expr.kind in ('and', 'or'):
+        validate_user_rule(model, expr.left, name)
+        validate_user_rule(model, expr.right, name)
+        return
+    if expr.kind == 'not':
+        validate_user_rule(model, expr.item, name)
+        return
+    if expr.kind == 'bare':
+        _require_user_boolean(model, expr.item, name)
+        return
+    if expr.kind in ('eq', 'ne', 'contains'):
+        validate_expression(expr, model, model)
+        return
+    raise unsupported(expr.kind, 'a user condition')
+
+
+def concrete_rule(expr, name, user_model):
+    """Walk ``expr`` and check it against ``user_model``."""
     walked = walk_user_lambda(expr)
-    assert_concrete_booleans(get_user_model(), walked, name)
+    validate_user_rule(user_model, walked, name)
     return walked
 
 
-def _compile(path, expr):
-    if expr.kind == 'field':
-        key = '%s__%s' % (path, expr.name) if path else expr.name
-        return Q(**{key: True})
+def _prefixed(path, field_path):
+    """Lookup for a user field. ``path`` is the sponsor prefix, or empty."""
+    parts = tuple(field_path)
+    name = '__'.join(parts) if parts else 'pk'
+    if path:
+        return '%s__%s' % (path, name)
+    return name
+
+
+def _compile(path, expr, scope):
+    if expr.kind == 'and':
+        return (
+            _compile(path, expr.left, scope)
+            & _compile(path, expr.right, scope)
+        )
+    if expr.kind == 'or':
+        return (
+            _compile(path, expr.left, scope)
+            | _compile(path, expr.right, scope)
+        )
     if expr.kind == 'not':
-        return ~_compile(path, expr.left)
-    return _compile(path, expr.left) & _compile(path, expr.right)
+        return negate_q(scope, _compile(path, expr.item, scope))
+    if expr.kind == 'bare':
+        return _compile(path, expr.item, scope)
+    if expr.kind == 'field':
+        return boolean_q(_prefixed(path, expr.path))
+    if expr.kind in ('eq', 'ne'):
+        return _compile_user_comparison(path, expr)
+    if expr.kind == 'contains':
+        return _compile_user_contains(path, expr)
+    raise unsupported(expr.kind, 'a user condition')
+
+
+def _compile_user_comparison(path, node):
+    equal = node.kind == 'eq'
+    left = node.left
+    right = node.right
+    if left.kind == 'field' and right.kind == 'field':
+        return columns_q(
+            _prefixed(path, left.path),
+            _prefixed(path, right.path),
+            equal,
+        )
+    if left.kind == 'field':
+        return column_q(
+            _prefixed(path, left.path), right.value, equal, field=False,
+        )
+    return column_q(
+        _prefixed(path, right.path), left.value, equal, field=False,
+    )
+
+
+def _compile_user_contains(path, node):
+    lookup = _prefixed(path, node.left.path)
+    member = node.right
+    if member.kind == 'const':
+        value = member_pk(member.value)
+        if value is None:
+            return Q(pk__in=())
+        return contains_q(lookup, value)
+    return contains_q(lookup, F(_prefixed(path, member.path)))
 
 
 class SkipFlag(RawSQL):
@@ -200,6 +232,7 @@ class SkipFlag(RawSQL):
 
     def __init__(self, name, value):
         self.name = name
+        self.hint = 'skip_%s' % name
         self.value = bool(value)
         super().__init__('%s', (self.value,), output_field=BooleanField())
 
@@ -231,20 +264,24 @@ def _stored(conditions):
     return tuple(conditions)
 
 
-def compile_user_rules(model, path, conditions, *, role, values):
+def compile_user_rules(model, path, conditions, *, role, values, scope=None):
     """``(skip_<name> OR condition)`` for rules that apply to ``role``.
 
     ``conditions is None`` is the built-in ``is_active`` rule. The registry
     passes that rule only when ``model`` has the field, and one fragment
-    for every inquiry.
+    for every inquiry. ``scope`` is the model ``not`` is evaluated against.
+    A sponsor rule is filtered on the delegation row, so ``scope`` is that
+    row's model. An empty prefix uses ``model``, the principal.
     """
     values = values or {}
+    if scope is None:
+        scope = model
     combined = None
     for rule in _stored(conditions):
         if not rule_applies(rule.on, role):
             continue
         flag = SkipFlag(rule.name, values.get(rule.name, False))
-        part = Q(flag) | _compile(path, rule.expr)
+        part = Q(flag) | _compile(path, rule.expr, scope)
         combined = part if combined is None else combined & part
     return Q() if combined is None else combined
 
@@ -253,10 +290,5 @@ def compile_override_q(model, path, slot, values):
     """``(NOT skip_<override> AND override)``, or ``None`` when unset."""
     if slot is None:
         return None
-    if field_state(model, slot.expr) != 'ok':
-        raise TrustsConfigurationError(
-            'User override %r needs a concrete BooleanField on %s.'
-            % (slot.name, model._meta.label)
-        )
     flag = SkipFlag(slot.name, (values or {}).get(slot.name, False))
-    return ~Q(flag) & _compile(path, slot.expr)
+    return ~Q(flag) & _compile(path, slot.expr, model)

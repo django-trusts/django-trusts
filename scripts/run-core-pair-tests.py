@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Run the complete applicable legacy core suite against core + Zero IIa.
 
-Uses ``tests.pair_settings`` (ZeroConfig only; no library ``'trusts'``).
+Uses ``tests.pair_settings`` (Zero plus the trusts_tests backend; no
+library ``'trusts'`` app).
 """
 
 from __future__ import annotations

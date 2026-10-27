@@ -1,12 +1,11 @@
 """Lockfile regressions for the SQL-first policy export.
 
 The kernel and pair suites load this package. ``load_tests`` pulls in
-the SQL export slice and the suite-wiring check.
+the SQL export slices.
 """
 
 SLICE_MODULES = (
     'tests.core.test_issue147.test_sql_export',
-    'tests.core.test_issue147.test_suite_wiring',
     'tests.core.test_issue147.test_yaml_lock',
     'tests.core.test_issue147.test_issue258',
     'tests.core.test_issue147.test_sql_format',

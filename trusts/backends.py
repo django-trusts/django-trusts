@@ -1,305 +1,394 @@
 """Generic Trusts backend mixin.
 
-``TrustModelBackendMixin`` lives only here. Core does not ship
-``TrustModelBackend`` or ``HistoricalGroupQueryCompiler``; those names
-are ``trusts.zero.backends``. ``trusts.core_backends`` is gone.
+The app config holds one state object per key. ``get_registry()`` is
+how an application registers. Each listed backend answers from that
+state's catalog only. A miss returns nothing. Callers OR the grant
+``Q`` objects.
 """
 
+from collections.abc import Callable
+from typing import Protocol, TypeVar, runtime_checkable
+
+from django.apps import apps
+from django.contrib.auth import get_backends, get_user_model, load_backend
 from django.contrib.auth.models import Permission
 from django.db.models import Model, QuerySet, Subquery
 
-from trusts.errors import PermissionConditionError
-from trusts.plan.conditions import (
-    evaluate_registered_expression,
-    permission_has_condition,
+from trusts.compile.appbuild import build_app_catalog
+from trusts.compile.catalogs import compile_catalog_users, filter_catalogs
+from trusts.compile.compilers import RegistrationListener
+from trusts.errors import TrustsConfigurationError
+from trusts.inspect.snapshot import (
+    _build_document,
+    _installed_document,
+    resolve_policy_database,
 )
-from trusts.core import (
-    PlanQueryCompiler,
-    _compile_common_permissions,
-    _compiler_applies,
-    all_match,
-    instance_match,
-)
-from trusts import utils
+
+T = TypeVar('T', bound=Model)
+RELATIONSHIP_BACKEND_KEY = 'relationship_backend'
 
 
-def _permission_binding(perm, model):
-    """Unevaluated Permission pk for ``perm`` (instance or dotted code).
+@runtime_checkable
+class Registry(Protocol):
+    """Registration calls returned by ``get_registry()``."""
 
-    Unknown codes become an empty subquery and match nothing. This is
-    permission identity in SQL, not a second authorization source.
+    def register(
+        self, *,
+        trust: type[T],
+        user: str | Callable[[T], object] | None = None,
+        permission: str | Callable[[T], object] | None = None,
+        content: str | Callable[[T], object],
+        group: str | Callable[[T], object] | None = None,
+        delegate: str | Callable[[T], object] | None = None,
+        sponsor: str | Callable[[T], object] | None = None,
+        condition: (
+            Callable[[T], object] | Callable[[T, object], object] | None
+        ) = None,
+        along=None,
+    ):
+        self._accept('register', (), {
+            'trust': trust,
+            'user': user,
+            'permission': permission,
+            'content': content,
+            'group': group,
+            'delegate': delegate,
+            'sponsor': sponsor,
+            'condition': condition,
+            'along': along,
+        })
+
+    def add_named_filter(self, model, code, predicate):
+        """Record a named-filter builder. The compiler parses it at build."""
+        self._accept('add_named_filter', (model, code, predicate), {})
+
+    def set_user_condition(self, name, expr, on='*'):
+        self._accept('set_user_condition', (name, expr), {'on': on})
+
+    def set_user_override(self, name, expr, on='user'):
+        self._accept('set_user_override', (name, expr), {'on': on})
+
+    def _accept(self, name, args, kwargs):
+        """Store one registration call. ``Recorder`` implements this."""
+
+
+class Recorder(Registry):
+    """Ordered log of registration calls for one app.
+
+    ``play`` replays each call, in order, as the same method on
+    ``target``. The log must already be frozen. A later ``play``
+    replays those same calls onto the new target.
     """
-    if isinstance(perm, Permission):
-        return perm
-    applabel, modelname, action, _cond = utils.parse_perm_code(perm)
+
+    def __init__(self, listener: Registry):
+        self._rows = []
+        self.frozen = False
+        self._listener = listener
+
+    def _accept(self, name, args, kwargs):
+        self._open(name)
+        getattr(self._listener, name)(*args, **kwargs)
+        self._rows.append((name, args, kwargs))
+
+    def freeze(self):
+        self.frozen = True
+
+    def play(self, target: Registry):
+        """Replay this log on ``target``.
+
+        The caller freezes the log first. A second play replays the
+        same calls onto that target.
+        """
+        for name, args, kwargs in self._rows:
+            getattr(target, name)(*args, **kwargs)
+
+    def _open(self, method):
+        if self.frozen:
+            raise TrustsConfigurationError(
+                '%s refused: this registry is frozen. '
+                'The catalog is already built.' % method
+            )
+
+
+class RelationshipBackend:
+    """Registration log and catalog for one app config.
+
+    ``family`` and ``query_compiler`` come from the backend class that
+    first created this state. The catalog path is the app config class.
+    """
+
+    def __init__(self, family='relationship', query_compiler=None):
+        self.family = family
+        self.query_compiler = query_compiler
+        self.recorder = Recorder(RegistrationListener())
+        self.catalog = None
+
+
+class TrustModelBackendMixin(object):
+    """Object-permission backend. The app config holds this backend's state."""
+
+    family = 'relationship'
+    query_compiler = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def get_registry(self) -> Registry:
+        """Open registration log for this backend's app.
+
+        Not the built catalog. Registration does not resolve the user
+        model and does not build the catalog.
+        """
+        config = apps.get_containing_app_config(type(self).__module__)
+        backend_type = type(self)
+        state = config.get_or_create_config(
+            RELATIONSHIP_BACKEND_KEY,
+            lambda: RelationshipBackend(
+                family=backend_type.family,
+                query_compiler=backend_type.query_compiler,
+            ),
+            on_ready=build_app_catalog,
+        )
+        return state.recorder
+
+    def _state(self):
+        config = apps.get_containing_app_config(type(self).__module__)
+        if config is None:
+            return None
+        lookup = getattr(config, 'get_config', None)
+        if not callable(lookup):
+            return None
+        return lookup(RELATIONSHIP_BACKEND_KEY)
+
+    def _catalog(self):
+        """Catalog this backend answers from, or ``None`` when unset."""
+        state = self._state()
+        if state is None:
+            return None
+        return state.catalog
+
+    def walk_questions(self, visitor):
+        """Walk this catalog's questions in document order."""
+        catalog = self._catalog()
+        if catalog is None:
+            return None
+        return catalog.walk_questions(visitor)
+
+    def has_perm(self, user_obj, permext, obj=None, **skip_flags):
+        """Object check. No object denies. No catalog denies."""
+        if obj is None or not isinstance(obj, (QuerySet, Model)):
+            return False
+        catalog = self._catalog()
+        if catalog is None:
+            return False
+        return catalog.has_perm(user_obj, permext, obj, **skip_flags)
+
+    def get_all_permissions(self, user_obj, obj=None, **skip_flags):
+        """Permissions this catalog grants on the object."""
+        if obj is None or not isinstance(obj, (QuerySet, Model)):
+            return set()
+        catalog = self._catalog()
+        if catalog is None:
+            return set()
+        return catalog.get_all_permissions(user_obj, obj, **skip_flags)
+
+    def get_group_permissions(self, user_obj, obj=None, **skip_flags):
+        """Group permissions this catalog grants on the object."""
+        if obj is None or not isinstance(obj, (QuerySet, Model)):
+            return set()
+        catalog = self._catalog()
+        if catalog is None:
+            return set()
+        return catalog.get_group_permissions(user_obj, obj, **skip_flags)
+
+    def singular_permission_accepted(self, perm):
+        """``auth.Permission`` only, unless a backend overrides this."""
+        return isinstance(perm, Permission)
+
+    def permitted_users_predicate(self, content, perm, *, skipped=()):
+        """``Q`` over candidate users, or ``None`` when this path does not apply."""
+        catalog = self._catalog()
+        if catalog is None:
+            return None
+        return catalog.permitted_users_predicate(
+            content, perm, skipped=skipped,
+            accepts_permission=self.singular_permission_accepted,
+        )
+
+    def authorized_grant_q(self, subject, user, permission, *, skipped=()):
+        """Grant for an authorized-row filter."""
+        catalog = self._catalog()
+        if catalog is None:
+            return None
+        return catalog.complete_grant_q(
+            subject, user, permission, skipped=skipped)
+
+    def permitted_grant_q(self, subject, user, permission, *, skipped=(),
+                          conditions=(), binding=None, api=None):
+        """Grant for a permitted-row filter."""
+        catalog = self._catalog()
+        if catalog is None:
+            return None
+        model = subject.model if isinstance(subject, QuerySet) else subject
+        predicate, _owned = catalog.authorization_grant(
+            subject, user, model, permission, conditions, binding,
+            api=api, skipped=skipped)
+        return predicate
+
+    def filter_permitted(self, queryset, user, permission, *, conditions=(),
+                         **skip_flags):
+        """Rows this backend permits. Other backends are not consulted.
+
+        No applicable plan, a selected name this catalog does not own,
+        or a permission string this catalog cannot read, returns an
+        empty queryset and does not raise.
+        """
+        if (
+            not isinstance(permission, str) or permission.count('.') != 1
+            or ':' in permission
+        ):
+            return queryset.none()
+        catalog = self._catalog()
+        if catalog is None:
+            return queryset.none()
+        has_plan, owns = catalog.authorization_preflight(
+            queryset.model, conditions)
+        if not has_plan or not owns:
+            return queryset.none()
+        return filter_catalogs(
+            ((self, catalog),), queryset, user,
+            ask=lambda item, skipped: item.permitted_grant_q(
+                queryset, user, permission, skipped=skipped,
+                conditions=conditions,
+                binding=codename_binding(
+                    queryset.model, *permission.split('.', 1)),
+                api='authorization_required'),
+            skip_flags=skip_flags, user_model=get_user_model())
+
+    def filter_by_permitted_content(self, queryset, user, permission, *,
+                                    content, **skip_flags):
+        """Scope rows this backend permits as a prefix of ``content``.
+
+        No applicable plan, or a user or permission that is not a saved
+        model instance, returns an empty queryset and does not raise.
+        """
+        catalog = self._catalog()
+        if catalog is None:
+            return queryset.none()
+        return catalog.filter_by_permitted_content(
+            queryset, user, permission, content=content, **skip_flags,
+        )
+
+    def policy_document(self, *, alias=None):
+        """This backend's part of the policy document.
+
+        Same shape as the project document: ``schema_version``,
+        ``database``, and ``backends`` holding this catalog only.
+        ``alias`` overrides ``TRUSTS_POLICY_DATABASE`` for this call.
+        """
+        resolved = resolve_policy_database(alias)
+        catalog = self._catalog()
+        catalogs = () if catalog is None else (catalog,)
+        return _build_document(catalogs, resolved)
+
+
+def policy_document(backend=None, *, alias=None):
+    """Policy document for one backend, or the whole project.
+
+    ``backend=None`` is every configured Trusts backend, the document
+    ``trusts_policy_sql`` renders. A dotted path is loaded the way
+    ``User.objects.with_perm(..., backend=)`` loads one backend, and
+    the result is that backend's ``policy_document()``.
+    """
+    if backend is None:
+        return _installed_document(alias=alias)
+    if not isinstance(backend, str):
+        raise TypeError(
+            'backend must be a dotted import path string (got %r).' % backend)
+    loaded = load_backend(backend)
+    if not isinstance(loaded, TrustModelBackendMixin):
+        raise TrustsConfigurationError(
+            'backend %r is not a Trusts backend.' % backend)
+    return loaded.policy_document(alias=alias)
+
+
+def codename_binding(model, app_label, codename):
+    """Unevaluated pk of the exact codename on ``model``'s content type."""
     return Subquery(
         Permission.objects.filter(
-            codename='%s_%s' % (action, modelname),
-            content_type__app_label=applabel.lower(),
-            content_type__model=modelname,
+            content_type__app_label=app_label.lower(),
+            content_type__model=model._meta.model_name,
+            codename=codename,
         ).values('pk')[:1]
     )
 
 
-def _perm_codes(permission_qs):
-    return set(
-        '%s.%s' % (app, code)
-        for app, code in permission_qs.values_list(
-            'content_type__app_label', 'codename',
-        )
+def permission_backends(backend=None):
+    """Listed backends, or the one ``backend`` dotted path."""
+    if backend is None:
+        return get_backends()
+    if not isinstance(backend, str):
+        raise TypeError(
+            'backend must be a dotted import path string (got %r).' % backend)
+    return (load_backend(backend),)
+
+
+def trusts_backends(backend=None):
+    """Listed Trusts backends. Each answers from its own catalog."""
+    return tuple(
+        item for item in permission_backends(backend)
+        if isinstance(item, TrustModelBackendMixin))
+
+
+def filter_listed(queryset, user, *, ask, backend=None,
+                  skip_flags, require_user=True, extra_q=None):
+    """OR each listed backend's own grant and bind ``AUTH_USER_MODEL``.
+
+    A ``skip_<name>`` keyword is checked against the catalog being
+    asked. A catalog that does not own the selected names contributes
+    nothing. No contributor yields an empty queryset.
+    """
+    return filter_catalogs(
+        _catalogs(backend), queryset, user,
+        ask=ask, skip_flags=skip_flags, require_user=require_user,
+        extra_q=extra_q, user_model=get_user_model(),
     )
 
 
-class TrustModelBackendMixin(object):
-    query_compiler = PlanQueryCompiler()
+def compile_permitted_users(content, perm, *, user_queryset=None,
+                            backend=None, **skip_flags):
+    """Lazy user queryset for one saved content object and one permission.
 
-    @staticmethod
-    def _get_class(obj):
-        if isinstance(obj, QuerySet):
-            klass = obj.model
-        else:
-            klass = obj.__class__
-        return klass
+    Listed backends are asked once, in order. Each catalog that
+    registered the content contributes its own user predicate, including
+    that catalog's override. ``skip_<name>`` is checked against that
+    catalog. Predicates are OR'd and bound with ``AUTH_USER_MODEL``.
+    Unsaved content, a permission this inquiry cannot read, a
+    ``user_queryset`` that is not a ``QuerySet`` or whose model is not
+    ``AUTH_USER_MODEL``, and a catalog whose registered user model is
+    not that candidate all yield an empty queryset and do not raise.
+    ``backend`` is one dotted path.
+    """
+    return compile_catalog_users(
+        _catalogs(backend), content, perm,
+        user_queryset=user_queryset, user_model=get_user_model(),
+        **skip_flags,
+    )
 
-    def _trusts_config(self):
-        from trusts.apps import implementation_for_class
 
-        return implementation_for_class(type(self), required=True)
+def _catalogs(backend):
+    """Listed backends, one entry per catalog object, in list order.
 
-    def _own_handle(self):
-        config = self._trusts_config()
-        return config.configured_backend(config.path_for_backend(self))
-
-    def _own_plan_applies(self, obj, user_obj):
-        """True when this path's compiler applies to ``obj``.
-
-        Routes through ``QueryCompiler.applies``. Inapplicable is
-        ``False`` at zero SQL, before ``:name`` overlay.
-        """
-        handle = self._own_handle()
-        plan = handle.registry.plan_for(obj, user=user_obj)
-        return _compiler_applies(handle.compiler, plan)
-
-    def _ensure_perm_cache(self, user_obj):
-        """Documented ``_trust_perm_cache`` attribute; not an auth source."""
-        if not hasattr(user_obj, '_trust_perm_cache'):
-            setattr(user_obj, '_trust_perm_cache', dict())
-        return getattr(user_obj, '_trust_perm_cache')
-
-    def _path_permissions(self, user_obj, obj, *, kind,
-                          skipped=()):
-        from trusts.apps import _relationship_implementation_handles
-
-        handle = self._own_handle()
-        qs = _compile_common_permissions(
-            (handle,), obj, user_obj, kind=kind,
-            sponsor_handles=_relationship_implementation_handles(),
-            skipped=skipped,
-        )
-        if qs is None:
-            return set()
-        return _perm_codes(qs)
-
-    def _skip_inquiry(self, user_obj, skip_flags):
-        from trusts.core import bind_checked_user
-
-        return bind_checked_user(
-            user_obj, skip_flags=skip_flags,
-            registry=lambda: self._own_handle().registry,
-        )
-
-    def _listed_permissions(self, user_obj, obj, skip_flags, *, kind,
-                            cache=False):
-        inquiry = self._skip_inquiry(user_obj, skip_flags)
-        if obj is None or inquiry.denied:
-            return set()
-        if cache:
-            self._ensure_perm_cache(user_obj)
-        if isinstance(obj, QuerySet) or isinstance(obj, Model):
-            return self._path_permissions(
-                user_obj, obj, kind=kind, skipped=inquiry.values,
-            )
-        return set()
-
-    def get_group_permissions(self, user_obj, obj=None, **skip_flags):
-        """
-        Returns a set of permission strings that this user has through his/her
-        groups.
-        """
-        return self._listed_permissions(
-            user_obj, obj, skip_flags, kind='group',
-        )
-
-    def get_all_permissions(self, user_obj, obj=None, **skip_flags):
-        return self._listed_permissions(
-            user_obj, obj, skip_flags, kind='complete', cache=True,
-        )
-
-    def permission_condition_met(self, record, user_obj, perm, obj):
-        if record.expr is None:
-            model = obj.model if isinstance(obj, QuerySet) else getattr(obj, '__class__', obj)
-            raise PermissionConditionError(
-                'Permission condition on %s is unbound.'
-                % getattr(getattr(model, '_meta', None), 'label', model)
-            )
-        if isinstance(obj, QuerySet):
-            objs = obj.all()
-            model = obj.model
-        elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
-            objs = obj
-            model = None
-        else:
-            objs = [obj]
-            model = obj.__class__
-
-        return all([
-            evaluate_registered_expression(
-                record.expr, user_obj, perm, o, model=model or o.__class__
-            )
-            for o in objs
-        ])
-
-    def _bound_condition_lookup(self, obj):
-        """Bound ``ConditionLookup`` on this backend path's registry.
-
-        Unbound (after explicit ``set_condition_lookup(None)``) is
-        ``None``. A name absent from this path is a local fail-closed
-        non-match. Malformed or unbound policy this path owns still
-        raises.
-        """
-        return self._own_handle().registry.condition_lookup
-
-    def _condition_overlay(self, permext, obj, user_obj):
-        """Return (record, extra_q) for a ``:condition`` suffix.
-
-        Stored IR on a QuerySet compiles to SQL (AND overlay) from this
-        path only. A name absent from this path is ``(None, None)`` so
-        the caller can fail closed without raising. An explicit unbound
-        lookup on an instance is still a loud configuration failure.
-
-        A bound ``ConditionLookup`` is the only condition path. Core
-        does not import Zero modules or discover helpers from a model
-        ``__module__``.
-        """
-        if not permission_has_condition(permext):
-            return None, None
-        applabel, modelname, action, cond = utils.parse_perm_code(permext)
-        model = self._get_class(obj)
-        lookup = self._bound_condition_lookup(obj)
-        if lookup is None:
-            if isinstance(obj, QuerySet):
-                return None, None
-            raise AttributeError(
-                'Permission condition code "%s" is not associate with model "%s_%s"'
-                % (cond, applabel, modelname)
-            )
-        record = lookup.record_for(model, cond)
-        if record is None:
-            return None, None
-        extra_q = None
-        if isinstance(obj, QuerySet):
-            extra_q = lookup.compile_q(obj.model, permext, user_obj)
-        return record, extra_q
-
-    def _collection_has_perm(self, user_obj, perm, obj, extra_q=None, *,
-                             skipped=()):
-        from trusts.apps import _relationship_implementation_handles
-
-        handle = self._own_handle()
-        binding = _permission_binding(perm, obj.model)
-        matched = all_match(
-            (handle,), obj, user_obj, binding, kind='complete', extra_q=extra_q,
-            sponsor_handles=_relationship_implementation_handles(),
-            permission_model=Permission,
-            skipped=skipped,
-        )
-        if matched is None:
-            return False
-        return matched
-
-    def _instance_has_perm(self, user_obj, perm, obj, extra_q=None, *,
-                           skipped=()):
-        from trusts.apps import _relationship_implementation_handles
-
-        handle = self._own_handle()
-        binding = _permission_binding(perm, obj.__class__)
-        matched = instance_match(
-            handle, obj, user_obj, binding, kind='complete', extra_q=extra_q,
-            sponsor_handles=_relationship_implementation_handles(),
-            permission_model=Permission,
-            skipped=skipped,
-        )
-        if matched is None:
-            return False
-        return matched
-
-    def has_perm(self, user_obj, permext, obj=None, **skip_flags):
-        """Object check for one permission string.
-
-        The string uses the historical codename split to choose the row.
-        When that row is an ``auth.Permission``, a content-type mismatch
-        with ``obj`` is ``False``. Another permission terminal stays
-        primary-key identity inside the plan. ``skip_<name>`` is a bound
-        parameter on that registered user condition.
-        Django's ``user.has_perm`` does not forward these keywords.
-        """
-        inquiry = self._skip_inquiry(user_obj, skip_flags)
-        if obj is None or inquiry.denied:
-            return False
-        skipped = inquiry.values
-
-        if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
-            return False
-
-        if not self._own_plan_applies(obj, user_obj):
-            return False
-
-        record, extra_q = self._condition_overlay(permext, obj, user_obj)
-        applabel, modelname, action, _cond = utils.parse_perm_code(permext)
-        perm = '%s.%s_%s' % (applabel, action, modelname)
-
-        if permission_has_condition(permext) and record is None:
-            return False
-
-        if isinstance(obj, QuerySet):
-            positive = self._collection_has_perm(
-                user_obj, perm, obj, extra_q=extra_q,
-                skipped=skipped,
-            )
-        else:
-            positive = self._instance_has_perm(
-                user_obj, perm, obj, extra_q=extra_q,
-                skipped=skipped,
-            )
-        if not positive:
-            return False
-        if record is None or extra_q is not None:
-            return True
-        return self.permission_condition_met(record, user_obj, perm, obj)
-
-    def singular_permission_accepted(self, perm):
-        """True when object ``has_perm`` treats ``perm`` as one permission row.
-
-        The mixin default accepts ``auth.Permission`` only. Agreement
-        with ``user.has_perm`` uses ``permission.user_perm_str``. Another
-        permission-terminal model is accepted only when a backend
-        overrides this and ``permitted_users_predicate``.
-        """
-        return isinstance(perm, Permission)
-
-    def permitted_users_predicate(self, content, perm, *, skipped=()):
-        """``Q`` over candidate users, or ``None`` when this path does not apply.
-
-        ``None`` contributes no grant. It is not an empty-queryset
-        fallback for a path that cannot be reversed. An ``Along``
-        registration derives walk-site identities from the bound content,
-        walks the inverse graph once without the outer user, and joins
-        eligible grants outside that walk. ``skipped`` is the bound
-        ``skip_<name>`` parameter map.
-        """
-        from trusts.reverse import trusts_mixin_predicate
-
-        return trusts_mixin_predicate(
-            self, content, perm,
-            skipped=skipped,
-        )
+    A backend with no catalog contributes nothing.
+    """
+    chosen, seen = [], set()
+    for item in trusts_backends(backend):
+        catalog = item._catalog()
+        if catalog is None:
+            continue
+        marker = id(catalog)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        chosen.append((item, catalog))
+    return chosen

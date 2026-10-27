@@ -1,12 +1,9 @@
-"""Isolated TrustsRegistry registration tests (issue #57).
+"""Isolated Compiler registration tests (issue #57).
 
 Registration only. Does not exercise object authorization, authorized-content
 filtering, permission enumeration, backends, conditions, or compatibility.
 """
 
-import types
-
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -15,12 +12,10 @@ from django.db import models
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
-from trusts.core import (
-    Ref,
-    RegisteredRelation,
-    TrustsConfigurationError,
-    TrustsRegistry,
-)
+from trusts.compile.compilers import RegisteredRelation
+from trusts.compile.graph import Ref
+from trusts.errors import TrustsConfigurationError
+from tests.support import compiler
 
 
 def _mock_models():
@@ -46,7 +41,7 @@ def _mock_models():
             Document, related_name='alt_grants', on_delete=models.CASCADE,
         )
         user = models.ForeignKey(
-            settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+            get_user_model(), on_delete=models.CASCADE,
         )
         permission = models.ForeignKey(
             Permission, on_delete=models.CASCADE,
@@ -64,7 +59,7 @@ def _mock_models():
     class OtherGrant(models.Model):
         document = models.ForeignKey(Document, on_delete=models.CASCADE)
         user = models.ForeignKey(
-            settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+            get_user_model(), on_delete=models.CASCADE,
         )
         permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
 
@@ -76,7 +71,7 @@ def _mock_models():
 
 def _register(registry, grant, content_attr='document'):
     j = Ref(grant)
-    return registry.register(
+    return registry.register_relation(
         content=getattr(j, content_attr),
         user=j.user,
         permission=j.permission,
@@ -88,10 +83,10 @@ class TrustsRegistryTest(SimpleTestCase):
     def test_successful_direct_registration_infers_root_and_terminals(self):
         Document, DocumentGrant, _other = _mock_models()
         User = get_user_model()
-        registry = TrustsRegistry()
+        registry = compiler()
         j = Ref(DocumentGrant)
 
-        record = registry.register(
+        record = registry.register_relation(
             content=j.document,
             user=j.user,
             permission=j.permission,
@@ -112,12 +107,15 @@ class TrustsRegistryTest(SimpleTestCase):
         self.assertEqual(record.content_target, Document._meta.pk.attname)
         self.assertEqual(record.user_target, User._meta.pk.attname)
         self.assertEqual(record.permission_target, Permission._meta.pk.attname)
-        self.assertEqual(registry.records_for_root(DocumentGrant), (record,))
+        self.assertEqual(
+            tuple(row for row in registry.records if row.root is DocumentGrant),
+            (record,),
+        )
         self.assertEqual(registry.records, (record,))
 
     def test_all_refs_share_the_same_root(self):
         _document, DocumentGrant, _other = _mock_models()
-        record = _register(TrustsRegistry(), DocumentGrant)
+        record = _register(compiler(), DocumentGrant)
         self.assertIs(record.root, DocumentGrant)
         self.assertEqual(record.content_path[0], 'document')
         self.assertEqual(record.user_path[0], 'user')
@@ -125,11 +123,11 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_mixed_roots_rejected(self):
         _document, DocumentGrant, OtherGrant = _mock_models()
-        registry = TrustsRegistry()
+        registry = compiler()
         j = Ref(DocumentGrant)
         k = Ref(OtherGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'same root'):
-            registry.register(
+            registry.register_relation(
                 content=j.document,
                 user=k.user,
                 permission=j.permission,
@@ -138,10 +136,10 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_missing_field_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        registry = TrustsRegistry()
+        registry = compiler()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'missing field'):
-            registry.register(
+            registry.register_relation(
                 content=j.missing,
                 user=j.user,
                 permission=j.permission,
@@ -149,10 +147,10 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_scalar_intermediate_traversal_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        registry = TrustsRegistry()
+        registry = compiler()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'scalar'):
-            registry.register(
+            registry.register_relation(
                 content=j.document.title,
                 user=j.user,
                 permission=j.permission,
@@ -160,12 +158,12 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_multi_valued_traversal_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        registry = TrustsRegistry()
+        registry = compiler()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(
             TrustsConfigurationError, r'multi-valued',
         ):
-            registry.register(
+            registry.register_relation(
                 content=j.tags,
                 user=j.user,
                 permission=j.permission,
@@ -173,10 +171,10 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_reverse_traversal_rejected(self):
         Document, DocumentGrant, _other = _mock_models()
-        registry = TrustsRegistry()
+        registry = compiler()
         j = Ref(Document)
         with self.assertRaisesRegex(TrustsConfigurationError, r'reverse'):
-            registry.register(
+            registry.register_relation(
                 content=j.grants,
                 user=j.grants,
                 permission=j.grants,
@@ -185,12 +183,12 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_generic_foreign_key_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        registry = TrustsRegistry()
+        registry = compiler()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(
             TrustsConfigurationError, r'generic foreign key',
         ):
-            registry.register(
+            registry.register_relation(
                 content=j.target,
                 user=j.user,
                 permission=j.permission,
@@ -205,7 +203,7 @@ class TrustsRegistryTest(SimpleTestCase):
                 on_delete=models.CASCADE,
             )
             path = models.ForeignKey(
-                settings.AUTH_USER_MODEL, related_name='collision_path_grants',
+                get_user_model(), related_name='collision_path_grants',
                 on_delete=models.CASCADE,
             )
             permission = models.ForeignKey(
@@ -222,8 +220,8 @@ class TrustsRegistryTest(SimpleTestCase):
         self.assertEqual(j.root, Ref(CollisionGrant, ('root',)))
         self.assertEqual(j.path, Ref(CollisionGrant, ('path',)))
 
-        registry = TrustsRegistry()
-        record = registry.register(
+        registry = compiler()
+        record = registry.register_relation(
             content=j.root,
             user=j.path,
             permission=j.permission,
@@ -236,8 +234,8 @@ class TrustsRegistryTest(SimpleTestCase):
         self.assertEqual(record.user_field, 'path')
         self.assertIs(record.user_model, User)
 
-        alt = TrustsRegistry()
-        via_path_content = alt.register(
+        alt = compiler()
+        via_path_content = alt.register_relation(
             content=Ref(CollisionGrant).path,
             user=Ref(CollisionGrant).root,
             permission=Ref(CollisionGrant).permission,
@@ -258,16 +256,16 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_malformed_arguments_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        registry = TrustsRegistry()
+        registry = compiler()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'must be a root-relative Ref'):
-            registry.register(
+            registry.register_relation(
                 content='document',
                 user=j.user,
                 permission=j.permission,
             )
         with self.assertRaisesRegex(TrustsConfigurationError, r'non-empty'):
-            registry.register(
+            registry.register_relation(
                 content=j,
                 user=j.user,
                 permission=j.permission,
@@ -275,16 +273,16 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_non_none_condition_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        registry = TrustsRegistry()
+        registry = compiler()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'not supported'):
-            registry.register(
+            registry.register_relation(
                 content=j.document,
                 user=j.user,
                 permission=j.permission,
                 condition=object(),
             )
-        record = registry.register(
+        record = registry.register_relation(
             content=j.document,
             user=j.user,
             permission=j.permission,
@@ -294,12 +292,15 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_duplicate_and_conflicting_registration_are_deterministic(self):
         _document, DocumentGrant, OtherGrant = _mock_models()
-        registry = TrustsRegistry()
+        registry = compiler()
         first = _register(registry, DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
             _register(registry, DocumentGrant)
         self.assertEqual(registry.records, (first,))
-        self.assertEqual(registry.records_for_root(DocumentGrant), (first,))
+        self.assertEqual(
+            tuple(row for row in registry.records if row.root is DocumentGrant),
+            (first,),
+        )
 
         with self.assertRaisesRegex(TrustsConfigurationError, r'Conflicting'):
             _register(registry, DocumentGrant, content_attr='alt_document')
@@ -309,7 +310,7 @@ class TrustsRegistryTest(SimpleTestCase):
         other = _register(registry, OtherGrant)
         self.assertEqual(registry.records, (first, other))
 
-        twin = TrustsRegistry()
+        twin = compiler()
         again = _register(twin, DocumentGrant)
         self.assertEqual(first, again)
         self.assertIsNot(first, again)
@@ -318,7 +319,7 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_normalized_records_are_immutable(self):
         _document, DocumentGrant, _other = _mock_models()
-        record = _register(TrustsRegistry(), DocumentGrant)
+        record = _register(compiler(), DocumentGrant)
         with self.assertRaises((AttributeError, TrustsConfigurationError, TypeError)):
             record.root = object
         j = Ref(DocumentGrant)
@@ -330,82 +331,24 @@ class TrustsRegistryTest(SimpleTestCase):
         # here is the zero-SQL proof; a query would raise
         # DatabaseOperationForbidden.
         _document, DocumentGrant, _other = _mock_models()
-        registry = TrustsRegistry()
+        registry = compiler()
         _register(registry, DocumentGrant)
         with self.assertRaises(TrustsConfigurationError):
             _register(registry, DocumentGrant)
         j = Ref(DocumentGrant)
         with self.assertRaises(TrustsConfigurationError):
-            registry.register(
+            registry.register_relation(
                 content=j.missing,
                 user=j.user,
                 permission=j.permission,
             )
 
-    def test_no_historical_model_is_required(self):
-        Document, DocumentGrant, OtherGrant = _mock_models()
-        for model in (Document, DocumentGrant, OtherGrant):
-            names = {cls.__name__ for cls in model.__mro__}
-            self.assertNotIn('Trust', names)
-            self.assertNotIn('Content', names)
-            self.assertNotIn('Junction', names)
-        record = _register(TrustsRegistry(), DocumentGrant)
-        self.assertEqual(DocumentGrant.__module__, __name__)
-        self.assertIs(record.root, DocumentGrant)
 
     def test_instances_are_isolated(self):
         _document, DocumentGrant, _other = _mock_models()
-        left = TrustsRegistry()
-        right = TrustsRegistry()
+        left = compiler()
+        right = compiler()
         _register(left, DocumentGrant)
         self.assertEqual(len(left.records), 1)
         self.assertEqual(right.records, ())
 
-    def test_package_surface_does_not_reexport_registry(self):
-        import trusts
-        self.assertIsNone(getattr(trusts, 'TrustsRegistry', None))
-        self.assertIsNone(getattr(trusts, 'RegisteredRelation', None))
-
-    def test_core_module_has_no_historical_import_or_global(self):
-        import trusts.core as core
-
-        forbidden = {
-            'Trust',
-            'Content',
-            'Junction',
-            'TrustUserPermission',
-            'TrustGroupPermission',
-            'Group',
-            'Role',
-        }
-        self.assertFalse(forbidden.intersection(vars(core)))
-
-        imported = {
-            value.__name__
-            for value in vars(core).values()
-            if isinstance(value, types.ModuleType)
-        }
-        allowed_trusts_modules = {
-            'trusts.core', 'trusts._bind_once', 'trusts.errors',
-            'trusts.plan.rewrites', 'trusts.compile.factory',
-            'trusts.compile.nodes',
-            'trusts.compile.paths',             'trusts.compile.visitors',
-            'trusts.plan.handles',
-            'trusts.plan.registry',
-            'trusts.plan.standards',
-        }
-        self.assertTrue(
-            all(
-                name in allowed_trusts_modules or not name.startswith('trusts.')
-                for name in imported
-            ),
-            imported,
-        )
-        for value in vars(core).values():
-            module = getattr(value, '__module__', None)
-            if isinstance(module, str):
-                self.assertFalse(
-                    module.startswith('trusts.')
-                    and module not in allowed_trusts_modules,
-                    module,
-                )

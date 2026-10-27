@@ -5,15 +5,12 @@ once-at-registration symbolic-proxy builders, fail-closed invalid
 families, honest contextual typing, and ``py.typed`` / Pyright
 packaging. OrderedFold stays gone.
 """
-
 import importlib.util
 import inspect
 import types
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar, get_args, get_origin, get_type_hints
-from unittest.mock import patch
-
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
@@ -21,38 +18,24 @@ from django.db import connection
 from django.db.models import Model
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import isolate_apps
-
 from tests.myapp.models import Document, DocumentGrant
-from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.core import (
-    Along,
-    BackendHandle,
-    PlanQueryCompiler,
-    Ref,
-    RegisteredDelegation,
-    RegisteredRelation,
-    TrustsConfigurationError,
-    TrustsRegistry,
-    _public_path_segments,
-    _resolve_path,
-    _validate_condition,
-)
-
-
+from trusts.compile.compilers import RegisteredDelegation, RegisteredRelation
+from trusts.compile.graph import Along
+from trusts.compile.graph import Ref
+from trusts.errors import TrustsConfigurationError
+from trusts.backends import Recorder, Registry
+from trusts.compile.compilers import Compiler
+from tests.support import built_catalog, compiler
 ROOT = Path(__file__).resolve().parents[2]
-
 
 def _handle(registry=None, path='tests.core.issue207'):
     if registry is None:
-        registry = TrustsRegistry()
-    return BackendHandle(
-        path=path,
-        registry=registry,
-        compiler=PlanQueryCompiler(),
-    )
-
+        registry = compiler()
+    registry.path = path
+    return registry
 
 class _Count:
+
     def __init__(self, attr):
         self.attr = attr
         self.calls = 0
@@ -61,74 +44,42 @@ class _Count:
         self.calls += 1
         return getattr(trust, self.attr)
 
-
 class RegisterPublicSurfaceTest(SimpleTestCase):
-    def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue207', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue207', PAIR_KERNEL_SUITE)
 
-    def test_register_relationship_is_absent(self):
-        handle = _handle()
-        self.assertFalse(hasattr(BackendHandle, 'register_relationship'))
-        self.assertFalse(hasattr(handle, 'register_relationship'))
-        self.assertFalse(hasattr(handle.registry, 'register_relationship'))
-        self.assertTrue(callable(handle.register))
-        self.assertFalse(hasattr(BackendHandle, 'register_ordered_fold'))
 
     def test_positional_trust_is_type_error(self):
         handle = _handle()
         with self.assertRaises(TypeError):
-            handle.register(
-                DocumentGrant,
-                user='user',
-                permission='permission',
-                content='document',
-            )
-        self.assertEqual(handle.registry.records, ())
+            handle.register(DocumentGrant, user='user', permission='permission', content='document')
+        self.assertEqual(built_catalog(handle).records, ())
 
     def test_honest_contextual_typing_does_not_prove_attributes(self):
-        hints = get_type_hints(BackendHandle.register)
+        hints = get_type_hints(Compiler.register)
         trust_hint = hints['trust']
         self.assertIs(get_origin(trust_hint), type)
         type_args = get_args(trust_hint)
         self.assertEqual(len(type_args), 1)
         self.assertIsInstance(type_args[0], TypeVar)
         self.assertIs(type_args[0].__bound__, Model)
-        for role in (
-            'user', 'permission', 'content', 'group', 'delegate', 'sponsor',
-        ):
+        for role in ('user', 'permission', 'content', 'group', 'delegate', 'sponsor'):
             origin = get_origin(hints[role])
             self.assertIn(origin, (types.UnionType, type(str | int)))
             parts = get_args(hints[role])
             self.assertIn(str, parts)
-            callable_parts = [
-                part for part in parts if get_origin(part) is Callable
-            ]
+            callable_parts = [part for part in parts if get_origin(part) is Callable]
             self.assertEqual(len(callable_parts), 1)
             callable_args = get_args(callable_parts[0])
             self.assertEqual(callable_args[0], [type_args[0]])
             self.assertIs(callable_args[1], object)
         condition_hint = hints['condition']
-        self.assertIn(
-            get_origin(condition_hint),
-            (types.UnionType, type(str | int)),
-        )
+        self.assertIn(get_origin(condition_hint), (types.UnionType, type(str | int)))
         condition_parts = get_args(condition_hint)
         self.assertIn(type(None), condition_parts)
-        condition_callables = [
-            part for part in condition_parts if get_origin(part) is Callable
-        ]
+        condition_callables = [part for part in condition_parts if get_origin(part) is Callable]
         self.assertEqual(len(condition_callables), 2)
-        self.assertIn(
-            ([type_args[0]], object),
-            [get_args(part) for part in condition_callables],
-        )
-        self.assertEqual(
-            set(get_args(hints['return'])),
-            {RegisteredRelation, RegisteredDelegation},
-        )
-        # Python does not prove lambda attributes exist on trust=.
-        self.assertNotIn('document', BackendHandle.register.__annotations__)
+        self.assertIn(([type_args[0]], object), [get_args(part) for part in condition_callables])
+        self.assertEqual(set(get_args(hints['return'])), {RegisteredRelation, RegisteredDelegation})
+        self.assertNotIn('document', Compiler.register.__annotations__)
 
     def test_py_typed_marker_is_present(self):
         import trusts
@@ -138,35 +89,33 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         wheel = (ROOT / 'scripts' / 'verify-wheel-install.py').read_text()
         self.assertIn('trusts/py.typed', wheel)
         self.assertIn('register contextual typing', wheel)
-        self.assertIn('register_relationship', wheel)
+        self.assertIn('Recorder.register', wheel)
         metadata = (ROOT / 'scripts' / 'verify-package-metadata.py').read_text()
         self.assertIn('trusts/py.typed', metadata)
         pyright = (ROOT / 'scripts' / 'verify-wheel-pyright.py').read_text()
         self.assertIn('not_a_field', pyright)
         self.assertIn('AnnotatedGrant', pyright)
-        self.assertIn('TrustsImplementationConfig', pyright)
-        self.assertIn('configured_backend()', pyright)
+        self.assertIn('TrustsConfigMixin', pyright)
+        self.assertIn('get_registry().register', pyright)
         self.assertIn('condition=', pyright)
         self.assertIn('t.team == t.document', pyright)
-        self.assertNotIn('from trusts.core import BackendHandle', pyright)
+        self.assertNotIn('import BackendHandle', pyright)
 
     def test_keyword_only_signature(self):
-        signature = inspect.signature(BackendHandle.register)
+        signature = inspect.signature(Compiler.register)
         names = [name for name in signature.parameters if name != 'self']
-        self.assertEqual(
-            names,
-            [
-                'trust', 'user', 'permission', 'content', 'group',
-                'delegate', 'sponsor', 'condition', 'along',
-            ],
-        )
+        self.assertEqual(names, ['trust', 'user', 'permission', 'content', 'group', 'delegate', 'sponsor', 'condition', 'along'])
         for name in names:
+            self.assertEqual(signature.parameters[name].kind, inspect.Parameter.KEYWORD_ONLY, name)
+        self.assertIs(Recorder.register, Registry.register)
+        self.assertTrue(issubclass(Recorder, Registry))
+        public = inspect.signature(Registry.register)
+        public_names = [name for name in public.parameters if name != 'self']
+        self.assertEqual(public_names, names)
+        for name in public_names:
             self.assertEqual(
-                signature.parameters[name].kind,
-                inspect.Parameter.KEYWORD_ONLY,
-                name,
+                public.parameters[name].kind, inspect.Parameter.KEYWORD_ONLY, name,
             )
-
 
 def _wheel_install_module():
     path = ROOT / 'scripts' / 'verify-wheel-install.py'
@@ -174,21 +123,13 @@ def _wheel_install_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-_REGISTER_NAMES = (
-    'trust', 'user', 'permission', 'content', 'group',
-    'delegate', 'sponsor', 'condition', 'along',
-)
-
+_REGISTER_NAMES = ('trust', 'user', 'permission', 'content', 'group', 'delegate', 'sponsor', 'condition', 'along')
 
 def _fake_register(names=_REGISTER_NAMES, annotations=None, *, keyword_only=True):
+
     def register(self, **_kwargs):
         return None
-
-    params = [
-        inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD),
-    ]
+    params = [inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)]
     for index, name in enumerate(names):
         if keyword_only:
             kind = inspect.Parameter.KEYWORD_ONLY
@@ -201,55 +142,26 @@ def _fake_register(names=_REGISTER_NAMES, annotations=None, *, keyword_only=True
     register.__annotations__ = dict(annotations or {})
     return register
 
-
 class RegisterWheelSignatureTest(SimpleTestCase):
+
     def setUp(self):
         self.wheel = _wheel_install_module()
-        self.hints = dict(get_type_hints(BackendHandle.register))
+        self.hints = dict(get_type_hints(Compiler.register))
 
     def _check(self, names=_REGISTER_NAMES, *, keyword_only=True, **updates):
         annotations = dict(self.hints)
         annotations.update(updates)
-        register = _fake_register(
-            names, annotations, keyword_only=keyword_only,
-        )
+        register = _fake_register(names, annotations, keyword_only=keyword_only)
         self.wheel.assert_register_signature(register)
 
-    def test_installed_contract_accepts_backend_handle_register(self):
-        self.wheel.assert_register_signature(BackendHandle.register)
+    def test_installed_contract_accepts_register(self):
+        self.wheel.assert_register_signature(Compiler.register)
 
     def test_error_branches_fail_closed(self):
         trust_var = get_args(self.hints['trust'])[0]
         one_arg = Callable[[trust_var], object]
         two_arg = Callable[[trust_var, object], object]
-        cases = (
-            ('parameters', {'names': ('trust', 'user')}),
-            ('keyword-only', {'keyword_only': False}),
-            ('trust-origin', {'trust': trust_var}),
-            ('trust-var', {'trust': type[Model]}),
-            ('user-str', {'user': one_arg | None}),
-            ('user-callable', {'user': str | None}),
-            ('user-callable-args', {'user': str | Callable[[object], object] | None}),
-            ('delegate-str', {'delegate': one_arg | None}),
-            ('delegate-none', {'delegate': str | one_arg}),
-            ('delegate-callable', {'delegate': str | None}),
-            (
-                'delegate-callable-args',
-                {'delegate': str | Callable[[object], object] | None},
-            ),
-            ('sponsor-str', {'sponsor': one_arg | None}),
-            ('condition-none', {'condition': one_arg | two_arg}),
-            ('condition-forms', {'condition': one_arg | None}),
-            (
-                'ordinary-condition',
-                {'condition': two_arg | Callable[[trust_var, int], object] | None},
-            ),
-            (
-                'delegated-condition',
-                {'condition': one_arg | Callable[[trust_var, int], object] | None},
-            ),
-            ('return-type', {'return': RegisteredRelation}),
-        )
+        cases = (('parameters', {'names': ('trust', 'user')}), ('keyword-only', {'keyword_only': False}), ('trust-origin', {'trust': trust_var}), ('trust-var', {'trust': type[Model]}), ('user-str', {'user': one_arg | None}), ('user-callable', {'user': str | None}), ('user-callable-args', {'user': str | Callable[[object], object] | None}), ('delegate-str', {'delegate': one_arg | None}), ('delegate-none', {'delegate': str | one_arg}), ('delegate-callable', {'delegate': str | None}), ('delegate-callable-args', {'delegate': str | Callable[[object], object] | None}), ('sponsor-str', {'sponsor': one_arg | None}), ('condition-none', {'condition': one_arg | two_arg}), ('condition-forms', {'condition': one_arg | None}), ('ordinary-condition', {'condition': two_arg | Callable[[trust_var, int], object] | None}), ('delegated-condition', {'condition': one_arg | Callable[[trust_var, int], object] | None}))
         for label, updates in cases:
             with self.subTest(label=label):
                 names = updates.pop('names', _REGISTER_NAMES)
@@ -258,40 +170,21 @@ class RegisterWheelSignatureTest(SimpleTestCase):
                     self._check(names, keyword_only=keyword_only, **updates)
 
     def test_malformed_condition_callable_fails_closed(self):
+
         class _Box:
             __class_getitem__ = classmethod(lambda cls, item: item)
-
         with self.assertRaises(SystemExit) as raised:
             self.wheel._callable_shape(_Box, lambda part: (part,))
         self.assertIn('condition Callable hint', str(raised.exception))
 
-
 class RegisterNormalizeTest(SimpleTestCase):
+
     def test_strings_callables_and_mixed_normalize_equivalently(self):
-        via_ref = TrustsRegistry()
-        expected = via_ref.register(
-            content=Ref(DocumentGrant).document,
-            user=Ref(DocumentGrant).user,
-            permission=Ref(DocumentGrant).permission,
-        )
-        strings = _handle(path='tests.core.issue207-strings').register(
-            trust=DocumentGrant,
-            user='user',
-            permission='permission',
-            content='document',
-        )
-        callables = _handle(path='tests.core.issue207-callables').register(
-            trust=DocumentGrant,
-            user=lambda t: t.user,
-            permission=lambda t: t.permission,
-            content=lambda t: t.document,
-        )
-        mixed = _handle(path='tests.core.issue207-mixed').register(
-            trust=DocumentGrant,
-            user=lambda t: t.user,
-            permission='permission',
-            content=lambda t: t.document,
-        )
+        via_ref = compiler()
+        expected = via_ref.register_relation(content=Ref(DocumentGrant).document, user=Ref(DocumentGrant).user, permission=Ref(DocumentGrant).permission)
+        strings = _handle(path='tests.core.issue207-strings').register(trust=DocumentGrant, user='user', permission='permission', content='document')
+        callables = _handle(path='tests.core.issue207-callables').register(trust=DocumentGrant, user=lambda t: t.user, permission=lambda t: t.permission, content=lambda t: t.document)
+        mixed = _handle(path='tests.core.issue207-mixed').register(trust=DocumentGrant, user=lambda t: t.user, permission='permission', content=lambda t: t.document)
         self.assertEqual(strings, expected)
         self.assertEqual(callables, expected)
         self.assertEqual(mixed, expected)
@@ -299,30 +192,11 @@ class RegisterNormalizeTest(SimpleTestCase):
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
     def test_multihop_and_terminal_m2m_match_strings(self):
         from tests.core.test_issue98 import _gh_models, _register_team
-
         models_ = _gh_models()
         TeamRepoGrant = models_[6]
-        expected = _register_team(TrustsRegistry(), TeamRepoGrant)
-        record = _handle().register(
-            trust=TeamRepoGrant,
-            user=lambda t: t.team.members,
-            permission=lambda t: t.operation,
-            content=lambda t: t.repository,
-            condition=lambda t: (
-                t.team.permission_bundles.operations.contains(t.operation)
-                & (t.team.organization == t.repository.organization)
-            ),
-        )
-        mixed = _handle(path='tests.core.issue207-m2m-mixed').register(
-            trust=TeamRepoGrant,
-            user='team__members',
-            permission=lambda t: t.operation,
-            content='repository',
-            condition=lambda t: (
-                t.team.permission_bundles.operations.contains(t.operation)
-                & (t.team.organization == t.repository.organization)
-            ),
-        )
+        expected = _register_team(compiler(), TeamRepoGrant)
+        record = _handle().register(trust=TeamRepoGrant, user=lambda t: t.team.members, permission=lambda t: t.operation, content=lambda t: t.repository, condition=lambda t: t.team.permission_bundles.operations.contains(t.operation) & (t.team.organization == t.repository.organization))
+        mixed = _handle(path='tests.core.issue207-m2m-mixed').register(trust=TeamRepoGrant, user='team__members', permission=lambda t: t.operation, content='repository', condition=lambda t: t.team.permission_bundles.operations.contains(t.operation) & (t.team.organization == t.repository.organization))
         self.assertEqual(record, expected)
         self.assertEqual(mixed, expected)
         self.assertEqual(record.user_path, ('team', 'members'))
@@ -330,168 +204,73 @@ class RegisterNormalizeTest(SimpleTestCase):
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
     def test_along_and_builders_match_internal_ref(self):
         from tests.core.test_issue92 import _node_graph_models
-
-        _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = (
-            _node_graph_models()
-        )
-        via_ref = TrustsRegistry()
+        _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = _node_graph_models()
+        via_ref = compiler()
         j = Ref(Grant)
-        expected = via_ref.register(
-            content=j.node,
-            user=j.user,
-            permission=j.permission,
-            along=Along(j.node.parent, bound=8),
-        )
-        record = _handle().register(
-            trust=Grant,
-            user=lambda t: t.user,
-            permission='permission',
-            content=lambda t: t.node,
-            along=('node__parent', 8),
-        )
+        expected = via_ref.register_relation(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=8))
+        record = _handle().register(trust=Grant, user=lambda t: t.user, permission='permission', content=lambda t: t.node, along=('node__parent', 8))
         self.assertEqual(record, expected)
         self.assertEqual(record.along.shape, 'S')
 
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
     def test_multihop_user_without_membership_fails_closed(self):
         from tests.core.test_issue98 import _gh_models
-
         TeamRepoGrant = _gh_models()[6]
         handle = _handle()
         with self.assertRaises(TrustsConfigurationError):
-            handle.register(
-                trust=TeamRepoGrant,
-                user=lambda t: t.team.organization,
-                permission=lambda t: t.operation,
-                content=lambda t: t.repository,
-            )
-        self.assertEqual(handle.registry.records, ())
-
+            handle.register(trust=TeamRepoGrant, user=lambda t: t.team.organization, permission=lambda t: t.operation, content=lambda t: t.repository)
+        self.assertEqual(built_catalog(handle).records, ())
 
 class RegisterOnceAtRegistrationTest(TestCase):
+
     def test_builders_run_once_and_never_during_projections(self):
         if 'myapp_document' not in connection.introspection.table_names():
             self.skipTest('myapp tables exist only on the kernel host')
-        registry = TrustsRegistry()
+        registry = compiler()
         handle = _handle(registry)
         user = _Count('user')
         permission = _Count('permission')
         content = _Count('document')
-        handle.register(
-            trust=DocumentGrant,
-            user=user,
-            permission=permission,
-            content=content,
-        )
+        handle.register(trust=DocumentGrant, user=user, permission=permission, content=content)
         self.assertEqual((user.calls, permission.calls, content.calls), (1, 1, 1))
-
         User = get_user_model()
         alice = User.objects.create_user('alice-207', password='x')
         document = Document.objects.create(title='once')
         ct = ContentType.objects.get_for_model(Document)
-        perm, _created = Permission.objects.get_or_create(
-            content_type=ct,
-            codename='change_document',
-            defaults={'name': 'Can change document'},
-        )
-        DocumentGrant.objects.create(
-            document=document, user=alice, permission=perm,
-        )
-        self.assertTrue(registry.has_permission(alice, document, perm))
-        list(registry.permissions_for(alice, document))
-        list(registry.filter_authorized(Document.objects.all(), alice, perm))
+        perm, _created = Permission.objects.get_or_create(content_type=ct, codename='change_document', defaults={'name': 'Can change document'})
+        DocumentGrant.objects.create(document=document, user=alice, permission=perm)
+        self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (perm.content_type.app_label, perm.codename), document))
+        list(built_catalog(registry).permissions_for(alice, document))
+        list(built_catalog(registry).filter_authorized(Document.objects.all(), alice, perm))
         self.assertEqual((user.calls, permission.calls, content.calls), (1, 1, 1))
         self.assertEqual(registry.records[0].user_path, ('user',))
         self.assertIsInstance(registry.records[0].user_field, str)
 
-
 class RegisterFailClosedTest(TestCase):
+
     def test_invalid_builder_families_are_zero_sql_and_do_not_mutate(self):
         captured = []
 
         def capture(trust):
             captured.append(trust)
             return trust.user
-
         first = _handle(path='tests.core.issue207-capture')
-        first.register(
-            trust=DocumentGrant,
-            user=capture,
-            permission=lambda t: t.permission,
-            content=lambda t: t.document,
-        )
+        first.register(trust=DocumentGrant, user=capture, permission=lambda t: t.permission, content=lambda t: t.document)
 
         def boom(_trust):
             raise RuntimeError('builder exploded')
-
-        cases = (
-            ('exception', boom),
-            ('missing', lambda t: t.not_a_field),
-            ('empty', lambda t: t),
-            ('constant-str', lambda t: 'user'),
-            ('constant-int', lambda t: 1),
-            ('constant-none', lambda t: None),
-            ('foreign-root', lambda t: captured[0].user),
-            ('magic-eq', lambda t: t.user == t.permission),
-            ('magic-add', lambda t: t.user + t.permission),
-            ('magic-item', lambda t: t.user['x']),
-            ('magic-call', lambda t: t.user()),
-            ('unsupported-shape', lambda t: t.document.title),
-        )
+        cases = (('exception', boom), ('missing', lambda t: t.not_a_field), ('empty', lambda t: t), ('constant-str', lambda t: 'user'), ('constant-int', lambda t: 1), ('constant-none', lambda t: None), ('foreign-root', lambda t: captured[0].user), ('magic-eq', lambda t: t.user == t.permission), ('magic-add', lambda t: t.user + t.permission), ('magic-item', lambda t: t.user['x']), ('magic-call', lambda t: t.user()), ('unsupported-shape', lambda t: t.document.title))
         handle = _handle()
         for name, builder in cases:
             with self.subTest(name=name):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
-                        handle.register(
-                            trust=DocumentGrant,
-                            user=builder,
-                            permission=lambda t: t.permission,
-                            content=lambda t: t.document,
-                        )
-                self.assertEqual(handle.registry.records, ())
+                        handle.register(trust=DocumentGrant, user=builder, permission=lambda t: t.permission, content=lambda t: t.document)
+                self.assertEqual(handle.records, ())
 
     def test_failed_third_role_does_not_partially_mutate(self):
         handle = _handle()
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError):
-                handle.register(
-                    trust=DocumentGrant,
-                    user=lambda t: t.user,
-                    permission=lambda t: t.permission,
-                    content=lambda t: t.not_a_field,
-                )
-        self.assertEqual(handle.registry.records, ())
-
-    def test_freeze_wins_before_builder_invocation(self):
-        registry = TrustsRegistry()
-        handle = _handle(registry)
-        registry.freeze()
-        calls = []
-
-        def user(trust):
-            calls.append(trust)
-            return trust.user
-
-        with patch(
-            'trusts.core._public_path_segments',
-            wraps=_public_path_segments,
-        ) as segments:
-            with patch('trusts.core._resolve_path', wraps=_resolve_path) as resolve:
-                with patch(
-                    'trusts.core._validate_condition',
-                    wraps=_validate_condition,
-                ) as validate:
-                    with self.assertRaises(TrustsConfigurationError) as ctx:
-                        handle.register(
-                            trust=DocumentGrant,
-                            user=user,
-                            permission=lambda t: t.permission,
-                            content=lambda t: t.document,
-                        )
-        self.assertIn('frozen', str(ctx.exception).lower())
-        self.assertEqual(calls, [])
-        segments.assert_not_called()
-        resolve.assert_not_called()
-        validate.assert_not_called()
-        self.assertEqual(registry.records, ())
+                handle.register(trust=DocumentGrant, user=lambda t: t.user, permission=lambda t: t.permission, content=lambda t: t.not_a_field)
+        self.assertEqual(built_catalog(handle).records, ())

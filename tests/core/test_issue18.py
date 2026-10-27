@@ -3,40 +3,57 @@
 Isolated models whose names are unrelated to Trust/Group/Role/Permission.
 A long root-relative ceiling walks several ordinary forward FK hops, then
 the bounded M2M→M2M membership shape. Two alternative records share
-content/user/permission bindings and differ only in the closed
-``permission_in`` ceiling.
+content/user/permission bindings and differ only in the ``.contains``
+ceiling.
 
 Core must resolve every hop from Django ``_meta`` / stored path metadata.
 This module does not import ``trusts.zero`` and does not special-case
 Zero class names, app labels, field names, or path length.
 """
-
+import ast
+import inspect
 from contextlib import contextmanager
-from unittest.mock import patch
-
+from pathlib import Path
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
-from django.db.models import options as model_options
 from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
+import trusts
+from tests.support import scoped_permitted_content as filter_by_permitted_content, built_catalog, compiler
+from trusts.plan.relations import PlanQueryCompiler, RelationPlan
+from trusts.compile.graph import Ref
+from trusts.errors import TrustsConfigurationError
+from trusts.plan.contents import granted
+from trusts.plan.aggregates import all_match, instance_match
+from trusts.models import AuthorizedManager
+from tests.support import listed_relationship
 
-from trusts.core import (
-    BackendHandle,
-    PlanQueryCompiler,
-    Ref,
-    RelationPlan,
-    TrustsConfigurationError,
-    TrustsRegistry,
-    all_match,
-    common_permissions,
-    filter_by_permitted_content,
-    granted,
-    instance_match,
-    permission_in,
-)
-from trusts.query import AuthorizedManager
+
+def _plan_imports_compile(node):
+    """Names by which a plan module imports trusts.compile."""
+
+    if isinstance(node, ast.Import):
+        return [
+            alias.name for alias in node.names
+            if alias.name == 'trusts.compile' or alias.name.startswith('trusts.compile.')
+        ]
+    if not isinstance(node, ast.ImportFrom):
+        return []
+    module = node.module or ''
+    if module == 'trusts.compile' or module.startswith('trusts.compile.'):
+        return [module]
+    if module == 'trusts' and any(alias.name == 'compile' for alias in node.names):
+        return ['trusts.compile']
+    if node.level and (
+        module == 'compile'
+        or module.startswith('compile.')
+        or module.endswith('.compile')
+        or (not module and any(alias.name == 'compile' for alias in node.names))
+    ):
+        return ['.' * node.level + (module or 'compile')]
+    return []
 
 
 def _long_path_models():
@@ -56,47 +73,35 @@ def _long_path_models():
 
     class Hall(models.Model):
         title = models.CharField(max_length=40)
-        badges = models.ManyToManyField(
-            Token, related_name='badged_halls', blank=True,
-        )
+        badges = models.ManyToManyField(Token, related_name='badged_halls', blank=True)
 
         class Meta:
             app_label = 'trusts_tests'
 
     class Cluster(models.Model):
         title = models.CharField(max_length=40)
-        tokens = models.ManyToManyField(
-            Token, related_name='clustered', blank=True,
-        )
-        halls = models.ManyToManyField(
-            Hall, related_name='clusters', blank=True,
-        )
+        tokens = models.ManyToManyField(Token, related_name='clustered', blank=True)
+        halls = models.ManyToManyField(Hall, related_name='clusters', blank=True)
 
         class Meta:
             app_label = 'trusts_tests'
 
     class Building(models.Model):
-        hall = models.ForeignKey(
-            Hall, related_name='buildings', on_delete=models.CASCADE,
-        )
+        hall = models.ForeignKey(Hall, related_name='buildings', on_delete=models.CASCADE)
         title = models.CharField(max_length=40)
 
         class Meta:
             app_label = 'trusts_tests'
 
     class Floor(models.Model):
-        building = models.ForeignKey(
-            Building, related_name='floors', on_delete=models.CASCADE,
-        )
+        building = models.ForeignKey(Building, related_name='floors', on_delete=models.CASCADE)
         title = models.CharField(max_length=40)
 
         class Meta:
             app_label = 'trusts_tests'
 
     class Wing(models.Model):
-        floor = models.ForeignKey(
-            Floor, related_name='wings', on_delete=models.CASCADE,
-        )
+        floor = models.ForeignKey(Floor, related_name='wings', on_delete=models.CASCADE)
         title = models.CharField(max_length=40)
 
         class Meta:
@@ -104,37 +109,21 @@ def _long_path_models():
 
     class Artifact(models.Model):
         title = models.CharField(max_length=40)
-
         objects = AuthorizedManager()
 
         class Meta:
             app_label = 'trusts_tests'
 
     class Placement(models.Model):
-        artifact = models.ForeignKey(
-            Artifact, related_name='placements', on_delete=models.CASCADE,
-        )
-        actor = models.ForeignKey(
-            Actor, related_name='placements', on_delete=models.CASCADE,
-        )
-        alt_actor = models.ForeignKey(
-            Actor, related_name='alt_placements', on_delete=models.CASCADE,
-        )
-        token = models.ForeignKey(
-            Token, related_name='placements', on_delete=models.CASCADE,
-        )
-        wing = models.ForeignKey(
-            Wing, related_name='placements', on_delete=models.CASCADE,
-        )
+        artifact = models.ForeignKey(Artifact, related_name='placements', on_delete=models.CASCADE)
+        actor = models.ForeignKey(Actor, related_name='placements', on_delete=models.CASCADE)
+        alt_actor = models.ForeignKey(Actor, related_name='alt_placements', on_delete=models.CASCADE)
+        token = models.ForeignKey(Token, related_name='placements', on_delete=models.CASCADE)
+        wing = models.ForeignKey(Wing, related_name='placements', on_delete=models.CASCADE)
 
         class Meta:
             app_label = 'trusts_tests'
-
-    return (
-        Actor, Token, Hall, Cluster, Building, Floor, Wing,
-        Artifact, Placement,
-    )
-
+    return (Actor, Token, Hall, Cluster, Building, Floor, Wing, Artifact, Placement)
 
 def _colliding_to_field_models():
     """M2M through-FK uses a non-PK ``to_field`` on the token model."""
@@ -159,51 +148,33 @@ def _colliding_to_field_models():
 
     class Cluster(models.Model):
         title = models.CharField(max_length=40)
-        halls = models.ManyToManyField(
-            Hall, related_name='clusters', blank=True,
-        )
+        halls = models.ManyToManyField(Hall, related_name='clusters', blank=True)
 
         class Meta:
             app_label = 'trusts_tests'
 
     class ClusterToken(models.Model):
-        cluster = models.ForeignKey(
-            Cluster, related_name='+', on_delete=models.CASCADE,
-        )
-        token = models.ForeignKey(
-            Token, related_name='+', on_delete=models.CASCADE, to_field='code',
-        )
+        cluster = models.ForeignKey(Cluster, related_name='+', on_delete=models.CASCADE)
+        token = models.ForeignKey(Token, related_name='+', on_delete=models.CASCADE, to_field='code')
 
         class Meta:
             app_label = 'trusts_tests'
-
-    Cluster.add_to_class(
-        'tokens',
-        models.ManyToManyField(
-            Token, through=ClusterToken, related_name='+',
-        ),
-    )
+    Cluster.add_to_class('tokens', models.ManyToManyField(Token, through=ClusterToken, related_name='+'))
 
     class Building(models.Model):
-        hall = models.ForeignKey(
-            Hall, related_name='buildings', on_delete=models.CASCADE,
-        )
+        hall = models.ForeignKey(Hall, related_name='buildings', on_delete=models.CASCADE)
 
         class Meta:
             app_label = 'trusts_tests'
 
     class Floor(models.Model):
-        building = models.ForeignKey(
-            Building, related_name='floors', on_delete=models.CASCADE,
-        )
+        building = models.ForeignKey(Building, related_name='floors', on_delete=models.CASCADE)
 
         class Meta:
             app_label = 'trusts_tests'
 
     class Wing(models.Model):
-        floor = models.ForeignKey(
-            Floor, related_name='wings', on_delete=models.CASCADE,
-        )
+        floor = models.ForeignKey(Floor, related_name='wings', on_delete=models.CASCADE)
 
         class Meta:
             app_label = 'trusts_tests'
@@ -215,27 +186,14 @@ def _colliding_to_field_models():
             app_label = 'trusts_tests'
 
     class Placement(models.Model):
-        artifact = models.ForeignKey(
-            Artifact, related_name='+', on_delete=models.CASCADE,
-        )
-        actor = models.ForeignKey(
-            Actor, related_name='+', on_delete=models.CASCADE,
-        )
-        token = models.ForeignKey(
-            Token, related_name='+', on_delete=models.CASCADE,
-        )
-        wing = models.ForeignKey(
-            Wing, related_name='+', on_delete=models.CASCADE,
-        )
+        artifact = models.ForeignKey(Artifact, related_name='+', on_delete=models.CASCADE)
+        actor = models.ForeignKey(Actor, related_name='+', on_delete=models.CASCADE)
+        token = models.ForeignKey(Token, related_name='+', on_delete=models.CASCADE)
+        wing = models.ForeignKey(Wing, related_name='+', on_delete=models.CASCADE)
 
         class Meta:
             app_label = 'trusts_tests'
-
-    return (
-        Actor, Token, Hall, Cluster, ClusterToken, Building, Floor, Wing,
-        Artifact, Placement,
-    )
-
+    return (Actor, Token, Hall, Cluster, ClusterToken, Building, Floor, Wing, Artifact, Placement)
 
 @contextmanager
 def _tables(*model_classes):
@@ -249,39 +207,30 @@ def _tables(*model_classes):
             for model in reversed(model_classes):
                 editor.delete_model(model)
 
-
 def _direct_ceiling(registry, placement):
-    p = Ref(placement)
     return registry.register(
-        content=p.artifact,
-        user=p.actor,
-        permission=p.token,
-        condition=permission_in(p.wing.floor.building.hall.badges),
+        trust=placement,
+        user='actor',
+        permission='token',
+        content='artifact',
+        condition=lambda t: t.wing.floor.building.hall.badges.contains(t.token),
     )
-
 
 def _cluster_ceiling(registry, placement):
-    p = Ref(placement)
     return registry.register(
-        content=p.artifact,
-        user=p.actor,
-        permission=p.token,
-        condition=permission_in(p.wing.floor.building.hall.clusters.tokens),
+        trust=placement,
+        user='actor',
+        permission='token',
+        content='artifact',
+        condition=lambda t: t.wing.floor.building.hall.clusters.tokens.contains(t.token),
     )
-
 
 def _pks(rows):
     return {row.pk for row in rows}
 
-
 class CoreImportBoundaryTest(SimpleTestCase):
-    def test_core_package_does_not_import_trusts_zero(self):
-        import ast
-        import inspect
-        from pathlib import Path
 
-        import trusts
-
+    def test_import_graph_stays_inside_core(self):
         root = Path(inspect.getfile(trusts)).resolve().parent
         forbidden = []
         for path in sorted(root.rglob('*.py')):
@@ -293,43 +242,26 @@ class CoreImportBoundaryTest(SimpleTestCase):
                     names = [node.module or '']
                 else:
                     continue
-                if any(
-                    name == 'trusts.zero' or name.startswith('trusts.zero.')
-                    for name in names
-                ):
+                if any((name == 'trusts.zero' or name.startswith('trusts.zero.') for name in names)):
                     forbidden.append(str(path))
         self.assertEqual(forbidden, [])
-        self.assertFalse(hasattr(trusts, 'get_entity_model'))
-        self.assertFalse(hasattr(trusts, 'get_group_model'))
-        self.assertFalse(hasattr(trusts, 'get_permission_model'))
-        self.assertFalse(hasattr(trusts, 'ENTITY_MODEL_NAME'))
-        self.assertFalse(hasattr(trusts, 'ROOT_PK'))
-
-
-class PermissionConditionsMetaOptionTest(SimpleTestCase):
-    def test_generic_option_is_registered_idempotently(self):
-        from trusts.plan.conditions import _ensure_permission_conditions_option
-
-        self.assertIn('permission_conditions', model_options.DEFAULT_NAMES)
-        before = model_options.DEFAULT_NAMES
-        count = before.count('permission_conditions')
-        _ensure_permission_conditions_option()
-        _ensure_permission_conditions_option()
-        self.assertIs(model_options.DEFAULT_NAMES, before)
-        self.assertEqual(
-            model_options.DEFAULT_NAMES.count('permission_conditions'),
-            count,
-        )
-        self.assertEqual(count, 1)
-
+        plan_forbidden = []
+        for path in sorted((root / 'plan').rglob('*.py')):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                hits = _plan_imports_compile(node)
+                if hits:
+                    plan_forbidden.append('%s imports %s' % (path.name, ', '.join(hits)))
+        self.assertEqual(plan_forbidden, [])
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class LongPathRegistrationTest(TestCase):
+
     def test_alternative_ceilings_register_with_zero_sql(self):
         models_ = _long_path_models()
         Placement = models_[-1]
         Artifact = models_[-2]
-        registry = TrustsRegistry()
+        registry = compiler()
         with self.assertNumQueries(0):
             direct = _direct_ceiling(registry, Placement)
             clustered = _cluster_ceiling(registry, Placement)
@@ -340,125 +272,86 @@ class LongPathRegistrationTest(TestCase):
         self.assertEqual(clustered.user_path, ('actor',))
         self.assertEqual(direct.permission_path, ('token',))
         self.assertEqual(clustered.permission_path, ('token',))
-        self.assertEqual(
-            direct.condition.refs[0]._path,
-            ('wing', 'floor', 'building', 'hall', 'badges'),
-        )
-        self.assertEqual(
-            clustered.condition.refs[0]._path,
-            ('wing', 'floor', 'building', 'hall', 'clusters', 'tokens'),
-        )
-        self.assertGreaterEqual(len(clustered.condition.refs[0]._path), 6)
+        self.assertEqual(direct.condition.left.path, ('wing', 'floor', 'building', 'hall', 'badges'))
+        self.assertEqual(clustered.condition.left.path, ('wing', 'floor', 'building', 'hall', 'clusters', 'tokens'))
+        self.assertGreaterEqual(len(clustered.condition.left.path), 6)
 
     def test_handle_string_paths_match_ref_registration(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        via_ref = TrustsRegistry()
-        via_handle = TrustsRegistry()
-        handle = BackendHandle(
-            path='tests.core.longpath',
-            registry=via_handle,
-            compiler=PlanQueryCompiler(),
-        )
+        via_ref = compiler()
+        via_handle = compiler()
+        via_handle.path = 'tests.core.longpath'
+        handle = via_handle
         with self.assertNumQueries(0):
             ref_direct = _direct_ceiling(via_ref, Placement)
             ref_cluster = _cluster_ceiling(via_ref, Placement)
-            handle_direct = handle.register(
-                trust=Placement,
-                user='actor',
-                permission='token',
-                content='artifact',
-                condition=lambda t: (
-                    t.wing.floor.building.hall.badges.contains(t.token)
-                ),
-            )
-            handle_cluster = handle.register(
-                trust=Placement,
-                user='actor',
-                permission='token',
-                content='artifact',
-                condition=lambda t: (
-                    t.wing.floor.building.hall.clusters.tokens.contains(
-                        t.token,
-                    )
-                ),
-            )
+            handle_direct = handle.register(trust=Placement, user='actor', permission='token', content='artifact', condition=lambda t: t.wing.floor.building.hall.badges.contains(t.token))
+            handle_cluster = handle.register(trust=Placement, user='actor', permission='token', content='artifact', condition=lambda t: t.wing.floor.building.hall.clusters.tokens.contains(t.token))
         self.assertEqual(handle_direct, ref_direct)
         self.assertEqual(handle_cluster, ref_cluster)
-        self.assertGreaterEqual(len(handle_cluster.condition.refs[0]._path), 6)
+        self.assertGreaterEqual(len(handle_cluster.condition.left.path), 6)
 
     def test_exact_duplicate_rejects_and_leaves_store_unchanged(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        registry = TrustsRegistry()
+        registry = compiler()
         first = _cluster_ceiling(registry, Placement)
         with self.assertNumQueries(0):
-            with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
+            with self.assertRaisesRegex(TrustsConfigurationError, 'Duplicate'):
                 _cluster_ceiling(registry, Placement)
         self.assertEqual(registry.records, (first,))
 
     def test_different_bindings_still_conflict(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        registry = TrustsRegistry()
+        registry = compiler()
         first = _cluster_ceiling(registry, Placement)
-        p = Ref(Placement)
         with self.assertNumQueries(0):
-            with self.assertRaisesRegex(TrustsConfigurationError, r'Conflicting'):
+            with self.assertRaisesRegex(TrustsConfigurationError, 'Conflicting'):
                 registry.register(
-                    content=p.artifact,
-                    user=p.alt_actor,
-                    permission=p.token,
-                    condition=permission_in(
-                        p.wing.floor.building.hall.clusters.tokens,
-                    ),
+                    trust=Placement,
+                    user='alt_actor',
+                    permission='token',
+                    content='artifact',
+                    condition=lambda t: t.wing.floor.building.hall.clusters.tokens.contains(t.token),
                 )
         self.assertEqual(registry.records, (first,))
 
     def test_wrong_terminal_malformed_and_gfk_fail_closed(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        registry = TrustsRegistry()
-        p = Ref(Placement)
+        registry = compiler()
         with self.assertNumQueries(0):
-            with self.assertRaisesRegex(
-                TrustsConfigurationError, r'permission model',
-            ):
+            with self.assertRaisesRegex(TrustsConfigurationError, 'permission model'):
                 registry.register(
-                    content=p.artifact,
-                    user=p.actor,
-                    permission=p.token,
-                    condition=permission_in(p.wing.floor.building.hall.clusters),
+                    trust=Placement,
+                    user='actor',
+                    permission='token',
+                    content='artifact',
+                    condition=lambda t: t.wing.floor.building.hall.clusters.contains(t.token),
                 )
-            with self.assertRaisesRegex(
-                TrustsConfigurationError, r'extra or intermediate multi-valued',
-            ):
+            with self.assertRaisesRegex(TrustsConfigurationError, 'extra or intermediate multi-valued'):
                 registry.register(
-                    content=p.artifact,
-                    user=p.actor,
-                    permission=p.token,
-                    condition=permission_in(
-                        p.wing.floor.building.hall.clusters.tokens.clustered,
-                    ),
+                    trust=Placement,
+                    user='actor',
+                    permission='token',
+                    content='artifact',
+                    condition=lambda t: t.wing.floor.building.hall.clusters.tokens.clustered.contains(t.token),
                 )
-            with self.assertRaisesRegex(
-                TrustsConfigurationError, r'scalar field|single-valued hops',
-            ):
+            with self.assertRaisesRegex(TrustsConfigurationError, 'scalar field|single-valued hops'):
                 registry.register(
-                    content=p.artifact,
-                    user=p.actor,
-                    permission=p.token,
-                    condition=permission_in(
-                        p.wing.floor.building.hall.clusters.title,
-                    ),
+                    trust=Placement,
+                    user='actor',
+                    permission='token',
+                    content='artifact',
+                    condition=lambda t: t.wing.floor.building.hall.clusters.title.contains(t.token),
                 )
         self.assertEqual(registry.records, ())
 
         class Tagged(models.Model):
             label = models.CharField(max_length=20)
-            content_type = models.ForeignKey(
-                ContentType, on_delete=models.CASCADE,
-            )
+            content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
             object_id = models.PositiveIntegerField()
             target = GenericForeignKey('content_type', 'object_id')
 
@@ -473,69 +366,39 @@ class LongPathRegistrationTest(TestCase):
 
             class Meta:
                 app_label = 'trusts_tests'
-
-        g = Ref(TaggedGrant)
         with self.assertNumQueries(0):
-            with self.assertRaisesRegex(
-                TrustsConfigurationError, r'generic foreign key',
-            ):
+            with self.assertRaisesRegex(TrustsConfigurationError, 'generic foreign key'):
                 registry.register(
-                    content=g.artifact,
-                    user=g.actor,
-                    permission=g.token,
-                    condition=permission_in(g.tagged.target),
+                    trust=TaggedGrant,
+                    user='actor',
+                    permission='token',
+                    content='artifact',
+                    condition=lambda t: t.tagged.target.contains(t.token),
                 )
         self.assertEqual(registry.records, ())
 
     def test_colliding_to_field_membership_fails_closed(self):
-        (
-            _Actor, _Token, _Hall, Cluster, _Through, _Building, _Floor,
-            _Wing, Artifact, Placement,
-        ) = _colliding_to_field_models()
-        registry = TrustsRegistry()
-        p = Ref(Placement)
+        _Actor, _Token, _Hall, Cluster, _Through, _Building, _Floor, _Wing, Artifact, Placement = _colliding_to_field_models()
+        registry = compiler()
         with self.assertNumQueries(0):
-            with self.assertRaisesRegex(
-                TrustsConfigurationError, r'resolved comparison field',
-            ):
+            with self.assertRaisesRegex(TrustsConfigurationError, 'resolved comparison field'):
                 registry.register(
-                    content=p.artifact,
-                    user=p.actor,
-                    permission=p.token,
-                    condition=permission_in(
-                        p.wing.floor.building.hall.clusters.tokens,
-                    ),
+                    trust=Placement,
+                    user='actor',
+                    permission='token',
+                    content='artifact',
+                    condition=lambda t: t.wing.floor.building.hall.clusters.tokens.contains(t.token),
                 )
         self.assertEqual(registry.records, ())
         self.assertIs(Cluster._meta.concrete_model, Cluster)
         self.assertIs(Artifact._meta.concrete_model, Artifact)
 
-
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class LongPathAuthorizationTest(TransactionTestCase):
+
     def setUp(self):
-        (
-            self.Actor,
-            self.Token,
-            self.Hall,
-            self.Cluster,
-            self.Building,
-            self.Floor,
-            self.Wing,
-            self.Artifact,
-            self.Placement,
-        ) = _long_path_models()
-        self._table_cm = _tables(
-            self.Actor,
-            self.Token,
-            self.Hall,
-            self.Cluster,
-            self.Building,
-            self.Floor,
-            self.Wing,
-            self.Artifact,
-            self.Placement,
-        )
+        self.Actor, self.Token, self.Hall, self.Cluster, self.Building, self.Floor, self.Wing, self.Artifact, self.Placement = _long_path_models()
+        self._table_cm = _tables(self.Actor, self.Token, self.Hall, self.Cluster, self.Building, self.Floor, self.Wing, self.Artifact, self.Placement)
         self._table_cm.__enter__()
         self.actor = self.Actor.objects.create(name='member')
         self.stranger = self.Actor.objects.create(name='stranger')
@@ -544,20 +407,13 @@ class LongPathAuthorizationTest(TransactionTestCase):
         self.hall = self.Hall.objects.create(title='east')
         self.cluster = self.Cluster.objects.create(title='night')
         self.cluster.halls.add(self.hall)
-        self.building = self.Building.objects.create(
-            hall=self.hall, title='north',
-        )
-        self.floor = self.Floor.objects.create(
-            building=self.building, title='3',
-        )
+        self.building = self.Building.objects.create(hall=self.hall, title='north')
+        self.floor = self.Floor.objects.create(building=self.building, title='3')
         self.wing = self.Wing.objects.create(floor=self.floor, title='lab')
         self.artifact = self.Artifact.objects.create(title='scope')
         self.other = self.Artifact.objects.create(title='other')
-        self.Placement.objects.create(
-            artifact=self.artifact, actor=self.actor, alt_actor=self.stranger,
-            token=self.read, wing=self.wing,
-        )
-        self.registry = TrustsRegistry()
+        self.Placement.objects.create(artifact=self.artifact, actor=self.actor, alt_actor=self.stranger, token=self.read, wing=self.wing)
+        self.registry = compiler()
         _direct_ceiling(self.registry, self.Placement)
         _cluster_ceiling(self.registry, self.Placement)
 
@@ -565,35 +421,18 @@ class LongPathAuthorizationTest(TransactionTestCase):
         self._table_cm.__exit__(None, None, None)
 
     def _handles(self):
-        return (BackendHandle(
-            path='issue18',
-            registry=self.registry,
-            compiler=PlanQueryCompiler(),
-        ),)
+        self.registry.path = 'issue18'
+        return (self.registry,)
 
     def _agree(self, principal, token, obj, expected):
         with self.assertNumQueries(1):
-            via_obj = self.registry.has_permission(principal, obj, token)
+            via_obj = built_catalog(self.registry).has_permission(principal, obj, token)
         with self.assertNumQueries(1):
-            via_list = obj in list(
-                self.registry.filter_authorized(
-                    self.Artifact.objects.filter(pk=obj.pk),
-                    principal, token,
-                )
-            )
-        with patch(
-            'trusts.apps.configured_implementation_handles',
-            return_value=self._handles(),
-        ):
+            via_list = obj in list(built_catalog(self.registry).filter_authorized(self.Artifact.objects.filter(pk=obj.pk), principal, token))
+        with listed_relationship(self._handles()):
             with self.assertNumQueries(1):
-                via_manager = obj in list(
-                    self.Artifact.objects.filter(pk=obj.pk).authorized(
-                        principal, token,
-                    )
-                )
-        enumerated = {
-            row.pk for row in self.registry.permissions_for(principal, obj)
-        }
+                via_manager = obj in list(self.Artifact.objects.filter(pk=obj.pk).authorized(principal, token))
+        enumerated = {row.pk for row in built_catalog(self.registry).permissions_for(principal, obj)}
         self.assertEqual(via_obj, expected)
         self.assertEqual(via_list, expected)
         self.assertEqual(via_manager, expected)
@@ -627,12 +466,8 @@ class LongPathAuthorizationTest(TransactionTestCase):
     def test_fixed_query_object_list_and_enumeration_agree(self):
         self.hall.badges.add(self.read)
         with self.assertNumQueries(0):
-            qs = self.registry.filter_authorized(
-                self.Artifact.objects.all(), self.actor, self.read,
-            )
-            enumerated = self.registry.permissions_for(
-                self.actor, self.artifact,
-            )
+            qs = built_catalog(self.registry).filter_authorized(self.Artifact.objects.all(), self.actor, self.read)
+            enumerated = built_catalog(self.registry).permissions_for(self.actor, self.artifact)
         self.assertIsInstance(qs, QuerySet)
         self.assertIsInstance(enumerated, QuerySet)
         self.assertIsNone(qs._result_cache)
@@ -640,15 +475,10 @@ class LongPathAuthorizationTest(TransactionTestCase):
             self.assertEqual(_pks(qs), {self.artifact.pk})
         with self.assertNumQueries(1):
             self.assertEqual(_pks(enumerated), {self.read.pk})
-        sql = str(
-            self.registry.filter_authorized(
-                self.Artifact.objects.all(), self.actor, self.read,
-            ).query
-        ).lower().replace('_', '').replace('"', '')
+        sql = str(built_catalog(self.registry).filter_authorized(self.Artifact.objects.all(), self.actor, self.read).query).lower().replace('_', '').replace('"', '')
         self.assertIn('exists', sql)
         self.assertIn('placement', sql)
         self.assertIn('cluster', sql)
-
 
 def _membership_models():
     """Isolated nouns: M2M user hop vs FK user hop on the same folder."""
@@ -667,7 +497,6 @@ def _membership_models():
 
     class Folder(models.Model):
         title = models.CharField(max_length=40)
-
         objects = AuthorizedManager()
 
         class Meta:
@@ -675,43 +504,27 @@ def _membership_models():
 
     class Desk(models.Model):
         title = models.CharField(max_length=40)
-        holders = models.ManyToManyField(
-            Holder, related_name='desks', blank=True,
-        )
+        holders = models.ManyToManyField(Holder, related_name='desks', blank=True)
 
         class Meta:
             app_label = 'trusts_tests'
 
     class Seat(models.Model):
-        folder = models.ForeignKey(
-            Folder, related_name='seats', on_delete=models.CASCADE,
-        )
-        desk = models.ForeignKey(
-            Desk, related_name='seats', on_delete=models.CASCADE,
-        )
-        token = models.ForeignKey(
-            Token, related_name='seats', on_delete=models.CASCADE,
-        )
+        folder = models.ForeignKey(Folder, related_name='seats', on_delete=models.CASCADE)
+        desk = models.ForeignKey(Desk, related_name='seats', on_delete=models.CASCADE)
+        token = models.ForeignKey(Token, related_name='seats', on_delete=models.CASCADE)
 
         class Meta:
             app_label = 'trusts_tests'
 
     class Title(models.Model):
-        folder = models.ForeignKey(
-            Folder, related_name='titles', on_delete=models.CASCADE,
-        )
-        owner = models.ForeignKey(
-            Holder, related_name='titles', on_delete=models.CASCADE,
-        )
-        token = models.ForeignKey(
-            Token, related_name='titles', on_delete=models.CASCADE,
-        )
+        folder = models.ForeignKey(Folder, related_name='titles', on_delete=models.CASCADE)
+        owner = models.ForeignKey(Holder, related_name='titles', on_delete=models.CASCADE)
+        token = models.ForeignKey(Token, related_name='titles', on_delete=models.CASCADE)
 
         class Meta:
             app_label = 'trusts_tests'
-
-    return Holder, Token, Folder, Desk, Seat, Title
-
+    return (Holder, Token, Folder, Desk, Seat, Title)
 
 def _self_prefix_models():
     """Self-referential tree: prefix hop and terminal share one model."""
@@ -730,50 +543,27 @@ def _self_prefix_models():
 
     class Node(models.Model):
         title = models.CharField(max_length=40)
-        parent = models.ForeignKey(
-            'self',
-            null=True,
-            blank=True,
-            related_name='children',
-            on_delete=models.CASCADE,
-        )
-
+        parent = models.ForeignKey('self', null=True, blank=True, related_name='children', on_delete=models.CASCADE)
         objects = AuthorizedManager()
 
         class Meta:
             app_label = 'trusts_tests'
 
     class NodeGrant(models.Model):
-        node = models.ForeignKey(
-            Node, related_name='grants', on_delete=models.CASCADE,
-        )
-        holder = models.ForeignKey(
-            Holder, related_name='node_grants', on_delete=models.CASCADE,
-        )
-        token = models.ForeignKey(
-            Token, related_name='node_grants', on_delete=models.CASCADE,
-        )
+        node = models.ForeignKey(Node, related_name='grants', on_delete=models.CASCADE)
+        holder = models.ForeignKey(Holder, related_name='node_grants', on_delete=models.CASCADE)
+        token = models.ForeignKey(Token, related_name='node_grants', on_delete=models.CASCADE)
 
         class Meta:
             app_label = 'trusts_tests'
-
-    return Holder, Token, Node, NodeGrant
-
+    return (Holder, Token, Node, NodeGrant)
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class MembershipGroupExistsTest(TransactionTestCase):
+
     def setUp(self):
-        (
-            self.Holder,
-            self.Token,
-            self.Folder,
-            self.Desk,
-            self.Seat,
-            self.Title,
-        ) = _membership_models()
-        self._table_cm = _tables(
-            self.Holder, self.Token, self.Folder, self.Desk, self.Seat, self.Title,
-        )
+        self.Holder, self.Token, self.Folder, self.Desk, self.Seat, self.Title = _membership_models()
+        self._table_cm = _tables(self.Holder, self.Token, self.Folder, self.Desk, self.Seat, self.Title)
         self._table_cm.__enter__()
         self.member = self.Holder.objects.create(name='member')
         self.owner = self.Holder.objects.create(name='owner')
@@ -784,176 +574,94 @@ class MembershipGroupExistsTest(TransactionTestCase):
         self.other = self.Folder.objects.create(title='other')
         self.desk = self.Desk.objects.create(title='night')
         self.desk.holders.add(self.member)
-        self.Seat.objects.create(
-            folder=self.folder, desk=self.desk, token=self.read,
-        )
-        self.Title.objects.create(
-            folder=self.folder, owner=self.owner, token=self.read,
-        )
-        self.membership = TrustsRegistry()
+        self.Seat.objects.create(folder=self.folder, desk=self.desk, token=self.read)
+        self.Title.objects.create(folder=self.folder, owner=self.owner, token=self.read)
+        self.membership = compiler()
         s = Ref(self.Seat)
-        self.membership.register(
-            content=s.folder, user=s.desk.holders, permission=s.token,
-        )
-        self.trustee = TrustsRegistry()
+        self.membership.register_relation(content=s.folder, user=s.desk.holders, permission=s.token)
+        self.trustee = compiler()
         t = Ref(self.Title)
-        self.trustee.register(
-            content=t.folder, user=t.owner, permission=t.token,
-        )
-        self.mixed = TrustsRegistry()
+        self.trustee.register_relation(content=t.folder, user=t.owner, permission=t.token)
+        self.mixed = compiler()
         s = Ref(self.Seat)
         t = Ref(self.Title)
-        self.mixed.register(
-            content=s.folder, user=s.desk.holders, permission=s.token,
-        )
-        self.mixed.register(
-            content=t.folder, user=t.owner, permission=t.token,
-        )
+        self.mixed.register_relation(content=s.folder, user=s.desk.holders, permission=s.token)
+        self.mixed.register_relation(content=t.folder, user=t.owner, permission=t.token)
         self.compiler = PlanQueryCompiler()
 
     def tearDown(self):
         self._table_cm.__exit__(None, None, None)
 
     def _handle(self, registry):
-        return BackendHandle(
-            path='issue18-group',
-            registry=registry,
-            compiler=self.compiler,
-        )
+        registry.path = 'issue18-group'
+        return registry
 
     def test_membership_user_hop_is_not_a_group_slice(self):
         handle = self._handle(self.membership)
-        plan = self.membership.plan_for(
-            self.folder, user=self.member, permission=self.read,
-        )
+        plan = built_catalog(self.membership).plan_for(self.folder, user=self.member, permission=self.read)
         self.assertEqual(plan.records[0].user_path, ('desk', 'holders'))
         self.assertFalse(plan.records[0].via_group)
         with self.assertNumQueries(0):
-            self.assertIsNone(self.compiler.group_exists(
-                plan, self.folder, self.member, self.read,
-            ))
-            self.assertIsNone(all_match(
-                (handle,), self.folder, self.member, self.read, kind='group',
-            ))
-            self.assertIsNone(all_match(
-                (handle,), self.folder, self.stranger, self.read, kind='group',
-            ))
-            self.assertEqual(
-                list(common_permissions(
-                    (handle,), self.folder, self.member, kind='group',
-                )),
-                [],
-            )
+            self.assertIsNone(self.compiler.group_exists(plan, self.folder, self.member, self.read))
+            self.assertIsNone(all_match(built_catalog(handle), self.folder, self.member, self.read, kind='group'))
+            self.assertIsNone(all_match(built_catalog(handle), self.folder, self.stranger, self.read, kind='group'))
+            self.assertEqual(list(built_catalog(handle).permissions_for(self.member, self.folder, kind='group')), [])
         with self.assertNumQueries(1):
-            self.assertIs(all_match(
-                (handle,), self.folder, self.member, self.read,
-            ), True)
+            self.assertIs(all_match(built_catalog(handle), self.folder, self.member, self.read), True)
 
     def test_fk_user_hop_is_not_group_slice(self):
         handle = self._handle(self.trustee)
-        plan = self.trustee.plan_for(
-            self.folder, user=self.owner, permission=self.read,
-        )
+        plan = built_catalog(self.trustee).plan_for(self.folder, user=self.owner, permission=self.read)
         self.assertEqual(plan.records[0].user_path, ('owner',))
         with self.assertNumQueries(0):
-            self.assertIsNone(self.compiler.group_exists(
-                plan, self.folder, self.owner, self.read,
-            ))
-            self.assertIsNone(granted(
-                (handle,), self.folder, self.owner, self.read, kind='group',
-            ))
-        self.assertTrue(self.trustee.has_permission(
-            self.owner, self.folder, self.read,
-        ))
+            self.assertIsNone(self.compiler.group_exists(plan, self.folder, self.owner, self.read))
+            self.assertIsNone(granted(built_catalog(handle), self.folder, self.owner, self.read, kind='group'))
+        self.assertTrue(built_catalog(self.trustee).has_permission(self.owner, self.folder, self.read))
         with self.assertNumQueries(0):
-            self.assertEqual(
-                list(common_permissions(
-                    (handle,), self.folder, self.owner, kind='group',
-                )),
-                [],
-            )
+            self.assertEqual(list(built_catalog(handle).permissions_for(self.owner, self.folder, kind='group')), [])
 
     def test_mixed_plan_group_slice_omits_permission_records(self):
         handle = self._handle(self.mixed)
         with self.assertNumQueries(0):
-            self.assertIsNone(all_match(
-                (handle,), self.folder, self.member, self.read, kind='group',
-            ))
-            self.assertIsNone(all_match(
-                (handle,), self.folder, self.owner, self.read, kind='group',
-            ))
-            self.assertIsNone(instance_match(
-                handle, self.folder, self.member, self.read, kind='group',
-            ))
+            self.assertIsNone(all_match(built_catalog(handle), self.folder, self.member, self.read, kind='group'))
+            self.assertIsNone(all_match(built_catalog(handle), self.folder, self.owner, self.read, kind='group'))
+            self.assertIsNone(instance_match(built_catalog(handle), self.folder, self.member, self.read, kind='group'))
         with self.assertNumQueries(1):
-            self.assertIs(all_match(
-                (handle,), self.folder, self.owner, self.read,
-            ), True)
+            self.assertIs(all_match(built_catalog(handle), self.folder, self.owner, self.read), True)
         with self.assertNumQueries(1):
-            self.assertIs(all_match(
-                (handle,), self.folder, self.member, self.read,
-            ), True)
+            self.assertIs(all_match(built_catalog(handle), self.folder, self.member, self.read), True)
         with self.assertNumQueries(1):
-            self.assertIs(instance_match(
-                handle, self.other, self.member, self.read,
-            ), False)
+            self.assertIs(instance_match(built_catalog(handle), self.other, self.member, self.read), False)
 
     def test_empty_records_have_no_group_slice(self):
-        plan = RelationPlan(
-            records=self.membership.records,
-            permission_model=self.Token,
-        )
-        empty = RelationPlan(
-            records=(),
-            permission_model=self.Token,
-        )
+        plan = RelationPlan(records=self.membership.records, permission_model=self.Token)
+        empty = RelationPlan(records=(), permission_model=self.Token)
         self.assertNotIn('strategy', getattr(RelationPlan, '__dataclass_fields__', {}))
         with self.assertRaises(TypeError):
-            RelationPlan(
-                records=self.membership.records,
-                permission_model=self.Token,
-                strategy=object(),
-            )
+            RelationPlan(records=self.membership.records, permission_model=self.Token, strategy=object())
         with self.assertNumQueries(0):
-            self.assertIsNone(self.compiler.group_exists(
-                plan, self.folder, self.member, self.read,
-            ))
-            self.assertIsNone(self.compiler.group_exists(
-                empty, self.folder, self.member, self.read,
-            ))
-
+            self.assertIsNone(self.compiler.group_exists(plan, self.folder, self.member, self.read))
+            self.assertIsNone(self.compiler.group_exists(empty, self.folder, self.member, self.read))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class SelfReferentialPrefixScopeTest(TransactionTestCase):
+
     def setUp(self):
         self.Holder, self.Token, self.Node, self.NodeGrant = _self_prefix_models()
-        self._table_cm = _tables(
-            self.Holder, self.Token, self.Node, self.NodeGrant,
-        )
+        self._table_cm = _tables(self.Holder, self.Token, self.Node, self.NodeGrant)
         self._table_cm.__enter__()
         self.holder = self.Holder.objects.create(name='keeper')
         self.stranger = self.Holder.objects.create(name='stranger')
         self.add = self.Token.objects.create(code='add')
         self.parent = self.Node.objects.create(title='parent')
-        self.child = self.Node.objects.create(
-            title='child', parent=self.parent,
-        )
+        self.child = self.Node.objects.create(title='child', parent=self.parent)
         self.other = self.Node.objects.create(title='other')
-        self.NodeGrant.objects.create(
-            node=self.parent, holder=self.holder, token=self.add,
-        )
-        self.registry = TrustsRegistry()
+        self.NodeGrant.objects.create(node=self.parent, holder=self.holder, token=self.add)
+        self.registry = compiler()
         g = Ref(self.NodeGrant)
-        self.registry.register(
-            content=g.node.children,
-            user=g.holder,
-            permission=g.token,
-        )
-        self.handle = BackendHandle(
-            path='issue18-prefix',
-            registry=self.registry,
-            compiler=PlanQueryCompiler(),
-        )
+        self.registry.register_relation(content=g.node.children, user=g.holder, permission=g.token)
+        self.registry.path = 'issue18-prefix'
+        self.handle = self.registry
 
     def tearDown(self):
         self._table_cm.__exit__(None, None, None)
@@ -963,77 +671,31 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         self.assertEqual(record.content_path, ('node', 'children'))
         self.assertIs(record.content_model, self.Node)
         with self.assertNumQueries(0):
-            qs = filter_by_permitted_content(
-                self.Node.objects.all(),
-                self.holder,
-                self.add,
-                content=self.Node,
-                handles=(self.handle,),
-            )
+            qs = filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registry=built_catalog(self.handle))
         self.assertIsInstance(qs, QuerySet)
         self.assertIsNone(qs._result_cache)
         with self.assertNumQueries(1):
             self.assertEqual(_pks(qs), {self.parent.pk})
-        self.assertFalse(
-            filter_by_permitted_content(
-                self.Node.objects.all(),
-                self.stranger,
-                self.add,
-                content=self.Node,
-                handles=(self.handle,),
-            ).exists()
-        )
+        self.assertFalse(filter_by_permitted_content(self.Node.objects.all(), self.stranger, self.add, content=self.Node, registry=built_catalog(self.handle)).exists())
 
     def test_terminal_only_same_model_is_none(self):
-        registry = TrustsRegistry()
+        registry = compiler()
         g = Ref(self.NodeGrant)
-        registry.register(
-            content=g.node, user=g.holder, permission=g.token,
-        )
-        handle = BackendHandle(
-            path='issue18-terminal',
-            registry=registry,
-            compiler=PlanQueryCompiler(),
-        )
-        qs = filter_by_permitted_content(
-            self.Node.objects.all(),
-            self.holder,
-            self.add,
-            content=self.Node,
-            handles=(handle,),
-        )
+        registry.register_relation(content=g.node, user=g.holder, permission=g.token)
+        registry.path = 'issue18-terminal'
+        handle = registry
+        qs = filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registry=built_catalog(handle))
         with self.assertNumQueries(0):
             self.assertFalse(qs.exists())
 
     def test_authorized_content_is_child_not_parent(self):
         with self.assertNumQueries(1):
-            self.assertTrue(
-                self.registry.has_permission(self.holder, self.child, self.add),
-            )
+            self.assertTrue(built_catalog(self.registry).has_permission(self.holder, self.child, self.add))
         with self.assertNumQueries(1):
-            self.assertFalse(
-                self.registry.has_permission(self.holder, self.parent, self.add),
-            )
+            self.assertFalse(built_catalog(self.registry).has_permission(self.holder, self.parent, self.add))
         with self.assertNumQueries(1):
-            self.assertEqual(
-                _pks(self.registry.filter_authorized(
-                    self.Node.objects.all(), self.holder, self.add,
-                )),
-                {self.child.pk},
-            )
+            self.assertEqual(_pks(built_catalog(self.registry).filter_authorized(self.Node.objects.all(), self.holder, self.add)), {self.child.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(
-                _pks(self.registry.permissions_for(self.holder, self.child)),
-                {self.add.pk},
-            )
+            self.assertEqual(_pks(built_catalog(self.registry).permissions_for(self.holder, self.child)), {self.add.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(
-                _pks(filter_by_permitted_content(
-                    self.Node.objects.all(),
-                    self.holder,
-                    self.add,
-                    content=self.Node,
-                    handles=(self.handle,),
-                )),
-                {self.parent.pk},
-            )
+            self.assertEqual(_pks(filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registry=built_catalog(self.handle))), {self.parent.pk})

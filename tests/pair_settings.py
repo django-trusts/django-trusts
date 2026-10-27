@@ -24,12 +24,19 @@ INSTALLED_APPS = (
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'trusts.zero.apps.ZeroConfig',
+    # Nothing in registration depends on this order. TestsConfig
+    # registers through TestsTrustBackend().get_registry(). That
+    # backend lives in the tests app, so TestsConfig owns the registry.
     'tests.apps.TestsConfig',
+    'trusts.zero.apps.ZeroConfig',
 )
 
 AUTHENTICATION_BACKENDS = (
     'trusts.zero.backends.TrustModelBackend',
+    # TestsConfig registers Category, Ticket, and TestGroupJunction
+    # when Zero is installed. The listed backend's module lives in
+    # that app, so those records are a listed catalog.
+    'tests.backends.TestsTrustBackend',
 )
 
 MIDDLEWARE = (

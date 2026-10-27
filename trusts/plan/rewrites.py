@@ -28,6 +28,10 @@ from django.db.models.sql.query import Query
 from django.db.models.sql.where import ExtraWhere, NothingNode, WhereNode
 
 from trusts.errors import TrustsConfigurationError
+from django.conf import settings
+import django
+from django.db import connections
+from django.contrib.auth.models import Permission
 
 
 BIND_ALIAS = 'trusts_bind'
@@ -57,12 +61,11 @@ def trusts_bind_once():
     Missing ``TRUSTS_SQL_BIND_ONCE`` means on. ``False`` leaves the queryset
     exactly as policy code built it.
     """
-    from django.conf import settings
 
     return bool(getattr(settings, 'TRUSTS_SQL_BIND_ONCE', True))
 
 
-def bind_once(queryset, *also):
+def bind_once(queryset, *also, user_model):
     """Return the queryset to execute and to record.
 
     Extra trees (a grant ``Q`` that is not yet on ``queryset``) are
@@ -91,17 +94,17 @@ def bind_once(queryset, *also):
         problem = _shape_problem(queryset, also)
         if problem is not None:
             return _fallback(queryset, also, problem)
-        prepared, extras = _rewrite(queryset, also)
+        prepared, extras = _rewrite(queryset, also, user_model)
     except Exception as exc:
         return _fallback(queryset, also, _exception_detail(exc))
     return _pack(prepared, extras)
 
 
-def bound_exists_query(queryset):
+def bound_exists_query(queryset, *, user_model):
     """The ``EXISTS`` query the lockfile compiles for ``queryset``."""
     if not trusts_bind_once():
         return queryset.query.exists()
-    bound = bind_once(queryset)
+    bound = bind_once(queryset, user_model=user_model)
     if bound in _fallbacks:
         return bound.query.exists()
     return strip_exists_marker(bound.query.exists())
@@ -128,7 +131,6 @@ def _warn_once(detail):
     if _warned:
         return
     _warned = True
-    import django
 
     logging.getLogger('trusts').warning(
         'bind_once left the queryset unchanged: %s (Django %s).',
@@ -375,10 +377,10 @@ class _QueryHolder(object):
         self.query = query
 
 
-def _rewrite(queryset, also):
+def _rewrite(queryset, also, user_model):
     prepared, extras = _prepare(queryset, also)
     root = getattr(prepared.query, 'model', None)
-    walk = _Walk(root, _connection_for(prepared))
+    walk = _Walk(root, _connection_for(prepared), user_model)
     walk.visit(prepared.query)
     for extra in extras:
         walk.visit(extra)
@@ -489,16 +491,16 @@ def _prepare(queryset, also):
 
 
 def _connection_for(queryset):
-    from django.db import connections
 
     alias = getattr(queryset, 'db', None) or 'default'
     return connections[alias]
 
 
 class _Walk(object):
-    def __init__(self, root_model, connection):
+    def __init__(self, root_model, connection, user_model):
         self.root_model = root_model
         self.connection = connection
+        self.user_model = user_model
         self.hits = []
         self.seen_queries = set()
         self.seen_along = set()
@@ -606,7 +608,7 @@ class _Walk(object):
         if (
             isinstance(candidate, dict)
             and getattr(node, 'lookup_name', None) == 'exact'
-            and _is_content_pk(node)
+            and _is_content_pk(node, self.user_model)
         ):
             self.hits.append(_Hit(
                 candidate, 'const', 'content pk', _lookup_output(node),
@@ -616,7 +618,9 @@ class _Walk(object):
         plain = _plain_value(raw)
         if plain is _SKIP or not _rhs_is_emitted(node, plain, self.connection):
             return
-        kind, label = _classify_lookup(node, plain, self.root_model)
+        kind, label = _classify_lookup(
+            node, plain, self.root_model, self.user_model,
+        )
         if kind == 'eligibility':
             # One column for every copy of this boolean. The comparison is
             # ``column = trusts_bind.<name>``, so PostgreSQL still emits an
@@ -642,7 +646,9 @@ class _Walk(object):
         if plain is _SKIP:
             self.visit(raw)
             return
-        kind, label = _classify_key(key, plain, self.root_model)
+        kind, label = _classify_key(
+            key, plain, self.root_model, self.user_model,
+        )
         if kind == 'eligibility':
             self.hits.append(_Hit(
                 plain, kind, label, BooleanField(),
@@ -664,7 +670,7 @@ class _Walk(object):
         if id(node) in self.seen_along:
             return
         self.seen_along.add(id(node))
-        bound = _along_bound(node)
+        bound = int(node.along_bound)
         self.hits.append(_Hit(bound, 'const', 'along bound', _INTEGER, apply))
         self._visit_sources(node)
 
@@ -729,26 +735,27 @@ def _lhs_apply(lookup, child):
     return apply
 
 
-def _classify_lookup(lookup, value, root_model):
+def _classify_lookup(lookup, value, root_model, user_model):
     name = _lookup_field_name(lookup)
     model_label = _lookup_model_label(lookup)
     if isinstance(value, bool) and name in _ELIGIBILITY:
         return 'eligibility', _ELIGIBILITY[name]
-    if isinstance(value, bool) and _user_boolean_label(lookup, name) is not None:
-        return 'eligibility', _user_boolean_label(lookup, name)
+    label = _user_boolean_label(lookup, name, user_model)
+    if isinstance(value, bool) and label is not None:
+        return 'eligibility', label
     if name == 'app_label' and model_label == 'contenttypes.ContentType':
         return 'const', 'content type app'
     if name == 'model' and model_label == 'contenttypes.ContentType':
         return 'const', 'content type model'
-    bind = _infer_bind(lookup, root_model)
+    bind = _infer_bind(lookup, root_model, user_model)
     if bind is not None:
         return 'bind', bind
-    if _is_content_pk(lookup):
+    if _is_content_pk(lookup, user_model):
         return 'const', 'content pk'
     return 'leave', None
 
 
-def _classify_key(key, value, root_model):
+def _classify_key(key, value, root_model, user_model):
     field = key.rsplit('__', 1)[-1]
     if isinstance(value, bool) and field in _ELIGIBILITY:
         return 'eligibility', _ELIGIBILITY[field]
@@ -760,12 +767,12 @@ def _classify_key(key, value, root_model):
         return 'bind', 'user.id'
     if field in _PERMISSION_FIELDS:
         return 'bind', 'permission.id'
-    if field in ('pk', 'id') and _model_is_content(root_model):
+    if field in ('pk', 'id') and _model_is_content(root_model, user_model):
         return 'const', 'content pk'
     return 'leave', None
 
 
-def _infer_bind(lookup, root_model):
+def _infer_bind(lookup, root_model, user_model):
     target = getattr(getattr(lookup, 'lhs', None), 'target', None)
     if getattr(lookup, 'trusts_content_bind', False):
         attname = getattr(target, 'attname', None) or 'id'
@@ -776,56 +783,63 @@ def _infer_bind(lookup, root_model):
     if remote is not None and getattr(remote, 'model', None) is not None:
         concrete = remote.model._meta.concrete_model
         attname = target.target_field.attname
-        if concrete is _user_concrete() or _lookup_field_name(lookup) in _USER_FIELDS:
+        if (
+            concrete is _user_concrete(user_model)
+            or _lookup_field_name(lookup) in _USER_FIELDS
+        ):
             return 'user.%s' % attname
         if (
             concrete is _permission_concrete()
             or _lookup_field_name(lookup) in _PERMISSION_FIELDS
         ):
             return 'permission.%s' % attname
-        if _model_is_user(root_model):
+        if _model_is_user(root_model, user_model):
             return 'content.%s' % attname
         return None
     if getattr(target, 'primary_key', False):
         concrete = target.model._meta.concrete_model
-        if concrete is _user_concrete():
+        if concrete is _user_concrete(user_model):
             return 'user.%s' % target.attname
         if concrete is _permission_concrete():
             return 'permission.%s' % target.attname
     return None
 
 
-def _is_content_pk(lookup):
+def _is_content_pk(lookup, user_model):
     target = getattr(getattr(lookup, 'lhs', None), 'target', None)
     if target is None or not getattr(target, 'primary_key', False):
         return False
     concrete = target.model._meta.concrete_model
-    if concrete is _user_concrete() or concrete is _permission_concrete():
+    if (
+        concrete is _user_concrete(user_model)
+        or concrete is _permission_concrete()
+    ):
         return False
     return True
 
 
-def _model_is_user(model):
+def _model_is_user(model, user_model):
     if model is None:
         return False
-    return model._meta.concrete_model is _user_concrete()
+    return model._meta.concrete_model is _user_concrete(user_model)
 
 
-def _model_is_content(model):
+def _model_is_content(model, user_model):
     if model is None:
         return False
     concrete = model._meta.concrete_model
-    return concrete is not _user_concrete() and concrete is not _permission_concrete()
+    user = _user_concrete(user_model)
+    return concrete is not user and concrete is not _permission_concrete()
 
 
-def _user_concrete():
-    from django.contrib.auth import get_user_model
-
-    return get_user_model()._meta.concrete_model
+def _user_concrete(user_model):
+    """Concrete model passed from the catalog that is compiling SQL."""
+    if user_model is None:
+        return None
+    return user_model._meta.concrete_model
 
 
 def _permission_concrete():
-    from django.contrib.auth.models import Permission
 
     return Permission._meta.concrete_model
 
@@ -840,18 +854,19 @@ def _lookup_field_name(lookup):
     return None
 
 
-def _user_boolean_label(lookup, name):
+def _user_boolean_label(lookup, name, user_model):
     """Bind-once label for a concrete boolean on the auth user model.
 
     ``is_active`` keeps its existing eligibility label. Other user booleans
     use ``user.<field>`` so the lockfile token is ``user.<field>=True``.
     """
-    if not name or name in _ELIGIBILITY:
+    concrete = _user_concrete(user_model)
+    if concrete is None or not name or name in _ELIGIBILITY:
         return None
-    if _lookup_model_label(lookup) != _user_concrete()._meta.label:
+    if _lookup_model_label(lookup) != concrete._meta.label:
         return None
     try:
-        field = _user_concrete()._meta.get_field(name)
+        field = concrete._meta.get_field(name)
     except Exception:
         return None
     if (
@@ -921,24 +936,8 @@ def _plain_value(value):
     return value
 
 
-# Along expression classes are identified by name so this pass does not
-# import the module that defines them.
-_ALONG_NODES = frozenset((
-    'GrantReach',
-    '_AnchorInInverseReach',
-    '_KeyedReach',
-    '_PrefixInForwardWalk',
-))
-
-
 def _is_along(node):
-    return type(node).__name__ in _ALONG_NODES
-
-
-def _along_bound(node):
-    if type(node).__name__ == '_KeyedReach':
-        return int(node.walk.bound)
-    return int(node.record.along.bound)
+    return getattr(node, 'along_bound', None) is not None
 
 
 def _unresolved_pair(child):
@@ -1112,7 +1111,7 @@ class BindTable(object):
     """``CROSS JOIN (SELECT %s AS col, ...) trusts_bind``.
 
     ``join_type`` stays unset so ``Query.promote_joins`` leaves the row
-    alone. ``as_sql`` still emits ``CROSS JOIN``. The row is installed
+    alone. ``as_sql`` still emits ``CROSS JOIN``. The row is placed
     after the statement's real base table.
     """
 
@@ -1358,11 +1357,3 @@ def strip_exists_marker(query):
         query.annotations['a'] = SqlInt(1)
         query._annotation_select_cache = None
     return query
-
-
-class LiteralExists(Exists):
-    """``EXISTS (SELECT 1 ...)``. The marker is SQL, not a placeholder."""
-
-    def __init__(self, queryset, **kwargs):
-        super().__init__(queryset, **kwargs)
-        strip_exists_marker(self.query)

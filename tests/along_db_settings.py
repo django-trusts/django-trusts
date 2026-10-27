@@ -2,8 +2,10 @@
 
 The kernel settings mark ``myapp`` and ``trusts_tests`` as unmigrated.
 Django syncs those apps before ``auth`` migrations, and PostgreSQL and
-MySQL then reject the foreign key to ``auth_user``. These jobs only need
-``auth`` and the kernel host, so the along tests migrate in dependency order.
+MySQL then reject the foreign key to ``auth_user``. These jobs install
+``auth``, the kernel host, and ``AlongCoreConfig``. That last app owns
+modules under ``tests.core`` and has no models, so nothing is synced
+ahead of ``auth``.
 """
 
 import os
@@ -22,5 +24,10 @@ INSTALLED_APPS = (
     'django.contrib.contenttypes',
     'django.contrib.auth',
     'tests.kernel_host.apps.KernelHostConfig',
+    'tests.core.apps.AlongCoreConfig',
+)
+# DocumentBackend lives in myapp, which these jobs do not install.
+AUTHENTICATION_BACKENDS = (
+    'tests.kernel_host.backends.HostTrustModelBackend',
 )
 MIGRATION_MODULES = {}
