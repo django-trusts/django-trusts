@@ -238,8 +238,6 @@ Register the model paths when the application starts:
        )
 
        def ready(self):
-           super().ready()
-
            from .models import (
                Document,
                DocumentDelegation,
@@ -272,6 +270,7 @@ Register the model paths when the application starts:
                "non_confidential",
                predicate=lambda u, p, o: o.confidential != True,
            )
+           super().ready()
 
 The first registration reaches permission objects directly. The second reaches
 Django ``auth.Group`` objects; ``django-trusts`` follows each group's

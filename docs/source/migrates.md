@@ -144,7 +144,7 @@ Call `Backend().get_registry().register(...)` and
 | Compiler check | `trusts.E004` from `check_query_compilers` | Removed, along with `compiler_for_class`. Drop `trusts.E004` from `SILENCED_SYSTEM_CHECKS`. |
 | Family override | `_authorization_family` on `TrustsImplementationConfig` | `family` on the backend class (default `'relationship'`) |
 | `filter_authorized_scopes(..., handles=)` | Backend objects, or every relationship-family handle | `filter_by_permitted_content(..., backend=)` in `trusts.decorators`. See the next section. `handles=` is not accepted. |
-| `authorization_required` when no listed backend has a plan for the model | `TrustsConfigurationError` at request time (`authorization_required has no applicable auth.Permission plan`) | `PermissionDenied` when the row exists, `Http404` when it does not. A catalog that did not register the model contributes nothing and does not raise. `trusts.E008` still reports the gap from `manage.py check`. Selected condition names that no participating backend owns together still raise `TrustsConfigurationError` before a grant query. |
+| `authorization_required` when no listed backend has a plan for the model | `TrustsConfigurationError` at request time (`authorization_required has no applicable auth.Permission plan`) | `PermissionDenied` when the row exists, `Http404` when it does not. A catalog that did not register the model, or that does not own every selected name, contributes nothing and does not raise. `trusts.E008` is removed. |
 
 ```python
 # Old
@@ -196,7 +196,7 @@ Migration-bot checklist:
 - `trusts.E012`
 - `TrustsMixinRequired`
 - `TrustsConfigMixin`
-- `self.recorder.register`
+- `Backend().get_registry().register(`
 
 ## `filter_authorized_scopes` removed (#302)
 
