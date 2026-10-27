@@ -41,8 +41,6 @@ field is NULL (`None != 5`).
 | `o.left != o.right` | exactly one NULL | matches | does not match |
 | `u.manager == o.reviewer` | both NULL | matches | does not match |
 | `u != o.owner` | `owner` is NULL | matches | does not match |
-| `o.left == None` | `left` is NULL | matches | unchanged |
-| `o.left != 5` | `left` is NULL | matches | unchanged |
 
 `has_perm`, a permitted queryset, and `get_permitted_users` use this
 rule. Relation `condition=` equality was already plain `a = b` (NULL
@@ -57,8 +55,6 @@ user rules raise it for every unsupported operator, unsupported node, and
 missing field. The messages name the surface, for example
 "'|' is not supported in a relation condition."
 Named filters use the [supported lambda expressions](index.rst#supported-lambda-expressions).
-The predicates compiler and the relation-condition guards raise `PermissionConditionError` directly and do not wrap it.
-`get_permitted_users` reads object-side fields from the saved row. Save first; an in-memory change is ignored, and a never-saved object returns an empty user queryset before SQL.
 
 | | Old | New |
 | --- | --- | --- |
@@ -66,9 +62,6 @@ The predicates compiler and the relation-condition guards raise `PermissionCondi
 | Unsupported operator or constant | `PermissionConditionUnsupported` | `PermissionConditionError` |
 | `PermissionConditionNotQueryable` (a `ValueError`, never raised) | importable | removed |
 | Base class of `PermissionConditionError` | `Exception` | `TrustsConfigurationError` |
-| Ordered comparison (`<`, `<=`, `>`, `>=`) | rejected when the builder returned | rejected at the operator, same class |
-| `condition=` or user-rule grammar, missing field, or non-boolean user-rule field | `TrustsConfigurationError` | `PermissionConditionError` (still caught by `except TrustsConfigurationError`) |
-| Missing field in a `user=`, `permission=`, `delegate=`, or `sponsor=` path | `TrustsConfigurationError` | `PermissionConditionError` (still caught by `except TrustsConfigurationError`) |
 | Second `add_named_filter` with the same model and code | replaced the first filter | `PermissionConditionError` at the `add_named_filter` call after apps are ready; the second builder is not called |
 
 An `except TrustsConfigurationError` block now also catches condition
@@ -112,17 +105,13 @@ Use the public inquiry methods instead.
 | --- | --- | --- |
 | Permission rows | `RelationPlan.common_permissions(user, content)` | `user.get_all_permissions(content)` |
 | Condition object check | `ConditionRegistry.evaluate_permission_condition(...)` | `qs.permitted(permission, user, conditions=(code,))` |
-| Stored-condition object check | `evaluate_stored_condition(...)` | the same compiled `Q` |
 | Compiler failure type | `TrustsCompilerError` | `TrustsConfigurationError` |
-| Exists marker | `LiteralExists(queryset)` | ordinary `Exists`; the renderer writes `SELECT 1` |
 
 Migration-bot checklist:
 
 - `common_permissions`
 - `evaluate_permission_condition`
-- `evaluate_stored_condition`
 - `TrustsCompilerError`
-- `LiteralExists`
 
 ## `Meta.permission_conditions` removed (#330)
 
@@ -150,8 +139,7 @@ Call `Backend().get_registry().register(...)` and
 `ready()` freezes that log and builds the catalog. A call after
 `super().ready()` raises `TrustsConfigurationError`. An app with
 registrations and no listed backend raises `TrustsConfigurationError`
-from `ready()`. `trusts.E010` is retired; drop it from
-`SILENCED_SYSTEM_CHECKS`.
+from `ready()`.
 
 | | Old | New |
 | --- | --- | --- |
@@ -215,7 +203,6 @@ Migration-bot checklist:
 - `check_query_compilers`
 - `trusts.E004`
 - `_authorization_family`
-- `trusts.E010`
 - `trusts.E011`
 - `trusts.E012`
 - `TrustsMixinRequired`
@@ -301,7 +288,6 @@ Migration-bot checklist:
 | Chained queryset | The list method is not on `QuerySet` | `Repository.objects.filter(...).permitted(...)` when the queryset mixes in `PermittedQuerySetMixin` and is supplied with `as_manager()` or `from_queryset` |
 | Attachment names | `AuthorizedQuerySet`, `AuthorizedManagerMixin`, `AuthorizedManager` | Those names stay. Add `PermittedQuerySetMixin`, `PermittedQuerySet`, and `PermittedManager` |
 | `.authorized(user, permission, extra_q=None)` | Instance projection, any registered terminal | Retained. User conditions and overrides apply; not routed through `.permitted` validation |
-| Malformed permission, bad `conditions`, missing `auth.Permission` plan, or conditions no backend owns together | n/a | Empty `.permitted()` queryset before SQL, including for an anonymous user |
 | Well-formed permission for another content type | Denial on the instance projection when the row's content type does not match | Empty `.permitted()` queryset |
 
 New code should use `.permitted()`. For user checks and audit options, see
@@ -334,29 +320,19 @@ Migration-bot checklist:
 
 ## Request-time fail-closed (#343)
 
-A malformed permission or condition, a missing plan, or condition names
-no backend owns return an empty queryset (`none()`) at request time.
-They do not raise `TrustsConfigurationError`, `TypeError`, or `ValueError`.
-`authorization_required` is `PermissionDenied` when the row exists and
-`Http404` when it does not. Registration errors still raise at
-`register()` and `ready()`. The decorator still validates its declaration
-arguments when the view is decorated.
+`v1.0.0rc1` raised `TrustsConfigurationError` for these calls.
+Registration errors still raise at `register()` and `ready()`.
 
 | | Old | New |
 | --- | --- | --- |
-| `.permitted()` malformed permission, bad `conditions`, missing plan, or unowned names | `TrustsConfigurationError` or `TypeError` before SQL | `none()` before SQL |
-| `.authorized()` string, unsaved permission, or a user that is not a model instance | `TrustsConfigurationError` or `TypeError` before SQL | `none()` |
-| `get_permitted_users()` / `User.objects.permitted()` malformed permission, missing plan, or unsaved content | `TrustsConfigurationError`, `TypeError`, or `ValueError` before SQL | `none()` |
-| `filter_by_permitted_content()` malformed user or permission, or a missing plan | `TrustsConfigurationError` or `TypeError` before SQL | `none()` |
+| `.authorized()` when `user` or `permission` is not a model instance | `TrustsConfigurationError` | empty queryset |
+| `filter_authorized_scopes` when the queryset, `user`, or `permission` has the wrong type | `TrustsConfigurationError` | `filter_by_permitted_content` returns an empty queryset |
 | `authorization_required` when no backend has a plan or owns the names | `TrustsConfigurationError` before the grant query | `PermissionDenied` when the row exists, `Http404` when it does not |
 
 Migration-bot checklist:
 
-- `.permitted(`
 - `.authorized(`
-- `get_permitted_users(`
-- `User.objects.permitted(`
-- `filter_by_permitted_content(`
+- `filter_authorized_scopes(`
 - `authorization_required(`
 - `TrustsConfigurationError`
 
@@ -408,8 +384,7 @@ registry.register(
 )
 ```
 
-A path or condition lambda runs at the `register()` call and again on replay.
-A named-filter builder runs once. The stored overlay is private `Equal` /
+The stored overlay is private `Equal` /
 `PermissionIn` / `All` and contains no callable. The expression grammar is the
 [supported lambda expressions](index.rst#supported-lambda-expressions).
 Public `register(condition=...)` rejects
