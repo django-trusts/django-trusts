@@ -49,7 +49,7 @@ The predicates compiler and the relation-condition guards raise `PermissionCondi
 | Ordered comparison (`<`, `<=`, `>`, `>=`) | rejected when the builder returned | rejected at the operator, same class |
 | `condition=` or user-rule grammar, missing field, or non-boolean user-rule field | `TrustsConfigurationError` | `PermissionConditionError` (still caught by `except TrustsConfigurationError`) |
 | Missing field in a `user=`, `permission=`, `delegate=`, or `sponsor=` path | `TrustsConfigurationError` | `PermissionConditionError` (still caught by `except TrustsConfigurationError`) |
-| Second `add_named_filter` with the same model and code | replaced the first filter | `PermissionConditionError` at `ready()`; the second builder is not called |
+| Second `add_named_filter` with the same model and code | replaced the first filter | `PermissionConditionError` at the `add_named_filter` call after apps are ready; the second builder is not called |
 
 An `except TrustsConfigurationError` block now also catches condition
 errors. Catch `PermissionConditionError` first to tell them apart.
@@ -128,7 +128,9 @@ module must live in the app whose config extends `TrustsConfigMixin`.
 Call `self.recorder.register(...)` and `self.recorder.add_named_filter(...)`
 before `super().ready()`. `ready()` freezes the recorder and builds
 the catalog. A call after `super().ready()` raises
-`TrustsConfigurationError`.
+`TrustsConfigurationError`. An app with registrations and no listed
+backend raises `TrustsConfigurationError` from `ready()`. `trusts.E010`
+is retired; drop it from `SILENCED_SYSTEM_CHECKS`.
 
 | | Old | New |
 | --- | --- | --- |
@@ -192,6 +194,7 @@ Migration-bot checklist:
 - `check_query_compilers`
 - `trusts.E004`
 - `_authorization_family`
+- `trusts.E010`
 - `trusts.E011`
 - `trusts.E012`
 - `TrustsMixinRequired`
@@ -356,8 +359,8 @@ backend.register(
 )
 ```
 
-The condition runs once after the freeze check, in the same `AppConfig.ready()`
-world as path lambdas. The stored overlay is private `Equal` /
+A path or condition lambda runs at the `register()` call and again on replay.
+A named-filter builder runs once. The stored overlay is private `Equal` /
 `PermissionIn` / `All` and contains no callable. Literal Python `in` is
 unsupported and is not recovered through AST, bytecode, `dis`, or a
 `__contains__` side channel. Public `register(condition=...)` rejects
