@@ -22,5 +22,8 @@ INSTALLED_APPS = (
     'django.contrib.contenttypes',
     'django.contrib.auth',
     'tests.kernel_host.apps.KernelHostConfig',
+    # Registers Meta.permission_conditions and stores the user model.
+    # No models of its own, so it does not disturb auth migration order.
+    'trusts.apps.TrustsImplementationConfig',
 )
 MIGRATION_MODULES = {}

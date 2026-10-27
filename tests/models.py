@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth.models import Group, User
 
 from django.conf import settings
+from trusts.apps import _ensure_permission_conditions_option
 
 
 def ticket_meta_own(u, p, o):
@@ -86,6 +87,12 @@ if Content is not None:
         class Meta:
             proxy = True
             auto_modeladmin = True
+
+
+# ``isolate_apps('tests')`` reimports this module. Register the Meta
+# option before ``Ticket`` declares it. The helper is idempotent when
+# ``TrustsImplementationConfig`` has already run.
+_ensure_permission_conditions_option()
 
 
 class Ticket(Content if Content is not None else models.Model):

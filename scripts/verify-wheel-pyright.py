@@ -3,8 +3,9 @@
 
 Must run from outside the checkout after installing the built wheel.
 A valid consumer must be clean; ``t.not_a_field`` must be a diagnostic.
-The consumer uses the documented ``TrustsImplementationConfig`` path and
-does not import or annotate ``BackendHandle``.
+The consumer subclasses ``TrustModelBackendMixin`` in this file so
+``get_registry`` is the typed recorder, uses ``TrustsImplementationConfig``,
+and does not import or annotate ``BackendHandle``.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ OK_SOURCE = '''\
 from django.db import models
 
 from trusts.apps import TrustsImplementationConfig
+from trusts.backends import TrustModelBackendMixin
 
 
 class AnnotatedGrant(models.Model):
@@ -34,12 +36,15 @@ class AnnotatedGrant(models.Model):
         app_label = "pyright_proof"
 
 
+class DocumentBackend(TrustModelBackendMixin):
+    """Host backend in this file, so Pyright can see ``get_registry``."""
+
+
 class DocumentsConfig(TrustsImplementationConfig):
     name = "pyright_proof"
     label = "pyright_proof"
 
     def ready(self):
-        from documents.backends import DocumentBackend
         DocumentBackend().get_registry().register(
             trust=AnnotatedGrant,
             user=lambda t: t.user,
@@ -54,6 +59,7 @@ MISSING_SOURCE = '''\
 from django.db import models
 
 from trusts.apps import TrustsImplementationConfig
+from trusts.backends import TrustModelBackendMixin
 
 
 class AnnotatedGrant(models.Model):
@@ -66,12 +72,15 @@ class AnnotatedGrant(models.Model):
         app_label = "pyright_proof"
 
 
+class DocumentBackend(TrustModelBackendMixin):
+    """Host backend in this file, so Pyright can see ``get_registry``."""
+
+
 class DocumentsConfig(TrustsImplementationConfig):
     name = "pyright_proof"
     label = "pyright_proof"
 
     def ready(self):
-        from documents.backends import DocumentBackend
         DocumentBackend().get_registry().register(
             trust=AnnotatedGrant,
             user=lambda t: t.user,

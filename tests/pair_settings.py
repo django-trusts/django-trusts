@@ -24,8 +24,11 @@ INSTALLED_APPS = (
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'trusts.zero.apps.ZeroConfig',
+    # TestsConfig.ready donates onto the Zero recorder. ZeroConfig is
+    # the implementation owner and must run after that donation: its
+    # ready() freezes recorders and builds catalogs.
     'tests.apps.TestsConfig',
+    'trusts.zero.apps.ZeroConfig',
 )
 
 AUTHENTICATION_BACKENDS = (
