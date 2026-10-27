@@ -113,10 +113,10 @@ performed by application code are outside that behavior.
 
 `condition=` is the same one-argument symbolic condition, rooted at `trust=`.
 It runs at the `register()` call and again during `AppConfig.ready()`.
-Supported operations are path equality
-(`==`), collection-rooted `.contains(member)`, and conjunction (`&`). Literal
-Python `in` is unsupported and is not recovered through AST, bytecode, `dis`,
-or a `__contains__` side channel. The stored overlay is private and
+Literal Python `in` is not recovered through AST, bytecode, `dis`, or a
+`__contains__` side channel; the expression grammar is the
+[supported lambda expressions](index.rst#supported-lambda-expressions).
+The stored overlay is private and
 contains no callable. Public
 `register(condition=...)` rejects a prebuilt condition. `.contains` is a reserved condition-proxy method; a model field of
 that name cannot be walked there. The `predicate=` keyword is reserved and

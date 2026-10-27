@@ -665,11 +665,9 @@ symbolic condition rooted at the trust model. A delegated registration may
 use the same one-argument form for row-only restrictions or the two-argument
 form shown above when its relationship scope must compare with the requested
 permission. django-trusts invokes either builder once during registration and
-stores no callable. The condition grammar is path equality
-(``==``), collection-rooted membership (``.contains(member)``), and
-conjunction (``&``). Parenthesize ``==`` when combining it with ``&``.
-Python ``in``, ``and`` / ``or`` / ``not``, and a prebuilt condition
-are not accepted. ``.contains`` is a
+stores no callable. The expression grammar is
+:ref:`supported lambda expressions <supported-lambda-expressions>`.
+A prebuilt condition is not accepted. ``.contains`` is a
 reserved method on the condition proxy; a model field actually named
 ``contains`` cannot be walked there. ``predicate=`` is reserved and
 unsupported in 1.0.
@@ -689,6 +687,22 @@ unsupported in 1.0.
 
 A relationship condition is always applied to its branch; a named filter is
 selected by an authorization caller. Neither can create permission by itself.
+
+.. _supported-lambda-expressions:
+
+Supported lambda expressions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A condition lambda accepts ``==``, ``!=``, ``&``, ``|``,
+``.contains(member)``, a bare boolean field, and comparison with a
+constant, including ``None``; ``~`` applies only to a boolean field or
+to ``&`` of boolean fields, and ``==`` or ``!=`` must be parenthesized
+when combined with ``&`` or ``|``.
+
+Python ``in``, ``and`` / ``or`` / ``not``, ordered comparisons,
+arithmetic, calls, and indexing are rejected.
+
+As a path in ``register()``, it is limited to attribute access.
 
 Applications may register more than one valid path to the same content. A
 direct user grant and a team-derived grant can coexist, with either

@@ -56,7 +56,7 @@ NULL already did not match.
 user rules raise it for every unsupported operator, unsupported node, and
 missing field. The messages name the surface, for example
 "'|' is not supported in a relation condition."
-Named filters accept `.contains()`, `~`, and a bare boolean field.
+Named filters use the [supported lambda expressions](index.rst#supported-lambda-expressions).
 The predicates compiler and the relation-condition guards raise `PermissionConditionError` directly and do not wrap it.
 `get_permitted_users` reads object-side fields from the saved row. Save first; an in-memory change is ignored, and a never-saved object returns an empty user queryset before SQL.
 
@@ -379,7 +379,7 @@ Migration-bot checklist:
 | Public condition | `All(permission_in("team__allowed_operations"), Equal("team__organization", "repository__organization"))` | `lambda t: t.team.allowed_operations.contains(t.operation) & (t.team.organization == t.repository.organization)` |
 | Membership | `permission_in("team__allowed_operations")` | collection-rooted `.contains(member)` whose member is this registration's `permission=` path |
 | Equality | `Equal("team__organization", "repository__organization")` | `t.team.organization == t.repository.organization` |
-| Conjunction | `All(...)` | `p & q` (parenthesize `==`; `&` binds tighter) |
+| Conjunction | `All(...)` | `p & q`; see [supported lambda expressions](index.rst#supported-lambda-expressions) |
 | `predicate=` | n/a | reserved; unsupported in 1.0 (`TypeError` unexpected keyword) |
 
 ```python
@@ -410,9 +410,9 @@ registry.register(
 
 A path or condition lambda runs at the `register()` call and again on replay.
 A named-filter builder runs once. The stored overlay is private `Equal` /
-`PermissionIn` / `All` and contains no callable. Literal Python `in` is
-unsupported and is not recovered through AST, bytecode, `dis`, or a
-`__contains__` side channel. Public `register(condition=...)` rejects
+`PermissionIn` / `All` and contains no callable. The expression grammar is the
+[supported lambda expressions](index.rst#supported-lambda-expressions).
+Public `register(condition=...)` rejects
 prebuilt `All` / `Equal` / `permission_in` values (`TypeError`).
 
 `.contains` is a reserved method on the condition proxy. A model field
