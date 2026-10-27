@@ -664,8 +664,7 @@ For an ordinary registration, the ``condition=`` argument is a one-argument
 symbolic condition rooted at the trust model. A delegated registration may
 use the same one-argument form for row-only restrictions or the two-argument
 form shown above when its relationship scope must compare with the requested
-permission. django-trusts invokes either builder once during registration and
-stores no callable. The expression grammar is
+permission. See
 :ref:`supported lambda expressions <supported-lambda-expressions>`.
 A prebuilt condition is not accepted. ``.contains`` is a
 reserved method on the condition proxy; a model field actually named
@@ -701,6 +700,10 @@ when combined with ``&`` or ``|``.
 
 Python ``in``, ``and`` / ``or`` / ``not``, ordered comparisons,
 arithmetic, calls, and indexing are rejected.
+
+A path lambda, a ``condition=`` lambda, and a delegated condition builder
+are evaluated only when registering and compiling, never during a
+permission query.
 
 As a path in ``register()``, it is limited to attribute access.
 
