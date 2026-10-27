@@ -17,10 +17,8 @@ when the caller passes the wrong kind of object. Registration and
 | | Old | New |
 | --- | --- | --- |
 | `.authorized(user, permission)` when `permission` is not a model instance | `TrustsConfigurationError` (`permission must be a model instance`) | empty queryset |
-| `.authorized(user, permission)` when `permission` is unsaved (`pk is None`) | the instance check passes and the query proceeds | empty queryset |
 | `.authorized(user, permission)` when `user` is not a model instance | `TrustsConfigurationError` (`user must be a model instance`) | empty queryset |
 | `filter_authorized_scopes` when the queryset is not a `QuerySet`, or `user` or `permission` is not a model instance | `TrustsConfigurationError` | `filter_by_permitted_content` returns an empty queryset |
-| `filter_authorized_scopes` when `permission` is unsaved (`pk is None`) | the instance check passes and the query proceeds | `filter_by_permitted_content` returns an empty queryset |
 
 Migration-bot checklist:
 
@@ -253,15 +251,15 @@ See [User conditions and overrides](index.rst#user-conditions-and-overrides).
 
 | | 1.0.0 | 1.1.0 |
 | --- | --- | --- |
-| Permission row used on a different model than `Permission.content_type`, including a group that contains both | Grant on `has_perm`, enumeration, `.authorized()`, users from content, and lockfile SQL that matched `permission_id` only | Denial: `False` / empty. The shared grant joins `content_type` and requires the protected object's `app_label` and `model` |
+| Permission row used on a different model than `Permission.content_type`, including a group that contains both | Grant on `has_perm`, enumeration, and `.authorized()` that matched `permission_id` only | Denial: `False` / empty. The shared grant joins `content_type` and requires the protected object's `app_label` and `model` |
 | `authorization_required` for that pair | Already `PermissionDenied` for an ordinary user | Same denial |
 | Same-model grant, including a custom codename that does not end with the model name | Grant on instance projections | Unchanged grant |
 | Permission terminal that is not `auth.Permission`, including a custom model with a `content_type` foreign key | Primary-key identity | Unchanged |
 
 For an ordinary owner of one organization, the shared owner group used to
-grant both content types on both objects. Enumeration, `.authorized()`,
-users from content, and lockfile SQL follow the same split: the crossed
-permission drops out, and the same-model permission stays.
+grant both content types on both objects. Enumeration and `.authorized()`
+follow the same split: the crossed permission drops out, and the same-model
+permission stays.
 
 ```python
 # Old (crossed group permissions matched by permission_id only)
@@ -277,9 +275,8 @@ owner.has_perm("gh_permissions.manage_organization", organization)  # True
 owner.has_perm("gh_permissions.read_repository", repository)  # True
 ```
 
-No schema migration. Existing crossed positives become denials. Regenerate
-`trusts-policy.lock.yaml` and review the diff; `auth.Permission` grants now
-also match the protected object's content type.
+No schema migration. Existing crossed positives become denials.
+`auth.Permission` grants now also match the protected object's content type.
 
 Migration-bot checklist:
 
@@ -289,25 +286,7 @@ Migration-bot checklist:
 - `get_permitted_users(`
 - `.permitted(`
 - `authorization_required(`
-- `trusts_policy_sql`
 - `content_type`
-
-## `TRUSTS_SQL_BIND_ONCE`
-
-Grant SQL from `v1.0.0rc1` is the plain queryset statement. `TRUSTS_SQL_BIND_ONCE`
-defaults to true and binds each distinct inquiry value once, on a
-`trusts_bind` row. Set it to false to keep the plain statement. A rewrite
-that does not apply keeps that plain SQL and logs a warning. Regenerate
-`trusts-policy.lock.yaml` after choosing.
-
-| | Old | New |
-| --- | --- | --- |
-| Authorization SQL | Plain queryset SQL | One `trusts_bind` row per inquiry unless `TRUSTS_SQL_BIND_ONCE` is false |
-
-Migration-bot checklist:
-
-- `TRUSTS_SQL_BIND_ONCE`
-- `trusts_bind`
 
 ## Permitted content queryset (#270)
 
