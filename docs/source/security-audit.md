@@ -95,15 +95,13 @@ registry.register(
 The [setup guide](index.rst#register-the-trust) also shows the
 lambda spelling.
 
-Each path accepts either a Django `__` string or a one-argument path lambda;
-django-trusts calls the
-lambda with a symbolic path value. Attribute access records a path rooted
+Each path accepts either a Django `__` string or a one-argument path lambda.
+See [supported lambda expressions](index.rst#supported-lambda-expressions).
+Attribute access records a path rooted
 at the `trust=` model; other operations are unsupported. django-trusts
 validates the resulting path with Django model metadata, stores its normalized
 `__` form, and does not retain the lambda.
 
-The lambda runs at the registration call and again during `AppConfig.ready()`,
-in the same application context as the surrounding registration code.
 django-trusts does not inspect or sandbox unrelated Python in its body. Its
 path validation is designed not to issue SQL;
 that statement does not cover other application code executed by the lambda.
@@ -112,7 +110,6 @@ rejected before django-trusts updates the registry. Side effects already
 performed by application code are outside that behavior.
 
 `condition=` is the same one-argument symbolic condition, rooted at `trust=`.
-It runs at the `register()` call and again during `AppConfig.ready()`.
 Literal Python `in` is not recovered through AST, bytecode, `dis`, or a
 `__contains__` side channel; the expression grammar is the
 [supported lambda expressions](index.rst#supported-lambda-expressions).
@@ -145,8 +142,9 @@ defect.
 A delegated condition builder receives either the relationship root alone or
 that root plus the requested permission as symbolic values. The one-argument
 form applies row-only restrictions. The two-argument form may also compare the
-requested permission with relationship-owned scope data. Both forms run
-at the registration call and again during `AppConfig.ready()`, and may
+requested permission with relationship-owned scope data. See
+[supported lambda expressions](index.rst#supported-lambda-expressions).
+Both forms may
 express restrictions such as
 approval, tenant alignment, revocation, or expiry. The compiler stores
 normalized expression data and retains no callable. A two-argument builder on
@@ -374,14 +372,13 @@ registry.add_named_filter(
 The [setup guide](index.rst#named-filters) shows how callers select
 that filter.
 
-The backend invokes the callable once with symbolic user, permission, and
-object references. Operations on those references construct a closed expression
+See [supported lambda expressions](index.rst#supported-lambda-expressions).
+As a named condition, the builder receives the user, the permission, and
+the object. Operations on those references construct a closed expression
 tree; django-trusts validates and normalizes that result, stores only the
-immutable IR, and discards the callable. The condition runs in the same
-application-startup context as its surrounding code and receives no additional
-authority from django-trusts. django-trusts does not inspect or sandbox the
-callable body; SQL, I/O, request state, and mutable captures remain application
-behavior outside the returned-expression validation.
+immutable IR, and discards the callable. django-trusts does not inspect or
+sandbox the callable body; SQL, I/O, request state, and mutable captures
+remain application behavior outside the returned-expression validation.
 
 At an authorization site, the named filter restricts an existing grant:
 

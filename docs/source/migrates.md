@@ -377,9 +377,6 @@ registry.register(
 )
 ```
 
-A path or condition lambda runs at the `register()` call and again when
-`ready()` replays the log. On `v1.0.0rc1` each of those callables ran once,
-during `register()`. A named-filter builder still runs once.
 The stored overlay is private `Equal` /
 `PermissionIn` / `All` and contains no callable. The expression grammar is the
 [supported lambda expressions](index.rst#supported-lambda-expressions).
