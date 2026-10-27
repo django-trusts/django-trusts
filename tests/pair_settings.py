@@ -24,9 +24,9 @@ INSTALLED_APPS = (
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    # TestsConfig.ready donates onto the Zero recorder. ZeroConfig is
-    # the implementation owner and must run after that donation: its
-    # ready() freezes recorders and builds catalogs.
+    # Nothing in registration depends on this order. TestsConfig
+    # registers through TestsTrustBackend().get_registry(). That
+    # backend lives in the tests app, so TestsConfig owns the registry.
     'tests.apps.TestsConfig',
     'trusts.zero.apps.ZeroConfig',
 )
