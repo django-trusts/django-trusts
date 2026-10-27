@@ -1,23 +1,29 @@
 """Public permission-condition API (issue #142 Stage B).
 
+This is Core's own surface, not a shim kept for django-trusts-zero.
+Zero carries its own ``permission_has_condition`` and imports
+``PermissionConditionNotQueryable`` from ``trusts.errors``.
+
 Register named filters as builders on the configured backend
 (``add_named_filter``). The application-facing surface is only the
 condition exceptions and permission-code helpers.
 
 Construction nodes, ref factories, reserved ``Query`` / ``TQ``, and
-registry/compiler store types live in ``trusts.conditions._ir``.
+registry/compiler store types live in ``trusts.plan.conditions``.
 ``from trusts.conditions import Expr`` and
 ``from trusts.conditions import ConditionRegistry`` raise
 ``ImportError``.
 """
 
-from trusts.conditions._ir import (
+from trusts.plan.conditions import (
+    permission_condition_code,
+    permission_has_condition,
+)
+from trusts.errors import (
     PermissionConditionBooleanError,
     PermissionConditionError,
     PermissionConditionNotQueryable,
     PermissionConditionUnsupported,
-    permission_condition_code,
-    permission_has_condition,
 )
 
 __all__ = [

@@ -23,7 +23,7 @@ from tests.core.test_issue147.test_sql_export import (
     _document_handle,
     _handle,
 )
-from trusts.conditions._ir import ModelIdentity
+from trusts.plan.conditions import ModelIdentity
 from trusts.core import TrustsConfigurationError
 from trusts.policy_lock import (
     _const_from_json,

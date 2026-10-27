@@ -1964,7 +1964,10 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
         user_model, note_model, grant_model, link_model = self._create('Replaced')
         try:
             registry = TrustsRegistry()
-            with patch('django.contrib.auth.get_user_model', return_value=user_model):
+            with patch(
+                'trusts.plan.standards.get_user_model',
+                return_value=user_model,
+            ):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
                         registry.set_user_condition('is_active', lambda u: u.is_active)

@@ -43,7 +43,7 @@ compiler, ``any_plan_records()``, ``granted()``, ``all_match()``,
 ``common_permissions()``, ``filter_by_permitted_content()``,
 ``ConditionLookup``, and configuration/compiler exceptions live here.
 Permission-condition *records* live on each ``TrustsRegistry`` via
-``trusts.conditions._ir.ConditionRegistry``. Construction self-binds
+``trusts.plan.conditions.ConditionRegistry``. Construction self-binds
 the private store adapter; ``set_condition_lookup`` remains for
 tests and explicit unbind.
 """
@@ -59,21 +59,53 @@ from typing import TypeVar
 from django.apps import apps as django_apps
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import BooleanField, Count, Exists, F, Model, OuterRef, Q
-from django.db.models.base import ModelBase
 from django.db.models.expressions import Expression
 from django.db.models.query import QuerySet
 
 from trusts._bind_once import bind_once
+from trusts.compile.factory import assemble_frozen
+from trusts.compile.nodes import (
+    All,
+    Along,
+    Equal,
+    PermissionIn,
+    Ref,
+    _InquiryPermissionMatch,
+    _is_condition_operand,
+    _is_model_class,
+    permission_in,
+)
+from trusts.compile.paths import AlongWalk, _PathBuilder
+from trusts.compile.visitors import (
+    ConditionAnd as _ConditionAnd,
+    ConditionEq as _ConditionEq,
+    ConditionIn as _ConditionIn,
+    ConditionInquiryMatch as _ConditionInquiryMatch,
+    ConditionProxy as _ConditionProxy,
+    InquiryPermissionProxy as _InquiryPermissionProxy,
+    _CONDITION_ARITY_PROBE,
+    _CONDITION_EXPR_TYPES,
+)
+from trusts.errors import TrustsCompilerError, TrustsConfigurationError
+from trusts.plan.handles import BackendHandle
+from trusts.plan.registry import FrozenRegistry as _FrozenRegistry
+from trusts.plan.standards import (
+    BUILTIN_USER_CONDITIONS,
+    UserCondition,
+    assert_concrete_booleans,
+    bind_skip_flags,
+    builtin_user_conditions,
+    compile_override_q,
+    compile_user_rules,
+    concrete_rule,
+    condition_names,
+    normalize_on,
+    normalize_override_on,
+    rule_applies,
+    validate_user_rule_name,
+)
 
 T = TypeVar('T', bound=Model)
-
-
-class TrustsConfigurationError(Exception):
-    """Malformed or unsupported ``TrustsRegistry`` registration."""
-
-
-class TrustsCompilerError(TrustsConfigurationError):
-    """Configured Trusts backend is missing or has a malformed query compiler."""
 
 
 class QueryCompiler(object):
@@ -885,10 +917,6 @@ def _anonymous_common_permissions(handles, candidates):
 
         permission_model = Permission
     return permission_model._default_manager.none()
-
-
-def _is_model_class(value):
-    return isinstance(value, ModelBase)
 
 
 def _generic_relation_types():
@@ -1974,8 +2002,6 @@ def _known_skip_names(handles):
 
     No registry yet means the built-in ``is_active`` condition only.
     """
-    from trusts.user_rules import BUILTIN_USER_CONDITIONS, condition_names
-
     names = set()
     saw = False
     for handle in handles:
@@ -2061,8 +2087,6 @@ def bind_checked_user(subject, grant=None, *, rules=None, override=None,
     if plan is not None:
         rules = plan.user_rules_closed if closed else plan.user_rules
         override = plan.user_override_q if with_override else None
-    from trusts.user_rules import bind_skip_flags
-
     if rules is None:
         return SkipParams(False, values, None)
     rules_q = bind_skip_flags(rules, values)
@@ -2439,274 +2463,6 @@ def _delegated_user_exists(delegations, sponsor_records, content, permission,
     if not parts:
         return None
     return parts[0] if len(parts) == 1 else reduce(or_, parts)
-
-
-class Ref(object):
-    """Root-relative path from one permission-bearing relation model.
-
-    Build paths with attribute access::
-
-        j = Ref(DocumentGrant)
-        j.document  # path ('document',) on DocumentGrant
-
-    Attribute access always builds a field ref, including names such as
-    ``root`` and ``path``. Inspect the model and segments on the
-    normalized ``RegisteredRelation``, not on ``Ref``.
-    """
-
-    __slots__ = ('_root', '_path')
-
-    def __init__(self, root, path=()):
-        if not _is_model_class(root):
-            raise TrustsConfigurationError(
-                'Ref root must be a Django model class, not %r.' % (root,)
-            )
-        if isinstance(path, str):
-            raise TrustsConfigurationError(
-                'Ref path must be a sequence of field names, not a string.'
-            )
-        if not isinstance(path, (tuple, list)):
-            raise TrustsConfigurationError(
-                'Ref path must be a sequence of field names, not %r.' % (path,)
-            )
-        object.__setattr__(self, '_root', root)
-        object.__setattr__(self, '_path', tuple(path))
-
-    def __getattr__(self, name):
-        return Ref(self._root, self._path + (name,))
-
-    def __setattr__(self, name, value):
-        raise TrustsConfigurationError('Ref is immutable.')
-
-    def __delattr__(self, name):
-        raise TrustsConfigurationError('Ref is immutable.')
-
-    def __eq__(self, other):
-        return (
-            isinstance(other, Ref)
-            and self._root is other._root
-            and self._path == other._path
-        )
-
-    def __hash__(self):
-        return hash((self._root, self._path))
-
-    def __repr__(self):
-        if not self._path:
-            return 'Ref(%s)' % self._root.__name__
-        return 'Ref(%s).%s' % (self._root.__name__, '.'.join(self._path))
-
-
-class Along(object):
-    """Bounded directed walk that replaces equality at one walk-site.
-
-    ``ref`` names the directed edge from the walk-site. ``bound`` is the
-    maximum hop distance (1..64). Depth 0 is always included.
-    """
-
-    __slots__ = ('ref', 'bound')
-
-    def __init__(self, ref, bound):
-        object.__setattr__(self, 'ref', ref)
-        object.__setattr__(self, 'bound', bound)
-
-    def __setattr__(self, name, value):
-        raise TrustsConfigurationError('Along is immutable.')
-
-    def __delattr__(self, name):
-        raise TrustsConfigurationError('Along is immutable.')
-
-    def __eq__(self, other):
-        return (
-            isinstance(other, Along)
-            and self.ref == other.ref
-            and self.bound == other.bound
-        )
-
-    def __hash__(self):
-        return hash((self.ref, self.bound))
-
-    def __repr__(self):
-        return 'Along(%r, bound=%r)' % (self.ref, self.bound)
-
-
-def _is_condition_operand(value):
-    """True for an internal ``Ref`` or a public Django ``__`` path string."""
-    return isinstance(value, (str, Ref))
-
-
-class Equal(object):
-    """Closed equality of two root-relative single-valued refs.
-
-    Isolated registry tests may pass ``Ref`` operands. Public
-    ``register(*, trust=..., condition=...)`` does not accept a prebuilt
-    ``Equal``; it lowers a trust-rooted ``==`` expression to this node.
-    """
-
-    __slots__ = ('left', 'right')
-
-    def __init__(self, left, right):
-        if not _is_condition_operand(left) or not _is_condition_operand(right):
-            raise TrustsConfigurationError(
-                'Equal left and right must be root-relative Refs or Django '
-                'path strings, not %r and %r.' % (left, right)
-            )
-        object.__setattr__(self, 'left', left)
-        object.__setattr__(self, 'right', right)
-
-    def __setattr__(self, name, value):
-        raise TrustsConfigurationError('Equal is immutable.')
-
-    def __delattr__(self, name):
-        raise TrustsConfigurationError('Equal is immutable.')
-
-    def __eq__(self, other):
-        return (
-            isinstance(other, Equal)
-            and self.left == other.left
-            and self.right == other.right
-        )
-
-    def __hash__(self):
-        return hash((Equal, self.left, self.right))
-
-    def __repr__(self):
-        return 'Equal(%r, %r)' % (self.left, self.right)
-
-
-class PermissionIn(object):
-    """Closed membership of the registered permission in one or more refs."""
-
-    __slots__ = ('refs',)
-
-    def __init__(self, *refs):
-        if not refs:
-            raise TrustsConfigurationError(
-                'permission_in requires one or more refs.'
-            )
-        for ref in refs:
-            if not _is_condition_operand(ref):
-                raise TrustsConfigurationError(
-                    'permission_in refs must be root-relative Refs or Django '
-                    'path strings, not %r.' % (ref,)
-                )
-        object.__setattr__(self, 'refs', refs)
-
-    def __setattr__(self, name, value):
-        raise TrustsConfigurationError('permission_in is immutable.')
-
-    def __delattr__(self, name):
-        raise TrustsConfigurationError('permission_in is immutable.')
-
-    def __eq__(self, other):
-        return isinstance(other, PermissionIn) and self.refs == other.refs
-
-    def __hash__(self):
-        return hash((PermissionIn, self.refs))
-
-    def __repr__(self):
-        return 'permission_in(%s)' % ', '.join(repr(ref) for ref in self.refs)
-
-
-permission_in = PermissionIn
-
-
-class _InquiryPermissionMatch(object):
-    """Closed match between one relationship path and inquiry permission.
-
-    This node is produced only by a two-argument delegated ``condition=``
-    builder. It is deliberately private: application code supplies the
-    symbolic expression, never a prebuilt node.
-    """
-
-    __slots__ = ('ref',)
-
-    def __init__(self, ref):
-        if not _is_condition_operand(ref):
-            raise TrustsConfigurationError(
-                'inquiry permission match requires one root-relative Ref, '
-                'not %r.' % (ref,)
-            )
-        object.__setattr__(self, 'ref', ref)
-
-    def __setattr__(self, name, value):
-        raise TrustsConfigurationError('Inquiry permission match is immutable.')
-
-    def __delattr__(self, name):
-        raise TrustsConfigurationError('Inquiry permission match is immutable.')
-
-    def __eq__(self, other):
-        return (
-            isinstance(other, _InquiryPermissionMatch)
-            and self.ref == other.ref
-        )
-
-    def __hash__(self):
-        return hash((_InquiryPermissionMatch, self.ref))
-
-    def __repr__(self):
-        return 'inquiry_permission_match(%r)' % (self.ref,)
-
-
-class All(object):
-    """Closed AND of one or more typed predicate nodes."""
-
-    __slots__ = ('predicates',)
-
-    def __init__(self, *predicates):
-        if not predicates:
-            raise TrustsConfigurationError(
-                'All requires one or more predicates.'
-            )
-        for predicate in predicates:
-            if not isinstance(
-                predicate, (All, Equal, PermissionIn, _InquiryPermissionMatch)
-            ):
-                raise TrustsConfigurationError(
-                    'All predicates must be All, Equal, permission_in, or '
-                    'an inquiry-permission match '
-                    'nodes, not %r.' % (predicate,)
-                )
-        object.__setattr__(self, 'predicates', predicates)
-
-    def __setattr__(self, name, value):
-        raise TrustsConfigurationError('All is immutable.')
-
-    def __delattr__(self, name):
-        raise TrustsConfigurationError('All is immutable.')
-
-    def __eq__(self, other):
-        return (
-            isinstance(other, All)
-            and self.predicates == other.predicates
-        )
-
-    def __hash__(self):
-        return hash((All, self.predicates))
-
-    def __repr__(self):
-        return 'All(%s)' % ', '.join(repr(pred) for pred in self.predicates)
-
-
-@dataclass(frozen=True, slots=True)
-class AlongWalk:
-    """Immutable walk metadata resolved from ``Along`` at ``register()``."""
-
-    path: tuple
-    bound: int
-    shape: str
-    walk_path: tuple
-    walk_model: type
-    walk_ident: str
-    walk_field: str
-    suffix_path: tuple
-    suffix_field: str
-    ident_family: str
-    parent_attname: str | None
-    edge_model: type | None
-    edge_parent_attname: str | None
-    edge_child_attname: str | None
-    rewrite_attname: str | None
 
 
 _ALONG_BOUND_MIN = 1
@@ -4026,9 +3782,9 @@ class TrustsRegistry(object):
     """
 
     def __init__(self):
-        # Lazy: trusts.core must finish loading before _ir imports
-        # ConditionLookup. A module-level Core↔_ir import is circular.
-        from trusts.conditions._ir import (
+        # Lazy: trusts.core must finish loading before the condition IR
+        # imports ConditionLookup. A module-level import is circular.
+        from trusts.plan.conditions import (
             ConditionRegistry,
             RegistryConditionLookup,
         )
@@ -4126,7 +3882,6 @@ class TrustsRegistry(object):
         if self._user_conditions is None:
             from django.contrib.auth import get_user_model
 
-            from trusts.user_rules import builtin_user_conditions
             return builtin_user_conditions(get_user_model())
         return tuple(self._user_conditions.values())
 
@@ -4137,8 +3892,6 @@ class TrustsRegistry(object):
         return tuple(self._user_conditions.values())
 
     def _known_skip_names(self):
-        from trusts.user_rules import condition_names
-
         return condition_names(
             self._stored_user_conditions(), self._user_override,
         )
@@ -4154,13 +3907,10 @@ class TrustsRegistry(object):
         stored = self._stored_user_conditions()
         if stored is not None:
             return stored
-        from trusts.user_rules import builtin_user_conditions
         return builtin_user_conditions(model)
 
     def _rule_fragment(self, model, *, role, path=''):
         """Registration-time ``(skip OR condition)`` for one model and role."""
-        from trusts.user_rules import compile_user_rules
-
         model = model._meta.concrete_model
         key = (model, role, path)
         try:
@@ -4175,8 +3925,6 @@ class TrustsRegistry(object):
 
     def _override_fragment(self, model):
         """Registration-time ``(NOT skip AND override)`` for the checked user."""
-        from trusts.user_rules import compile_override_q
-
         model = model._meta.concrete_model
         try:
             return self._override_fragments[model]
@@ -4230,14 +3978,6 @@ class TrustsRegistry(object):
         """
         from django.contrib.auth import get_user_model
 
-        from trusts.user_rules import (
-            UserCondition,
-            builtin_user_conditions,
-            concrete_rule,
-            normalize_on,
-            validate_user_rule_name,
-        )
-
         self._open_for_rules('condition')
         validate_user_rule_name(name, kind='condition')
         target = normalize_on(on)
@@ -4275,8 +4015,6 @@ class TrustsRegistry(object):
 
     def _assert_rules_for_registration(self, *, user_model=None, sponsor_model=None):
         """Require each applicable rule's concrete booleans on these models."""
-        from trusts.user_rules import assert_concrete_booleans, rule_applies
-
         pairs = []
         if user_model is not None:
             pairs.append((user_model, 'user'))
@@ -4301,13 +4039,6 @@ class TrustsRegistry(object):
         ``on="sponsor"`` and ``on="*"`` raise. The name cannot match a
         registered condition.
         """
-        from trusts.user_rules import (
-            UserCondition,
-            concrete_rule,
-            normalize_override_on,
-            validate_user_rule_name,
-        )
-
         self._open_for_rules('override')
         validate_user_rule_name(name, kind='override')
         normalize_override_on(on)
@@ -4630,6 +4361,105 @@ class TrustsRegistry(object):
         self._order.append(record)
         return record
 
+    def _register_public(
+        self, *, trust, user=None, permission=None, content, group=None,
+        delegate=None, sponsor=None, condition=None, along=None,
+    ):
+        """Public ``BackendHandle.register`` body, on the registry it stores.
+
+        The handle forwards here so ``trusts.plan.handles`` does not import
+        this module. Callers keep using ``BackendHandle.register``.
+        """
+        if getattr(self, 'frozen', False):
+            raise TrustsConfigurationError(
+                'Cannot register on a frozen TrustsRegistry.'
+            )
+        ordinary = user is not None or permission is not None or group is not None
+        delegated = delegate is not None or sponsor is not None
+        if ordinary and delegated:
+            raise TrustsConfigurationError(
+                'register accepts ordinary user=/permission=/group= or '
+                'delegated delegate=/sponsor= arguments, not both modes.'
+            )
+        if delegated:
+            if delegate is None or sponsor is None:
+                raise TrustsConfigurationError(
+                    'delegated register requires both delegate= and sponsor=.'
+                )
+            if user is not None or permission is not None or group is not None:
+                raise TrustsConfigurationError(
+                    'delegated register forbids user=, permission=, and group=.'
+                )
+        else:
+            if user is None:
+                raise TrustsConfigurationError(
+                    'ordinary register requires user=.'
+                )
+            _require_one_permission_source(permission, group)
+        if isinstance(trust, Ref):
+            raise TypeError(
+                'register trust must be a Django model class, '
+                'not a Ref.'
+            )
+        if not _is_model_class(trust):
+            raise TrustsConfigurationError(
+                'register trust must be a Django model class, '
+                'not %r.' % (trust,)
+            )
+        token = object()
+        content_path = _normalize_public_role(
+            trust, content, 'content', token=token,
+        )
+        if delegated:
+            delegate_path = _normalize_public_role(
+                trust, delegate, 'delegate', token=token,
+            )
+            sponsor_path = _normalize_public_role(
+                trust, sponsor, 'sponsor', token=token,
+            )
+            return self.register_delegation(
+                content=_public_ref(trust, content_path, 'content'),
+                delegate=_public_ref(trust, delegate_path, 'delegate'),
+                sponsor=_public_ref(trust, sponsor_path, 'sponsor'),
+                condition=_normalize_delegated_condition(
+                    trust, condition, token=token,
+                ),
+                along=_bind_public_along(trust, along),
+            )
+        user_path = _normalize_public_role(trust, user, 'user', token=token)
+        if group is not None:
+            group_text = _normalize_public_role(
+                trust, group, 'group', token=token,
+            )
+            group_segments = _public_path_segments(group_text, 'group')
+            _group_path, _group_model, group_field, _group_target = (
+                _resolve_group_path(trust, group_segments)
+            )
+            _perm_path, _perm_model, permission_text, _perm_target = (
+                _append_group_permissions(group_segments, group_field)
+            )
+            return self.register(
+                content=_public_ref(trust, content_path, 'content'),
+                user=_public_ref(trust, user_path, 'user'),
+                group=_public_ref(trust, group_text, 'group'),
+                condition=_normalize_public_condition(
+                    trust, condition, permission_text, token=token,
+                ),
+                along=_bind_public_along(trust, along),
+            )
+        permission_path = _normalize_public_role(
+            trust, permission, 'permission', token=token,
+        )
+        return self.register(
+            content=_public_ref(trust, content_path, 'content'),
+            user=_public_ref(trust, user_path, 'user'),
+            permission=_public_ref(trust, permission_path, 'permission'),
+            condition=_normalize_public_condition(
+                trust, condition, permission_path, token=token,
+            ),
+            along=_bind_public_along(trust, along),
+        )
+
     def _records_for(self, content_model, user_model=None, permission_model=None):
         chosen = []
         for record in self._order:
@@ -4665,43 +4495,18 @@ class TrustsRegistry(object):
         Optional ``user`` / ``permission`` instances keep only registrations
         whose inferred terminals match those models. Construction is lazy.
         """
-        content_model = _content_model(content)
-        user_model = None
-        if user is not None:
-            user_model = _concrete_model(_require_instance(user, 'user'))
-        permission_model = None
-        if permission is not None:
-            permission_model = _concrete_model(
-                _require_instance(permission, 'permission')
-            )
-
-        records = self._records_for(content_model, user_model, permission_model)
-        delegations = self._delegations_for(content_model, user_model)
-        plan_permission = permission_model
-        if records:
-            models = {record.permission_model for record in records}
-            if len(models) != 1:
-                raise TrustsConfigurationError(
-                    'Applicable registrations must share one permission '
-                    'model; got %s.'
-                    % ', '.join(sorted(model._meta.label for model in models))
-                )
-            plan_permission = models.pop()
-        subject = self._compiled_subject(records, delegations, user_model)
-        rules = closed = override = None
-        if subject is not None:
-            rules = self._rule_fragment(subject, role='user')
-            closed = rules
-            override = self._override_fragment(subject)
-        return RelationPlan(
-            records=records,
-            delegations=delegations,
-            permission_model=plan_permission,
-            content_identity=_candidate_model(content),
-            user_rules=rules,
-            user_rules_closed=closed,
-            user_override_q=override,
-        )
+        return assemble_frozen(
+            self,
+            compiler=None,
+            handles=(),
+            relation_plan=RelationPlan,
+            bind_record_qs=_bind_record_qs,
+            grant_reach=GrantReach,
+            content_model=_content_model,
+            concrete_model=_concrete_model,
+            require_instance=_require_instance,
+            candidate_model=_candidate_model,
+        ).plan_for(content, user=user, permission=permission)
 
     def permissions_for(self, user, content, **skip_flags):
         """Distinct permission rows granted to ``user`` on ``content``."""
@@ -4763,340 +4568,7 @@ class TrustsRegistry(object):
         )
 
 
-class _PathBuilder(object):
-    """Symbolic attribute-recording value rooted at one ``register()`` call.
 
-    Public typing presents this object as the ``trust=`` model. Runtime
-    records attribute names only; it does not load a row or prove that
-    an attribute exists.
-    """
-
-    __slots__ = ('_trust', '_path', '_token')
-
-    def __init__(self, trust, path=(), token=None):
-        object.__setattr__(self, '_trust', trust)
-        object.__setattr__(self, '_path', tuple(path))
-        object.__setattr__(self, '_token', token)
-
-    def __getattr__(self, name):
-        return _PathBuilder(self._trust, self._path + (name,), self._token)
-
-    def __setattr__(self, name, value):
-        raise TrustsConfigurationError('Path builder is immutable.')
-
-    def __delattr__(self, name):
-        raise TrustsConfigurationError('Path builder is immutable.')
-
-    def __repr__(self):
-        root = getattr(self._trust, '__name__', self._trust)
-        if not self._path:
-            return 'PathBuilder(%s)' % root
-        return 'PathBuilder(%s).%s' % (root, '.'.join(self._path))
-
-
-def _unsupported_path_builder_op(name):
-    def _op(self, *args, **kwargs):
-        raise TrustsConfigurationError(
-            'Path builder does not support %s.' % name
-        )
-    _op.__name__ = name
-    return _op
-
-
-for _name in (
-    '__eq__', '__ne__', '__lt__', '__le__', '__gt__', '__ge__',
-    '__hash__', '__bool__', '__len__', '__contains__',
-    '__getitem__', '__setitem__', '__delitem__',
-    '__call__', '__iter__', '__next__',
-    '__add__', '__radd__', '__sub__', '__rsub__',
-    '__mul__', '__rmul__', '__truediv__', '__rtruediv__',
-    '__floordiv__', '__rfloordiv__', '__mod__', '__rmod__', '__pow__',
-    '__or__', '__ror__', '__and__', '__rand__',
-    '__xor__', '__rxor__', '__invert__',
-    '__lshift__', '__rlshift__', '__rshift__', '__rrshift__',
-    '__neg__', '__pos__', '__abs__',
-    '__int__', '__float__', '__index__',
-    '__enter__', '__exit__',
-    '__await__', '__aenter__', '__aexit__',
-):
-    setattr(_PathBuilder, _name, _unsupported_path_builder_op(_name))
-
-
-_CONDITION_ARITY_PROBE = object()
-
-_CONDITION_BOOLEAN_MESSAGE = (
-    "Python 'and'/'or'/'not' and chained comparisons are unsupported "
-    "on condition=; use '&' for conjunction."
-)
-
-_CONDITION_IN_MESSAGE = (
-    "Python 'in' is unsupported on condition=; use "
-    "collection.contains(member)."
-)
-
-
-def _unsupported_condition_op(name):
-    def _op(self, *args, **kwargs):
-        raise TrustsConfigurationError(
-            'condition builder does not support %s.' % name
-        )
-    _op.__name__ = name
-    return _op
-
-
-def _condition_boolean_error(self):
-    raise TrustsConfigurationError(_CONDITION_BOOLEAN_MESSAGE)
-
-
-class _ConditionProxy(object):
-    """Trust-rooted symbolic value for public ``condition=`` builders.
-
-    Attribute access records a path. ``contains`` is a reserved proxy
-    method, not a field hop: a model field actually named ``contains``
-    cannot be walked here. Path-role builders stay on ``_PathBuilder``
-    and do not grow ``contains``.
-    """
-
-    __slots__ = ('_trust', '_path', '_token')
-
-    def __init__(self, trust, path=(), token=None):
-        object.__setattr__(self, '_trust', trust)
-        object.__setattr__(self, '_path', tuple(path))
-        object.__setattr__(self, '_token', token)
-
-    def __getattr__(self, name):
-        return _ConditionProxy(self._trust, self._path + (name,), self._token)
-
-    def __setattr__(self, name, value):
-        raise TrustsConfigurationError('Condition builder is immutable.')
-
-    def __delattr__(self, name):
-        raise TrustsConfigurationError('Condition builder is immutable.')
-
-    def contains(self, member):
-        if isinstance(member, _InquiryPermissionProxy):
-            if not self._path:
-                raise TrustsConfigurationError(
-                    'condition .contains collection returned an empty path.'
-                )
-            return _ConditionInquiryMatch(self)
-        if not isinstance(member, _ConditionProxy):
-            raise TrustsConfigurationError(
-                'condition .contains member must be a path rooted at the '
-                'supplied trust value, not %r.' % (member,)
-            )
-        if member._token is not self._token:
-            raise TrustsConfigurationError(
-                'condition .contains used a path from another symbolic root.'
-            )
-        if not self._path:
-            raise TrustsConfigurationError(
-                'condition .contains collection returned an empty path.'
-            )
-        if not member._path:
-            raise TrustsConfigurationError(
-                'condition .contains member returned an empty path.'
-            )
-        return _ConditionIn(self, member)
-
-    def __eq__(self, other):
-        if isinstance(other, _InquiryPermissionProxy):
-            if not self._path:
-                raise TrustsConfigurationError(
-                    'condition equality returned an empty path.'
-                )
-            return _ConditionInquiryMatch(self)
-        if not isinstance(other, _ConditionProxy):
-            raise TrustsConfigurationError(
-                'condition equality requires two trust-rooted paths, '
-                'not %r.' % (other,)
-            )
-        if other._token is not self._token:
-            raise TrustsConfigurationError(
-                'condition equality used a path from another symbolic root.'
-            )
-        if not self._path or not other._path:
-            raise TrustsConfigurationError(
-                'condition equality returned an empty path.'
-            )
-        return _ConditionEq(self, other)
-
-    def __contains__(self, item):
-        raise TrustsConfigurationError(_CONDITION_IN_MESSAGE)
-
-    def __and__(self, other):
-        raise TrustsConfigurationError(
-            'condition conjunction requires equality or .contains '
-            'operands, not a bare path.'
-        )
-
-    def __rand__(self, other):
-        raise TrustsConfigurationError(
-            'condition conjunction requires equality or .contains '
-            'operands, not a bare path.'
-        )
-
-    def __repr__(self):
-        root = getattr(self._trust, '__name__', self._trust)
-        if not self._path:
-            return 'ConditionProxy(%s)' % root
-        return 'ConditionProxy(%s).%s' % (root, '.'.join(self._path))
-
-
-class _ConditionEq(object):
-    """Private executing-proxy equality node. Not a stored policy record."""
-
-    __slots__ = ('left', 'right')
-
-    def __init__(self, left, right):
-        object.__setattr__(self, 'left', left)
-        object.__setattr__(self, 'right', right)
-
-    def __and__(self, other):
-        return _condition_and(self, other)
-
-    def __rand__(self, other):
-        return _condition_and(other, self)
-
-
-class _ConditionIn(object):
-    """Private executing-proxy membership node. Not a stored policy record."""
-
-    __slots__ = ('collection', 'member')
-
-    def __init__(self, collection, member):
-        object.__setattr__(self, 'collection', collection)
-        object.__setattr__(self, 'member', member)
-
-    def __and__(self, other):
-        return _condition_and(self, other)
-
-    def __rand__(self, other):
-        return _condition_and(other, self)
-
-
-class _InquiryPermissionProxy(object):
-    """Symbolic requested permission for delegated conditions."""
-
-    __slots__ = ('_token',)
-
-    def __init__(self, token):
-        object.__setattr__(self, '_token', token)
-
-    def __getattr__(self, name):
-        raise TrustsConfigurationError(
-            'requested permission is a symbolic terminal and has no '
-            'traversable attributes.'
-        )
-
-    def __eq__(self, other):
-        if isinstance(other, _ConditionProxy) and other._path:
-            return _ConditionInquiryMatch(other)
-        raise TrustsConfigurationError(
-            'requested permission equality requires one relationship path.'
-        )
-
-    def __bool__(self):
-        raise TrustsConfigurationError(_CONDITION_BOOLEAN_MESSAGE)
-
-    def __setattr__(self, name, value):
-        raise TrustsConfigurationError('Requested permission is immutable.')
-
-    def __delattr__(self, name):
-        raise TrustsConfigurationError('Requested permission is immutable.')
-
-
-class _ConditionInquiryMatch(object):
-    """Private executing proxy for ``row_path == p`` or contains(p)."""
-
-    __slots__ = ('path',)
-
-    def __init__(self, path):
-        object.__setattr__(self, 'path', path)
-
-    def __and__(self, other):
-        return _condition_and(self, other)
-
-    def __rand__(self, other):
-        return _condition_and(other, self)
-
-
-class _ConditionAnd(object):
-    """Private executing-proxy conjunction. Flattened to ``All`` on store."""
-
-    __slots__ = ('left', 'right')
-
-    def __init__(self, left, right):
-        object.__setattr__(self, 'left', left)
-        object.__setattr__(self, 'right', right)
-
-    def __and__(self, other):
-        return _condition_and(self, other)
-
-    def __rand__(self, other):
-        return _condition_and(other, self)
-
-
-_CONDITION_EXPR_TYPES = (
-    _ConditionEq, _ConditionIn, _ConditionInquiryMatch, _ConditionAnd,
-)
-
-
-def _condition_and(left, right):
-    if not isinstance(left, _CONDITION_EXPR_TYPES):
-        raise TrustsConfigurationError(
-            'condition conjunction requires equality or .contains '
-            'operands, not %r.' % (left,)
-        )
-    if not isinstance(right, _CONDITION_EXPR_TYPES):
-        raise TrustsConfigurationError(
-            'condition conjunction requires equality or .contains '
-            'operands, not %r.' % (right,)
-        )
-    return _ConditionAnd(left, right)
-
-
-for _name in (
-    '__ne__', '__lt__', '__le__', '__gt__', '__ge__',
-    '__hash__', '__len__',
-    '__getitem__', '__setitem__', '__delitem__',
-    '__call__', '__iter__', '__next__',
-    '__add__', '__radd__', '__sub__', '__rsub__',
-    '__mul__', '__rmul__', '__truediv__', '__rtruediv__',
-    '__floordiv__', '__rfloordiv__', '__mod__', '__rmod__', '__pow__',
-    '__or__', '__ror__',
-    '__xor__', '__rxor__', '__invert__',
-    '__lshift__', '__rlshift__', '__rshift__', '__rrshift__',
-    '__neg__', '__pos__', '__abs__',
-    '__int__', '__float__', '__index__',
-    '__enter__', '__exit__',
-    '__await__', '__aenter__', '__aexit__',
-):
-    setattr(_ConditionProxy, _name, _unsupported_condition_op(_name))
-
-_ConditionProxy.__bool__ = _condition_boolean_error
-
-for _cls in _CONDITION_EXPR_TYPES:
-    for _name in (
-        '__ne__', '__lt__', '__le__', '__gt__', '__ge__',
-        '__hash__', '__len__', '__contains__',
-        '__getitem__', '__setitem__', '__delitem__',
-        '__call__', '__iter__', '__next__',
-        '__add__', '__radd__', '__sub__', '__rsub__',
-        '__mul__', '__rmul__', '__truediv__', '__rtruediv__',
-        '__floordiv__', '__rfloordiv__', '__mod__', '__rmod__', '__pow__',
-        '__or__', '__ror__',
-        '__xor__', '__rxor__', '__invert__',
-        '__lshift__', '__rlshift__', '__rshift__', '__rrshift__',
-        '__neg__', '__pos__', '__abs__',
-        '__int__', '__float__', '__index__',
-        '__enter__', '__exit__',
-        '__await__', '__aenter__', '__aexit__',
-    ):
-        setattr(_cls, _name, _unsupported_condition_op(_name))
-    _cls.__bool__ = _condition_boolean_error
-    _cls.__setattr__ = _ConditionProxy.__setattr__
-    _cls.__delattr__ = _ConditionProxy.__delattr__
 
 
 def _require_condition_arity(builder):
@@ -5236,7 +4708,7 @@ def _lower_public_condition(node, trust, token, permission_path):
 
 def _reject_public_condition_value(condition):
     """Public ``condition=`` is a callable, not a prebuilt IR node."""
-    from trusts.conditions._ir import Expr
+    from trusts.plan.conditions import Expr
 
     if (
         condition is All
@@ -5429,189 +4901,8 @@ def _bind_public_along(root, along):
     return Along(_public_ref(root, path, 'along'), bound)
 
 
-@dataclass(frozen=True, slots=True)
-class BackendHandle:
-    """Exact configured path, exact registry identity, and class compiler."""
-
-    path: str
-    registry: object
-    compiler: object
-
-    def register(
-        self,
-        *,
-        trust: type[T],
-        user: str | Callable[[T], object] | None = None,
-        permission: str | Callable[[T], object] | None = None,
-        content: str | Callable[[T], object],
-        group: str | Callable[[T], object] | None = None,
-        delegate: str | Callable[[T], object] | None = None,
-        sponsor: str | Callable[[T], object] | None = None,
-        condition: (
-            Callable[[T], object]
-            | Callable[[T, object], object]
-            | None
-        ) = None,
-        along=None,
-    ) -> RegisteredRelation | RegisteredDelegation:
-        """Register one ordinary grant or delegated relationship.
-
-        ``user`` and ``content`` accept a Django ``__`` path string or a
-        one-argument symbolic path builder. A dependent ``content`` path may
-        cross forward single-valued or reverse one-to-one prefix hops before
-        its one reverse one-to-many gateway. ``permission`` and ``group``
-        are mutually exclusive sources. ``permission`` is one direct
-        single-valued hop, or zero or more forward single-valued hops
-        followed by exactly one forward many-to-many to
-        ``auth.Permission``. ``group`` is a forward single-valued path that
-        must end at Django's ``auth.Group``. The compiler appends
-        ``Group.permissions``; applications do not put ``permissions``
-        on the group path. Supplying both, or neither, raises
-        ``TrustsConfigurationError`` before any path builder runs. A
-        ``permission=`` registration does not contribute to
-        ``get_group_permissions``. Delegated mode instead requires exactly
-        ``delegate=`` and ``sponsor=`` and forbids ``user=``, ``permission=``,
-        and ``group=``. ``along=`` is the same bounded walk as an ordinary
-        registration. A delegated row is not an ordinary grant: the delegate
-        is allowed on an object only when that walk reaches the object and
-        the sponsor's ordinary authority reaches it too.
-
-        A builder is called once during registration with a value typed
-        as ``trust``. Attribute access records a path; the callable is
-        discarded and never stored or run during authorization.
-        In ordinary mode, ``condition`` is a one-argument trust-rooted
-        symbolic callable. In delegated mode it accepts either the
-        relationship alone or ``(relationship, requested_permission)``.
-        Conditions use path ``==``, collection-rooted
-        ``.contains(member)``, and ``&``. They are invoked once after the
-        freeze check; the stored overlay contains no callable. For
-        ``group=``, ``.contains`` member is the compiler-owned permission
-        path. Prebuilt predicate nodes are ``TypeError``. ``predicate`` is
-        reserved and unsupported. ``along`` is ``(path, bound)``. Passing
-        a ``Ref`` is ``TypeError``. A frozen backend raises
-        ``TrustsConfigurationError`` before path parsing or builder
-        invocation.
-
-        Only an explicit ``group=`` record contributes to
-        ``get_group_permissions``. That same record also participates in
-        ordinary ``has_perm``, ``get_all_permissions``, and authorized
-        querysets. A ``permission=`` record is never treated as
-        group-derived because its user path is many-to-many.
-        """
-        if getattr(self.registry, 'frozen', False):
-            raise TrustsConfigurationError(
-                'Cannot register on a frozen TrustsRegistry.'
-            )
-        ordinary = user is not None or permission is not None or group is not None
-        delegated = delegate is not None or sponsor is not None
-        if ordinary and delegated:
-            raise TrustsConfigurationError(
-                'register accepts ordinary user=/permission=/group= or '
-                'delegated delegate=/sponsor= arguments, not both modes.'
-            )
-        if delegated:
-            if delegate is None or sponsor is None:
-                raise TrustsConfigurationError(
-                    'delegated register requires both delegate= and sponsor=.'
-                )
-            if user is not None or permission is not None or group is not None:
-                raise TrustsConfigurationError(
-                    'delegated register forbids user=, permission=, and group=.'
-                )
-        else:
-            if user is None:
-                raise TrustsConfigurationError(
-                    'ordinary register requires user=.'
-                )
-            _require_one_permission_source(permission, group)
-        if isinstance(trust, Ref):
-            raise TypeError(
-                'register trust must be a Django model class, '
-                'not a Ref.'
-            )
-        if not _is_model_class(trust):
-            raise TrustsConfigurationError(
-                'register trust must be a Django model class, '
-                'not %r.' % (trust,)
-            )
-        token = object()
-        content_path = _normalize_public_role(
-            trust, content, 'content', token=token,
-        )
-        if delegated:
-            delegate_path = _normalize_public_role(
-                trust, delegate, 'delegate', token=token,
-            )
-            sponsor_path = _normalize_public_role(
-                trust, sponsor, 'sponsor', token=token,
-            )
-            return self.registry.register_delegation(
-                content=_public_ref(trust, content_path, 'content'),
-                delegate=_public_ref(trust, delegate_path, 'delegate'),
-                sponsor=_public_ref(trust, sponsor_path, 'sponsor'),
-                condition=_normalize_delegated_condition(
-                    trust, condition, token=token,
-                ),
-                along=_bind_public_along(trust, along),
-            )
-        user_path = _normalize_public_role(trust, user, 'user', token=token)
-        if group is not None:
-            group_text = _normalize_public_role(
-                trust, group, 'group', token=token,
-            )
-            group_segments = _public_path_segments(group_text, 'group')
-            _group_path, _group_model, group_field, _group_target = (
-                _resolve_group_path(trust, group_segments)
-            )
-            _perm_path, _perm_model, permission_text, _perm_target = (
-                _append_group_permissions(group_segments, group_field)
-            )
-            return self.registry.register(
-                content=_public_ref(trust, content_path, 'content'),
-                user=_public_ref(trust, user_path, 'user'),
-                group=_public_ref(trust, group_text, 'group'),
-                condition=_normalize_public_condition(
-                    trust, condition, permission_text, token=token,
-                ),
-                along=_bind_public_along(trust, along),
-            )
-        permission_path = _normalize_public_role(
-            trust, permission, 'permission', token=token,
-        )
-        return self.registry.register(
-            content=_public_ref(trust, content_path, 'content'),
-            user=_public_ref(trust, user_path, 'user'),
-            permission=_public_ref(trust, permission_path, 'permission'),
-            condition=_normalize_public_condition(
-                trust, condition, permission_path, token=token,
-            ),
-            along=_bind_public_along(trust, along),
-        )
-
-    def add_named_filter(self, model, code, predicate):
-        """Bind a named restricting predicate on this backend.
-
-        Forwards the current registration-time permission-condition
-        builder. A frozen/finalized backend raises
-        ``TrustsConfigurationError`` before ``predicate`` is invoked.
-        A prebuilt ``Expr`` is not accepted. The filter grants nothing
-        independently.
-        """
-        if getattr(self.registry, 'frozen', False):
-            raise TrustsConfigurationError(
-                'Cannot register a permission condition on a frozen '
-                'TrustsRegistry.'
-            )
-        return self.registry.register_permission_condition(
-            model, code, predicate,
-        )
-
-    @property
-    def historical_fallback(self):
-        """True when this route uses ``HistoricalGroupQueryCompiler``.
-
-        Noun-blind core does not decide this. The flag identifies the
-        concrete compiler for mixin isolation. It does not reopen a
-        static content map; undeclared terminals fail closed.
-        """
-        return bool(getattr(self.compiler, 'historical_fallback', False))
+# ``BackendHandle.register`` annotates these names. Bind the same objects
+# ``trusts.core`` defines so ``get_type_hints`` resolves them. ``plan.handles``
+# does not import this module.
+BackendHandle.register.__globals__['RegisteredRelation'] = RegisteredRelation
+BackendHandle.register.__globals__['RegisteredDelegation'] = RegisteredDelegation

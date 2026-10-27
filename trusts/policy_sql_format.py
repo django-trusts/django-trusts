@@ -9,6 +9,8 @@ involved. Schema version 1 is unchanged.
 
 from __future__ import annotations
 
+__all__ = []
+
 from trusts.core import TrustsConfigurationError
 
 # Unquoted words the compilers and ``along=`` SQL emit. Any other bare

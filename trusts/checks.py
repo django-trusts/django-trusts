@@ -15,12 +15,14 @@ diagnostics live in ``django-trusts-ordered-fold`` as
 ``trusts_ordered_fold.E001``.
 """
 
+__all__ = []
+
 from django.core import checks as django_checks
 
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.policy_lock  # noqa: F401
-from trusts.conditions import PermissionConditionError
-from trusts.conditions._ir import (
+from trusts.errors import PermissionConditionError
+from trusts.plan.conditions import (
     obsolete_legacy_callback_setting_enabled,
     validate_expression,
 )

@@ -85,7 +85,7 @@ class StageBPublicSurfaceTest(SimpleTestCase):
             from django_trusts import condition_refs  # noqa: F401
 
     def test_private_ir_remains_importable_for_compiler_tests(self):
-        from trusts.conditions._ir import Expr, TQ, condition_refs
+        from trusts.plan.conditions import Expr, TQ, condition_refs
 
         u, _p, o = condition_refs()
         self.assertIsInstance(u == o.owner, Expr)
@@ -96,7 +96,7 @@ class StageBPublicSurfaceTest(SimpleTestCase):
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class StageBRegisterCallableOnlyTest(SimpleTestCase):
     def test_registering_prebuilt_expr_raises_before_mutation(self):
-        from trusts.conditions._ir import condition_refs
+        from trusts.plan.conditions import condition_refs
 
         User = get_user_model()
 

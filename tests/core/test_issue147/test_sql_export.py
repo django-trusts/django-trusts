@@ -21,7 +21,7 @@ from django.db import connection, models
 from django.db.models.sql.compiler import SQLCompiler
 from django.test import SimpleTestCase, TestCase, override_settings
 
-from trusts.conditions._ir import ModelIdentity
+from trusts.plan.conditions import ModelIdentity
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
