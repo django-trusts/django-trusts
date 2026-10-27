@@ -118,12 +118,14 @@ Migration-bot checklist:
 
 ## `Meta.permission_conditions` removed (#330)
 
-Named filters are not a model `Meta` option. Register the predicate with
-`get_registry().add_named_filter(...)`.
+Named filters are not a model `Meta` option. In `AppConfig.ready()`,
+`registry = Backend().get_registry()`, then
+`registry.add_named_filter(...)` before `super().ready()`. See
+[Named filters](index.rst#named-filters).
 
 | | Old | New |
 | --- | --- | --- |
-| Named filter | `class Meta: permission_conditions = (('name', predicate),)` | `get_registry().add_named_filter(Model, 'name', predicate)` before `super().ready()` |
+| Named filter | `class Meta: permission_conditions = (('name', predicate),)` | `registry.add_named_filter(Model, "name", predicate=predicate)` before `super().ready()` |
 
 django-trusts does not append `permission_conditions` to
 `django.db.models.options.DEFAULT_NAMES`.
