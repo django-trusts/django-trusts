@@ -9,8 +9,10 @@ permissions:
   contents: read
 
 env:
-  # Exact Zero candidate companion.
-  COMPANION_ZERO_SHA: 8d7c729ad7153d30600c151188794efe9a59a882
+  # Exact Zero candidate. Imports trusts.inspect.checks and trusts.plan.standards.
+  COMPANION_ZERO_SHA: cd0eec9ca236e6b1b99af08df049b9dc8a11d101
+  # gh-permissions candidate. Imports trusts.inspect.snapshot.
+  COMPANION_GH_SHA: a642533566fc9715a1c399d5d01f226c5c13d01c
 
 jobs:
   tests:
@@ -207,9 +209,10 @@ jobs:
         python -m build --wheel --outdir .deps/django-trusts-zero/dist .deps/django-trusts-zero
         python scripts/verify-companion-wheels.py
 
-  # Zero and GH Permissions against this Core commit, without editing
-  # their pins. A failure is reported and does not block the workflow.
-  # This job does not comment on the pull request.
+  # Zero and GH Permissions against this Core commit. A pinned
+  # COMPANION_ZERO_SHA / COMPANION_GH_SHA is checked out before a
+  # same-named branch or dev. A failure is reported and does not
+  # block the workflow. This job does not comment on the pull request.
   follow-companions:
     name: follow Core (${{ matrix.companion }})
     runs-on: ubuntu-latest
@@ -263,6 +266,22 @@ jobs:
           echo "The GitHub default branch of ${REPOSITORY} is dev." >&2
           echo "CI uses that default as the stable branch. It must be master or main." >&2
           exit 1
+        fi
+
+        pin=""
+        case "${{ matrix.companion }}" in
+          zero)
+            pin="${COMPANION_ZERO_SHA:-}"
+            ;;
+          gh-permissions)
+            pin="${COMPANION_GH_SHA:-}"
+            ;;
+        esac
+        if [ -n "${pin}" ]; then
+          echo "ref=${pin}" >> "${GITHUB_OUTPUT}"
+          echo "stable=${stable}" >> "${GITHUB_OUTPUT}"
+          echo "Companion ref: ${pin}"
+          exit 0
         fi
 
         heads="$(git ls-remote --heads "${url}")"
