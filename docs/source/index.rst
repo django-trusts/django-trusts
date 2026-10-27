@@ -451,11 +451,14 @@ as ``user.has_perm(permission, document)``, not the same string codec.
 A relationship-family backend participates only when it has an applicable
 ``auth.Permission`` plan for the queryset model and owns every selected
 name as a queryable condition. Other backends contribute nothing. If none
-contribute, the queryset is empty; in ``authorization_required``, the view
-is 403 or 404.
+own the full set, the queryset is empty before SQL. In
+``authorization_required``, the view is 403 or 404.
+``trusts.E008`` is removed. A runtime ``.permitted()`` call uses that
+same ownership rule and does not raise.
 
-Malformed permissions and conditions, and a well-formed
-permission for another content type, produce an empty queryset. Named conditions remain explicit:
+A malformed permission or condition tuple returns an empty queryset before
+SQL. A well-formed permission for another content type produces an empty
+queryset. Named conditions remain explicit:
 
 .. code-block:: python
 
