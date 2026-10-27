@@ -97,21 +97,23 @@ lambda spelling.
 
 Each path accepts either a Django `__` string or a one-argument path lambda;
 django-trusts calls the
-lambda once with a symbolic path value. Attribute access records a path rooted
+lambda with a symbolic path value. Attribute access records a path rooted
 at the `trust=` model; other operations are unsupported. django-trusts
 validates the resulting path with Django model metadata, stores its normalized
 `__` form, and does not retain the lambda.
 
-The lambda runs during `AppConfig.ready()`, in the same application context
-as the surrounding registration code. django-trusts does not inspect or sandbox
-unrelated Python in its body. Its path validation is designed not to issue SQL;
+The lambda runs at the registration call and again during `AppConfig.ready()`,
+in the same application context as the surrounding registration code.
+django-trusts does not inspect or sandbox unrelated Python in its body. Its
+path validation is designed not to issue SQL;
 that statement does not cover other application code executed by the lambda.
 An exception, an empty or invalid path, or an unsupported relationship shape is
 rejected before django-trusts updates the registry. Side effects already
 performed by application code are outside that behavior.
 
 `condition=` is the same one-argument symbolic condition, rooted at `trust=`.
-It is invoked once after the freeze check. Supported operations are path equality
+It runs at the `register()` call and again during `AppConfig.ready()`.
+Supported operations are path equality
 (`==`), collection-rooted `.contains(member)`, and conjunction (`&`). Literal
 Python `in` is unsupported and is not recovered through AST, bytecode, `dis`,
 or a `__contains__` side channel. The stored overlay is private `Equal` /
@@ -144,8 +146,9 @@ defect.
 A delegated condition builder receives either the relationship root alone or
 that root plus the requested permission as symbolic values. The one-argument
 form applies row-only restrictions. The two-argument form may also compare the
-requested permission with relationship-owned scope data. Both forms are
-invoked once during registration and may express restrictions such as
+requested permission with relationship-owned scope data. Both forms run
+at the registration call and again during `AppConfig.ready()`, and may
+express restrictions such as
 approval, tenant alignment, revocation, or expiry. The compiler stores
 normalized expression data and retains no callable. A two-argument builder on
 an ordinary registration, or any unsupported arity, is a configuration error.
@@ -483,10 +486,9 @@ including a custom model that has a `content_type` foreign key.
 String `has_perm` still infers the model from the codename suffix. That
 codec gap is [issue #268](https://github.com/django-trusts/django-trusts/issues/268).
 `.permitted()` and `authorization_required` bind the exact codename to the
-protected model's content type instead. `trusts.E008` covers declared
-`authorization_required` guards only. A runtime `.permitted()` call uses
-the same ownership rule and raises, but it is not registered with that
-check.
+protected model's content type instead. `trusts.E008` is removed. A
+runtime `.permitted()` call uses the same ownership rule and returns an
+empty queryset when no catalog owns the selected names.
 
 The [Django backend boundary](#django-auths-checks-before-calling-backends)
 still applies to native `user.has_perm()`. Trusts-owned inquiries use the

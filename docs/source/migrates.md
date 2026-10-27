@@ -8,6 +8,26 @@ development log. New features and changes that require no application action
 belong in [What's new](whats-new.md); development history belongs in
 [development history](../dev/development.md).
 
+## Request-time input fails closed
+
+`.authorized()` and `filter_by_permitted_content` return an empty queryset
+when the caller passes the wrong kind of object. Registration and
+`ready()` still raise `TrustsConfigurationError`.
+
+| | Old | New |
+| --- | --- | --- |
+| `.authorized(user, permission)` when `permission` is not a model instance | `TrustsConfigurationError` (`permission must be a model instance`) | empty queryset |
+| `.authorized(user, permission)` when `user` is not a model instance | `TrustsConfigurationError` (`user must be a model instance`) | empty queryset |
+| `filter_authorized_scopes` when the queryset is not a `QuerySet`, or `user` or `permission` is not a model instance | `TrustsConfigurationError` | `filter_by_permitted_content` returns an empty queryset |
+
+Migration-bot checklist:
+
+- `except TrustsConfigurationError`
+- `assertRaises`
+- `.authorized(`
+- `filter_authorized_scopes(`
+- `filter_by_permitted_content(`
+
 ## Two fields do not match NULL
 
 A condition that compares two fields no longer treats NULL as a value.
@@ -38,7 +58,7 @@ missing field. The messages name the surface, for example
 "'|' is not supported in a relation condition."
 Named filters accept `.contains()`, `~`, and a bare boolean field.
 The predicates compiler and the relation-condition guards raise `PermissionConditionError` directly and do not wrap it.
-`get_permitted_users` reads object-side fields from the saved row. Save first; an in-memory change is ignored, and a never-saved object raises `PermissionConditionError` (`Save the object first.`).
+`get_permitted_users` reads object-side fields from the saved row. Save first; an in-memory change is ignored, and a never-saved object returns an empty user queryset.
 
 | | Old | New |
 | --- | --- | --- |
@@ -49,7 +69,7 @@ The predicates compiler and the relation-condition guards raise `PermissionCondi
 | Ordered comparison (`<`, `<=`, `>`, `>=`) | rejected when the builder returned | rejected at the operator, same class |
 | `condition=` or user-rule grammar, missing field, or non-boolean user-rule field | `TrustsConfigurationError` | `PermissionConditionError` (still caught by `except TrustsConfigurationError`) |
 | Missing field in a `user=`, `permission=`, `delegate=`, or `sponsor=` path | `TrustsConfigurationError` | `PermissionConditionError` (still caught by `except TrustsConfigurationError`) |
-| Second `add_named_filter` with the same model and code | replaced the first filter | `PermissionConditionError` at `ready()`; the second builder is not called |
+| Second `add_named_filter` with the same model and code | replaced the first filter | `PermissionConditionError` at the `add_named_filter` call after apps are ready; the second builder is not called |
 
 An `except TrustsConfigurationError` block now also catches condition
 errors. Catch `PermissionConditionError` first to tell them apart.
@@ -128,7 +148,10 @@ module must live in the app whose config extends `TrustsConfigMixin`.
 Call `Backend().get_registry().register(...)` and
 `get_registry().add_named_filter(...)` before `super().ready()`.
 `ready()` freezes that log and builds the catalog. A call after
-`super().ready()` raises `TrustsConfigurationError`.
+`super().ready()` raises `TrustsConfigurationError`. An app with
+registrations and no listed backend raises `TrustsConfigurationError`
+from `ready()`. `trusts.E010` is retired; drop it from
+`SILENCED_SYSTEM_CHECKS`.
 
 | | Old | New |
 | --- | --- | --- |
@@ -192,6 +215,7 @@ Migration-bot checklist:
 - `check_query_compilers`
 - `trusts.E004`
 - `_authorization_family`
+- `trusts.E010`
 - `trusts.E011`
 - `trusts.E012`
 - `TrustsMixinRequired`
@@ -277,7 +301,7 @@ Migration-bot checklist:
 | Chained queryset | The list method is not on `QuerySet` | `Repository.objects.filter(...).permitted(...)` when the queryset mixes in `PermittedQuerySetMixin` and is supplied with `as_manager()` or `from_queryset` |
 | Attachment names | `AuthorizedQuerySet`, `AuthorizedManagerMixin`, `AuthorizedManager` | Those names stay. Add `PermittedQuerySetMixin`, `PermittedQuerySet`, and `PermittedManager` |
 | `.authorized(user, permission, extra_q=None)` | Instance projection, any registered terminal | Retained. User conditions and overrides apply; not routed through `.permitted` validation |
-| Malformed permission, bad `conditions`, missing `auth.Permission` plan, or conditions no backend owns together | n/a | `TypeError` or `TrustsConfigurationError` before SQL, including for an anonymous user |
+| Malformed permission, bad `conditions`, missing `auth.Permission` plan, or conditions no backend owns together | n/a | empty queryset before SQL, including for an anonymous user |
 | Well-formed permission for another content type | Denial on the instance projection when the row's content type does not match | Empty `.permitted()` queryset |
 
 New code should use `.permitted()`. For user checks and audit options, see
@@ -356,8 +380,8 @@ backend.register(
 )
 ```
 
-The condition runs once after the freeze check, in the same `AppConfig.ready()`
-world as path lambdas. The stored overlay is private `Equal` /
+A path or condition lambda runs at the `register()` call and again on replay.
+A named-filter builder runs once. The stored overlay is private `Equal` /
 `PermissionIn` / `All` and contains no callable. Literal Python `in` is
 unsupported and is not recovered through AST, bytecode, `dis`, or a
 `__contains__` side channel. Public `register(condition=...)` rejects
