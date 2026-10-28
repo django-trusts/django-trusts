@@ -482,7 +482,8 @@ including a custom model that has a `content_type` foreign key.
 String `has_perm` still infers the model from the codename suffix. That
 codec gap is [issue #268](https://github.com/django-trusts/django-trusts/issues/268).
 `.permitted()` and `authorization_required` bind the exact codename to the
-protected model's content type instead. `trusts.E008` is removed. Each
+protected model's content type instead. The lockfile records those
+statements under [Codename statements](#codename-statements). `trusts.E008` is removed. Each
 inquiry asks each backend; a backend that does not own the names
 contributes nothing. A runtime `.permitted()` call returns an empty
 queryset. `authorization_required` is 403 or 404. There is no system
@@ -525,6 +526,18 @@ The [historical policy-output record](../dev/permission-policy-sql.rst) and
 its examples describe one implementation snapshot. Their field names, ordering,
 identifiers, parameter notation, and SQL/YAML layout are not compatibility
 promises or a supported input format.
+
+### Codename statements
+
+For an `auth.Permission` terminal, the lockfile records the codename
+subquery the string inquiry executes. `has_perm` is
+`user.has_perm(code, object)`. `permitted_by_codename` is
+`.permitted(code, user)`. `get_permitted_users_by_codename` is
+`content.get_permitted_users(code)`. `permitted` and `get_permitted_users`
+remain the saved permission row. The codename call input is
+`$permission.codename`. App label and model stay `$content.app_label`
+and `$content.model`. Schema version 1 is unchanged. Regenerate a
+committed lockfile once so those rows are the statements under review.
 
 ### Formatter and enforcement
 

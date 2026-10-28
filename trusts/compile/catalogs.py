@@ -19,6 +19,7 @@ from trusts.plan.aggregates import (
     instance_match,
 )
 from trusts.plan.conditions import (
+    codename_lookup,
     condition_model_key,
     permission_binding,
 )
@@ -53,15 +54,19 @@ _NO_PRESET = object()
 class Question(object):
     """One possible permission question for one content group.
 
-    ``name`` is the document/API name (``permitted``, ``has_perm``,
-    ``get_all_permissions``, ``get_group_permissions``,
-    ``get_permitted_users``, or ``filter_by_permitted_content``).
+    ``name`` is the document/API name (``permitted``,
+    ``permitted_by_codename``, ``has_perm``, ``get_all_permissions``,
+    ``get_group_permissions``, ``get_permitted_users``,
+    ``get_permitted_users_by_codename``, or
+    ``filter_by_permitted_content``).
     ``content_model`` is the concrete content model for the group.
     ``records`` / ``delegations`` are that group's lowered rows, split
     by kind, in registration order. ``question`` is one of the four
     catalog question families; its call signature depends on ``name``:
 
     - ``permitted``: ``question(user, permission) -> QuerySet``
+    - ``permitted_by_codename``: ``question(user, binding) -> QuerySet``
+      for the ``.permitted(str)`` codename subquery.
     - ``has_perm``: ``question(user, content, permission)`` returns the
       exists query runtime executes. The object is true when a row is
       held and false when this catalog grants nothing.
@@ -69,6 +74,8 @@ class Question(object):
       ``question(user, content) -> QuerySet | ()``
     - ``get_permitted_users``: ``question(content, permission)``
       ``-> QuerySet``
+    - ``get_permitted_users_by_codename``: ``question(content, code)``
+      ``-> QuerySet`` for a permission string.
     - ``filter_by_permitted_content``:
       ``question(queryset, user, permission) -> QuerySet`` where
       ``queryset`` is over a proper-prefix model of ``content_model``.
@@ -472,6 +479,8 @@ class Catalog(object):
         return inquiry.denied, inquiry.values
 
     def _question_has_perm(self, user, content, permission):
+        if isinstance(permission, str):
+            permission = permission_binding(permission, content.__class__)
         inquiry = _instance_exists_query(self, content, user, permission)
         return False if inquiry is None else inquiry
 
@@ -479,6 +488,25 @@ class Catalog(object):
         return self.filter_authorized(
             content_model._meta.concrete_model._default_manager.all(),
             user, permission,
+        )
+
+    def _question_permitted_by_codename(self, content_model, user, code):
+        """``.permitted(str)`` for this catalog: the codename subquery."""
+        model = content_model._meta.concrete_model
+        app_label, codename = code.split('.', 1)
+        binding = codename_lookup(model, app_label, codename)
+        queryset = model._default_manager.all()
+        if not isinstance(user, Model):
+            return queryset.none()
+        denied, values = self._resolve_skipped(user, {})
+        if denied:
+            return queryset.none()
+        predicate, _owned = self.authorization_grant(
+            queryset, user, model, binding, (), binding,
+            api='permitted', skipped=values,
+        )
+        return bind_filtered_queryset(
+            queryset, predicate, user_model=self.user_model,
         )
 
     def _question_filter_by_permitted_content(

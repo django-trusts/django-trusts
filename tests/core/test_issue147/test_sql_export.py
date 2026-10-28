@@ -303,12 +303,18 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotIn('kind', trust)
         self.assertNotIn('kind', named)
         self.assertIn('EXISTS (', content['has_perm']['sql'])
-        self.assertIn('$permission.id', content['has_perm']['params'])
+        self.assertIn('$permission.codename', content['has_perm']['params'])
+        self.assertNotIn('$permission.id', content['has_perm']['params'])
+        self.assertIn('$permission.codename', content['permitted_by_codename']['params'])
+        self.assertIn('$permission.codename', content['get_permitted_users_by_codename']['params'])
+        self.assertIn('$permission.id', content['permitted']['params'])
+        self.assertIn('$permission.id', content['get_permitted_users']['params'])
         self.assertIn('auth_permission', content['get_all_permissions']['sql'])
         for token in ('change_document', 'codename'):
             self.assertNotIn(token, content['permitted']['sql'])
             self.assertNotIn(token, named['sql'])
-            self.assertNotIn(token, content['has_perm']['sql'])
+        self.assertNotIn('change_document', content['has_perm']['sql'])
+        self.assertIn('"codename"', content['has_perm']['sql'])
         for token in _FORBIDDEN:
             self.assertNotIn(token, text)
 
@@ -503,8 +509,12 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertIn('WITH RECURSIVE', text)
         self.assertIn('UNION ALL', text)
         self.assertIn('FROM "gen" AS "g"', text)
-        self.assertEqual(text.count('"$along_bound=2"'), 4)
-        for key in ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'):
+        self.assertEqual(text.count('"$along_bound=2"'), 6)
+        for key in (
+            'permitted', 'permitted_by_codename', 'has_perm',
+            'get_all_permissions', 'get_permitted_users',
+            'get_permitted_users_by_codename',
+        ):
             params = content[key]['params']
             self.assertEqual([param for param in params if param.startswith('$along_bound=')], ['$along_bound=2'])
             self.assertEqual(content[key]['sql'].count('%s'), len(params))
