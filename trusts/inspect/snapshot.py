@@ -4,6 +4,8 @@
 Each backend lists ``contents`` by model. A content owns its trust
 legs, the compiled SQL for ``permitted``, ``has_perm``,
 ``get_all_permissions``, and ``get_permitted_users`` when it has trusts,
+``permitted_by_codename`` and ``get_permitted_users_by_codename`` when
+the permission terminal is ``auth.Permission``,
 ``filter_by_permitted_content`` when the content path has a proper prefix,
 ``get_group_permissions`` when a trust was registered with ``group=``,
 and its named filters. ``get_permitted_users`` is the reverse
@@ -310,9 +312,14 @@ class _PolicyVisitor(object):
             if rows:
                 content['filter_by_permitted_content'] = rows
             return content
+        code = _change_permission_code(model)
         if question.name == 'permitted':
             queryset = question.question(user, permission)
+        elif question.name == 'permitted_by_codename':
+            queryset = question.question(user, code)
         elif question.name == 'has_perm':
+            if _auth_permission_terminal(question.records or records):
+                permission = code
             queryset = question.question(
                 user, _content_sentinel(model, alias), permission,
             )
@@ -324,6 +331,10 @@ class _PolicyVisitor(object):
             instance = _content_sentinel(model, alias)
             _populate_reverse_along_identity(instance, records, alias)
             queryset = question.question(instance, permission)
+        elif question.name == 'get_permitted_users_by_codename':
+            instance = _content_sentinel(model, alias)
+            _populate_reverse_along_identity(instance, records, alias)
+            queryset = question.question(instance, code)
         else:
             raise TrustsConfigurationError(
                 'Policy SQL visitor cannot render question %r.'
@@ -331,7 +342,9 @@ class _PolicyVisitor(object):
             )
         content[question.name] = _sql_row(_compile_queryset(
             queryset, alias, record=records[0], expr=None, records=records,
-            reverse_users=question.name == 'get_permitted_users',
+            reverse_users=question.name in (
+                'get_permitted_users', 'get_permitted_users_by_codename',
+            ),
         ))
         return content
 
@@ -648,6 +661,30 @@ def _populate_reverse_along_identity(content, records, alias):
             continue
         field = _concrete_target_field(along.walk_model, along.walk_ident)
         setattr(content, field.attname, _sentinel_value(field, alias))
+
+
+def _change_permission_code(model):
+    """``app_label.change_<model>`` for the codename statements.
+
+    String ``has_perm`` and ``get_permitted_users`` parse that codename.
+    ``.permitted(str)`` binds the same text as an exact codename on
+    ``model``. The SQL text does not contain the action; it is a call
+    input.
+    """
+    meta = model._meta
+    return '%s.change_%s' % (meta.app_label, meta.model_name)
+
+
+def _auth_permission_terminal(records):
+    """True when these ordinary rows terminate on ``auth.Permission``."""
+    if not records:
+        return False
+    concrete = Permission._meta.concrete_model
+    for record in records:
+        model = getattr(record, 'permission_model', None)
+        if model is None or model._meta.concrete_model is not concrete:
+            return False
+    return True
 
 
 def _role_sentinel(record, role, alias):
@@ -1215,6 +1252,9 @@ def _symbol_for_new_param(node, query=None):
         return _with_hint(
             {'const': _json_const(node.value)}, hint,
         )
+    bind = getattr(node, 'bind', None)
+    if isinstance(bind, str) and bind:
+        return _with_hint({'bind': bind}, _request_hint(bind))
     if isinstance(node, Value):
         return _with_hint(
             {'const': _json_const(node.value)},
@@ -1234,9 +1274,13 @@ def _symbol_for_new_param(node, query=None):
     if isinstance(node, Lookup):
         rhs = getattr(node, 'rhs', None)
         if rhs is not None and not hasattr(rhs, 'as_sql'):
-            return _with_hint(
-                {'const': _json_const(rhs)}, _const_hint(node, rhs),
-            )
+            hint = _const_hint(node, rhs)
+            if hint == 'permission.codename':
+                return _with_hint(
+                    {'bind': 'permission.codename'},
+                    _request_hint('permission.codename'),
+                )
+            return _with_hint({'const': _json_const(rhs)}, hint)
     raise TrustsConfigurationError(
         'Policy SQL render could not classify a %s placeholder.'
         % type(node).__name__
@@ -1304,6 +1348,8 @@ def _const_hint(node, value):
         return 'content type model'
     if name == 'is_active':
         return 'active'
+    if name == 'codename' and label == 'auth.Permission':
+        return 'permission.codename'
     target = getattr(lhs, 'target', None)
     if target is not None and getattr(target, 'primary_key', False):
         return 'content pk'

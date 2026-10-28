@@ -12,6 +12,7 @@ from types import MappingProxyType
 
 from django.apps import apps as django_apps
 from django.conf import settings
+from django.contrib.auth.models import Permission
 from django.core.exceptions import AppRegistryNotReady, FieldDoesNotExist
 from django.db.models import Model, Q
 
@@ -330,6 +331,22 @@ def _invoke(linked, name, head, kw, *args, **kwargs):
     return getattr(linked[0], name)(*head, *args, **{**kw, **kwargs})
 
 
+def _codename_statements(records):
+    """True when every ordinary record terminates on ``auth.Permission``.
+
+    String inquiries compile a codename subquery only for that terminal.
+    A group with no ordinary record does not gain those rows.
+    """
+    if not records:
+        return False
+    concrete = Permission._meta.concrete_model
+    for record in records:
+        model = record.permission_model
+        if model is None or model._meta.concrete_model is not concrete:
+            return False
+    return True
+
+
 def question_descriptors(records, delegations, linked, named_filters):
     """Questions for one built catalog, in document order.
 
@@ -343,6 +360,7 @@ def question_descriptors(records, delegations, linked, named_filters):
         records, delegations,
     ):
         found = prefix_models(group_records, group_delegations)
+        codename = _codename_statements(group_records)
         questions.extend(
             Question(
                 name, model, group_records, group_delegations, fn,
@@ -355,6 +373,14 @@ def question_descriptors(records, delegations, linked, named_filters):
                         _invoke, linked, '_question_content_grant', (model,), {},
                     ),
                     True,
+                ),
+                (
+                    'permitted_by_codename',
+                    partial(
+                        _invoke, linked, '_question_permitted_by_codename',
+                        (model,), {},
+                    ),
+                    codename,
                 ),
                 (
                     'has_perm',
@@ -377,6 +403,11 @@ def question_descriptors(records, delegations, linked, named_filters):
                     'get_permitted_users',
                     partial(_invoke, linked, 'permitted_users', (), {}),
                     True,
+                ),
+                (
+                    'get_permitted_users_by_codename',
+                    partial(_invoke, linked, 'permitted_users', (), {}),
+                    codename,
                 ),
                 (
                     'filter_by_permitted_content',
