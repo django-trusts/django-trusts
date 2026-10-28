@@ -241,6 +241,53 @@ backends:
               WHERE ("documents_document"."confidential" IS NULL
                   OR NOT ("documents_document"."confidential" = %s)
               )
+            has_perm:
+              params: ["$user.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "$permission.codename", "confidential=True"]
+              sql: |-
+                SELECT 1 AS "a"
+                FROM "documents_document"
+                CROSS JOIN (
+                  SELECT %s AS "user_id", %s AS "content_pk", %s AS "is_active", %s AS "app_label", %s AS "model"
+                ) "trusts_bind"
+                WHERE ("documents_document"."id" = ("trusts_bind"."content_pk")
+                  AND EXISTS (
+                    SELECT 1 AS "a"
+                    FROM "auth_user" "U0"
+                    WHERE ("U0"."id" = ("trusts_bind"."user_id")
+                        AND ((%s)
+                          OR "U0"."is_active" = ("trusts_bind"."is_active")
+                      )
+                    )
+                    LIMIT 1
+                  )
+                  AND EXISTS (
+                    SELECT 1 AS "a"
+                    FROM "documents_documentpermission" "V0"
+                    INNER JOIN "auth_permission" "V1" ON ("V0"."permission_id" = "V1"."id")
+                    INNER JOIN "django_content_type" "V2" ON ("V1"."content_type_id" = "V2"."id")
+                    WHERE ("V0"."permission_id" = (
+                        SELECT "U0"."id" AS "pk"
+                        FROM "auth_permission" "U0"
+                        INNER JOIN "django_content_type" "U1" ON ("U0"."content_type_id" = "U1"."id")
+                        WHERE ("U0"."codename" = %s
+                            AND "U1"."app_label" = ("trusts_bind"."app_label")
+                            AND "U1"."model" = ("trusts_bind"."model")
+                        )
+                        ORDER BY "U1"."app_label" ASC, "U1"."model" ASC, "U0"."codename" ASC
+                        LIMIT 1
+                      )
+                        AND "V2"."app_label" = ("trusts_bind"."app_label")
+                        AND "V2"."model" = ("trusts_bind"."model")
+                        AND "V0"."user_id" = ("trusts_bind"."user_id")
+                        AND "V0"."document_id" = ("documents_document"."id")
+                    )
+                    LIMIT 1
+                  )
+                    AND ("documents_document"."confidential" IS NULL
+                      OR NOT ("documents_document"."confidential" = %s)
+                  )
+                )
+                LIMIT 1
   - path: "documents.backends.OrBackend"
     contents:
       - model: "documents.Document"

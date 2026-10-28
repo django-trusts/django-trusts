@@ -28,6 +28,7 @@ from trusts.models import PermittedQuerySet, PermittedUsersMixin
 from trusts.plan.rewrites import CallInput
 
 _CODE = 'documents.change_document'
+_CONDITIONAL = 'documents.change_document:non_confidential'
 _CODENAME = 'change_document'
 
 
@@ -122,16 +123,24 @@ class ExecutedEqualsLockTest(TransactionTestCase):
             )
             for key, run in cases:
                 with self.subTest(key=key):
-                    self.assertEqual(content[key], golden[key])
-                    sql, params = _capture(run)
-                    self.assertEqual(_format_policy_sql(sql), content[key]['sql'])
-                    expected = tuple(
-                        _runtime_value(
-                            token, user=user, content=doc, codename=_CODENAME,
-                        )
-                        for token in content[key]['params']
-                    )
-                    self.assertEqual(tuple(params), expected)
+                    self._matches(content[key], golden[key], run, user, doc)
+            conditional = content['named_filters'][0]['has_perm']
+            self._matches(
+                conditional,
+                golden['named_filters'][0]['has_perm'],
+                lambda: DocumentBackend().has_perm(user, _CONDITIONAL, doc),
+                user, doc,
+            )
+
+    def _matches(self, row, golden_row, run, user, doc):
+        self.assertEqual(row, golden_row)
+        sql, params = _capture(run)
+        self.assertEqual(_format_policy_sql(sql), row['sql'])
+        expected = tuple(
+            _runtime_value(token, user=user, content=doc, codename=_CODENAME)
+            for token in row['params']
+        )
+        self.assertEqual(tuple(params), expected)
 
 
 class CodenameLockRoundTripTest(SimpleTestCase):

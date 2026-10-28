@@ -370,6 +370,9 @@ class _PolicyVisitor(object):
                 queryset, self.alias, record=None, expr=question.expr,
             )),
         }
+        composed = self._named_filter_has_perm(question, model)
+        if composed is not None:
+            row['has_perm'] = composed
         content = self._contents.get(label)
         if content is None:
             content = {'model': label}
@@ -377,6 +380,27 @@ class _PolicyVisitor(object):
             self._order.append(label)
         content.setdefault('named_filters', []).append(row)
         return content
+
+    def _named_filter_has_perm(self, question, model):
+        """Saved-instance ``has_perm(code:name)`` for one registered filter.
+
+        ``None`` when this content has no ``auth.Permission`` grant.
+        The condition row stays. This is the one statement that runs.
+        """
+        records = self._classifier_records.get(_model_label(model))
+        if not records or not _auth_permission_terminal(records):
+            return None
+        user = _role_sentinel(records[0], 'user', self.alias)
+        content = _content_sentinel(model, self.alias)
+        inquiry = self.catalog._question_conditional_has_perm(
+            user, content, '%s:%s' % (_change_permission_code(model), question.code),
+        )
+        if inquiry is None:
+            return None
+        return _sql_row(_compile_queryset(
+            inquiry, self.alias, record=records[0], expr=question.expr,
+            records=records,
+        ))
 
     def _ensure_content(self, model, records, delegations):
 

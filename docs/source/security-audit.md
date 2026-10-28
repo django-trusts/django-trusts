@@ -536,8 +536,10 @@ subquery the string inquiry executes. `has_perm` is
 `content.get_permitted_users(code)`. `permitted` and `get_permitted_users`
 remain the saved permission row. The codename call input is
 `$permission.codename`. App label and model stay `$content.app_label`
-and `$content.model`. Schema version 1 is unchanged. Regenerate a
-committed lockfile once so those rows are the statements under review.
+and `$content.model`. A named filter on that content also has `has_perm`:
+the saved-instance check with that condition, the one statement that
+executes. Schema version 1 is unchanged. Regenerate a committed
+lockfile once so those rows are the statements under review.
 
 ### Formatter and enforcement
 
