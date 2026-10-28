@@ -24,8 +24,11 @@ INSTALLED_APPS = (
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'trusts.zero.apps.ZeroConfig',
+    # Nothing in registration depends on this order. TestsConfig
+    # registers through TestsTrustBackend().get_registry(). That
+    # backend lives in the tests app, so TestsConfig owns the registry.
     'tests.apps.TestsConfig',
+    'trusts.zero.apps.ZeroConfig',
 )
 
 AUTHENTICATION_BACKENDS = (

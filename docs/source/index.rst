@@ -60,8 +60,7 @@ django-trusts requires Python 3.12--3.14 and Django 6.1.
    python -m pip install "django-trusts @ git+https://github.com/django-trusts/django-trusts@dev"
 
 Every app that hosts Trusts registrations or a Trusts backend must extend
-``TrustsConfigMixin`` on its Django ``AppConfig``. The config stores the
-backend's state and relays ``ready`` to it.
+``TrustsConfigMixin`` on its Django ``AppConfig``.
 
 Define the models
 -----------------
@@ -76,7 +75,7 @@ The application owns its protected content and trust models.
    from django.contrib.auth.models import Group, Permission
    from django.db import models
 
-   from trusts.query import PermittedQuerySetMixin, PermittedUsersMixin
+   from trusts.models import PermittedQuerySetMixin, PermittedUsersMixin
 
 
    class DocumentQuerySet(PermittedQuerySetMixin, models.QuerySet):
@@ -233,13 +232,9 @@ Register the model paths when the application starts:
 
    class DocumentsConfig(TrustsConfigMixin, AppConfig):
        name = "documents"
-       trusts_backend_paths = (
-           "documents.backends.DocumentBackend",
-       )
 
        def ready(self):
-           super().ready()
-
+           from .backends import DocumentBackend
            from .models import (
                Document,
                DocumentDelegation,
@@ -272,6 +267,7 @@ Register the model paths when the application starts:
                "non_confidential",
                predicate=lambda u, p, o: o.confidential != True,
            )
+           super().ready()
 
 The first registration reaches permission objects directly. The second reaches
 Django ``auth.Group`` objects; ``django-trusts`` follows each group's
@@ -455,13 +451,14 @@ as ``user.has_perm(permission, document)``, not the same string codec.
 A relationship-family backend participates only when it has an applicable
 ``auth.Permission`` plan for the queryset model and owns every selected
 name as a queryable condition. Other backends contribute nothing. If none
-own the full set, the call raises ``TrustsConfigurationError`` before SQL.
-``trusts.E008`` reports that configuration for ``authorization_required``
-declarations only. A runtime ``.permitted()`` call is not one of those
-declarations; it still validates and raises on first use.
+own the full set, the queryset is empty before SQL. In
+``authorization_required``, the view is 403 or 404.
+``trusts.E008`` is removed. A runtime ``.permitted()`` call uses that
+same ownership rule and does not raise.
 
-Malformed permissions and conditions raise before SQL. A well-formed
-permission for another content type produces an empty queryset. Named conditions remain explicit:
+A malformed permission or condition tuple returns an empty queryset before
+SQL. A well-formed permission for another content type produces an empty
+queryset. Named conditions remain explicit:
 
 .. code-block:: python
 
@@ -479,15 +476,15 @@ permitted content sits under those rows. The result is a lazy queryset of
 the same model.
 
 ``permission`` is a saved permission row. ``content`` is the protected
-model. ``handles`` is optional and defaults to the installed relationship
-backends.
+model. ``backend`` is optional and defaults to the installed relationship
+backends; pass ``backend=`` to select one.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
 the user may read:
 
 .. code-block:: python
 
-   from trusts.core import filter_by_permitted_content
+   from trusts.decorators import filter_by_permitted_content
 
    cabinets = filter_by_permitted_content(
        Cabinet.objects.all(),
@@ -521,7 +518,7 @@ existing user manager:
 
 .. code-block:: python
 
-   from trusts.query import PermittedUsersManagerMixin
+   from trusts.models import PermittedUsersManagerMixin
 
 
    class UserManager(PermittedUsersManagerMixin, ExistingUserManager):
@@ -564,7 +561,7 @@ condition:
 
 .. code-block:: python
 
-   registry = backend.registry
+   registry = backend.get_registry()
    registry.set_user_condition("is_active", lambda u: u.is_active)
 
 Setting the same name replaces that condition. Pass ``None`` to remove it:
@@ -667,19 +664,16 @@ For an ordinary registration, the ``condition=`` argument is a one-argument
 symbolic condition rooted at the trust model. A delegated registration may
 use the same one-argument form for row-only restrictions or the two-argument
 form shown above when its relationship scope must compare with the requested
-permission. django-trusts invokes either builder once during registration and
-stores no callable. The condition grammar is path equality
-(``==``), collection-rooted membership (``.contains(member)``), and
-conjunction (``&``). Parenthesize ``==`` when combining it with ``&``.
-Python ``in``, ``and`` / ``or`` / ``not``, and prebuilt ``All`` /
-``Equal`` / ``permission_in`` values are not accepted. ``.contains`` is a
+permission. See
+:ref:`supported lambda expressions <supported-lambda-expressions>`.
+A prebuilt condition is not accepted. ``.contains`` is a
 reserved method on the condition proxy; a model field actually named
 ``contains`` cannot be walked there. ``predicate=`` is reserved and
 unsupported in 1.0.
 
 .. code-block:: python
 
-   backend.register(
+   registry.register(
        trust=TeamDocumentPermission,
        user=lambda t: t.team.members,
        permission=lambda t: t.permission,
@@ -692,6 +686,26 @@ unsupported in 1.0.
 
 A relationship condition is always applied to its branch; a named filter is
 selected by an authorization caller. Neither can create permission by itself.
+
+.. _supported-lambda-expressions:
+
+Supported lambda expressions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A condition lambda accepts ``==``, ``!=``, ``&``, ``|``,
+``.contains(member)``, a bare boolean field, and comparison with a
+constant, including ``None``; ``~`` applies only to a boolean field or
+to ``&`` of boolean fields, and ``==`` or ``!=`` must be parenthesized
+when combined with ``&`` or ``|``.
+
+Python ``in``, ``and`` / ``or`` / ``not``, ordered comparisons,
+arithmetic, calls, and indexing are rejected.
+
+A path lambda, a ``condition=`` lambda, and a delegated condition builder
+are evaluated only when registering and compiling, never during a
+permission query.
+
+As a path in ``register()``, it is limited to attribute access.
 
 Applications may register more than one valid path to the same content. A
 direct user grant and a team-derived grant can coexist, with either
