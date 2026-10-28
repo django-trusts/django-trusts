@@ -9,7 +9,7 @@ from django.db import router
 from django.db.models import Count, Exists, OuterRef, Q
 from django.db.models.sql.constants import SINGLE
 
-from trusts.plan.rewrites import bind_once, bound_exists_query
+from trusts.plan.rewrites import bind_once, bound_exists_query, strip_exists_marker
 from trusts.plan.hops import require_instance
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import (
@@ -120,6 +120,11 @@ def _bound_saved_row(catalog, obj, user, permission, *, kind='complete',
     if queryset is None:
         return None
     return bind_once(queryset, user_model=catalog.user_model)
+
+
+def bound_saved_exists(queryset):
+    """Exists query ``queryset.exists()`` compiles for a bound saved row."""
+    return strip_exists_marker(queryset.query.exists())
 
 
 def _instance_exists_query(catalog, obj, user, permission, *, kind='complete',

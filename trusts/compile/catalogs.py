@@ -9,13 +9,15 @@ from django.db.models import Model, Q, QuerySet
 from trusts.errors import TrustsConfigurationError
 from trusts.utils import parse_perm_code
 from trusts.plan.aggregates import (
+    _ExistsQuery,
     _bound_all_match,
+    _bound_saved_row,
     _compile_common_permissions,
     _delegated_user_exists,
-    _bound_saved_row,
     _instance_exists_query,
     all_match,
     all_rows_hold,
+    bound_saved_exists,
     instance_match,
 )
 from trusts.plan.conditions import (
@@ -514,6 +516,40 @@ class Catalog(object):
     ):
         return self.filter_by_permitted_content(
             queryset, user, permission, content=content_model,
+        )
+
+    def _question_conditional_has_perm(self, user, content, permext):
+        """Exists query a saved-instance ``has_perm(code:name, object)`` runs.
+
+        ``None`` when this catalog has no grant for the condition.
+        """
+        denied, values = self._resolve_skipped(user, {})
+        if denied or not isinstance(content, Model) or content.pk is None:
+            return None
+        try:
+            applabel, modelname, action, cond = parse_perm_code(permext)
+        except ValueError:
+            return None
+        if not cond:
+            return None
+        _stored, extra_q = self._condition_overlay(permext, content, user)
+        if extra_q is None:
+            return None
+        plan = self.plan_for(content, user=user)
+        if not plan.applicable:
+            return None
+        binding = permission_binding(
+            '%s.%s_%s' % (applabel, action, modelname), content.__class__,
+        )
+        queryset = _bound_saved_row(
+            self, content, user, binding,
+            kind='complete', extra_q=extra_q,
+            permission_model=Permission, skipped=values,
+        )
+        if queryset is None:
+            return None
+        return _ExistsQuery(
+            bound_saved_exists(queryset), content._meta.concrete_model,
         )
 
     def _question_named_filter(self, model, tree, user, permission):
