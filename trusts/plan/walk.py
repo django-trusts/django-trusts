@@ -259,15 +259,58 @@ def _content_walk_seed(walk, content):
 
 
 def _grant_walk_attname(record):
-    """Grant-root column that stores the walk identity.
+    """Grant-root column that stores a one-hop walk identity.
 
-    The walk site is one hop from the grant root in every Along
-    registration this compiler renders. That hop's column is the join
-    key outside the recursive CTE.
+    A direct hop keeps that identity on the root row, and that column is
+    the comparison outside the recursive CTE. A longer path does not.
+    Callers join ``_walk_identity_column`` instead of reading this.
     """
     walk = record.along
+    if len(walk.walk_path) != 1:
+        raise TrustsConfigurationError(
+            'Along walk path %r is not one hop; the walk identity is not '
+            'a column of %s.'
+            % ('__'.join(walk.walk_path), record.root._meta.label)
+        )
     field = record.root._meta.get_field(walk.walk_path[0])
     return field.attname
+
+
+def _walk_ident_field(walk):
+    """Concrete walk-site field whose attname is the walk identity."""
+    for field in walk.walk_model._meta.concrete_fields:
+        if field.attname == walk.walk_ident:
+            return field
+    raise TrustsConfigurationError(
+        'Along walk identity %r is not a concrete field on %s.'
+        % (walk.walk_ident, walk.walk_model._meta.label)
+    )
+
+
+def _walk_identity_column(query, walk, reuse=None):
+    """Join the full walk path and return the walk-site identity column.
+
+    The forward seed already selects ``walk_field``. The upward walk has
+    to compare that same column, including when the walk site is a
+    reverse one-to-many more than one hop from the grant row.
+    """
+    field = _walk_ident_field(walk)
+    join_info = query.setup_joins(
+        [*walk.walk_path, field.name],
+        query.get_meta(),
+        query.get_initial_alias(),
+        can_reuse=reuse,
+        allow_many=True,
+    )
+    targets, alias, _joins = query.trim_joins(
+        join_info.targets, join_info.joins, join_info.path,
+    )
+    if len(targets) != 1:
+        raise TrustsConfigurationError(
+            'Along walk identity %r does not resolve to one column.'
+            % (walk.walk_ident,)
+        )
+    return targets[0].get_col(alias)
 
 
 def _render_keyed_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None):
