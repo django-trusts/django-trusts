@@ -6,22 +6,23 @@ from django.contrib.auth.models import Permission
 from django.db import router
 from django.db.models import Model, Q, QuerySet
 
-from trusts.errors import PermissionConditionError, TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 from trusts.utils import parse_perm_code
 from trusts.plan.aggregates import (
+    _bound_all_match,
     _compile_common_permissions,
     _delegated_user_exists,
-    all_match,
+    _bound_saved_row,
     _instance_exists_query,
+    all_match,
+    all_rows_hold,
     instance_match,
 )
 from trusts.plan.conditions import (
     condition_model_key,
     permission_binding,
-    validate_expression,
 )
-from trusts.plan.grammar import is_predicate
-from trusts.plan.writers import compile_to_q, evaluate_expression
+from trusts.plan.writers import compile_to_q
 from trusts.plan.contents import (
     _as_q,
     _compile_granted,
@@ -403,9 +404,12 @@ class Catalog(object):
 
     def prepare_has_perm(self, user_obj, permext, obj, *, skipped):
         model = _content_model(obj)
-        if not isinstance(permext, str): return PreparedInquiry(model, result=False)
-        try: applabel, modelname, action, cond = parse_perm_code(permext)
-        except ValueError: return PreparedInquiry(model, result=False)
+        if not isinstance(permext, str):
+            return PreparedInquiry(model, result=False)
+        try:
+            applabel, modelname, action, cond = parse_perm_code(permext)
+        except ValueError:
+            return PreparedInquiry(model, result=False)
         plan = self.plan_for(obj, user=user_obj)
         if not plan.applicable:
             return PreparedInquiry(model, result=False)
@@ -413,35 +417,26 @@ class Catalog(object):
         perm = '%s.%s_%s' % (applabel, action, modelname)
         if cond and stored is None:
             return PreparedInquiry(model, result=False)
-        held = self.has_permission(
-            user_obj, obj, permission_binding(perm, model),
-            extra_q=extra_q, permission_model=Permission,
-            skipped=dict(skipped) if isinstance(skipped, dict) else {},
-        )
-        if not held:
-            return PreparedInquiry(model, result=False)
-        if stored is None or extra_q is not None:
-            return PreparedInquiry(model, result=True)
-        return self.permission_condition_met(stored, user_obj, perm, obj)
-
-    def permission_condition_met(self, stored, user_obj, perm, obj):
-        model = _content_model(obj)
-        _registered, tree = stored
+        binding = permission_binding(perm, model)
+        values = dict(skipped) if isinstance(skipped, dict) else {}
         if isinstance(obj, QuerySet):
-            objs, model = obj.all(), obj.model
-        elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
-            objs, model = obj, None
-        else:
-            objs = [obj]
-        met = all(
-            evaluate_registered_expression(
-                tree, user_obj, perm, item,
-                model=model or item.__class__,
-                user_model=self.user_model,
+            bound = _bound_all_match(
+                self, obj, user_obj, binding,
+                kind='complete', extra_q=extra_q,
+                permission_model=Permission, skipped=values,
             )
-            for item in objs
+            if bound is None:
+                return PreparedInquiry(model, result=False)
+            qs, granted_q = bound
+            return PreparedInquiry(model, qs=qs, granted_q=granted_q)
+        queryset = _bound_saved_row(
+            self, obj, user_obj, binding,
+            kind='complete', extra_q=extra_q,
+            permission_model=Permission, skipped=values,
         )
-        return PreparedInquiry(model, result=bool(met))
+        if queryset is None:
+            return PreparedInquiry(model, result=False)
+        return PreparedInquiry(model, qs=queryset)
 
     def _permission_codes(self, user_obj, obj, skip_flags, *, kind):
         denied, values = self._resolve_skipped(user_obj, skip_flags)
@@ -460,10 +455,10 @@ class Catalog(object):
             return None, None
         model = _content_model(obj)
         stored = _condition_entry(self, model, cond)
-        if stored is None or not isinstance(obj, QuerySet):
-            return stored, None
+        if stored is None:
+            return None, None
         return stored, _apply_prepared(
-            stored, obj.model, user_obj, permext, self.user_model,
+            stored, model, user_obj, permext, self.user_model,
         )
 
     def _resolve_skipped(self, subject, skip_flags, skipped=None, *,
@@ -501,14 +496,17 @@ class Catalog(object):
 
 
 class PreparedInquiry(object):
-    def __init__(self, model, result=_NO_PRESET, qs=None):
+    def __init__(self, model, result=_NO_PRESET, qs=None, granted_q=_NO_PRESET):
         self.model = model
         self.result = result
         self.qs = qs
+        self.granted_q = granted_q
 
     def execute(self):
         if self.result is not _NO_PRESET:
             return self.result
+        if self.granted_q is not _NO_PRESET:
+            return all_rows_hold(self.qs, self.granted_q)
         return bool(self.qs.exists())
 
 
@@ -601,25 +599,6 @@ def _selected_condition_q(catalog, model, permission, conditions, user, *, api):
         )
         extra_q = part if extra_q is None else extra_q & part
     return extra_q
-
-
-def evaluate_registered_expression(expr, user, perm, obj, model=None, user_model=None):
-    """Evaluate a registered ``Tree`` against a real principal/object."""
-    if not is_predicate(expr):
-        raise PermissionConditionError(
-            'Permission condition did not produce a comparison, '
-            '.contains(), boolean field, or combination with & and |.'
-        )
-    klass = model
-    if klass is None:
-        klass = (
-            obj.model if hasattr(obj, 'model') and not isinstance(obj, Model)
-            else obj.__class__
-        )
-    validate_expression(expr, klass, user_model)
-    return evaluate_expression(
-        expr, user, perm, obj, model=klass, user_model=user_model,
-    )
 
 
 def catalog_models(catalog, content, principal_model):
