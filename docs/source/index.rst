@@ -644,13 +644,6 @@ a tuple of names. Unsupported expressions fail registration.
 
    user.has_perm("documents.change_document:non_confidential", document)
 
-A saved instance is read from the database. The ``:name`` filter is part of
-that statement, and the check agrees with
-``.permitted(permission, user, conditions=(name,)).filter(pk=obj.pk)``.
-An assignment that has not been saved is not part of the check. An instance
-with no primary key, and a name that is not registered, are denied before
-SQL.
-
 More expressive permission policies
 -----------------------------------
 

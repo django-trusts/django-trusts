@@ -11,11 +11,6 @@ log.
 
 ## 1.1.0
 
-- **Instance conditions read the stored row.** A saved-instance
-  `has_perm("app.codename:name", obj)` applies the named filter in SQL to
-  the stored row. See [Named filters](index.rst#named-filters) and the
-  [migration record](migrates.md#instance-conditions-read-the-stored-row).
-
 - **User conditions and overrides.** `set_user_condition()` and
   `set_user_override()` add named user checks to Trusts inquiries. Skip one
   with `skip_<name>=True`. Rules use user model fields; Python properties raise

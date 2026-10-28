@@ -8,20 +8,6 @@ development log. New features and changes that require no application action
 belong in [What's new](whats-new.md); development history belongs in
 [development history](../dev/development.md).
 
-## Instance conditions read the stored row
-
-`has_perm("app.codename:name", instance)` applies the named filter to the
-stored row. See [Named filters](index.rst#named-filters).
-
-| | Old | New |
-| --- | --- | --- |
-| Saved instance, field changed in memory and not saved | The condition saw the in-memory value | The condition sees the stored row |
-| Unsaved instance (`pk` is `None`) | Denied | Denied |
-| `:name` not registered | Denied | Denied |
-
-`.permitted("app.codename", user, conditions=("name",)).filter(pk=instance.pk)`
-already read the stored row. `has_perm` on that saved instance agrees with it.
-
 ## Request-time input fails closed
 
 `.authorized()` and `filter_by_permitted_content` return an empty queryset
