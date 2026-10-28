@@ -1,8 +1,9 @@
-"""Python and SQL writers for one checked condition tree.
+"""SQL writer for one checked condition tree.
 
-``trusts.plan.conditions`` parses and checks a builder. These functions
-turn that tree into a Python result or a Django ``Q``. They do not
-register a filter and they do not look one up.
+``trusts.plan.conditions`` parses and checks a builder. ``compile_to_q``
+turns that tree into a Django ``Q``. It does not register a filter and
+it does not look one up. ``values_match`` and ``boolean_holds`` are the
+NULL rules for values already loaded while compiling.
 """
 
 from django.core.exceptions import ObjectDoesNotExist
@@ -56,68 +57,6 @@ def _walk_model_path(instance, model, path, *, collection=False):
             continue
         current = getattr(current, field.attname)
     return current
-
-
-def _resolve_runtime(node, user, perm, obj, model, user_model):
-    if _node(node, 'const'):
-        return node.value
-    if _node(node, 'field'):
-        if node.root == 'user':
-            if not node.path:
-                return user
-            return _walk_model_path(user, user_model, node.path)
-        if node.root == 'permission':
-            if node.path:
-                raise PermissionConditionError(
-                    'Permission references cannot traverse attributes in V1.'
-                )
-            return perm
-        if node.root == 'object':
-            return _walk_model_path(obj, model, node.path)
-    raise PermissionConditionError(
-        'Cannot evaluate permission condition node %r.' % (node,)
-    )
-
-
-def evaluate_expression(node, user, perm, obj, model=None, user_model=None):
-    """Evaluate a captured expression against a real principal/permission/object."""
-    if model is None:
-        model = obj.__class__
-    if _node(node, 'and'):
-        return evaluate_expression(
-            node.left, user, perm, obj, model, user_model,
-        ) and evaluate_expression(
-            node.right, user, perm, obj, model, user_model,
-        )
-    if _node(node, 'or'):
-        return evaluate_expression(
-            node.left, user, perm, obj, model, user_model,
-        ) or evaluate_expression(
-            node.right, user, perm, obj, model, user_model,
-        )
-    if _node(node, 'eq', 'ne'):
-        return values_match(
-            _resolve_runtime(node.left, user, perm, obj, model, user_model),
-            _resolve_runtime(node.right, user, perm, obj, model, user_model),
-            _node(node, 'eq'),
-            fields=_both_fields(node),
-        )
-    if _node(node, 'contains'):
-        return _evaluate_contains(
-            node, user, perm, obj, model, user_model,
-        )
-    if _node(node, 'bare'):
-        return boolean_holds(_resolve_runtime(
-            node.item, user, perm, obj, model, user_model,
-        ))
-    if _node(node, 'not'):
-        return not evaluate_expression(
-            node.item, user, perm, obj, model, user_model,
-        )
-    raise PermissionConditionError(
-        'Permission condition did not produce a comparison, '
-        '.contains(), or boolean field.'
-    )
 
 
 class _Bound(object):
@@ -252,7 +191,23 @@ def _collection_contains(manager, pk):
 
 
 def _bound_value(node, user, perm, user_model):
-    return _resolve_runtime(node, user, perm, None, None, user_model)
+    """User, permission, or constant value. Object fields stay in the queryset."""
+    if _node(node, 'const'):
+        return node.value
+    if _node(node, 'field'):
+        if node.root == 'user':
+            if not node.path:
+                return user
+            return _walk_model_path(user, user_model, node.path)
+        if node.root == 'permission':
+            if node.path:
+                raise PermissionConditionError(
+                    'Permission references cannot traverse attributes in V1.'
+                )
+            return perm
+    raise PermissionConditionError(
+        'Cannot compile permission condition node %r.' % (node,)
+    )
 
 
 def _load_collection(node, user, obj, model, user_model):
@@ -265,14 +220,6 @@ def _load_collection(node, user, obj, model, user_model):
     raise PermissionConditionError(
         'Cannot evaluate permission condition node %r.' % (node,)
     )
-
-
-def _evaluate_contains(node, user, perm, obj, model, user_model):
-    manager = _load_collection(node.left, user, obj, model, user_model)
-    member = _resolve_runtime(
-        node.right, user, perm, obj, model, user_model,
-    )
-    return _collection_contains(manager, member_pk(member))
 
 
 def _compile_bare(node, model, user, perm, user_model):

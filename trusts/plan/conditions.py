@@ -1,8 +1,8 @@
 """Private condition language (issue #4 V1 / #142 Stage B).
 
 This module is not an application-facing import. It parses and checks
-a builder. Python evaluation and the queryset ``Q`` live in
-``trusts.plan.writers``. ``parse_named_filter`` returns the stored
+a builder. The queryset ``Q`` lives in ``trusts.plan.writers``.
+``parse_named_filter`` returns the stored
 node, a ``trusts.plan.grammar.Tree``.
 
 A callable argument to ``parse_named_filter`` is a **builder**: this
