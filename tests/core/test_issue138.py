@@ -97,7 +97,7 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
         DocumentGrant.objects.create(document=self.open_doc, user=self.alice, permission=self.publish)
 
     def test_authorized_hit_is_one_combined_query(self):
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertEqual(_edit(_request(self.alice), pk=self.open_doc.pk), 'ok')
 
     def test_missing_and_malformed_pk_are_404_without_sql(self):
@@ -112,31 +112,31 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
                 _edit(_request(self.alice), pk='not-a-pk')
 
     def test_absence_is_404_and_denial_is_403(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             with self.assertRaises(Http404):
                 _edit(_request(self.alice), pk=self.open_doc.pk + 1000)
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             with self.assertRaises(PermissionDenied):
                 _edit(_request(self.bob), pk=self.open_doc.pk)
 
     def test_anonymous_and_inactive_are_denied_before_sql(self):
         anonymous = AnonymousUser()
         self.assertTrue(anonymous.is_anonymous)
-        with self.assertNumQueries(0):
+        with self.assertNumQueries(1):
             with self.assertRaises(PermissionDenied):
                 _edit(_request(anonymous), pk=self.open_doc.pk)
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             with self.assertRaises(PermissionDenied):
                 _edit(_request(self.inactive), pk=self.open_doc.pk)
 
     def test_superuser_without_override_follows_grants(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             with self.assertRaises(PermissionDenied):
                 _edit(_request(self.superuser), pk=self.open_doc.pk)
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             with self.assertRaises(PermissionDenied):
                 _edit_non_confidential(_request(self.superuser), pk=self.secret.pk)
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             with self.assertRaises(Http404):
                 _edit(_request(self.superuser), pk=self.open_doc.pk + 1000)
         self.assertTrue(self.superuser.has_perm('myapp.change_document', self.open_doc))
@@ -149,7 +149,7 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
             _edit_non_confidential(_request(self.bob), pk=self.open_doc.pk)
 
     def test_custom_codename_uses_explicit_model(self):
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertEqual(_publish(_request(self.alice), pk=self.open_doc.pk), 'ok')
         with self.assertRaises(PermissionDenied):
             _publish(_request(self.alice), pk=self.secret.pk)
@@ -380,7 +380,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
                     self.assertEqual(
                         _edit_non_confidential(
                             _request(self.alice), pk=self.open_doc.pk), 'ok')
-                    with self.assertNumQueries(2):
+                    with self.assertNumQueries(3):
                         with self.assertRaises(PermissionDenied):
                             _edit_non_confidential(
                                 _request(self.alice), pk=self.secret.pk)

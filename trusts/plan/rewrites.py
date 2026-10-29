@@ -523,7 +523,7 @@ class _Walk(object):
 
     def visit(self, node, exists_context=False):
         if node is None or isinstance(node, (
-            BindRef, BoundBool, CallInput, SqlInt, str, bytes, int, float, bool,
+            BindRef, BoundBool, SqlInt, str, bytes, int, float, bool,
         )):
             return
         if isinstance(node, _AlongOnce):
@@ -925,7 +925,7 @@ def _rhs_is_emitted(lookup, value, connection):
 def _plain_value(value):
     if isinstance(value, (list, tuple, set, dict, QuerySet)):
         return _SKIP
-    if isinstance(value, (BindRef, BoundBool, CallInput, SqlInt, Expression)):
+    if isinstance(value, (BindRef, BoundBool, SqlInt, Expression)):
         return _SKIP
     if hasattr(value, 'resolve_expression') or hasattr(value, 'as_sql'):
         return _SKIP
@@ -1198,28 +1198,6 @@ def _role_first(columns):
     return tuple(
         column for _, column in sorted(enumerate(columns), key=key)
     )
-
-
-class CallInput(Value):
-    """One inquiry value that still compiles as a single ``%s``.
-
-    ``bind`` is the lockfile name (``permission.codename``). ``as_sql``
-    emits that value as one placeholder, the same text a plain constant
-    of this type emits. ``bind_once`` still sees the wrapped value.
-    """
-
-    def __init__(self, value, bind):
-        super().__init__(value)
-        self.bind = bind
-
-    def as_sql(self, compiler, connection):
-        return '%s', (self.value,)
-
-    def resolve_expression(
-        self, query=None, allow_joins=True, reuse=None,
-        summarize=False, for_save=False,
-    ):
-        return copy.copy(self)
 
 
 class BoundBool(Value):

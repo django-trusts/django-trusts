@@ -177,7 +177,7 @@ class RegistryQuestionsTest(TransactionTestCase):
                 seen.append(question)
                 return question.name
         names = built.walk_questions(_RecordingVisitor())
-        self.assertEqual(names, ('permitted', 'permitted_by_codename', 'has_perm', 'get_all_permissions', 'get_group_permissions', 'get_permitted_users', 'get_permitted_users_by_codename'))
+        self.assertEqual(names, ('permitted', 'has_perm', 'get_all_permissions', 'get_group_permissions', 'get_permitted_users'))
         self.assertTrue(all((isinstance(q, Question) for q in seen)))
         self.assertTrue(all((q.content_model is self.Document for q in seen)))
         self.assertEqual(len(seen[0].records), 2)
@@ -208,7 +208,7 @@ class RegistryQuestionsTest(TransactionTestCase):
                 seen.append(question)
                 return question
         built.walk_questions(_Visitor())
-        self.assertEqual([q.name for q in seen], ['permitted', 'permitted_by_codename', 'has_perm', 'get_all_permissions', 'get_permitted_users', 'get_permitted_users_by_codename', 'filter_by_permitted_content'])
+        self.assertEqual([q.name for q in seen], ['permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users', 'filter_by_permitted_content'])
         prefix_q = seen[-1]
         self.assertIs(prefix_q.content_model, self.Document)
         self.assertEqual(prefix_q.prefixes, (self.Folder,))
@@ -241,7 +241,7 @@ class RegistryQuestionsTest(TransactionTestCase):
                 seen.append(question)
                 return question.name
         names = built.walk_questions(_Visitor())
-        self.assertEqual(names[:-2], ('permitted', 'permitted_by_codename', 'has_perm', 'get_all_permissions', 'get_permitted_users', 'get_permitted_users_by_codename'))
+        self.assertEqual(names[:-2], ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'))
         self.assertEqual(names[-2:], ('named_filter', 'named_filter_grant'))
         named = seen[-2]
         self.assertEqual(named.name, 'named_filter')
