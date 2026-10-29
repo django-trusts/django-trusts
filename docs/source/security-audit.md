@@ -536,9 +536,14 @@ subquery the string inquiry executes. `has_perm` is
 `content.get_permitted_users(code)`. `permitted` and `get_permitted_users`
 remain the saved permission row. The codename call input is
 `$permission.codename`. App label and model stay `$content.app_label`
-and `$content.model`. A named filter on that content also has `has_perm`:
-the saved-instance check with that condition, the one statement that
-executes. Schema version 1 is unchanged. Regenerate a committed
+and `$content.model`. A named filter on that content also has `has_perm` and `permitted`:
+the saved-instance check with that condition, and
+`.permitted(code, user, conditions=(name,))`. Each is the one statement
+that executes. Several names are the AND of those single statements;
+the lockfile does not list the combinations. A queryset `has_perm` is
+the caller query AND the locked grant predicate. `extra_q` is not a
+lockfile row. `skip_<name>` changes only that bound parameter's value.
+Schema version 1 is unchanged. Regenerate a committed
 lockfile once so those rows are the statements under review.
 
 ### Formatter and enforcement

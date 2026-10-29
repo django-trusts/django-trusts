@@ -291,8 +291,9 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertEqual(list(content['permitted']), ['params', 'sql'])
         self.assertEqual(content['permitted']['params'], ['$user.id', '$permission.id', 'user.is_active=True', '$content.app_label="documents"', '$content.model="document"', 'skip_is_active=False'])
         named = content['named_filters'][0]
-        self.assertEqual(list(named), ['id', 'params', 'sql', 'has_perm'])
+        self.assertEqual(list(named), ['id', 'params', 'sql', 'has_perm', 'permitted'])
         self.assertEqual(list(named['has_perm']), ['params', 'sql'])
+        self.assertEqual(list(named['permitted']), ['params', 'sql'])
         self.assertIn('$permission.codename', named['has_perm']['params'])
         self.assertIn('confidential=True', named['has_perm']['params'])
         self.assertEqual(named['id'], 'documents__Document__non_confidential')
