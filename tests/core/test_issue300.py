@@ -537,9 +537,8 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
                     permitted = content['permitted']
                     named = content['named_filters'][0]
                     user = User(pk=1)
-                    permission = Permission(pk=1)
-                    raw_sql, raw_params = built_catalog(handle).filter_authorized(
-                        ReviewDocument.objects.all(), user, permission,
+                    raw_sql, raw_params = built_catalog(handle)._string_content_grant(
+                        ReviewDocument, user, 'documents.change_reviewdocument',
                     ).query.sql_with_params()
                     self._assert_cardinality_and_order(permitted, raw_params)
                     self.assertEqual(raw_sql.count('%s'), len(raw_params))

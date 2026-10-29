@@ -764,31 +764,42 @@ committed lockfile when the conventional file exists or
 .. note::
 
    Example SQLite output for the direct ``DocumentPermission`` registration
-   above; the layout is not a stable format.
+   above. The output is stable only for the same django-trusts version and
+   dependencies.
 
 .. code-block:: yaml
 
    get_permitted_users:
-     params: ["$permission.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False"]
+     params: ["$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "$permission.codename"]
      sql: |-
        SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined"
        FROM "auth_user"
        CROSS JOIN (
-         SELECT %s AS "permission_id", %s AS "content_id", %s AS "is_active", %s AS "app_label", %s AS "model"
+         SELECT %s AS "content_id", %s AS "is_active", %s AS "app_label", %s AS "model"
        ) "trusts_bind"
        WHERE (((%s)
              OR "auth_user"."is_active" = ("trusts_bind"."is_active")
          )
          AND EXISTS (
            SELECT 1 AS "a"
-           FROM "documents_documentpermission" "U0"
-           INNER JOIN "auth_permission" "U2" ON ("U0"."permission_id" = "U2"."id")
-           INNER JOIN "django_content_type" "U3" ON ("U2"."content_type_id" = "U3"."id")
-           WHERE ("U0"."document_id" = ("trusts_bind"."content_id")
-               AND "U0"."permission_id" = ("trusts_bind"."permission_id")
-               AND "U3"."app_label" = ("trusts_bind"."app_label")
-               AND "U3"."model" = ("trusts_bind"."model")
-               AND "U0"."user_id" = ("auth_user"."id")
+           FROM "documents_documentpermission" "V0"
+           INNER JOIN "auth_permission" "V2" ON ("V0"."permission_id" = "V2"."id")
+           INNER JOIN "django_content_type" "V3" ON ("V2"."content_type_id" = "V3"."id")
+           WHERE ("V0"."document_id" = ("trusts_bind"."content_id")
+               AND "V0"."permission_id" = (
+               SELECT "U0"."id" AS "pk"
+               FROM "auth_permission" "U0"
+               INNER JOIN "django_content_type" "U1" ON ("U0"."content_type_id" = "U1"."id")
+               WHERE ("U0"."codename" = %s
+                   AND "U1"."app_label" = ("trusts_bind"."app_label")
+                   AND "U1"."model" = ("trusts_bind"."model")
+               )
+               ORDER BY "U1"."app_label" ASC, "U1"."model" ASC, "U0"."codename" ASC
+               LIMIT 1
+             )
+               AND "V3"."app_label" = ("trusts_bind"."app_label")
+               AND "V3"."model" = ("trusts_bind"."model")
+               AND "V0"."user_id" = ("auth_user"."id")
            )
            LIMIT 1
          ) )

@@ -289,14 +289,14 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertEqual(trust['content']['path'], 'document')
         self.assertEqual(list(document['database']), ['engine'])
         self.assertEqual(list(content['permitted']), ['params', 'sql'])
-        self.assertEqual(content['permitted']['params'], ['$user.id', '$permission.id', 'user.is_active=True', '$content.app_label="documents"', '$content.model="document"', 'skip_is_active=False'])
+        self.assertEqual(content['permitted']['params'], ['$user.id', 'user.is_active=True', '$content.app_label="documents"', '$content.model="document"', 'skip_is_active=False', '$permission.codename'])
         named = content['named_filters'][0]
         self.assertEqual(list(named), ['id', 'params', 'sql', 'has_perm', 'permitted'])
         self.assertEqual(list(named['has_perm']), ['params', 'sql'])
         self.assertEqual(list(named['permitted']), ['params', 'sql'])
-        self.assertIn('$permission.id', named['has_perm']['params'])
-        self.assertNotIn('$permission.codename', named['has_perm']['params'])
-        self.assertIn('$permission.id', named['permitted']['params'])
+        self.assertIn('$permission.codename', named['has_perm']['params'])
+        self.assertNotIn('$permission.id', named['has_perm']['params'])
+        self.assertIn('$permission.codename', named['permitted']['params'])
         self.assertIn('confidential=True', named['has_perm']['params'])
         self.assertEqual(named['id'], 'documents__Document__non_confidential')
         self.assertNotIn('.', named['id'])
@@ -309,18 +309,19 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotIn('kind', trust)
         self.assertNotIn('kind', named)
         self.assertIn('EXISTS (', content['has_perm']['sql'])
-        self.assertIn('$permission.id', content['has_perm']['params'])
-        self.assertNotIn('$permission.codename', content['has_perm']['params'])
+        self.assertIn('$permission.codename', content['has_perm']['params'])
+        self.assertNotIn('$permission.id', content['has_perm']['params'])
         self.assertNotIn('permitted_by_codename', content)
         self.assertNotIn('get_permitted_users_by_codename', content)
-        self.assertIn('$permission.id', content['permitted']['params'])
-        self.assertIn('$permission.id', content['get_permitted_users']['params'])
+        self.assertIn('$permission.codename', content['permitted']['params'])
+        self.assertIn('$permission.codename', content['get_permitted_users']['params'])
         self.assertIn('auth_permission', content['get_all_permissions']['sql'])
-        for token in ('change_document', 'codename'):
+        for token in ('change_document',):
             self.assertNotIn(token, content['permitted']['sql'])
             self.assertNotIn(token, named['sql'])
+        self.assertIn('"codename"', content['permitted']['sql'])
         self.assertNotIn('change_document', content['has_perm']['sql'])
-        self.assertNotIn('"codename"', content['has_perm']['sql'])
+        self.assertIn('"codename"', content['has_perm']['sql'])
         for token in _FORBIDDEN:
             self.assertNotIn(token, text)
 
@@ -743,14 +744,14 @@ class PolicySqlSentinelTest(SimpleTestCase):
         actor_content = actor_doc['backends'][0]['contents'][0]
         actor_trust = actor_content['trusts'][0]
         self.assertEqual(actor_trust['user']['target'], 'id')
-        self.assertEqual(actor_content['permitted']['params'], ['$user.id', '$permission.id', '$content.id', 'user.is_active=True', '$content.app_label="documents"', '$content.model="document"', 'skip_is_active=False'])
+        self.assertEqual(actor_content['permitted']['params'], ['$user.id', '$content.id', 'user.is_active=True', '$content.app_label="documents"', '$content.model="document"', 'skip_is_active=False', '$permission.codename'])
         account_handle = _handle('documents.backends.AccountBackend')
         account_handle.register(trust=PolicyAccountGrant, user='user', permission='permission', content='document')
         account_doc = yaml.safe_load(render_configured_policy(account_handle))
         account_content = account_doc['backends'][0]['contents'][0]
         account_trust = account_content['trusts'][0]
         self.assertEqual(account_trust['user'], {'path': 'user', 'model': 'documents.PolicyAccount', 'target': 'code'})
-        self.assertEqual(account_content['permitted']['params'], ['$user.code', '$permission.id', '$content.id', 'user.is_active=True', '$content.app_label="documents"', '$content.model="document"', 'skip_is_active=False'])
+        self.assertEqual(account_content['permitted']['params'], ['$user.code', '$content.id', 'user.is_active=True', '$content.app_label="documents"', '$content.model="document"', 'skip_is_active=False', '$permission.codename'])
 
     def test_custom_permission_pk_renders_the_resolved_target(self):
         handle = _handle('documents.backends.OperationBackend')

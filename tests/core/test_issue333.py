@@ -316,9 +316,9 @@ class NullRuleAgreementTest(TransactionTestCase):
                                 self.assertEqual(
                                     len(held_queries), len(via_queries),
                                 )
-                                self.assertLessEqual(len(held_queries), 2)
+                                self.assertLessEqual(len(held_queries), 1)
                                 if row.pk in expected:
-                                    self.assertEqual(len(held_queries), 2)
+                                    self.assertEqual(len(held_queries), 1)
                                 self.assertEqual(one, via)
                                 self.assertEqual(one, row.pk in expected)
                                 if one:
@@ -335,23 +335,23 @@ class NullRuleAgreementTest(TransactionTestCase):
                 probe = Pair.objects.get(pk=rows[1].pk)
                 probe.left = 999
                 probe.label = mark_b
-                with self.assertNumQueries(2):
+                with self.assertNumQueries(1):
                     self.assertTrue(alice.has_perm('%s:same' % PERM, probe))
-                with self.assertNumQueries(2):
+                with self.assertNumQueries(1):
                     self.assertTrue(alice.has_perm('%s:marked' % PERM, probe))
                 self.assertEqual(probe.left, 999)
                 self.assertEqual(probe.label_id, mark_b.pk)
                 blank = Pair.objects.get(pk=rows[0].pk)
                 blank.left = 4
-                with self.assertNumQueries(2):
+                with self.assertNumQueries(1):
                     self.assertTrue(alice.has_perm('%s:blank' % PERM, blank))
                 self.assertEqual(blank.left, 4)
-                with self.assertNumQueries(2):
+                with self.assertNumQueries(1):
                     self.assertFalse(alice.has_perm(
                         '%s:same' % PERM,
                         Pair.objects.filter(pk__in=(rows[1].pk, rows[2].pk)),
                     ))
-                with self.assertNumQueries(2):
+                with self.assertNumQueries(1):
                     self.assertTrue(alice.has_perm(
                         '%s:same' % PERM,
                         Pair.objects.filter(pk=rows[1].pk),
@@ -411,9 +411,9 @@ class NullRuleAgreementTest(TransactionTestCase):
                 )
                 for user, flags, expected in cases:
                     with self.subTest(user=user.username, flags=flags):
-                        with self.assertNumQueries(2):
+                        with self.assertNumQueries(1):
                             held = checker.has_perm(user, code, row, **flags)
-                        with self.assertNumQueries(2):
+                        with self.assertNumQueries(1):
                             via = Pair.objects.permitted(
                                 PERM, user, conditions=('same',), **flags,
                             ).filter(pk=row.pk).exists()
@@ -421,7 +421,7 @@ class NullRuleAgreementTest(TransactionTestCase):
                         self.assertEqual(held, via)
                 stale = Pair.objects.get(pk=row.pk)
                 stale.left = 8
-                with self.assertNumQueries(2):
+                with self.assertNumQueries(1):
                     self.assertTrue(checker.has_perm(
                         dormant, code, stale, skip_is_active=True,
                     ))

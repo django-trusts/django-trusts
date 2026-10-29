@@ -21,8 +21,9 @@ from trusts.plan.aggregates import (
     instance_match,
 )
 from trusts.plan.conditions import (
+    codename_lookup,
     condition_model_key,
-    lookup_saved_permission,
+    permission_binding,
 )
 from trusts.plan.writers import compile_to_q
 from trusts.plan.contents import (
@@ -419,11 +420,7 @@ class Catalog(object):
         perm = '%s.%s_%s' % (applabel, action, modelname)
         if cond and stored is None:
             return PreparedInquiry(model, result=False)
-        binding = lookup_saved_permission(
-            applabel, modelname, '%s_%s' % (action, modelname),
-        )
-        if binding is None:
-            return PreparedInquiry(model, result=False)
+        binding = permission_binding(perm, model)
         values = dict(skipped) if isinstance(skipped, dict) else {}
         if isinstance(obj, QuerySet):
             bound = _bound_all_match(
@@ -478,13 +475,36 @@ class Catalog(object):
         return inquiry.denied, inquiry.values
 
     def _question_has_perm(self, user, content, permission):
+        if isinstance(permission, str):
+            permission = permission_binding(permission, content.__class__)
         inquiry = _instance_exists_query(self, content, user, permission)
         return False if inquiry is None else inquiry
 
     def _question_content_grant(self, content_model, user, permission):
+        if isinstance(permission, str):
+            return self._string_content_grant(content_model, user, permission)
         return self.filter_authorized(
             content_model._meta.concrete_model._default_manager.all(),
             user, permission,
+        )
+
+    def _string_content_grant(self, content_model, user, code):
+        """``.permitted(str)``: the codename subquery on this content model."""
+        model = content_model._meta.concrete_model
+        app_label, codename = code.split('.', 1)
+        binding = codename_lookup(model, app_label, codename)
+        queryset = model._default_manager.all()
+        if not isinstance(user, Model):
+            return queryset.none()
+        denied, values = self._resolve_skipped(user, {})
+        if denied:
+            return queryset.none()
+        predicate, _owned = self.authorization_grant(
+            queryset, user, model, binding, (), binding,
+            api='permitted', skipped=values,
+        )
+        return bind_filtered_queryset(
+            queryset, predicate, user_model=self.user_model,
         )
 
     def _question_filter_by_permitted_content(
@@ -497,18 +517,26 @@ class Catalog(object):
     def _question_conditional_has_perm(self, user, content, permission, code):
         """Exists query a saved-instance ``has_perm(code:name, object)`` runs.
 
-        ``permission`` is the id-bound row. ``code`` is one filter name.
-        ``None`` when this catalog has no grant for the condition.
+        ``permission`` is a codename string or a permission row. ``code``
+        is one filter name. ``None`` when this catalog has no grant for
+        the condition.
         """
         denied, values = self._resolve_skipped(user, {})
         if (
             denied or not isinstance(content, Model) or content.pk is None
-            or not isinstance(permission, Model) or permission.pk is None
             or not isinstance(code, str) or not code
         ):
             return None
         meta = content._meta
-        permext = '%s.change_%s:%s' % (meta.app_label, meta.model_name, code)
+        if isinstance(permission, str):
+            base = permission.split(':', 1)[0]
+            binding = permission_binding(base, content.__class__)
+            permext = '%s:%s' % (base, code)
+        elif isinstance(permission, Model) and permission.pk is not None:
+            binding = permission
+            permext = '%s.change_%s:%s' % (meta.app_label, meta.model_name, code)
+        else:
+            return None
         _stored, extra_q = self._condition_overlay(permext, content, user)
         if extra_q is None:
             return None
@@ -516,7 +544,7 @@ class Catalog(object):
         if not plan.applicable:
             return None
         queryset = _bound_saved_row(
-            self, content, user, permission,
+            self, content, user, binding,
             kind='complete', extra_q=extra_q,
             permission_model=Permission, skipped=values,
         )
@@ -535,23 +563,29 @@ class Catalog(object):
     def _question_named_filter_grant(self, model, code, user, permission):
         """``.permitted(code, user, conditions=(name,))`` for this catalog.
 
-        ``permission`` is the id-bound row. One name. Several names are
-        the AND of these single statements.
+        ``permission`` is a codename string or a permission row. One name.
+        Several names are the AND of these single statements.
         """
         concrete = model._meta.concrete_model
         queryset = concrete._default_manager.all()
-        if (
-            not isinstance(user, Model)
-            or not isinstance(permission, Model) or permission.pk is None
-        ):
+        if not isinstance(user, Model):
+            return queryset.none()
+        if isinstance(permission, str):
+            app_label, codename = permission.split('.', 1)
+            binding = codename_lookup(concrete, app_label, codename)
+            label = permission
+        elif isinstance(permission, Model) and permission.pk is not None:
+            binding = permission
+            label = '%s.change_%s' % (
+                concrete._meta.app_label, concrete._meta.model_name,
+            )
+        else:
             return queryset.none()
         denied, values = self._resolve_skipped(user, {})
         if denied:
             return queryset.none()
-        meta = concrete._meta
-        label = '%s.change_%s' % (meta.app_label, meta.model_name)
         predicate, _owned = self.authorization_grant(
-            queryset, user, concrete, label, (code,), permission,
+            queryset, user, concrete, label, (code,), binding,
             api='permitted', skipped=values,
         )
         return bind_filtered_queryset(

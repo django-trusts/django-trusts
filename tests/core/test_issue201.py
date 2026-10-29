@@ -259,7 +259,7 @@ class AuthorizationRequiredReadinessPreflightTest(
                     with self.assertRaises(PermissionDenied):
                         _filtered(_request(user), pk=self.open_doc.pk)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             self.assertEqual(
                 _filtered(_request(self.alice), pk=self.open_doc.pk),
                 'ok',
@@ -276,16 +276,16 @@ class AuthorizationRequiredReadinessPreflightTest(
         def _filtered(request, pk):
             return 'ok'
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             self.assertEqual(_edit(_request(self.alice), pk=self.open_doc.pk), 'ok')
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(2):
             with self.assertRaises(PermissionDenied):
                 _edit(_request(self.bob), pk=self.open_doc.pk)
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(2):
             with self.assertRaises(Http404):
                 _edit(_request(self.alice), pk=self.open_doc.pk + 1000)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             self.assertEqual(
                 _filtered(_request(self.alice), pk=self.open_doc.pk),
                 'ok',

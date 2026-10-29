@@ -45,6 +45,7 @@ from django.db.models import (
     Manager,
     Model,
     QuerySet,
+    Subquery,
     BinaryField,
     BooleanField,
     CharField,
@@ -72,30 +73,50 @@ from trusts.plan.grammar import (
     missing_field,
     unsupported,
 )
+from trusts.plan.rewrites import CallInput
 from trusts.utils import parse_perm_code
 
 
-def lookup_saved_permission(app_label, model_name, codename):
-    """The saved ``auth.Permission`` id for one codename, or ``None``.
+def permission_binding(perm, model):
+    """Unevaluated ``auth.Permission`` pk for a codename string.
 
-    One query. A miss is closed by the caller: no grant statement runs.
+    A ``Permission`` instance is returned unchanged. A string becomes
+    the codename subquery ``has_perm`` and ``get_permitted_users`` run.
+    The codename, app label, and model name are call inputs. ``model``
+    is the content model the caller asked about; the string still
+    supplies the three constants.
     """
-    if (
-        not isinstance(app_label, str) or not app_label
-        or not isinstance(model_name, str) or not model_name
-        or not isinstance(codename, str) or not codename
-    ):
-        return None
-    pk = Permission.objects.filter(
-        content_type__app_label=app_label.lower(),
-        content_type__model=model_name,
-        codename=codename,
-    ).values_list('pk', flat=True).first()
-    if pk is None:
-        return None
-    row = Permission(pk=pk, codename=codename)
-    row._state.adding = False
-    return row
+    if isinstance(perm, Permission):
+        return perm
+    applabel, modelname, action, _cond = parse_perm_code(perm)
+    return Subquery(
+        Permission.objects.filter(
+            codename=CallInput(
+                '%s_%s' % (action, modelname), 'permission.codename',
+            ),
+            content_type__app_label=CallInput(
+                applabel.lower(), 'permission.app_label',
+            ),
+            content_type__model=CallInput(modelname, 'permission.model'),
+        ).values('pk')[:1]
+    )
+
+
+def codename_lookup(model, app_label, codename):
+    """Exact-codename subquery ``.permitted(str)`` runs.
+
+    ``model`` is the protected content model. Its model name stays a
+    content constant. The codename and app label are call inputs.
+    """
+    return Subquery(
+        Permission.objects.filter(
+            content_type__app_label=CallInput(
+                app_label.lower(), 'permission.app_label',
+            ),
+            content_type__model=model._meta.model_name,
+            codename=CallInput(codename, 'permission.codename'),
+        ).values('pk')[:1]
+    )
 
 
 def _node(node, *kinds):

@@ -155,7 +155,7 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
             change = _permission(self.Note)
             note = self.Note.objects.create(title='open', owner=alice)
             self.NoteGrant.objects.create(note=note, user=alice, permission=change)
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, PERM, note))
             for code in codes:
                 filtered = '%s:%s' % (PERM, code)
@@ -189,13 +189,13 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
             secret = self.Note.objects.create(title='secret', owner=alice, confidential=True)
             for note in (opened, secret):
                 self.NoteGrant.objects.create(note=note, user=alice, permission=change)
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, OPEN, opened))
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertFalse(self.backend.has_perm(alice, OPEN, secret))
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertFalse(self.backend.has_perm(bob, OPEN, opened))
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, PERM, secret))
             with self.assertNumQueries(0):
                 fresh = compiler(path='tests.core.issue203-reject')
@@ -210,13 +210,13 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
                     self.Note, 'partial_203', lambda u, p, o: o.title == 'open',
                 )
             self.assertEqual(len(log.calls), 1)
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, OPEN, opened))
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertFalse(self.backend.has_perm(alice, OPEN, secret))
             with self.assertNumQueries(0):
                 self.assertFalse(self.backend.has_perm(alice, '%s:partial_203' % PERM, opened))
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertFalse(self.backend.has_perm(bob, PERM, opened))
 
     def test_supported_surface_stays_builder_once_and_count_independent(self):
@@ -246,25 +246,25 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
             one = self.Note.objects.filter(pk=first.pk)
             many = self.Note.objects.filter(pk__in=[first.pk, second.pk])
             mixed = self.Note.objects.filter(pk__in=[first.pk, second.pk, secret.pk])
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, OPEN, first))
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, OPEN, one))
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, OPEN, many))
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertFalse(self.backend.has_perm(alice, OPEN, mixed))
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, PERM, mixed))
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertFalse(self.backend.has_perm(alice, OPEN, secret))
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertFalse(self.backend.has_perm(bob, OPEN, first))
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertFalse(self.backend.has_perm(bob, PERM, first))
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, '%s:titled' % PERM, first))
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, '%s:owned' % PERM, first))
             self.assertEqual(len(log.calls), 1)
 

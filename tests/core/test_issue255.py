@@ -230,7 +230,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
         row = document['backends'][0]['contents'][0]['get_permitted_users']
         self.assertEqual(list(row), ['params', 'sql'])
         self.assertIn('$content.id', row['params'])
-        self.assertIn('$permission.id', row['params'])
+        self.assertIn('$permission.codename', row['params'])
         self.assertIn('EXISTS', row['sql'])
         self.assertIn('auth_user', row['sql'])
         where_at = row['sql'].upper().find('WHERE')
@@ -269,14 +269,14 @@ class Issue255PolicySqlTest(SimpleTestCase):
             self.assertIn('WITH RECURSIVE', forward['sql'])
             self.assertEqual(forward['sql'].count('WITH RECURSIVE'), 2)
             self.assertEqual(forward['sql'].count('%s'), len(forward['params']))
-        self.assertEqual(content['permitted']['params'], ['$user.id', '$permission.id', 'user.is_active=True', '$along_bound=2', '$content.app_label="documents"', '$content.model="folder"', '$along_match=True', 'skip_is_active=False'])
-        self.assertIn('$permission.id', content['has_perm']['params'])
-        self.assertNotIn('$permission.codename', content['has_perm']['params'])
+        self.assertEqual(content['permitted']['params'], ['$user.id', 'user.is_active=True', '$along_bound=2', '$content.app_label="documents"', '$content.model="folder"', '$along_match=True', 'skip_is_active=False', '$permission.codename', '$permission.codename'])
+        self.assertIn('$permission.codename', content['has_perm']['params'])
+        self.assertNotIn('$permission.id', content['has_perm']['params'])
         self.assertNotIn('permitted_by_codename', content)
         self.assertNotIn('get_permitted_users_by_codename', content)
         self.assertEqual(content['get_all_permissions']['params'], ['$user.id', '$content.id', 'user.is_active=True', '$along_bound=2', '$content.app_label="documents"', '$content.model="folder"', '$along_match=True', 'skip_is_active=False'])
-        self.assertEqual(reverse['params'], ['$permission.id', '$content.id', 'user.is_active=True', '$along_bound=2', '$content.app_label="documents"', '$content.model="folder"', '$along_match=True', 'skip_is_active=False', '$along_match=True', '$along_match=True'])
-        self.assertEqual([index for index, param in enumerate(reverse['params']) if param == '$along_bound=2'], [3])
+        self.assertEqual(reverse['params'], ['$content.id', 'user.is_active=True', '$along_bound=2', '$content.app_label="documents"', '$content.model="folder"', '$along_match=True', 'skip_is_active=False', '$permission.codename', '$along_match=True', '$permission.codename', '$along_match=True'])
+        self.assertEqual([index for index, param in enumerate(reverse['params']) if param == '$along_bound=2'], [2])
         self.assertEqual(reverse['params'].count('user.is_active=True'), 1)
         self.assertEqual(reverse['sql'].count('%s'), len(reverse['params']))
         self.assertEqual(reverse['sql'].count('WITH RECURSIVE'), 2)
@@ -320,7 +320,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
         self.assertIn('mentor_id', permitted)
         self.assertIn('documents_parentgrant', permitted)
         self.assertIn('documents_mentorgrant', permitted)
-        self.assertEqual(content['permitted']['params'], ['$user.id', '$permission.id', 'user.is_active=True', '$along_bound=8', '$content.app_label="documents"', '$content.model="walknode"', '$along_match=True', 'skip_is_active=False'])
+        self.assertEqual(content['permitted']['params'], ['$user.id', 'user.is_active=True', '$along_bound=8', '$content.app_label="documents"', '$content.model="walknode"', '$along_match=True', 'skip_is_active=False', '$permission.codename', '$permission.codename'])
 
     def test_along_reverse_uuid_to_field_binds_content_ident(self):
 
@@ -351,10 +351,10 @@ class Issue255PolicySqlTest(SimpleTestCase):
         self.assertIn('WITH RECURSIVE', reverse['sql'])
         self.assertIn('"ident" = ("trusts_bind"."content_ident")', reverse['sql'])
         self.assertIn('"user_id" = ("auth_user"."id")', reverse['sql'])
-        self.assertEqual(reverse['params'], ['$permission.id', '$content.ident', 'user.is_active=True', '$along_bound=2', '$content.app_label="documents"', '$content.model="uuidnode"', '$along_match=True', 'skip_is_active=False', '$along_match=True'])
+        self.assertEqual(reverse['params'], ['$content.ident', 'user.is_active=True', '$along_bound=2', '$content.app_label="documents"', '$content.model="uuidnode"', '$along_match=True', 'skip_is_active=False', '$permission.codename', '$along_match=True'])
         self.assertNotIn('$content.id', reverse['params'])
         self.assertTrue(all((isinstance(param, str) for param in reverse['params'])))
-        self.assertEqual([index for index, param in enumerate(reverse['params']) if param == '$along_bound=2'], [3])
+        self.assertEqual([index for index, param in enumerate(reverse['params']) if param == '$along_bound=2'], [2])
 
     def test_content_pk_literal_stays_const_beside_an_along_reverse(self):
         handle = _export_handle('documents.backends.LiteralFolderBackend')
@@ -397,7 +397,6 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         self.assertTrue(callable(self.document.get_permitted_users))
         with self.assertNumQueries(0):
             by_instance = self.document.get_permitted_users(self.change)
-        with self.assertNumQueries(1):
             by_string = self.document.get_permitted_users(PERM)
         self.assertIsNone(by_instance._result_cache)
         self.assertIsNone(by_string._result_cache)

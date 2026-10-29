@@ -171,9 +171,9 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
     def test_mixin_own_handle_still_evaluates_fold_family_path(self):
         settings = self._family_patches()
         with settings:
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertTrue(self.mixin.has_perm(self.alice, PERM, self.fold_doc))
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(1):
                 self.assertFalse(self.document_backend.has_perm(self.alice, PERM, self.fold_doc))
             with self.assertNumQueries(1):
                 self.assertEqual(self.mixin.get_all_permissions(self.alice, self.fold_doc), {PERM})
@@ -208,7 +208,7 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
                 self.assertEqual(self.backend.get_all_permissions(self.alice, self.doc), set())
 
     def test_relationship_applies_keeps_live_grant(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             self.assertTrue(self.backend.has_perm(self.alice, PERM, self.doc))
 
 class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):

@@ -313,10 +313,13 @@ class _PolicyVisitor(object):
                 content['filter_by_permitted_content'] = rows
             return content
         if question.name == 'permitted':
-            queryset = question.question(user, permission)
+            queryset = question.question(
+                user, _lock_permission(model, question.records or records, permission),
+            )
         elif question.name == 'has_perm':
             queryset = question.question(
-                user, _content_sentinel(model, alias), permission,
+                user, _content_sentinel(model, alias),
+                _lock_permission(model, question.records or records, permission),
             )
         elif question.name in ('get_all_permissions', 'get_group_permissions'):
             queryset = question.question(
@@ -325,7 +328,10 @@ class _PolicyVisitor(object):
         elif question.name == 'get_permitted_users':
             instance = _content_sentinel(model, alias)
             _populate_reverse_along_identity(instance, records, alias)
-            queryset = question.question(instance, permission)
+            queryset = question.question(
+                instance,
+                _lock_permission(model, question.records or records, permission),
+            )
         else:
             raise TrustsConfigurationError(
                 'Policy SQL visitor cannot render question %r.'
@@ -380,10 +386,9 @@ class _PolicyVisitor(object):
         if not records or not _auth_permission_terminal(records):
             return None
         user = _role_sentinel(records[0], 'user', self.alias)
-        permission = _role_sentinel(records[0], 'permission', self.alias)
         content = _content_sentinel(model, self.alias)
         inquiry = self.catalog._question_conditional_has_perm(
-            user, content, permission, question.code,
+            user, content, _change_permission_code(model), question.code,
         )
         if inquiry is None:
             return None
@@ -414,8 +419,7 @@ class _PolicyVisitor(object):
         if named is None:
             return None
         user = _role_sentinel(records[0], 'user', self.alias)
-        permission = _role_sentinel(records[0], 'permission', self.alias)
-        queryset = question.question(user, permission)
+        queryset = question.question(user, _change_permission_code(model))
         named['permitted'] = _sql_row(_compile_queryset(
             queryset, self.alias, record=records[0], expr=question.expr,
             records=records,
@@ -717,6 +721,19 @@ def _auth_permission_terminal(records):
         if model is None or model._meta.concrete_model is not concrete:
             return False
     return True
+
+
+def _change_permission_code(model):
+    """``app_label.change_<model>`` for the codename binding."""
+    meta = model._meta
+    return '%s.change_%s' % (meta.app_label, meta.model_name)
+
+
+def _lock_permission(model, records, permission):
+    """Codename string for an ``auth.Permission`` terminal, else the row."""
+    if _auth_permission_terminal(records):
+        return _change_permission_code(model)
+    return permission
 
 
 def _role_sentinel(record, role, alias):
