@@ -388,7 +388,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         self.DocumentGrant.objects.create(
             document=self.doc_a, user=self.alice, permission=self.read,
         )
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             self.assertTrue(
                 built_catalog(registry).has_perm(
                     self.alice,

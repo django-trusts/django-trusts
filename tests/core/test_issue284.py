@@ -66,7 +66,7 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
     def test_content_enumeration_and_boolean_with_skip_is_active(self):
         self._deactivate(self.alice)
         permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(5):
             self.assertFalse(Document.objects.authorized(self.alice, self.change).exists())
             self.assertEqual(_pks(permitted.permitted(self.change, self.alice)), set())
             self.assertFalse(self.alice.has_perm(PERM, self.open_doc))
@@ -218,7 +218,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             self.assertEqual(_pks(built_catalog(registry).permissions_for(alice, note)), {read.pk})
             self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), note))
             self.assertEqual(_pks(built_catalog(registry).filter_authorized(Note.objects.all(), alice, read)), {note.pk})
-            with self.assertNumQueries(4):
+            with self.assertNumQueries(3):
                 self.assertEqual(list(built_catalog(registry).permissions_for(inactive, note)), [])
                 self.assertFalse(built_catalog(registry).has_perm(inactive, '%s.%s' % (read.content_type.app_label, read.codename), note))
                 self.assertFalse(built_catalog(registry).filter_authorized(Note.objects.all(), inactive, read).exists())

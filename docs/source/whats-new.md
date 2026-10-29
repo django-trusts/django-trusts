@@ -56,8 +56,9 @@ log.
   permission/object pairs deny. See the [migration record](migrates.md#permission-content-type-must-match-the-object-267)
   and [#269].
 
-- django-trusts now has inspectable SQL and a lockfile ([security audit](security-audit.md#authorization-policy-sql-and-lockfile)).
+- **Inspectable SQL and a lockfile.** django-trusts now has inspectable SQL and a lockfile ([security audit](security-audit.md#authorization-policy-sql-and-lockfile), [#252], [#292]).
 
+[#252]: https://github.com/django-trusts/django-trusts/pull/252
 [#254]: https://github.com/django-trusts/django-trusts/pull/254
 [#259]: https://github.com/django-trusts/django-trusts/pull/259
 [#264]: https://github.com/django-trusts/django-trusts/pull/264
@@ -65,4 +66,5 @@ log.
 [#271]: https://github.com/django-trusts/django-trusts/pull/271
 [#279]: https://github.com/django-trusts/django-trusts/pull/279
 [#286]: https://github.com/django-trusts/django-trusts/pull/286
+[#292]: https://github.com/django-trusts/django-trusts/pull/292
 [#304]: https://github.com/django-trusts/django-trusts/pull/304

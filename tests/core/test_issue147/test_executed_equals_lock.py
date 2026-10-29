@@ -40,6 +40,8 @@ def _runtime_value(token, *, user, content, permission):
         return content.pk
     if token == '$permission.id':
         return permission.pk
+    if token == '$permission.codename':
+        return _CODENAME
     source, raw = token.split('=', 1)
     if raw == 'True':
         return True
@@ -125,55 +127,55 @@ class ExecutedEqualsLockTest(TransactionTestCase):
             content = DocumentBackend().policy_document()['backends'][0]['contents'][0]
             cases = (
                 (
-                    'has_perm-string',
                     'has_perm',
                     lambda: DocumentBackend().has_perm(user, _CODE, doc),
-                    True,
                 ),
                 (
-                    'permitted-string',
                     'permitted',
                     lambda: list(PermittedQuerySet(model=Document).permitted(
                         _CODE, user, backend=DOCUMENT_BACKEND,
                     )),
-                    True,
                 ),
                 (
-                    'permitted-permission',
-                    'permitted',
-                    lambda: list(PermittedQuerySet(model=Document).permitted(
-                        permission, user, backend=DOCUMENT_BACKEND,
-                    )),
-                    False,
-                ),
-                (
-                    'get_permitted_users-string',
                     'get_permitted_users',
                     lambda: list(PermittedUsersMixin.get_permitted_users(
                         doc, _CODE, backend=DOCUMENT_BACKEND,
                     )),
-                    True,
-                ),
-                (
-                    'get_permitted_users-permission',
-                    'get_permitted_users',
-                    lambda: list(PermittedUsersMixin.get_permitted_users(
-                        doc, permission, backend=DOCUMENT_BACKEND,
-                    )),
-                    False,
                 ),
             )
-            for label, key, run, lookup in cases:
-                with self.subTest(label=label):
+            for key, run in cases:
+                with self.subTest(key=key):
                     self.assertEqual(content[key], golden[key])
-                    self._matches(content[key], run, user, doc, permission, lookup)
+                    self._matches(content[key], run, user, doc, permission)
+            permitted_string = list(PermittedQuerySet(model=Document).permitted(
+                _CODE, user, backend=DOCUMENT_BACKEND,
+            ))
+            permitted_object = list(PermittedQuerySet(model=Document).permitted(
+                permission, user, backend=DOCUMENT_BACKEND,
+            ))
+            self.assertEqual(permitted_string, permitted_object)
+            users_string = list(PermittedUsersMixin.get_permitted_users(
+                doc, _CODE, backend=DOCUMENT_BACKEND,
+            ))
+            users_object = list(PermittedUsersMixin.get_permitted_users(
+                doc, permission, backend=DOCUMENT_BACKEND,
+            ))
+            self.assertEqual(users_string, users_object)
+            self._binding_differs(
+                lambda: list(PermittedQuerySet(model=Document).permitted(
+                    _CODE, user, backend=DOCUMENT_BACKEND,
+                )),
+                lambda: list(PermittedQuerySet(model=Document).permitted(
+                    permission, user, backend=DOCUMENT_BACKEND,
+                )),
+            )
             named = content['named_filters'][0]
             golden_named = golden['named_filters'][0]
             self.assertEqual(named['has_perm'], golden_named['has_perm'])
             self._matches(
                 named['has_perm'],
                 lambda: DocumentBackend().has_perm(user, _CONDITIONAL, doc),
-                user, doc, permission, True,
+                user, doc, permission,
             )
             self.assertEqual(named['permitted'], golden_named['permitted'])
             self._matches(
@@ -182,16 +184,17 @@ class ExecutedEqualsLockTest(TransactionTestCase):
                     _CODE, user, conditions=('non_confidential',),
                     backend=DOCUMENT_BACKEND,
                 )),
-                user, doc, permission, True,
+                user, doc, permission,
             )
-            self._matches(
-                named['permitted'],
-                lambda: list(PermittedQuerySet(model=Document).permitted(
-                    permission, user, conditions=('non_confidential',),
-                    backend=DOCUMENT_BACKEND,
-                )),
-                user, doc, permission, False,
-            )
+            named_string = list(PermittedQuerySet(model=Document).permitted(
+                _CODE, user, conditions=('non_confidential',),
+                backend=DOCUMENT_BACKEND,
+            ))
+            named_object = list(PermittedQuerySet(model=Document).permitted(
+                permission, user, conditions=('non_confidential',),
+                backend=DOCUMENT_BACKEND,
+            ))
+            self.assertEqual(named_string, named_object)
 
     def test_skip_flag_changes_only_the_bound_value(self):
         User = get_user_model()
@@ -252,22 +255,23 @@ class ExecutedEqualsLockTest(TransactionTestCase):
             self.assertEqual(grant_where, locked_where)
             self.assertEqual(negated_where, 'NOT ' + grant_where)
 
-    def _matches(self, row, run, user, doc, permission, lookup):
+    def _matches(self, row, run, user, doc, permission):
         statements = _statements(run)
-        if lookup:
-            self.assertEqual(len(statements), 2)
-            lookup_sql = statements[0][0]
-            self.assertIn('auth_permission', lookup_sql)
-            self.assertNotIn('documents_', lookup_sql)
-        else:
-            self.assertEqual(len(statements), 1)
-        sql, params = _grant(statements)
+        self.assertEqual(len(statements), 1)
+        sql, params = statements[0]
         self.assertEqual(_format_policy_sql(sql), row['sql'])
         expected = tuple(
             _runtime_value(token, user=user, content=doc, permission=permission)
             for token in row['params']
         )
         self.assertEqual(tuple(params), expected)
+
+    def _binding_differs(self, string_run, object_run):
+        string_sql, _params = _statements(string_run)[0]
+        object_sql, _params = _statements(object_run)[0]
+        self.assertNotEqual(string_sql, object_sql)
+        self.assertIn('codename', string_sql)
+        self.assertIn('permission_id', object_sql)
 
 
 class LockRoundTripTest(SimpleTestCase):
@@ -285,10 +289,10 @@ class LockRoundTripTest(SimpleTestCase):
         for content in rows:
             self.assertNotIn('permitted_by_codename', content)
             self.assertNotIn('get_permitted_users_by_codename', content)
-            self.assertIn('$permission.id', content['has_perm']['params'])
-            self.assertNotIn('$permission.codename', content['has_perm']['params'])
-            self.assertIn('$permission.id', content['permitted']['params'])
-            self.assertIn('$permission.id', content['get_permitted_users']['params'])
+            self.assertIn('$permission.codename', content['has_perm']['params'])
+            self.assertNotIn('$permission.id', content['has_perm']['params'])
+            self.assertIn('$permission.codename', content['permitted']['params'])
+            self.assertIn('$permission.codename', content['get_permitted_users']['params'])
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / CONVENTIONAL_LOCKFILE_NAME
             target.write_bytes(payload)
