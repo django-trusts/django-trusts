@@ -107,8 +107,8 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
     def test_string_and_instance_grant_before_pagination(self):
         expected = {self.open_doc.pk, self.secret.pk}
         for permission in ('myapp.change_document', self.change):
-            with self.subTest(permission=permission):
-                with self.assertNumQueries(0):
+            with self.subTest(permission=type(permission).__name__):
+                with self.assertNumQueries(1 if isinstance(permission, str) else 0):
                     chosen = self.docs.permitted(permission, self.alice)
                 self.assertIsInstance(chosen, PermittedQuerySet)
                 self.assertIsNone(chosen._result_cache)
@@ -119,8 +119,8 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
 
     def test_owned_condition_is_an_and_overlay(self):
         for permission in ('myapp.change_document', self.change):
-            with self.subTest(permission=permission):
-                with self.assertNumQueries(0):
+            with self.subTest(permission=type(permission).__name__):
+                with self.assertNumQueries(1 if isinstance(permission, str) else 0):
                     chosen = self.docs.permitted(permission, self.alice, conditions=('non_confidential',))
                 with self.assertNumQueries(1):
                     self.assertEqual(_pks(chosen), {self.open_doc.pk})
@@ -138,9 +138,9 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
         foreign = Permission.objects.create(content_type=ContentType.objects.get_for_model(get_user_model()), codename='change_document', name='Foreign change document')
         self.assertEqual(_pks(self.docs.permitted(foreign, self.alice)), set())
         self.assertEqual(_pks(self.docs.permitted(self.change, self.alice)), {self.open_doc.pk, self.secret.pk})
-        with self.assertNumQueries(0):
-            other_app = self.docs.permitted('auth.change_document', self.alice)
         with self.assertNumQueries(1):
+            other_app = self.docs.permitted('auth.change_document', self.alice)
+        with self.assertNumQueries(0):
             self.assertEqual(list(other_app), [])
         grant_ct = ContentType.objects.get_for_model(DocumentGrant)
         Permission.objects.get_or_create(content_type=grant_ct, codename='change_documentgrant', defaults={'name': 'Can change document grant'})
@@ -164,7 +164,7 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
 
     def test_anonymous_and_inactive_are_empty_after_validation(self):
         anonymous = AnonymousUser()
-        with self.assertNumQueries(0):
+        with self.assertNumQueries(1):
             anonymous_qs = self.docs.permitted(self.change, anonymous)
             inactive_qs = self.docs.permitted('myapp.change_document', self.inactive)
         self.assertEqual(list(anonymous_qs), [])
@@ -202,7 +202,7 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
                 with self.assertNumQueries(0):
                     self.assertEqual(list(self.docs.permitted('myapp.change_document', self.alice, conditions=conditions)), [])
                     self.assertEqual(list(self.docs.permitted(self.change, anonymous, conditions=conditions)), [])
-        with self.assertNumQueries(0):
+        with self.assertNumQueries(1):
             missing = self.docs.permitted('myapp.change_document', self.alice, conditions=('missing_270',))
             missing_anonymous = self.docs.permitted(self.change, anonymous, conditions=('missing_270',))
         self.assertEqual(list(missing), [])
@@ -219,7 +219,7 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
     def test_model_without_an_auth_permission_plan_is_empty(self):
         manager = PermittedManager()
         manager.model = DocumentGrant
-        with self.assertNumQueries(0):
+        with self.assertNumQueries(2):
             missing = manager.permitted('myapp.change_documentgrant', self.alice)
             anonymous = manager.permitted('myapp.change_documentgrant', AnonymousUser())
         self.assertEqual(list(missing), [])
@@ -229,7 +229,7 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
         from tests.myapp.backends import DocumentBackend
 
         with unbound_named_filters(DocumentBackend):
-            with self.assertNumQueries(0):
+            with self.assertNumQueries(1):
                 empty = self.docs.permitted('myapp.change_document', self.alice, conditions=('non_confidential',))
                 empty_anonymous = self.docs.permitted(self.change, AnonymousUser(), conditions=('non_confidential',))
             self.assertEqual(list(empty), [])
@@ -275,7 +275,7 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
 
     def test_no_catalog_contributes_nothing(self):
         with listed_relationship(()):
-            with self.assertNumQueries(0):
+            with self.assertNumQueries(1):
                 empty = self.docs.permitted('myapp.change_document', self.alice)
             self.assertEqual(list(empty), [])
 
@@ -382,7 +382,7 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
         foreign.add_named_filter(Document, 'only_other_270', lambda u, p, o: o.confidential != True)
         primary = _document_factory()
         with listed_relationship((handle_a, handle_b)):
-            with self.assertNumQueries(0):
+            with self.assertNumQueries(1):
                 split = self.docs.permitted('myapp.change_document', self.alice, conditions=('split_a_270', 'split_b_270'))
                 split_anonymous = self.docs.permitted(self.change, AnonymousUser(), conditions=('split_a_270', 'split_b_270'))
             self.assertEqual(list(split), [])
@@ -407,7 +407,7 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
             with listed_relationship((primary,)):
                 self.assertEqual(_pks(self.docs.permitted('myapp.change_document', self.alice, conditions=('non_confidential',))), {self.open_doc.pk})
             with listed_relationship((extra,)):
-                with self.assertNumQueries(0):
+                with self.assertNumQueries(1):
                     omitted = self.docs.permitted('myapp.change_document', self.alice, conditions=('non_confidential',))
                 self.assertEqual(list(omitted), [])
             with listed_relationship((owned,)):

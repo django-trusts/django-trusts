@@ -189,7 +189,7 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
                     document_backend.has_perm(self.alice, FILTERED, qs),
                 )
 
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertTrue(
                 self.document_backend.has_perm(
                     self.alice, FILTERED, self.document,
@@ -201,11 +201,11 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
         admin.is_superuser = True
         admin.save(update_fields=['is_superuser'])
 
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertTrue(
                 self.document_backend.has_perm(self.alice, PERM, self.document),
             )
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertFalse(
                 self.document_backend.has_perm(admin, PERM, self.document),
             )

@@ -270,7 +270,10 @@ class Issue255PolicySqlTest(SimpleTestCase):
             self.assertEqual(forward['sql'].count('WITH RECURSIVE'), 2)
             self.assertEqual(forward['sql'].count('%s'), len(forward['params']))
         self.assertEqual(content['permitted']['params'], ['$user.id', '$permission.id', 'user.is_active=True', '$along_bound=2', '$content.app_label="documents"', '$content.model="folder"', '$along_match=True', 'skip_is_active=False'])
-        self.assertEqual(content['has_perm']['params'], ['$user.id', '$content.id', 'user.is_active=True', '$along_bound=2', '$content.app_label="documents"', '$content.model="folder"', '$along_match=True', 'skip_is_active=False', '$permission.codename', '$permission.codename'])
+        self.assertIn('$permission.id', content['has_perm']['params'])
+        self.assertNotIn('$permission.codename', content['has_perm']['params'])
+        self.assertNotIn('permitted_by_codename', content)
+        self.assertNotIn('get_permitted_users_by_codename', content)
         self.assertEqual(content['get_all_permissions']['params'], ['$user.id', '$content.id', 'user.is_active=True', '$along_bound=2', '$content.app_label="documents"', '$content.model="folder"', '$along_match=True', 'skip_is_active=False'])
         self.assertEqual(reverse['params'], ['$permission.id', '$content.id', 'user.is_active=True', '$along_bound=2', '$content.app_label="documents"', '$content.model="folder"', '$along_match=True', 'skip_is_active=False', '$along_match=True', '$along_match=True'])
         self.assertEqual([index for index, param in enumerate(reverse['params']) if param == '$along_bound=2'], [3])
@@ -394,6 +397,7 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         self.assertTrue(callable(self.document.get_permitted_users))
         with self.assertNumQueries(0):
             by_instance = self.document.get_permitted_users(self.change)
+        with self.assertNumQueries(1):
             by_string = self.document.get_permitted_users(PERM)
         self.assertIsNone(by_instance._result_cache)
         self.assertIsNone(by_string._result_cache)

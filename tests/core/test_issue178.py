@@ -65,7 +65,7 @@ class KernelMixinEnumerationTest(KernelHostRequiredMixin, TestCase):
         return Document.objects.filter(pk__in=[document.pk for document in documents])
 
     def test_instance_enumeration_matches_has_perm(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             self.assertTrue(
                 self.document_backend.has_perm(self.alice, PERM, self.document),
             )
@@ -111,7 +111,7 @@ class KernelMixinEnumerationTest(KernelHostRequiredMixin, TestCase):
                 self.document_backend.get_all_permissions(self.alice, many),
                 {PERM},
             )
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(4):
             self.assertTrue(self.document_backend.has_perm(self.alice, PERM, many))
             self.assertFalse(self.document_backend.has_perm(self.alice, PERM, mixed))
         with self.assertNumQueries(1):
@@ -264,7 +264,7 @@ class KernelMixinEnumerationTest(KernelHostRequiredMixin, TestCase):
                 self.document_backend.get_all_permissions(self.alice, self.document),
                 set(),
             )
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertFalse(
                 self.document_backend.has_perm(self.alice, PERM, self.document),
             )

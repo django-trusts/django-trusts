@@ -62,50 +62,50 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
         one = self._granted_qs(self.open_one)
         many = self._granted_qs(self.open_one, self.open_two)
         mixed = self._granted_qs(self.open_one, self.open_two, self.secret)
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertTrue(self.document_backend.has_perm(self.alice, FILTERED, one))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertTrue(self.document_backend.has_perm(self.alice, FILTERED, many))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertFalse(self.document_backend.has_perm(self.alice, FILTERED, mixed))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertTrue(self.document_backend.has_perm(self.alice, PERM, mixed))
         with self.assertNumQueries(0):
             self.assertFalse(self.host.has_perm(self.alice, FILTERED, mixed))
             self.assertFalse(self.host.has_perm(self.alice, PERM, mixed))
             self.assertEqual(self.host.get_all_permissions(self.alice, mixed), set())
             self.assertEqual(self.host.get_group_permissions(self.alice, mixed), set())
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertTrue(self.alice.has_perm(FILTERED, one))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertTrue(self.alice.has_perm(FILTERED, many))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertFalse(self.alice.has_perm(FILTERED, mixed))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertTrue(self.alice.has_perm(PERM, mixed))
         self.assertEqual(self.alice.get_all_permissions(mixed), {PERM})
         with override_settings(AUTHENTICATION_BACKENDS=(DOCUMENT_BACKEND, HOST_BACKEND)):
-            with self.assertNumQueries(1):
+            with self.assertNumQueries(2):
                 self.assertTrue(self.alice.has_perm(FILTERED, one))
-            with self.assertNumQueries(1):
+            with self.assertNumQueries(2):
                 self.assertFalse(self.alice.has_perm(FILTERED, mixed))
-            with self.assertNumQueries(1):
+            with self.assertNumQueries(2):
                 self.assertTrue(self.alice.has_perm(PERM, mixed))
 
     def test_named_filter_does_not_create_authorization(self):
         many = self._granted_qs(self.open_one, self.open_two)
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertFalse(self.document_backend.has_perm(self.bob, FILTERED, many))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertFalse(self.document_backend.has_perm(self.alice, WRONG_FILTERED, many))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertFalse(self.document_backend.has_perm(self.alice, WRONG, many))
         with self.assertNumQueries(0):
             self.assertFalse(self.host.has_perm(self.bob, FILTERED, many))
             self.assertFalse(self.host.has_perm(self.alice, WRONG_FILTERED, many))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertFalse(self.bob.has_perm(FILTERED, many))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertFalse(self.alice.has_perm(WRONG_FILTERED, many))
         self.assertFalse(self.alice.has_perm(WRONG, many))
         self.assertFalse(self.bob.has_perm(PERM, many))
@@ -119,7 +119,7 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
             self.assertFalse(self.document_backend.has_perm(self.alice, MISSING, self.open_one))
             self.assertFalse(self.host.has_perm(self.alice, MISSING, self.open_one))
             self.assertFalse(self.alice.has_perm(MISSING, self.open_one))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertTrue(self.document_backend.has_perm(self.alice, PERM, many))
         self.assertTrue(self.alice.has_perm(PERM, many))
         self.assertTrue(self.document_backend.has_perm(self.alice, PERM, self.open_one))
@@ -136,13 +136,13 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
             permission='permission', content='document',
         )
         alt_catalog = built_catalog(alt)
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertTrue(self.document_backend.has_perm(self.alice, PERM, one))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertTrue(alt_catalog.has_perm(self.alice, PERM, two))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertFalse(self.document_backend.has_perm(self.alice, PERM, both))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertFalse(alt_catalog.has_perm(self.alice, PERM, both))
         with self.assertNumQueries(0):
             self.assertFalse(self.host.has_perm(self.alice, PERM, both))
@@ -150,7 +150,7 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
             self.assertEqual(self.document_backend.get_all_permissions(self.alice, both), set())
         with self.assertNumQueries(1):
             self.assertEqual(alt_catalog.get_all_permissions(self.alice, both), set())
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertFalse(self.alice.has_perm(PERM, both))
         self.assertEqual(self.alice.get_all_permissions(both), set())
         self.assertTrue(self.alice.has_perm(PERM, one))
@@ -160,39 +160,39 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
         qs = self._granted_qs(self.open_one)
         mixed = self._granted_qs(self.open_one, self.secret)
         with override_settings(AUTHENTICATION_BACKENDS=(HOST_BACKEND, DOCUMENT_BACKEND, DOCUMENT_BACKEND)):
-            with self.assertNumQueries(1):
+            with self.assertNumQueries(2):
                 self.assertTrue(self.document_backend.has_perm(self.alice, FILTERED, qs))
             with self.assertNumQueries(0):
                 self.assertFalse(self.host.has_perm(self.alice, FILTERED, qs))
-            with self.assertNumQueries(2):
+            with self.assertNumQueries(4):
                 self.assertFalse(self.alice.has_perm(FILTERED, mixed))
             with self.assertNumQueries(2):
                 self.assertEqual(self.alice.get_all_permissions(qs), {PERM})
 
     def test_instance_named_filter_does_not_preempt_siblings(self):
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertTrue(self.document_backend.has_perm(self.alice, FILTERED, self.open_one))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertFalse(self.document_backend.has_perm(self.alice, FILTERED, self.secret))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertTrue(self.document_backend.has_perm(self.alice, PERM, self.secret))
         with self.assertNumQueries(0):
             self.assertFalse(self.host.has_perm(self.alice, FILTERED, self.open_one))
             self.assertFalse(self.host.has_perm(self.alice, PERM, self.open_one))
             self.assertFalse(self.host.has_perm(self.alice, MISSING, self.open_one))
             self.assertFalse(self.document_backend.has_perm(self.alice, MISSING, self.open_one))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertTrue(self.alice.has_perm(FILTERED, self.open_one))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertFalse(self.alice.has_perm(FILTERED, self.secret))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertTrue(self.alice.has_perm(PERM, self.secret))
         with self.assertNumQueries(0):
             self.assertFalse(self.alice.has_perm(MISSING, self.open_one))
         with override_settings(AUTHENTICATION_BACKENDS=(DOCUMENT_BACKEND, HOST_BACKEND)):
-            with self.assertNumQueries(1):
+            with self.assertNumQueries(2):
                 self.assertTrue(self.alice.has_perm(FILTERED, self.open_one))
-            with self.assertNumQueries(1):
+            with self.assertNumQueries(2):
                 self.assertFalse(self.alice.has_perm(FILTERED, self.secret))
             with self.assertNumQueries(0):
                 self.assertFalse(self.alice.has_perm(MISSING, self.open_one))
