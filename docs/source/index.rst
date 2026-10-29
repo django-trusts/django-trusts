@@ -761,6 +761,38 @@ committed lockfile when the conventional file exists or
 ``TRUSTS_POLICY_LOCKFILE`` selects an explicit absolute path. Run
 ``python manage.py check`` in CI and before deployment.
 
+.. note::
+
+   Example SQLite output for the direct ``DocumentPermission`` registration
+   above; the layout is not a stable format.
+
+.. code-block:: yaml
+
+   get_permitted_users:
+     params: ["$permission.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False"]
+     sql: |-
+       SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined"
+       FROM "auth_user"
+       CROSS JOIN (
+         SELECT %s AS "permission_id", %s AS "content_id", %s AS "is_active", %s AS "app_label", %s AS "model"
+       ) "trusts_bind"
+       WHERE (((%s)
+             OR "auth_user"."is_active" = ("trusts_bind"."is_active")
+         )
+         AND EXISTS (
+           SELECT 1 AS "a"
+           FROM "documents_documentpermission" "U0"
+           INNER JOIN "auth_permission" "U2" ON ("U0"."permission_id" = "U2"."id")
+           INNER JOIN "django_content_type" "U3" ON ("U2"."content_type_id" = "U3"."id")
+           WHERE ("U0"."document_id" = ("trusts_bind"."content_id")
+               AND "U0"."permission_id" = ("trusts_bind"."permission_id")
+               AND "U3"."app_label" = ("trusts_bind"."app_label")
+               AND "U3"."model" = ("trusts_bind"."model")
+               AND "U0"."user_id" = ("auth_user"."id")
+           )
+           LIMIT 1
+         ) )
+
 ``TRUSTS_SQL_BIND_ONCE`` defaults to true and enables the one-row bind-table
 rewrite. Leave it enabled. Set it to false only if that SQL misbehaves;
 django-trusts then uses the plain queryset SQL. If the queryset does not have
