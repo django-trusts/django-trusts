@@ -179,7 +179,7 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
         with _installed(self.handle):
             for code, permission, obj, expected in cases:
                 with self.subTest(code=code, obj=obj._meta.model_name):
-                    queries = 0 if obj in (self.team, self.widget) else 2
+                    queries = 0 if obj in (self.team, self.widget) else 1
                     with self.assertNumQueries(queries):
                         self.assertIs(self.owner.has_perm(code, obj), expected)
                     self.assertIs(catalog.has_perm(self.owner, code, obj), expected)

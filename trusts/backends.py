@@ -16,7 +16,7 @@ from django.db.models import Model, QuerySet
 
 from trusts.compile.appbuild import build_app_catalog
 from trusts.compile.catalogs import (
-    compile_catalog_users, filter_catalogs, lookup_saved_permission,
+    codename_lookup, compile_catalog_users, filter_catalogs,
 )
 from trusts.compile.compilers import RegistrationListener
 from trusts.errors import TrustsConfigurationError
@@ -257,17 +257,13 @@ class TrustModelBackendMixin(object):
             queryset.model, conditions)
         if not has_plan or not owns:
             return queryset.none()
-        app_label, codename = permission.split('.', 1)
-        binding = lookup_saved_permission(
-            app_label, queryset.model._meta.model_name, codename,
-        )
-        if binding is None:
-            return queryset.none()
         return filter_catalogs(
             ((self, catalog),), queryset, user,
             ask=lambda item, skipped: item.permitted_grant_q(
                 queryset, user, permission, skipped=skipped,
-                conditions=conditions, binding=binding,
+                conditions=conditions,
+                binding=codename_binding(
+                    queryset.model, *permission.split('.', 1)),
                 api='authorization_required'),
             skip_flags=skip_flags, user_model=get_user_model())
 
@@ -296,6 +292,15 @@ class TrustModelBackendMixin(object):
         catalog = self._catalog()
         catalogs = () if catalog is None else (catalog,)
         return _build_document(catalogs, resolved)
+
+
+def codename_binding(model, app_label, codename):
+    """Unevaluated pk of the exact codename on ``model``'s content type.
+
+    The model name stays a content constant. The codename and app label
+    are call inputs inside the one queryset.
+    """
+    return codename_lookup(model, app_label, codename)
 
 
 def policy_document(backend=None, *, alias=None):

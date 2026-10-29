@@ -779,7 +779,7 @@ class DelegatedAuthorityLiveTest(TestCase):
         ContentType.objects.clear_cache()
 
     def test_object_queryset_enumeration_and_reverse_agree(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             self.assertTrue(self.delegate.has_perm('myapp.change_document', self.document))
         with self.assertNumQueries(1):
             permitted = list(PermittedQuerySet(model=Document, using=Document.objects.db).permitted(self.change, self.delegate))
