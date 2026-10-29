@@ -70,6 +70,10 @@ log.
 - **Codename rows in the policy lockfile.** Regenerate a committed lockfile
   once. See
   [Codename statements](security-audit.md#codename-statements).
+
+- **Named-filter grant rows.** A named filter's `permitted` row is
+  `.permitted(code, user, conditions=(name,))`. See
+  [Codename statements](security-audit.md#codename-statements).
 [#252]: https://github.com/django-trusts/django-trusts/pull/252
 [#254]: https://github.com/django-trusts/django-trusts/pull/254
 [#259]: https://github.com/django-trusts/django-trusts/pull/259

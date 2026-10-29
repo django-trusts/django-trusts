@@ -283,6 +283,8 @@ class _PolicyVisitor(object):
     def visit(self, question):
         if question.name == 'named_filter':
             return self._visit_named_filter(question)
+        if question.name == 'named_filter_grant':
+            return self._visit_named_filter_grant(question)
         content = self._ensure_content(
             question.content_model, question.records, question.delegations,
         )
@@ -401,6 +403,35 @@ class _PolicyVisitor(object):
             inquiry, self.alias, record=records[0], expr=question.expr,
             records=records,
         ))
+
+    def _visit_named_filter_grant(self, question):
+        """``.permitted(code, user, conditions=(name,))`` on the filter row.
+
+        The ``has_perm`` key is already the saved-instance statement.
+        """
+        model = question.content_model
+        label = _model_label(model)
+        records = self._classifier_records.get(label)
+        if not records or not _auth_permission_terminal(records):
+            return None
+        content = self._contents.get(label)
+        if content is None:
+            return None
+        row_id = _dotless_id(label, question.code)
+        named = None
+        for row in content.get('named_filters', ()):
+            if row['id'] == row_id:
+                named = row
+                break
+        if named is None:
+            return None
+        user = _role_sentinel(records[0], 'user', self.alias)
+        queryset = question.question(user, _change_permission_code(model))
+        named['permitted'] = _sql_row(_compile_queryset(
+            queryset, self.alias, record=records[0], expr=question.expr,
+            records=records,
+        ))
+        return content
 
     def _ensure_content(self, model, records, delegations):
 

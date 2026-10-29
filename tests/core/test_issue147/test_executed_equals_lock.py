@@ -52,6 +52,17 @@ def _runtime_value(token, *, user, content, codename):
     raise AssertionError('unrecognized lockfile token %r' % token)
 
 
+def _where_clause(query):
+    """The ``WHERE`` text of one compiled statement."""
+    sql, _params = query.get_compiler(using='default').as_sql()
+    formatted = _format_policy_sql(sql)
+    marker = '\nWHERE '
+    start = formatted.find(marker)
+    if start < 0:
+        raise AssertionError(formatted)
+    return formatted[start + len(marker):]
+
+
 def _capture(run):
     """SQL and params of the one statement ``run`` executes."""
     recorded = []
@@ -124,13 +135,83 @@ class ExecutedEqualsLockTest(TransactionTestCase):
             for key, run in cases:
                 with self.subTest(key=key):
                     self._matches(content[key], golden[key], run, user, doc)
-            conditional = content['named_filters'][0]['has_perm']
+            named = content['named_filters'][0]
+            golden_named = golden['named_filters'][0]
             self._matches(
-                conditional,
-                golden['named_filters'][0]['has_perm'],
+                named['has_perm'],
+                golden_named['has_perm'],
                 lambda: DocumentBackend().has_perm(user, _CONDITIONAL, doc),
                 user, doc,
             )
+            self._matches(
+                named['permitted'],
+                golden_named['permitted'],
+                lambda: list(PermittedQuerySet(model=Document).permitted(
+                    _CODE, user, conditions=('non_confidential',),
+                    backend=DOCUMENT_BACKEND,
+                )),
+                user, doc,
+            )
+
+    def test_skip_flag_changes_only_the_bound_value(self):
+        User = get_user_model()
+        user = User.objects.create_user('lock-skip', password='x')
+        doc = Document.objects.create(title='specs', confidential=False)
+        with published_class_catalog(DocumentBackend, _document_handle()):
+            def permitted(skip):
+                return lambda: list(PermittedQuerySet(model=Document).permitted(
+                    _CODE, user, conditions=('non_confidential',),
+                    backend=DOCUMENT_BACKEND, skip_is_active=skip,
+                ))
+            self._skip_changes_one_param(permitted(False), permitted(True))
+            def check(skip):
+                return lambda: DocumentBackend().has_perm(
+                    user, _CONDITIONAL, doc, skip_is_active=skip,
+                )
+            self._skip_changes_one_param(check(False), check(True))
+
+    def _skip_changes_one_param(self, off, on):
+        sql_off, params_off = _capture(off)
+        sql_on, params_on = _capture(on)
+        self.assertEqual(sql_off, sql_on)
+        self.assertEqual(len(params_off), len(params_on))
+        diffs = [
+            index for index, (left, right) in enumerate(zip(params_off, params_on))
+            if left != right
+        ]
+        self.assertEqual(len(diffs), 1)
+        self.assertIs(params_off[diffs[0]], False)
+        self.assertIs(params_on[diffs[0]], True)
+
+    def test_all_match_negation_is_the_locked_grant(self):
+        from django.contrib.auth.models import Permission
+        from trusts.plan.aggregates import _bound_all_match
+        from trusts.plan.contents import _compile_granted
+        User = get_user_model()
+        user = User(pk=7, is_active=True, username='grant')
+        user._state.adding = False
+        permission = Permission(pk=3)
+        permission._state.adding = False
+        with published_class_catalog(DocumentBackend, _document_handle()) as catalog:
+            subject = Document.objects.all()
+            _denied, values = catalog._resolve_skipped(user, {})
+            granted = _compile_granted(
+                catalog, subject, user, permission,
+                kind='complete', skipped=values,
+            )
+            bound = _bound_all_match(
+                catalog, subject, user, permission,
+                kind='complete', skipped=values,
+            )
+            self.assertIsNotNone(granted)
+            self.assertIsNotNone(bound)
+            _queryset, grant_q = bound
+            locked = catalog._question_content_grant(Document, user, permission)
+            grant_where = _where_clause(Document.objects.filter(grant_q).query)
+            locked_where = _where_clause(locked.query)
+            negated_where = _where_clause(Document.objects.filter(~grant_q).query)
+            self.assertEqual(grant_where, locked_where)
+            self.assertEqual(negated_where, 'NOT ' + grant_where)
 
     def _matches(self, row, golden_row, run, user, doc):
         self.assertEqual(row, golden_row)

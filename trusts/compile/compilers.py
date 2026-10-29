@@ -428,7 +428,33 @@ def question_descriptors(records, delegations, linked, named_filters):
             ),
             code=code, expr=tree,
         ))
+        if _content_auth_permission(records, model):
+            questions.append(Question(
+                'named_filter_grant', model, (), (),
+                partial(
+                    _invoke, linked, '_question_named_filter_grant',
+                    (model, code), {},
+                ),
+                code=code, expr=tree,
+            ))
     return tuple(questions)
+
+
+def _content_auth_permission(records, model):
+    """True when this content's ordinary rows terminate on ``auth.Permission``."""
+    concrete = model._meta.concrete_model
+    permission = Permission._meta.concrete_model
+    matched = [
+        record for record in records
+        if record.content_model._meta.concrete_model is concrete
+    ]
+    if not matched:
+        return False
+    for record in matched:
+        terminal = record.permission_model
+        if terminal is None or terminal._meta.concrete_model is not permission:
+            return False
+    return True
 
 
 def _prepare_conditions(filters, user_model):

@@ -558,6 +558,28 @@ class Catalog(object):
         )
         return model._meta.concrete_model._default_manager.filter(compiled)
 
+    def _question_named_filter_grant(self, model, code, user, permission_code):
+        """``.permitted(code, user, conditions=(name,))`` for this catalog.
+
+        One name. Several names are the AND of these single statements.
+        """
+        concrete = model._meta.concrete_model
+        queryset = concrete._default_manager.all()
+        if not isinstance(user, Model):
+            return queryset.none()
+        denied, values = self._resolve_skipped(user, {})
+        if denied:
+            return queryset.none()
+        app_label, codename = permission_code.split('.', 1)
+        binding = codename_lookup(concrete, app_label, codename)
+        predicate, _owned = self.authorization_grant(
+            queryset, user, concrete, permission_code, (code,), binding,
+            api='permitted', skipped=values,
+        )
+        return bind_filtered_queryset(
+            queryset, predicate, user_model=self.user_model,
+        )
+
 
 class PreparedInquiry(object):
     def __init__(self, model, result=_NO_PRESET, qs=None, granted_q=_NO_PRESET):
