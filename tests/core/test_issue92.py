@@ -334,7 +334,7 @@ class _AlongProjectionMixin(object):
 
     def _assert_projections(self, registry, Model, granted_rows, denied_rows):
         handle = _direct_handle(registry)
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), granted_rows[0]))
         for obj in granted_rows:
             self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), obj))

@@ -482,8 +482,7 @@ including a custom model that has a `content_type` foreign key.
 String `has_perm` still infers the model from the codename suffix. That
 codec gap is [issue #268](https://github.com/django-trusts/django-trusts/issues/268).
 `.permitted()` and `authorization_required` bind the exact codename to the
-protected model's content type instead. The lockfile records those
-statements under [Codename statements](#codename-statements). `trusts.E008` is removed. Each
+protected model's content type instead. `trusts.E008` is removed. Each
 inquiry asks each backend; a backend that does not own the names
 contributes nothing. A runtime `.permitted()` call returns an empty
 queryset. `authorization_required` is 403 or 404. There is no system
@@ -521,30 +520,6 @@ within one django-trusts version, with unchanged dependencies, including Django
 and PyYAML, and the same selected renderer. A version or dependency change may
 alter the output without changing application declarations. Regenerate the
 lockfile and review that diff with the upgrade.
-
-The [historical policy-output record](../dev/permission-policy-sql.rst) and
-its examples describe one implementation snapshot. Their field names, ordering,
-identifiers, parameter notation, and SQL/YAML layout are not compatibility
-promises or a supported input format.
-
-### Codename statements
-
-For an `auth.Permission` terminal, the lockfile records the codename
-subquery the string inquiry executes. `has_perm` is
-`user.has_perm(code, object)`. `permitted_by_codename` is
-`.permitted(code, user)`. `get_permitted_users_by_codename` is
-`content.get_permitted_users(code)`. `permitted` and `get_permitted_users`
-remain the saved permission row. The codename call input is
-`$permission.codename`. App label and model stay `$content.app_label`
-and `$content.model`. A named filter on that content also has `has_perm` and `permitted`:
-the saved-instance check with that condition, and
-`.permitted(code, user, conditions=(name,))`. Each is the one statement
-that executes. Several names are the AND of those single statements;
-the lockfile does not list the combinations. A queryset `has_perm` is
-the caller query AND the locked grant predicate. `extra_q` is not a
-lockfile row. `skip_<name>` changes only that bound parameter's value.
-Schema version 1 is unchanged. Regenerate a committed
-lockfile once so those rows are the statements under review.
 
 ### Formatter and enforcement
 
@@ -602,11 +577,10 @@ answer:
 5. Is the final authorization query still within its tested statement bound?
 6. Did any unsupported database, callback, private registry, or private IR
    surface become reachable?
-7. If a policy lockfile is in play, does equality show only that the live
-   declared authorization surface and rendered SQL match the reviewed
-   artifact, and has every change to the Trusts backend or registration,
-   operation, parameter roles, `sql`, or `database.engine` been reviewed
-   on its own?
+7. If a policy lockfile is in play, does equality show only that the declared
+   authorization surface and rendered SQL match the reviewed artifact, and
+   has every change to the Trusts backend, registration, operation, parameter
+   roles, or rendered statement been reviewed on its own?
 8. If the implementation disagrees with this guide, is the code wrong, is the
    guide wrong, or has an explicit design decision changed the boundary?
 

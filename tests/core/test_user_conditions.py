@@ -818,7 +818,7 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
         _restore_document_registry(self.config, self.original, self.original_sentinel, self.saved_catalog)
 
     def test_staff_is_enforced_and_skippable(self):
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertFalse(self.backend.has_perm(self.plain, self.perm, self.doc))
         self.assertTrue(self.backend.has_perm(self.staff, self.perm, self.doc))
         self.assertTrue(self.backend.has_perm(self.plain, self.perm, self.doc, skip_staff=True))
@@ -1113,17 +1113,17 @@ class AuthorizationRequiredSuperuserTest(KernelHostRequiredMixin, TestCase):
         self.addCleanup(_restore_document_registry, config, original, sentinel, saved_catalog)
         self.assertIsNone(registry.compile().user_override)
         view = self._view()
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(5):
             with self.assertRaises(PermissionDenied):
                 view(_guard_request(self.active), pk=self.doc.pk)
         self.assertTrue(self.active.has_perm(self.perm, self.doc))
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(5):
             with self.assertRaises(PermissionDenied):
                 view(_guard_request(self.dormant), pk=self.doc.pk)
         audited = self._view(skip_is_active=True)
         self.assertEqual(audited(_guard_request(self.dormant), pk=self.doc.pk), 'ok')
         DocumentGrant.objects.create(document=self.doc, user=self.active, permission=self.change)
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertEqual(view(_guard_request(self.active), pk=self.doc.pk), 'ok')
 
     def test_override_allows_active_superuser_without_a_grant(self):
@@ -1131,9 +1131,9 @@ class AuthorizationRequiredSuperuserTest(KernelHostRequiredMixin, TestCase):
         self.addCleanup(_restore_document_registry, config, original, sentinel, saved_catalog)
         self.assertEqual(registry.compile().user_override.name, 'superuser')
         view = self._view()
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             self.assertEqual(view(_guard_request(self.active), pk=self.doc.pk), 'ok')
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(5):
             with self.assertRaises(PermissionDenied):
                 view(_guard_request(self.dormant), pk=self.doc.pk)
 

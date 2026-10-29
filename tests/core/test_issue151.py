@@ -454,30 +454,30 @@ class SavedInstanceConditionTest(TransactionTestCase):
                                 self.assertEqual(
                                     len(held_queries), len(via_queries),
                                 )
-                                self.assertLessEqual(len(held_queries), 1)
+                                self.assertLessEqual(len(held_queries), 2)
                                 if expected:
-                                    self.assertEqual(len(held_queries), 1)
+                                    self.assertEqual(len(held_queries), 2)
                                 self.assertEqual(held, expected)
                                 self.assertEqual(held, via)
                 stale = SavedNote.objects.get(pk=blank.pk)
                 stale.status = 'shut'
                 stale.label = mark_b
                 stale.owner = alice
-                with self.assertNumQueries(1):
+                with self.assertNumQueries(2):
                     self.assertTrue(bob.has_perm('%s:blank' % PERM_151, stale))
-                with self.assertNumQueries(1):
+                with self.assertNumQueries(2):
                     self.assertTrue(bob.has_perm('%s:marked' % PERM_151, stale))
-                with self.assertNumQueries(1):
+                with self.assertNumQueries(2):
                     self.assertFalse(alice.has_perm('%s:owned' % PERM_151, stale))
                 self.assertEqual(stale.status, 'shut')
                 self.assertEqual(stale.label_id, mark_b.pk)
                 self.assertEqual(stale.owner_id, alice.pk)
-                with self.assertNumQueries(1):
+                with self.assertNumQueries(2):
                     self.assertFalse(alice.has_perm(
                         '%s:blank' % PERM_151,
                         SavedNote.objects.filter(pk__in=(open_row.pk, blank.pk)),
                     ))
-                with self.assertNumQueries(1):
+                with self.assertNumQueries(2):
                     self.assertTrue(alice.has_perm(
                         '%s:blank' % PERM_151,
                         SavedNote.objects.filter(pk=blank.pk),
@@ -489,11 +489,11 @@ class SavedInstanceConditionTest(TransactionTestCase):
                     self.assertFalse(alice.has_perm(
                         '%s:blank' % PERM_151, SavedNote(status=None),
                     ))
-                with self.assertNumQueries(1):
+                with self.assertNumQueries(2):
                     self.assertFalse(checker.has_perm(
                         dormant, '%s:blank' % PERM_151, blank,
                     ))
-                with self.assertNumQueries(1):
+                with self.assertNumQueries(2):
                     self.assertTrue(checker.has_perm(
                         dormant, '%s:blank' % PERM_151, blank,
                         skip_is_active=True,
@@ -502,12 +502,12 @@ class SavedInstanceConditionTest(TransactionTestCase):
                     self.assertFalse(checker.has_perm(
                         bob, '%s:staff_blank' % PERM_151, blank,
                     ))
-                self.assertEqual(len(folded), 0)
-                with self.assertNumQueries(1):
+                self.assertEqual(len(folded), 1)
+                with self.assertNumQueries(2):
                     self.assertTrue(checker.has_perm(
                         alice, '%s:staff_blank' % PERM_151, blank,
                     ))
-                with self.assertNumQueries(1):
+                with self.assertNumQueries(2):
                     via = SavedNote.objects.permitted(
                         PERM_151, dormant, conditions=('blank',),
                         skip_is_active=True,

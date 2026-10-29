@@ -1,7 +1,7 @@
 """Object-to-users compiler: one content object and one permission to users.
 
-The permission row is canonical. A string is resolved inside the eventual
-SQL. Construction does not query.
+The permission row is canonical. A string is one permission lookup, then
+that saved id. A miss returns no users.
 """
 
 __all__ = []
@@ -13,7 +13,7 @@ from django.db.models import Exists, F, Model, OuterRef, Q
 
 from trusts.plan.conditions import (
     condition_model_key,
-    permission_binding,
+    lookup_saved_permission,
     resolve_field_path,
 )
 from trusts.plan.writers import (
@@ -74,8 +74,8 @@ def _permission_binding_for_plan(accepts_permission, content, perm, plan):
     ``accepts_permission`` is the singular-permission callable, or
     ``None`` for the mixin default (``auth.Permission``).
     ``condition`` is ``None`` or ``(singular_perm, code)``. A string
-    binding is an unevaluated ``auth.Permission`` subquery. A model
-    instance is that permission row.
+    is one permission lookup, then that saved row. A miss is ``None``.
+    A model instance is that permission row.
     """
     permission_model = plan.permission_model
     if isinstance(perm, str):
@@ -88,7 +88,11 @@ def _permission_binding_for_plan(accepts_permission, content, perm, plan):
             and permission_model is not Permission
         ):
             return None
-        binding = permission_binding(perm, content.__class__)
+        binding = lookup_saved_permission(
+            applabel, modelname, '%s_%s' % (action, modelname),
+        )
+        if binding is None:
+            return None
         if not code:
             return binding, None
         singular = '%s.%s_%s' % (applabel, action, modelname)

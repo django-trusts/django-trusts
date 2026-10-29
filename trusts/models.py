@@ -4,8 +4,8 @@
 from django.contrib.auth.models import Permission
 from django.db.models import Manager, Model, QuerySet
 
-from trusts.backends import (
-    codename_binding, compile_permitted_users, filter_listed)
+from trusts.backends import compile_permitted_users, filter_listed
+from trusts.compile.catalogs import lookup_saved_permission
 from trusts.errors import TrustsConfigurationError
 from trusts.utils import guard_conditions, guard_permission_string
 
@@ -95,6 +95,8 @@ class PermittedQuerySetMixin:
             return self.none()
         label = _condition_permission_label(model, normalized)
         binding = _permitted_binding(model, normalized)
+        if binding is None:
+            return self.none()
         return filter_listed(
             self, user,
             ask=lambda item, skipped: item.permitted_grant_q(
@@ -167,7 +169,9 @@ def _normalize_permitted_permission(permission, *, api):
 
 def _permitted_binding(model, normalized):
     if normalized[0] == 'string':
-        return codename_binding(model, normalized[1], normalized[2])
+        return lookup_saved_permission(
+            normalized[1], model._meta.model_name, normalized[2],
+        )
     return normalized[1]
 
 

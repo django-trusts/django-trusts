@@ -187,7 +187,7 @@ class SavedRowPermittedUsersTest(TransactionTestCase):
                             user.pk for user in users if allowed(user, row)
                         }
                         with self.subTest(code=code, row=row.pk):
-                            with self.assertNumQueries(0):
+                            with self.assertNumQueries(1):
                                 found = row.get_permitted_users(perm)
                             with self.assertNumQueries(1):
                                 self.assertEqual(
@@ -198,7 +198,7 @@ class SavedRowPermittedUsersTest(TransactionTestCase):
                 dirty.owner = bob
                 direct = '%s:direct' % PERM
                 with self.subTest(check='saved-row'):
-                    with self.assertNumQueries(1):
+                    with self.assertNumQueries(2):
                         found = set(
                             dirty.get_permitted_users(direct).values_list(
                                 'pk', flat=True,
