@@ -274,7 +274,7 @@ class PolicyCompositionTest(SimpleTestCase):
                     keys = list(named_row)
                     self.assertEqual(keys[:3], ['id', 'params', 'sql'])
                     if len(keys) > 3:
-                        self.assertEqual(keys, ['id', 'params', 'sql', 'has_perm'])
+                        self.assertEqual(keys, ['id', 'params', 'sql', 'has_perm', 'permitted'])
         guide = document['backends'][0]['contents'][0]
         trust = guide['trusts'][0]
         named = guide['named_filters'][0]
@@ -297,7 +297,7 @@ class PolicyCompositionTest(SimpleTestCase):
         self.assertNotIn('confidential" IS NULL', guide['permitted']['sql'])
         self.assertNotIn('confidential" = %s', guide['permitted']['sql'])
         self.assertEqual(named['id'], 'documents__Document__non_confidential')
-        self.assertEqual(list(named), ['id', 'params', 'sql', 'has_perm'])
+        self.assertEqual(list(named), ['id', 'params', 'sql', 'has_perm', 'permitted'])
         self.assertIn('documents_documentpermission', named['has_perm']['sql'])
         self.assertIn('confidential', named['has_perm']['sql'])
         self.assertIn('confidential', named['sql'])
