@@ -1,8 +1,8 @@
 """Private condition language (issue #4 V1 / #142 Stage B).
 
 This module is not an application-facing import. It parses and checks
-a builder. Python evaluation and the queryset ``Q`` live in
-``trusts.plan.writers``. ``parse_named_filter`` returns the stored
+a builder. The queryset ``Q`` lives in ``trusts.plan.writers``.
+``parse_named_filter`` returns the stored
 node, a ``trusts.plan.grammar.Tree``.
 
 A callable argument to ``parse_named_filter`` is a **builder**: this
@@ -73,22 +73,48 @@ from trusts.plan.grammar import (
     missing_field,
     unsupported,
 )
+from trusts.plan.rewrites import CallInput
 from trusts.utils import parse_perm_code
 
 
 def permission_binding(perm, model):
     """Unevaluated ``auth.Permission`` pk for a codename string.
 
-    A ``Permission`` instance is returned unchanged.
+    A ``Permission`` instance is returned unchanged. A string becomes
+    the codename subquery ``has_perm`` and ``get_permitted_users`` run.
+    The codename, app label, and model name are call inputs. ``model``
+    is the content model the caller asked about; the string still
+    supplies the three constants.
     """
     if isinstance(perm, Permission):
         return perm
     applabel, modelname, action, _cond = parse_perm_code(perm)
     return Subquery(
         Permission.objects.filter(
-            codename='%s_%s' % (action, modelname),
-            content_type__app_label=applabel.lower(),
-            content_type__model=modelname,
+            codename=CallInput(
+                '%s_%s' % (action, modelname), 'permission.codename',
+            ),
+            content_type__app_label=CallInput(
+                applabel.lower(), 'permission.app_label',
+            ),
+            content_type__model=CallInput(modelname, 'permission.model'),
+        ).values('pk')[:1]
+    )
+
+
+def codename_lookup(model, app_label, codename):
+    """Exact-codename subquery ``.permitted(str)`` runs.
+
+    ``model`` is the protected content model. Its model name stays a
+    content constant. The codename and app label are call inputs.
+    """
+    return Subquery(
+        Permission.objects.filter(
+            content_type__app_label=CallInput(
+                app_label.lower(), 'permission.app_label',
+            ),
+            content_type__model=model._meta.model_name,
+            codename=CallInput(codename, 'permission.codename'),
         ).values('pk')[:1]
     )
 

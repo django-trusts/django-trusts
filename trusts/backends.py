@@ -12,10 +12,12 @@ from typing import Protocol, TypeVar, runtime_checkable
 from django.apps import apps
 from django.contrib.auth import get_backends, get_user_model, load_backend
 from django.contrib.auth.models import Permission
-from django.db.models import Model, QuerySet, Subquery
+from django.db.models import Model, QuerySet
 
 from trusts.compile.appbuild import build_app_catalog
-from trusts.compile.catalogs import compile_catalog_users, filter_catalogs
+from trusts.compile.catalogs import (
+    codename_lookup, compile_catalog_users, filter_catalogs,
+)
 from trusts.compile.compilers import RegistrationListener
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import (
@@ -292,6 +294,15 @@ class TrustModelBackendMixin(object):
         return _build_document(catalogs, resolved)
 
 
+def codename_binding(model, app_label, codename):
+    """Unevaluated pk of the exact codename on ``model``'s content type.
+
+    The model name stays a content constant. The codename and app label
+    are call inputs inside the one queryset.
+    """
+    return codename_lookup(model, app_label, codename)
+
+
 def policy_document(backend=None, *, alias=None):
     """Policy document for one backend, or the whole project.
 
@@ -310,17 +321,6 @@ def policy_document(backend=None, *, alias=None):
         raise TrustsConfigurationError(
             'backend %r is not a Trusts backend.' % backend)
     return loaded.policy_document(alias=alias)
-
-
-def codename_binding(model, app_label, codename):
-    """Unevaluated pk of the exact codename on ``model``'s content type."""
-    return Subquery(
-        Permission.objects.filter(
-            content_type__app_label=app_label.lower(),
-            content_type__model=model._meta.model_name,
-            codename=codename,
-        ).values('pk')[:1]
-    )
 
 
 def permission_backends(backend=None):

@@ -241,8 +241,9 @@ class RegistryQuestionsTest(TransactionTestCase):
                 seen.append(question)
                 return question.name
         names = built.walk_questions(_Visitor())
-        self.assertEqual(names[:-1], ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'))
-        named = seen[-1]
+        self.assertEqual(names[:-2], ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'))
+        self.assertEqual(names[-2:], ('named_filter', 'named_filter_grant'))
+        named = seen[-2]
         self.assertEqual(named.name, 'named_filter')
         self.assertEqual(named.code, 'open')
         self.assertIs(named.content_model, self.Document)

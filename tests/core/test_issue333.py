@@ -13,7 +13,7 @@ from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
-from django.test.utils import isolate_apps
+from django.test.utils import CaptureQueriesContext, isolate_apps
 from django.utils import timezone
 
 from trusts.backends import TrustModelBackendMixin
@@ -229,6 +229,18 @@ class NullRuleAgreementTest(TransactionTestCase):
                 lambda u, p, o, mark=held: o.marks.contains(mark),
                 lambda u, r, mark=held: r.marks.filter(pk=mark).exists(),
             )
+            filters['codec'] = (
+                lambda u, p, o: p == PERM,
+                lambda u, r: True,
+            )
+            filters['other_codec'] = (
+                lambda u, p, o: p == 'trusts_tests.delete_pair',
+                lambda u, r: False,
+            )
+            filters['codec_same'] = (
+                lambda u, p, o: (p == PERM) & (o.left == o.right),
+                lambda u, r: _both_set(r.left, r.right) and r.left == r.right,
+            )
             factory = compiler(path='tests.core.test_issue333._PairBackend')
             factory.register(
                 trust=PairGrant, user='user', permission='permission',
@@ -293,10 +305,24 @@ class NullRuleAgreementTest(TransactionTestCase):
                                 PERM, user, conditions=(code,),
                             ).values_list('pk', flat=True)
                             self.assertEqual(set(listed), expected)
-                            held = {
-                                row.pk for row in rows
-                                if user.has_perm(filtered, row)
-                            }
+                            held = set()
+                            for row in rows:
+                                with CaptureQueriesContext(connection) as held_queries:
+                                    one = user.has_perm(filtered, row)
+                                with CaptureQueriesContext(connection) as via_queries:
+                                    via = Pair.objects.permitted(
+                                        PERM, user, conditions=(code,),
+                                    ).filter(pk=row.pk).exists()
+                                self.assertEqual(
+                                    len(held_queries), len(via_queries),
+                                )
+                                self.assertLessEqual(len(held_queries), 1)
+                                if row.pk in expected:
+                                    self.assertEqual(len(held_queries), 1)
+                                self.assertEqual(one, via)
+                                self.assertEqual(one, row.pk in expected)
+                                if one:
+                                    held.add(row.pk)
                             self.assertEqual(held, expected)
                     for row in rows:
                         expected = {u.pk for u in users if allowed(u, row)}
@@ -306,6 +332,100 @@ class NullRuleAgreementTest(TransactionTestCase):
                                 set(found.values_list('pk', flat=True)),
                                 expected,
                             )
+                probe = Pair.objects.get(pk=rows[1].pk)
+                probe.left = 999
+                probe.label = mark_b
+                with self.assertNumQueries(1):
+                    self.assertTrue(alice.has_perm('%s:same' % PERM, probe))
+                with self.assertNumQueries(1):
+                    self.assertTrue(alice.has_perm('%s:marked' % PERM, probe))
+                self.assertEqual(probe.left, 999)
+                self.assertEqual(probe.label_id, mark_b.pk)
+                blank = Pair.objects.get(pk=rows[0].pk)
+                blank.left = 4
+                with self.assertNumQueries(1):
+                    self.assertTrue(alice.has_perm('%s:blank' % PERM, blank))
+                self.assertEqual(blank.left, 4)
+                with self.assertNumQueries(1):
+                    self.assertFalse(alice.has_perm(
+                        '%s:same' % PERM,
+                        Pair.objects.filter(pk__in=(rows[1].pk, rows[2].pk)),
+                    ))
+                with self.assertNumQueries(1):
+                    self.assertTrue(alice.has_perm(
+                        '%s:same' % PERM,
+                        Pair.objects.filter(pk=rows[1].pk),
+                    ))
+                with self.assertNumQueries(0):
+                    self.assertFalse(
+                        alice.has_perm('%s:missing' % PERM, rows[1]),
+                    )
+                    self.assertFalse(alice.has_perm(
+                        '%s:same' % PERM, Pair(left=1, right=1, owner=alice),
+                    ))
+
+    def test_skip_flags_read_the_stored_row_in_one_query(self):
+        User = get_user_model()
+        Mark, Pair, PairGrant = _pair_models()
+        backend = 'tests.core.test_issue333._PairBackend'
+        with _tables(Mark, Pair, PairGrant):
+            factory = compiler(path='tests.core.test_issue333._PairBackend')
+            factory.set_user_condition('staff', lambda u: u.is_staff)
+            factory.register(
+                trust=PairGrant, user='user', permission='permission',
+                content='pair',
+            )
+            factory.add_named_filter(
+                Pair, 'same', lambda u, p, o: o.left == o.right,
+            )
+            with published_class_catalog(
+                _PairBackend, factory,
+            ), override_settings(AUTHENTICATION_BACKENDS=(backend,)):
+                staff = User.objects.create_user('staff-333', password='x')
+                staff.is_staff = True
+                staff.save(update_fields=['is_staff'])
+                plain = User.objects.create_user('plain-333', password='x')
+                dormant = User.objects.create_user('dormant-333', password='x')
+                dormant.is_staff = True
+                dormant.is_active = False
+                dormant.save(update_fields=['is_staff', 'is_active'])
+                change = Permission.objects.create(
+                    content_type=ContentType.objects.get_for_model(Pair),
+                    codename='change_pair',
+                    name='Can change pair',
+                )
+                row = Pair.objects.create(left=1, right=1)
+                for holder in (staff, plain, dormant):
+                    PairGrant.objects.create(
+                        pair=row, user=holder, permission=change,
+                    )
+                code = '%s:same' % PERM
+                checker = _PairBackend()
+                cases = (
+                    (staff, {}, True),
+                    (plain, {}, False),
+                    (plain, {'skip_staff': True}, True),
+                    (dormant, {}, False),
+                    (dormant, {'skip_is_active': True}, True),
+                    (dormant, {'skip_is_active': True, 'skip_staff': True}, True),
+                )
+                for user, flags, expected in cases:
+                    with self.subTest(user=user.username, flags=flags):
+                        with self.assertNumQueries(1):
+                            held = checker.has_perm(user, code, row, **flags)
+                        with self.assertNumQueries(1):
+                            via = Pair.objects.permitted(
+                                PERM, user, conditions=('same',), **flags,
+                            ).filter(pk=row.pk).exists()
+                        self.assertEqual(held, expected)
+                        self.assertEqual(held, via)
+                stale = Pair.objects.get(pk=row.pk)
+                stale.left = 8
+                with self.assertNumQueries(1):
+                    self.assertTrue(checker.has_perm(
+                        dormant, code, stale, skip_is_active=True,
+                    ))
+                self.assertEqual(stale.left, 8)
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')

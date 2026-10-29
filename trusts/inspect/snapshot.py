@@ -281,6 +281,8 @@ class _PolicyVisitor(object):
     def visit(self, question):
         if question.name == 'named_filter':
             return self._visit_named_filter(question)
+        if question.name == 'named_filter_grant':
+            return self._visit_named_filter_grant(question)
         content = self._ensure_content(
             question.content_model, question.records, question.delegations,
         )
@@ -311,10 +313,13 @@ class _PolicyVisitor(object):
                 content['filter_by_permitted_content'] = rows
             return content
         if question.name == 'permitted':
-            queryset = question.question(user, permission)
+            queryset = question.question(
+                user, _lock_permission(model, question.records or records, permission),
+            )
         elif question.name == 'has_perm':
             queryset = question.question(
-                user, _content_sentinel(model, alias), permission,
+                user, _content_sentinel(model, alias),
+                _lock_permission(model, question.records or records, permission),
             )
         elif question.name in ('get_all_permissions', 'get_group_permissions'):
             queryset = question.question(
@@ -323,7 +328,10 @@ class _PolicyVisitor(object):
         elif question.name == 'get_permitted_users':
             instance = _content_sentinel(model, alias)
             _populate_reverse_along_identity(instance, records, alias)
-            queryset = question.question(instance, permission)
+            queryset = question.question(
+                instance,
+                _lock_permission(model, question.records or records, permission),
+            )
         else:
             raise TrustsConfigurationError(
                 'Policy SQL visitor cannot render question %r.'
@@ -357,12 +365,65 @@ class _PolicyVisitor(object):
                 queryset, self.alias, record=None, expr=question.expr,
             )),
         }
+        composed = self._named_filter_has_perm(question, model)
+        if composed is not None:
+            row['has_perm'] = composed
         content = self._contents.get(label)
         if content is None:
             content = {'model': label}
             self._contents[label] = content
             self._order.append(label)
         content.setdefault('named_filters', []).append(row)
+        return content
+
+    def _named_filter_has_perm(self, question, model):
+        """Saved-instance ``has_perm(code:name)`` for one registered filter.
+
+        ``None`` when this content has no ``auth.Permission`` grant.
+        The condition row stays. This is the one statement that runs.
+        """
+        records = self._classifier_records.get(_model_label(model))
+        if not records or not _auth_permission_terminal(records):
+            return None
+        user = _role_sentinel(records[0], 'user', self.alias)
+        content = _content_sentinel(model, self.alias)
+        inquiry = self.catalog._question_conditional_has_perm(
+            user, content, _change_permission_code(model), question.code,
+        )
+        if inquiry is None:
+            return None
+        return _sql_row(_compile_queryset(
+            inquiry, self.alias, record=records[0], expr=question.expr,
+            records=records,
+        ))
+
+    def _visit_named_filter_grant(self, question):
+        """``.permitted(code, user, conditions=(name,))`` on the filter row.
+
+        The ``has_perm`` key is already the saved-instance statement.
+        """
+        model = question.content_model
+        label = _model_label(model)
+        records = self._classifier_records.get(label)
+        if not records or not _auth_permission_terminal(records):
+            return None
+        content = self._contents.get(label)
+        if content is None:
+            return None
+        row_id = _dotless_id(label, question.code)
+        named = None
+        for row in content.get('named_filters', ()):
+            if row['id'] == row_id:
+                named = row
+                break
+        if named is None:
+            return None
+        user = _role_sentinel(records[0], 'user', self.alias)
+        queryset = question.question(user, _change_permission_code(model))
+        named['permitted'] = _sql_row(_compile_queryset(
+            queryset, self.alias, record=records[0], expr=question.expr,
+            records=records,
+        ))
         return content
 
     def _ensure_content(self, model, records, delegations):
@@ -648,6 +709,31 @@ def _populate_reverse_along_identity(content, records, alias):
             continue
         field = _concrete_target_field(along.walk_model, along.walk_ident)
         setattr(content, field.attname, _sentinel_value(field, alias))
+
+
+def _auth_permission_terminal(records):
+    """True when these ordinary rows terminate on ``auth.Permission``."""
+    if not records:
+        return False
+    concrete = Permission._meta.concrete_model
+    for record in records:
+        model = getattr(record, 'permission_model', None)
+        if model is None or model._meta.concrete_model is not concrete:
+            return False
+    return True
+
+
+def _change_permission_code(model):
+    """``app_label.change_<model>`` for the codename binding."""
+    meta = model._meta
+    return '%s.change_%s' % (meta.app_label, meta.model_name)
+
+
+def _lock_permission(model, records, permission):
+    """Codename string for an ``auth.Permission`` terminal, else the row."""
+    if _auth_permission_terminal(records):
+        return _change_permission_code(model)
+    return permission
 
 
 def _role_sentinel(record, role, alias):
@@ -1215,6 +1301,9 @@ def _symbol_for_new_param(node, query=None):
         return _with_hint(
             {'const': _json_const(node.value)}, hint,
         )
+    bind = getattr(node, 'bind', None)
+    if isinstance(bind, str) and bind:
+        return _with_hint({'bind': bind}, _request_hint(bind))
     if isinstance(node, Value):
         return _with_hint(
             {'const': _json_const(node.value)},

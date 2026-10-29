@@ -271,7 +271,10 @@ class PolicyCompositionTest(SimpleTestCase):
                 for named_row in content.get('named_filters', ()):
                     self.assertNotIn('.', named_row['id'])
                     self.assertTrue(named_row['id'].startswith(model_prefix))
-                    self.assertEqual(list(named_row), ['id', 'params', 'sql'])
+                    keys = list(named_row)
+                    self.assertEqual(keys[:3], ['id', 'params', 'sql'])
+                    if len(keys) > 3:
+                        self.assertEqual(keys, ['id', 'params', 'sql', 'has_perm', 'permitted'])
         guide = document['backends'][0]['contents'][0]
         trust = guide['trusts'][0]
         named = guide['named_filters'][0]
@@ -283,14 +286,20 @@ class PolicyCompositionTest(SimpleTestCase):
         self.assertEqual(list(guide['has_perm']), ['params', 'sql'])
         self.assertIn('EXISTS (', guide['has_perm']['sql'])
         self.assertIn('documents_documentpermission', guide['has_perm']['sql'])
-        self.assertIn('$permission.id', guide['has_perm']['params'])
+        self.assertIn('$permission.codename', guide['has_perm']['params'])
+        self.assertNotIn('$permission.id', guide['has_perm']['params'])
+        self.assertNotIn('permitted_by_codename', guide)
+        self.assertNotIn('get_permitted_users_by_codename', guide)
+        self.assertIn('$permission.codename', guide['permitted']['params'])
         self.assertIn('$user.id', guide['has_perm']['params'])
         self.assertEqual(list(guide['permitted']), ['params', 'sql'])
         self.assertIn('documents_documentpermission', guide['permitted']['sql'])
         self.assertNotIn('confidential" IS NULL', guide['permitted']['sql'])
         self.assertNotIn('confidential" = %s', guide['permitted']['sql'])
         self.assertEqual(named['id'], 'documents__Document__non_confidential')
-        self.assertEqual(list(named), ['id', 'params', 'sql'])
+        self.assertEqual(list(named), ['id', 'params', 'sql', 'has_perm', 'permitted'])
+        self.assertIn('documents_documentpermission', named['has_perm']['sql'])
+        self.assertIn('confidential', named['has_perm']['sql'])
         self.assertIn('confidential', named['sql'])
         self.assertEqual(list(guide['get_all_permissions']), ['params', 'sql'])
         self.assertIn('auth_permission', guide['get_all_permissions']['sql'])

@@ -6,22 +6,26 @@ from django.contrib.auth.models import Permission
 from django.db import router
 from django.db.models import Model, Q, QuerySet
 
-from trusts.errors import PermissionConditionError, TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 from trusts.utils import parse_perm_code
 from trusts.plan.aggregates import (
+    _ExistsQuery,
+    _bound_all_match,
+    _bound_saved_row,
     _compile_common_permissions,
     _delegated_user_exists,
-    all_match,
     _instance_exists_query,
+    all_match,
+    all_rows_hold,
+    bound_saved_exists,
     instance_match,
 )
 from trusts.plan.conditions import (
+    codename_lookup,
     condition_model_key,
     permission_binding,
-    validate_expression,
 )
-from trusts.plan.grammar import is_predicate
-from trusts.plan.writers import compile_to_q, evaluate_expression
+from trusts.plan.writers import compile_to_q
 from trusts.plan.contents import (
     _as_q,
     _compile_granted,
@@ -403,9 +407,12 @@ class Catalog(object):
 
     def prepare_has_perm(self, user_obj, permext, obj, *, skipped):
         model = _content_model(obj)
-        if not isinstance(permext, str): return PreparedInquiry(model, result=False)
-        try: applabel, modelname, action, cond = parse_perm_code(permext)
-        except ValueError: return PreparedInquiry(model, result=False)
+        if not isinstance(permext, str):
+            return PreparedInquiry(model, result=False)
+        try:
+            applabel, modelname, action, cond = parse_perm_code(permext)
+        except ValueError:
+            return PreparedInquiry(model, result=False)
         plan = self.plan_for(obj, user=user_obj)
         if not plan.applicable:
             return PreparedInquiry(model, result=False)
@@ -413,35 +420,26 @@ class Catalog(object):
         perm = '%s.%s_%s' % (applabel, action, modelname)
         if cond and stored is None:
             return PreparedInquiry(model, result=False)
-        held = self.has_permission(
-            user_obj, obj, permission_binding(perm, model),
-            extra_q=extra_q, permission_model=Permission,
-            skipped=dict(skipped) if isinstance(skipped, dict) else {},
-        )
-        if not held:
-            return PreparedInquiry(model, result=False)
-        if stored is None or extra_q is not None:
-            return PreparedInquiry(model, result=True)
-        return self.permission_condition_met(stored, user_obj, perm, obj)
-
-    def permission_condition_met(self, stored, user_obj, perm, obj):
-        model = _content_model(obj)
-        _registered, tree = stored
+        binding = permission_binding(perm, model)
+        values = dict(skipped) if isinstance(skipped, dict) else {}
         if isinstance(obj, QuerySet):
-            objs, model = obj.all(), obj.model
-        elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
-            objs, model = obj, None
-        else:
-            objs = [obj]
-        met = all(
-            evaluate_registered_expression(
-                tree, user_obj, perm, item,
-                model=model or item.__class__,
-                user_model=self.user_model,
+            bound = _bound_all_match(
+                self, obj, user_obj, binding,
+                kind='complete', extra_q=extra_q,
+                permission_model=Permission, skipped=values,
             )
-            for item in objs
+            if bound is None:
+                return PreparedInquiry(model, result=False)
+            qs, granted_q = bound
+            return PreparedInquiry(model, qs=qs, granted_q=granted_q)
+        queryset = _bound_saved_row(
+            self, obj, user_obj, binding,
+            kind='complete', extra_q=extra_q,
+            permission_model=Permission, skipped=values,
         )
-        return PreparedInquiry(model, result=bool(met))
+        if queryset is None:
+            return PreparedInquiry(model, result=False)
+        return PreparedInquiry(model, qs=queryset)
 
     def _permission_codes(self, user_obj, obj, skip_flags, *, kind):
         denied, values = self._resolve_skipped(user_obj, skip_flags)
@@ -460,10 +458,10 @@ class Catalog(object):
             return None, None
         model = _content_model(obj)
         stored = _condition_entry(self, model, cond)
-        if stored is None or not isinstance(obj, QuerySet):
-            return stored, None
+        if stored is None:
+            return None, None
         return stored, _apply_prepared(
-            stored, obj.model, user_obj, permext, self.user_model,
+            stored, model, user_obj, permext, self.user_model,
         )
 
     def _resolve_skipped(self, subject, skip_flags, skipped=None, *,
@@ -477,13 +475,36 @@ class Catalog(object):
         return inquiry.denied, inquiry.values
 
     def _question_has_perm(self, user, content, permission):
+        if isinstance(permission, str):
+            permission = permission_binding(permission, content.__class__)
         inquiry = _instance_exists_query(self, content, user, permission)
         return False if inquiry is None else inquiry
 
     def _question_content_grant(self, content_model, user, permission):
+        if isinstance(permission, str):
+            return self._string_content_grant(content_model, user, permission)
         return self.filter_authorized(
             content_model._meta.concrete_model._default_manager.all(),
             user, permission,
+        )
+
+    def _string_content_grant(self, content_model, user, code):
+        """``.permitted(str)``: the codename subquery on this content model."""
+        model = content_model._meta.concrete_model
+        app_label, codename = code.split('.', 1)
+        binding = codename_lookup(model, app_label, codename)
+        queryset = model._default_manager.all()
+        if not isinstance(user, Model):
+            return queryset.none()
+        denied, values = self._resolve_skipped(user, {})
+        if denied:
+            return queryset.none()
+        predicate, _owned = self.authorization_grant(
+            queryset, user, model, binding, (), binding,
+            api='permitted', skipped=values,
+        )
+        return bind_filtered_queryset(
+            queryset, predicate, user_model=self.user_model,
         )
 
     def _question_filter_by_permitted_content(
@@ -493,22 +514,97 @@ class Catalog(object):
             queryset, user, permission, content=content_model,
         )
 
+    def _question_conditional_has_perm(self, user, content, permission, code):
+        """Exists query a saved-instance ``has_perm(code:name, object)`` runs.
+
+        ``permission`` is a codename string or a permission row. ``code``
+        is one filter name. ``None`` when this catalog has no grant for
+        the condition.
+        """
+        denied, values = self._resolve_skipped(user, {})
+        if (
+            denied or not isinstance(content, Model) or content.pk is None
+            or not isinstance(code, str) or not code
+        ):
+            return None
+        meta = content._meta
+        if isinstance(permission, str):
+            base = permission.split(':', 1)[0]
+            binding = permission_binding(base, content.__class__)
+            permext = '%s:%s' % (base, code)
+        elif isinstance(permission, Model) and permission.pk is not None:
+            binding = permission
+            permext = '%s.change_%s:%s' % (meta.app_label, meta.model_name, code)
+        else:
+            return None
+        _stored, extra_q = self._condition_overlay(permext, content, user)
+        if extra_q is None:
+            return None
+        plan = self.plan_for(content, user=user)
+        if not plan.applicable:
+            return None
+        queryset = _bound_saved_row(
+            self, content, user, binding,
+            kind='complete', extra_q=extra_q,
+            permission_model=Permission, skipped=values,
+        )
+        if queryset is None:
+            return None
+        return _ExistsQuery(
+            bound_saved_exists(queryset), content._meta.concrete_model,
+        )
+
     def _question_named_filter(self, model, tree, user, permission):
         compiled = compile_to_q(
             tree, model, user, permission, self.user_model,
         )
         return model._meta.concrete_model._default_manager.filter(compiled)
 
+    def _question_named_filter_grant(self, model, code, user, permission):
+        """``.permitted(code, user, conditions=(name,))`` for this catalog.
+
+        ``permission`` is a codename string or a permission row. One name.
+        Several names are the AND of these single statements.
+        """
+        concrete = model._meta.concrete_model
+        queryset = concrete._default_manager.all()
+        if not isinstance(user, Model):
+            return queryset.none()
+        if isinstance(permission, str):
+            app_label, codename = permission.split('.', 1)
+            binding = codename_lookup(concrete, app_label, codename)
+            label = permission
+        elif isinstance(permission, Model) and permission.pk is not None:
+            binding = permission
+            label = '%s.change_%s' % (
+                concrete._meta.app_label, concrete._meta.model_name,
+            )
+        else:
+            return queryset.none()
+        denied, values = self._resolve_skipped(user, {})
+        if denied:
+            return queryset.none()
+        predicate, _owned = self.authorization_grant(
+            queryset, user, concrete, label, (code,), binding,
+            api='permitted', skipped=values,
+        )
+        return bind_filtered_queryset(
+            queryset, predicate, user_model=self.user_model,
+        )
+
 
 class PreparedInquiry(object):
-    def __init__(self, model, result=_NO_PRESET, qs=None):
+    def __init__(self, model, result=_NO_PRESET, qs=None, granted_q=_NO_PRESET):
         self.model = model
         self.result = result
         self.qs = qs
+        self.granted_q = granted_q
 
     def execute(self):
         if self.result is not _NO_PRESET:
             return self.result
+        if self.granted_q is not _NO_PRESET:
+            return all_rows_hold(self.qs, self.granted_q)
         return bool(self.qs.exists())
 
 
@@ -601,25 +697,6 @@ def _selected_condition_q(catalog, model, permission, conditions, user, *, api):
         )
         extra_q = part if extra_q is None else extra_q & part
     return extra_q
-
-
-def evaluate_registered_expression(expr, user, perm, obj, model=None, user_model=None):
-    """Evaluate a registered ``Tree`` against a real principal/object."""
-    if not is_predicate(expr):
-        raise PermissionConditionError(
-            'Permission condition did not produce a comparison, '
-            '.contains(), boolean field, or combination with & and |.'
-        )
-    klass = model
-    if klass is None:
-        klass = (
-            obj.model if hasattr(obj, 'model') and not isinstance(obj, Model)
-            else obj.__class__
-        )
-    validate_expression(expr, klass, user_model)
-    return evaluate_expression(
-        expr, user, perm, obj, model=klass, user_model=user_model,
-    )
 
 
 def catalog_models(catalog, content, principal_model):

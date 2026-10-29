@@ -521,11 +521,6 @@ and PyYAML, and the same selected renderer. A version or dependency change may
 alter the output without changing application declarations. Regenerate the
 lockfile and review that diff with the upgrade.
 
-The [historical policy-output record](../dev/permission-policy-sql.rst) and
-its examples describe one implementation snapshot. Their field names, ordering,
-identifiers, parameter notation, and SQL/YAML layout are not compatibility
-promises or a supported input format.
-
 ### Formatter and enforcement
 
 The SQL formatter accepts only the tokens it understands and fails closed on an
@@ -582,11 +577,10 @@ answer:
 5. Is the final authorization query still within its tested statement bound?
 6. Did any unsupported database, callback, private registry, or private IR
    surface become reachable?
-7. If a policy lockfile is in play, does equality show only that the live
-   declared authorization surface and rendered SQL match the reviewed
-   artifact, and has every change to the Trusts backend or registration,
-   operation, parameter roles, `sql`, or `database.engine` been reviewed
-   on its own?
+7. If a policy lockfile is in play, does equality show only that the declared
+   authorization surface and rendered SQL match the reviewed artifact, and
+   has every change to the Trusts backend, registration, operation, parameter
+   roles, or rendered statement been reviewed on its own?
 8. If the implementation disagrees with this guide, is the code wrong, is the
    guide wrong, or has an explicit design decision changed the boundary?
 
