@@ -81,25 +81,13 @@ def permission_binding(perm, model):
     """Unevaluated ``auth.Permission`` pk for a codename string.
 
     A ``Permission`` instance is returned unchanged. A string becomes
-    the codename subquery ``has_perm`` and ``get_permitted_users`` run.
-    The codename, app label, and model name are call inputs. ``model``
-    is the content model the caller asked about; the string still
-    supplies the three constants.
+    the same exact-codename subquery ``has_perm`` and
+    ``get_permitted_users`` run via ``codename_lookup``.
     """
     if isinstance(perm, Permission):
         return perm
-    applabel, modelname, action, _cond = parse_perm_code(perm)
-    return Subquery(
-        Permission.objects.filter(
-            codename=CallInput(
-                '%s_%s' % (action, modelname), 'permission.codename',
-            ),
-            content_type__app_label=CallInput(
-                applabel.lower(), 'permission.app_label',
-            ),
-            content_type__model=CallInput(modelname, 'permission.model'),
-        ).values('pk')[:1]
-    )
+    applabel, codename, _cond = parse_perm_code(perm)
+    return codename_lookup(model, applabel, codename)
 
 
 def codename_lookup(model, app_label, codename):

@@ -13,6 +13,6 @@ class StageBPublicSurfaceTest(SimpleTestCase):
         )
         self.assertEqual(
             parse_perm_code('myapp.change_note:own'),
-            ('myapp', 'note', 'change', 'own'),
+            ('myapp', 'change_note', 'own'),
         )
-        self.assertEqual(parse_perm_code('myapp.change_note')[3], '')
+        self.assertEqual(parse_perm_code('myapp.change_note')[2], '')

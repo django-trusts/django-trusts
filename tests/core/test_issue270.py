@@ -146,13 +146,14 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
         Permission.objects.get_or_create(content_type=grant_ct, codename='change_documentgrant', defaults={'name': 'Can change document grant'})
         self.assertEqual(list(self.docs.permitted('myapp.change_documentgrant', self.alice)), [])
 
-    def test_custom_codename_matches_the_decorator_not_has_perm(self):
-        self.assertFalse(self.alice.has_perm('myapp.can_publish', self.open_doc))
+    def test_custom_codename_matches_every_projection(self):
+        self.assertTrue(self.alice.has_perm('myapp.can_publish', self.open_doc))
         self.assertTrue(_view_allows(_publish, self.alice, self.open_doc.pk))
         self.assertFalse(_view_allows(_publish, self.alice, self.secret.pk))
         for permission in ('myapp.can_publish', self.publish):
             with self.subTest(permission=permission):
                 self.assertEqual(_pks(self.docs.permitted(permission, self.alice)), {self.open_doc.pk})
+                self.assertIn(self.alice.pk, set(self.open_doc.get_permitted_users(permission).values_list('pk', flat=True)))
 
     def test_parity_with_authorization_required(self):
         cases = ((_edit, 'myapp.change_document', (), self.alice, self.open_doc, True), (_edit, 'myapp.change_document', (), self.bob, self.open_doc, False), (_edit, 'myapp.change_document', (), self.alice, self.secret, True), (_edit_open, 'myapp.change_document', ('non_confidential',), self.alice, self.open_doc, True), (_edit_open, 'myapp.change_document', ('non_confidential',), self.alice, self.secret, False), (_edit_open, 'myapp.change_document', ('non_confidential',), self.bob, self.open_doc, False), (_publish, 'myapp.can_publish', (), self.alice, self.open_doc, True), (_publish, 'myapp.can_publish', (), self.bob, self.open_doc, False))

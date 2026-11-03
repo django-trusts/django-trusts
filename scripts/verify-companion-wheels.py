@@ -29,7 +29,7 @@ from management_archive import ships_trusts_management
 
 ROOT = Path(__file__).resolve().parents[1]
 # Exact Zero candidate companion.
-ZERO_HEAD = '3d91640a38933a70b6c0ffdd9ce0878d323185be'
+ZERO_HEAD = 'baee94cd2b95a6df56c8df3a0737252d14ef568c'
 FORBIDDEN_ZERO_PATHS = (
     'trusts/__init__.py',
     'trusts/apps.py',
@@ -71,7 +71,7 @@ assert (init.parent / "zero" / "apps.py").is_file()
 assert (init.parent / "apps.py").is_file()
 from trusts.utils import parse_perm_code
 from trusts.errors import PermissionConditionError
-assert parse_perm_code("trusts.change_trust:own")[3] == "own"
+assert parse_perm_code("trusts.change_trust:own")[2] == "own"
 assert PermissionConditionError is not None
 print("companion-overlay-ok")
 '''

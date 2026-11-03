@@ -81,17 +81,16 @@ invoke callback conditions.
 
 ### Permission codec
 
-For a string, the SQL binds the exact codename to the queryset model's
-content type. The codename suffix is not parsed into an action and a model
-name. `read_pull_request` on `PullRequest` stays that codename; it is not
-looked up as model `request`.
+For a string, the SQL binds the exact codename to the checked object's
+content model. The codename is not parsed into an action and a model name.
+`read_pull_request` on `PullRequest` stays that codename; it is not looked
+up as model `request`.
 
-`authorization_required` uses this same rule. `user.has_perm` still uses
-`parse_perm_code`, which infers the model from the codename suffix. The two
-agree on codenames shaped like `action_modelname` and diverge otherwise.
-That gap is [issue #268](https://github.com/django-trusts/django-trusts/issues/268).
-`.permitted()` is the queryset form of the `authorization_required` inquiry,
-not a second implementation of the current `has_perm` codec.
+`authorization_required`, `.permitted()`, `has_perm`, and
+`get_permitted_users` use this rule for string permission codes: the app
+label and codename come from the string, and the model comes from the object
+being checked. `.permitted()` is the queryset form of the
+`authorization_required` inquiry, not a second codec.
 
 A saved `auth.Permission` instance is bound by its primary key. Building
 that queryset does not read `permission.content_type`. The [content-type boundary](../source/security-audit.md#permission-content-type)

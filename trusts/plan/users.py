@@ -80,7 +80,7 @@ def _permission_binding_for_plan(accepts_permission, content, perm, plan):
     permission_model = plan.permission_model
     if isinstance(perm, str):
         try:
-            applabel, modelname, action, code = parse_perm_code(perm)
+            applabel, codename, code = parse_perm_code(perm)
         except (ValueError, AttributeError):
             return None
         if (
@@ -91,7 +91,7 @@ def _permission_binding_for_plan(accepts_permission, content, perm, plan):
         binding = permission_binding(perm, content.__class__)
         if not code:
             return binding, None
-        singular = '%s.%s_%s' % (applabel, action, modelname)
+        singular = '%s.%s' % (applabel, codename)
         return binding, (singular, code)
     if isinstance(perm, Model) and perm.pk is None:
         return None
