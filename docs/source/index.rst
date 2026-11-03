@@ -132,6 +132,7 @@ The application owns its protected content and trust models.
            on_delete=models.CASCADE,
        )
        permissions = models.ManyToManyField(Permission)
+       expires_at = models.DateTimeField()
 
 ``DocumentPermission`` connects one user and one permission to one document.
 ``GroupDocumentPermission`` connects a Django group to one document; users
@@ -235,6 +236,7 @@ Register the model paths when the application starts:
 
        def ready(self):
            from .backends import DocumentBackend
+           from django.db.models.functions import Now
            from .models import (
                Document,
                DocumentDelegation,
@@ -260,7 +262,9 @@ Register the model paths when the application starts:
                delegate=lambda d: d.delegate,
                sponsor=lambda d: d.sponsor,
                content=lambda d: d.document,
-               condition=lambda d, p: d.permissions.contains(p),
+               condition=lambda d, p: (
+                   d.permissions.contains(p) & (d.expires_at > Now())
+               ),
            )
            registry.add_named_filter(
                Document,
@@ -314,15 +318,20 @@ available as independent alternatives.
 The delegated ``condition=`` builder receives the relationship as a symbolic
 value and may receive the requested permission as a second symbolic value.
 The one-argument form applies row-only restrictions. The two-argument form in
-the example checks the requested permission against ``permissions``.
+the example checks the requested permission against ``permissions`` and
+requires that the same relationship has not expired.
 Create the relationship and its scope with ordinary application data writes:
 
 .. code-block:: python
+
+   from datetime import timedelta
+   from django.utils import timezone
 
    delegation = DocumentDelegation.objects.create(
        delegate=automation_user,
        sponsor=owner,
        document=document,
+       expires_at=timezone.now() + timedelta(hours=1),
    )
    delegation.permissions.add(change_document)
 
@@ -669,7 +678,7 @@ permission. See
 A prebuilt condition is not accepted. ``.contains`` is a
 reserved method on the condition proxy; a model field actually named
 ``contains`` cannot be walked there. ``predicate=`` is reserved and
-unsupported in 1.0.
+unsupported.
 
 .. code-block:: python
 
@@ -692,14 +701,27 @@ selected by an authorization caller. Neither can create permission by itself.
 Supported lambda expressions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A condition lambda accepts ``==``, ``!=``, ``&``, ``|``,
-``.contains(member)``, a bare boolean field, and comparison with a
-constant, including ``None``; ``~`` applies only to a boolean field or
-to ``&`` of boolean fields, and ``==`` or ``!=`` must be parenthesized
-when combined with ``&`` or ``|``.
+A condition lambda accepts ``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=``,
+``&``, ``|``, ``.contains(member)``, a bare boolean field, and comparison
+with a constant, including ``None``; ``~`` applies only to a boolean field or
+to ``&`` of boolean fields. Parenthesize comparisons when combining them with
+``&`` or ``|``.
 
-Python ``in``, ``and`` / ``or`` / ``not``, ordered comparisons,
-arithmetic, calls, and indexing are rejected.
+The supported SQL functions are ``Now()``, ``Lower(expression)``, and
+``Coalesce(first, second, ...)`` from ``django.db.models.functions``.
+Function arguments may be field references, typed constants, or nested
+supported functions. Comparisons put the symbolic field on the left; function
+calls may appear on the right or as function arguments. Use Django's ``Value``
+for a literal string inside a function. ``Lower`` accepts text; ``Coalesce``
+requires at least two compatible arguments. The same expressions can be used
+in named filters.
+
+``Now()`` uses the database time when the query executes; clock precision and
+time-zone behavior follow the database backend. An evaluated queryset keeps
+its cached results; make a fresh inquiry to check expiration again.
+
+Python ``in``, ``and`` / ``or`` / ``not``, unsupported calls, arithmetic,
+and indexing are rejected. A prebuilt condition is not accepted.
 
 A path lambda, a ``condition=`` lambda, and a delegated condition builder
 are evaluated only when registering and compiling, never during a
