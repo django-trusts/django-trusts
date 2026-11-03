@@ -711,8 +711,7 @@ The supported SQL functions are ``Now()``, ``Lower(expression)``, and
 ``Coalesce(first, second, ...)`` from ``trusts.functions``. Only these
 three Trusts functions are supported; using Django's own versions is rejected
 by ``register()``. Function arguments may be field references, typed
-constants, or nested supported functions, and functions may appear on either
-side of a comparison. For example:
+constants, or nested supported functions. For example:
 
 .. code-block:: python
 
