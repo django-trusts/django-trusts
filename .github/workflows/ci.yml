@@ -9,9 +9,8 @@ permissions:
   contents: read
 
 env:
-  # Zero #268 candidate on branch cursor/fix-issue-268-perm-codename-579c.
-  # Push django-trusts-zero at 60b1e78f46a251a04c05c0fc6cf0c74824c90f4c before CI can fetch it.
-  COMPANION_ZERO_SHA: 60b1e78f46a251a04c05c0fc6cf0c74824c90f4c
+  # Zero #268 / django-trusts-zero #59.
+  COMPANION_ZERO_SHA: 827ff770985f47774c1ddeec4b554fbf0841541e
   # gh-permissions dev after #58.
   COMPANION_GH_SHA: 41cd5626da2db5bfa79a6dfe8ef4ba79e2da34b2
 
