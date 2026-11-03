@@ -79,7 +79,9 @@ Call `registry.register()` from the owning
 implementation's `AppConfig.ready()` before the registry freezes.
 
 The public registration signature is
-`register(*, trust, user=None, permission=None, content, group=None, delegate=None, sponsor=None, condition=None, along=None)`.
+`register(*, trust, user=None, permission=None, content, group=None, delegate=None, sponsor=None, condition=None, along=None, name=None, description=None)`.
+Optional `name` is letters and underscores. Optional `description` is a string.
+Omit either one. `register()` rejects a `name` or `description` of any other type.
 An ordinary registration supplies `user=` and exactly one of `permission=` or
 `group=`. The required `trust=` model is the root of its non-empty paths:
 

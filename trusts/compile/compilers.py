@@ -3,6 +3,7 @@
 __all__ = []
 
 import inspect
+import re
 from collections.abc import Callable
 from functools import partial
 from typing import TypeVar
@@ -80,6 +81,27 @@ from trusts.plan.standards import (
 )
 
 
+_REGISTER_NAME = re.compile(r'[A-Za-z_]+')
+
+
+def _require_register_labels(name, description):
+    """Reject a ``name`` or ``description`` of the wrong type.
+
+    ``None`` means the caller omitted the argument. ``name`` is letters
+    and underscores. ``description`` is a string.
+    """
+    if name is not None and (
+        not isinstance(name, str) or _REGISTER_NAME.fullmatch(name) is None
+    ):
+        raise TrustsConfigurationError(
+            'register name must be letters and underscores, not %r.' % (name,)
+        )
+    if description is not None and not isinstance(description, str):
+        raise TrustsConfigurationError(
+            'register description must be a string, not %r.' % (description,)
+        )
+
+
 _ALONG_BOUND_MIN = 1
 
 
@@ -139,10 +161,14 @@ RegisteredRelation = _frozen('RegisteredRelation', (
     ('group_model', type | None, None),
     ('group_field', str, ''),
     ('group_target', str, ''),
+    ('name', str | None, field(default=None, compare=False)),
+    ('description', str | None, field(default=None, compare=False)),
 ), (
     'Immutable normalized record for one permission-bearing relation. '
     '``*_field`` is the complete root-relative Django lookup. '
-    '``*_target`` is the last hop\'s comparison field (``attname``).'
+    '``*_target`` is the last hop\'s comparison field (``attname``). '
+    '``name`` and ``description`` are optional labels. They are not '
+    'part of record equality.'
 ))
 
 
@@ -167,11 +193,15 @@ RegisteredDelegation = _frozen('RegisteredDelegation', (
     ('sponsor_rules', object | None, field(
         default=None, compare=False, repr=False,
     )),
+    ('name', str | None, field(default=None, compare=False)),
+    ('description', str | None, field(default=None, compare=False)),
 ), (
     'Immutable normalized bridge to a sponsor\'s ordinary authority. '
     'A delegation stores no ordinary permission path. '
     '``condition_permission_model`` is set only when the delegated '
-    'condition refers to the requested permission.'
+    'condition refers to the requested permission. '
+    '``name`` and ``description`` are optional labels. They are not '
+    'part of record equality.'
 ))
 
 
@@ -185,11 +215,14 @@ PublicRegistration = _frozen('PublicRegistration', (
     ('sponsor', object | None, None),
     ('condition', object | None, None),
     ('along', object | None, None),
+    ('name', str | None, None),
+    ('description', str | None, None),
 ), (
     'Normalized public registration, before it is stored. '
     '``build_public_registration`` returns this shape. Storing it is '
     '``register``\'s job, via ``register_relation`` or '
-    '``register_delegation``.'
+    '``register_delegation``. ``name`` and ``description`` are optional '
+    'labels.'
 ))
 
 
@@ -596,7 +629,7 @@ class Compiler(object):
 
     @staticmethod
     def build_delegation(*, content, delegate, sponsor, condition=None,
-                         along=None):
+                         along=None, name=None, description=None):
         """Build one ``RegisteredDelegation`` without storing it.
 
         Pure shape-building half of ``register_delegation``: same ref,
@@ -652,6 +685,7 @@ class Compiler(object):
             along_walk = _build_along_walk(
                 root, content_path, content_model, along,
             )
+        _require_register_labels(name, description)
         return RegisteredDelegation(
             root=root,
             content_path=content_path,
@@ -670,10 +704,12 @@ class Compiler(object):
             condition_permission_model=condition_permission_model,
             condition_permission_target=condition_permission_target,
             along=along_walk,
+            name=name,
+            description=description,
         )
 
     def register_delegation(self, *, content, delegate, sponsor, condition=None,
-                            along=None):
+                            along=None, name=None, description=None):
         """Register one non-granting delegation relationship.
 
         The three paths share one root. Delegate and sponsor are
@@ -686,7 +722,8 @@ class Compiler(object):
         self._open('register_delegation')
         record = self.build_delegation(
             content=content, delegate=delegate, sponsor=sponsor,
-            condition=condition, along=along,
+            condition=condition, along=along, name=name,
+            description=description,
         )
         root = record.root
         existing = self._delegations_by_root.get(root, ())
@@ -732,7 +769,8 @@ class Compiler(object):
 
     @staticmethod
     def build_relation(*, content, user, permission=None, group=None,
-                       condition=None, along=None):
+                       condition=None, along=None, name=None,
+                       description=None):
         """Build one ``RegisteredRelation`` without storing it.
 
         Pure shape-building half of ``register``: same permission-source,
@@ -796,6 +834,7 @@ class Compiler(object):
                 root, content_path, content_model, along,
             )
 
+        _require_register_labels(name, description)
         return RegisteredRelation(
             root=root,
             content_path=content_path,
@@ -817,10 +856,12 @@ class Compiler(object):
             group_model=group_model,
             group_field=group_field,
             group_target=group_target,
+            name=name,
+            description=description,
         )
 
     def register_relation(self, *, content, user, permission=None, group=None,
-                 condition=None, along=None):
+                 condition=None, along=None, name=None, description=None):
         """Register one permission-bearing relation from root-relative refs.
 
         ``permission`` and ``group`` are mutually exclusive. ``permission``
@@ -853,7 +894,8 @@ class Compiler(object):
         self._open('register')
         record = self.build_relation(
             content=content, user=user, permission=permission, group=group,
-            condition=condition, along=along,
+            condition=condition, along=along, name=name,
+            description=description,
         )
         root = record.root
         existing = self._by_root.get(root, ())
@@ -899,6 +941,7 @@ class Compiler(object):
     def build_public_registration(
         *, trust, user=None, permission=None, content, group=None,
         delegate=None, sponsor=None, condition=None, along=None,
+        name=None, description=None,
     ):
         """Build a normalized ``PublicRegistration`` without storing it.
 
@@ -906,10 +949,12 @@ class Compiler(object):
         path-builder, condition, and ``along`` validation and errors, in
         the same order, but no append. Path and
         condition builders are invoked exactly once, here; the returned
-        shape carries only refs, lowered condition IR, and ``Along``.
+        shape carries only refs, lowered condition IR, ``Along``, and
+        the optional ``name`` and ``description`` labels.
         ``register`` stores the shape
         via ``register`` or ``register_delegation``.
         """
+        _require_register_labels(name, description)
         ordinary = user is not None or permission is not None or group is not None
         delegated = delegate is not None or sponsor is not None
         if ordinary and delegated:
@@ -962,6 +1007,8 @@ class Compiler(object):
                     trust, condition,
                 ),
                 along=_bind_public_along(trust, along),
+                name=name,
+                description=description,
             )
         user_path = _normalize_public_role(trust, user, 'user', token=token)
         if group is not None:
@@ -982,6 +1029,8 @@ class Compiler(object):
                 group=_public_ref(trust, group_text, 'group'),
                 condition=_normalize_public_condition(trust, condition),
                 along=_bind_public_along(trust, along),
+                name=name,
+                description=description,
             )
         permission_path = _normalize_public_role(
             trust, permission, 'permission', token=token,
@@ -993,6 +1042,8 @@ class Compiler(object):
             permission=_public_ref(trust, permission_path, 'permission'),
             condition=_normalize_public_condition(trust, condition),
             along=_bind_public_along(trust, along),
+            name=name,
+            description=description,
         )
 
     def register(
@@ -1008,11 +1059,14 @@ class Compiler(object):
             Callable[[T], object] | Callable[[T, object], object] | None
         ) = None,
         along=None,
+        name: str | None = None,
+        description: str | None = None,
     ) -> RegisteredRelation | RegisteredDelegation:
         shape = self.build_public_registration(
             trust=trust, user=user, permission=permission, content=content,
             group=group, delegate=delegate, sponsor=sponsor,
-            condition=condition, along=along,
+            condition=condition, along=along, name=name,
+            description=description,
         )
         if shape.delegate is not None:
             return self.register_delegation(
@@ -1021,6 +1075,8 @@ class Compiler(object):
                 sponsor=shape.sponsor,
                 condition=shape.condition,
                 along=shape.along,
+                name=shape.name,
+                description=shape.description,
             )
         if shape.group is not None:
             return self.register_relation(
@@ -1029,6 +1085,8 @@ class Compiler(object):
                 group=shape.group,
                 condition=shape.condition,
                 along=shape.along,
+                name=shape.name,
+                description=shape.description,
             )
         return self.register_relation(
             content=shape.content,
@@ -1036,6 +1094,8 @@ class Compiler(object):
             permission=shape.permission,
             condition=shape.condition,
             along=shape.along,
+            name=shape.name,
+            description=shape.description,
         )
 
     def compile(self):

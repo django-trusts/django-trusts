@@ -47,6 +47,8 @@ class Registry(Protocol):
             Callable[[T], object] | Callable[[T, object], object] | None
         ) = None,
         along=None,
+        name: str | None = None,
+        description: str | None = None,
     ):
         self._accept('register', (), {
             'trust': trust,
@@ -58,6 +60,8 @@ class Registry(Protocol):
             'sponsor': sponsor,
             'condition': condition,
             'along': along,
+            'name': name,
+            'description': description,
         })
 
     def add_named_filter(self, model, code, predicate):
@@ -285,7 +289,7 @@ class TrustModelBackendMixin(object):
         """This backend's part of the policy document.
 
         Same shape as the project document: ``schema_version``,
-        ``database``, and ``backends`` holding this catalog only.
+        ``database``, ``settings``, and ``backends`` holding this catalog only.
         ``alias`` overrides ``TRUSTS_POLICY_DATABASE`` for this call.
         """
         resolved = resolve_policy_database(alias)

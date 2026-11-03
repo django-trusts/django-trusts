@@ -492,7 +492,10 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
             self.assertEqual(bound_sql, plain_sql)
             self.assertNotIn('trusts_bind', bound_sql[0])
             self.assertRegex(bound_sql[0], '["`]depth["`]\\s*<\\s*\\(%s\\)')
-            self.assertEqual(bound_doc, plain_doc)
+            self.assertEqual(bound_doc['database'], plain_doc['database'])
+            self.assertEqual(bound_doc['backends'], plain_doc['backends'])
+            self.assertIs(bound_doc['settings']['TRUSTS_SQL_BIND_ONCE'], True)
+            self.assertIs(plain_doc['settings']['TRUSTS_SQL_BIND_ONCE'], False)
             for content in bound_doc['backends'][0]['contents']:
                 for key in ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'):
                     self.assertNotIn('trusts_bind', content[key]['sql'], key)

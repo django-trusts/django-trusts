@@ -11,8 +11,8 @@ permissions:
 env:
   # Zero #57.
   COMPANION_ZERO_SHA: 3d91640a38933a70b6c0ffdd9ce0878d323185be
-  # gh-permissions #56.
-  COMPANION_GH_SHA: e22b81764b658df5da65e5b57420d6d6578377c9
+  # gh-permissions dev after #58.
+  COMPANION_GH_SHA: 41cd5626da2db5bfa79a6dfe8ef4ba79e2da34b2
 
 jobs:
   tests:

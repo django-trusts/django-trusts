@@ -15,6 +15,7 @@ Each ``sql`` value is broken between tokens onto predictable lines.
 The token sequence is the statement Django compiled.
 ``trusts.E009`` compares the rendered bytes to the committed file and
 does not parse them. It is the only lockfile enforcement.
+``settings`` records the resolved values that change this document.
 """
 
 from __future__ import annotations
@@ -47,7 +48,8 @@ from trusts.inspect.yaml import (
     canonical_float_scalar,
     dump_policy_yaml,
 )
-from django.conf import settings
+from trusts.utils import trusts_bind_once
+from django.conf import global_settings, settings
 from django.db.utils import DEFAULT_DB_ALIAS
 from django.contrib.auth.models import Permission
 from django.db import connections
@@ -445,6 +447,7 @@ class _PolicyVisitor(object):
             if record in delegations:
                 row = {
                     'id': trust_id,
+                    **_registration_labels(record),
                     'root': _model_label(record.root),
                     'delegate': _delegation_relation(record, 'delegate'),
                     'sponsor': _delegation_relation(record, 'sponsor'),
@@ -471,6 +474,7 @@ class _PolicyVisitor(object):
                 continue
             row = {
                 'id': trust_id,
+                **_registration_labels(record),
                 'root': _model_label(record.root),
                 'user': _relation(record, 'user'),
             }
@@ -530,8 +534,48 @@ def _build_document(catalogs, alias):
     return {
         'schema_version': SCHEMA_VERSION,
         'database': {'engine': engine},
+        'settings': _policy_settings(),
         'backends': projected,
     }
+
+
+def _resolved_setting(name):
+    """Project value, or Django's default when the project leaves it unset."""
+    if settings.configured:
+        try:
+            return getattr(settings, name)
+        except AttributeError:
+            pass
+    return getattr(global_settings, name)
+
+
+def _policy_settings():
+    """Resolved settings that change generated SQL or this document.
+
+    ``TRUSTS_SQL_BIND_ONCE`` goes through ``trusts_bind_once`` so an
+    unset setting records the same value as the rewrite. The database
+    alias, filesystem paths, and settings that do not change the
+    document are omitted. Backend paths stay in settings order.
+    """
+    return {
+        'TRUSTS_SQL_BIND_ONCE': trusts_bind_once(),
+        'AUTH_USER_MODEL': _resolved_setting('AUTH_USER_MODEL'),
+        'AUTHENTICATION_BACKENDS': list(
+            _resolved_setting('AUTHENTICATION_BACKENDS'),
+        ),
+    }
+
+
+def _registration_labels(record):
+    """``name`` and ``description`` when ``register()`` was given them."""
+    labels = {}
+    name = getattr(record, 'name', None)
+    if name is not None:
+        labels['name'] = name
+    description = getattr(record, 'description', None)
+    if description is not None:
+        labels['description'] = description
+    return labels
 
 
 def _project_backend(catalog, alias):

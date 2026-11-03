@@ -1,6 +1,17 @@
 """Public helpers that are not a Django app, a model, or a backend."""
 
+from django.conf import settings
+
 from trusts.errors import TrustsConfigurationError
+
+
+def trusts_bind_once():
+    """Whether statements bind each distinct inquiry value once.
+
+    Missing ``TRUSTS_SQL_BIND_ONCE`` means on. ``False`` leaves the queryset
+    exactly as policy code built it.
+    """
+    return bool(getattr(settings, 'TRUSTS_SQL_BIND_ONCE', True))
 
 
 def parse_perm_code(perm):
