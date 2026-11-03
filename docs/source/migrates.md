@@ -252,11 +252,27 @@ model. Codenames that do not follow ``action_model`` now work on
 ``.permitted()``. Code that relied on inferring the model from the
 codename suffix must use the content model of the object being checked.
 
+Public ``trusts.utils.parse_perm_code`` no longer splits the codename into
+action and model name. It returned
+``(app_label, model_name, action, condition)``; it now returns
+``(app_label, codename, condition)``.
+
+```python
+# Old
+app_label, model_name, action, condition = parse_perm_code(perm)
+base = "%s.%s_%s" % (app_label, action, model_name)
+
+# New
+app_label, codename, condition = parse_perm_code(perm)
+base = "%s.%s" % (app_label, codename)
+```
+
 Migration-bot checklist:
 
 - `has_perm(`
 - `get_permitted_users(`
 - `parse_perm_code(`
+- `parse_perm_code(perm)[3]`
 
 ## Permission content type must match the object (#267)
 
