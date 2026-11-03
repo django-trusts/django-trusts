@@ -8,6 +8,31 @@ development log. New features and changes that require no application action
 belong in [What's new](whats-new.md); development history belongs in
 [development history](../dev/development.md).
 
+## Policy output records settings and labels
+
+`register()` takes optional `name` and `description`. `name` is letters
+and underscores. `description` is a string. Omit either one to leave it
+off. `name` does not change the row id.
+
+The policy output also records `TRUSTS_SQL_BIND_ONCE`, `AUTH_USER_MODEL`,
+and `AUTHENTICATION_BACKENDS`. An omitted setting records the same value
+as an explicit default. Lockfiles from before this change no longer
+match, so regenerate them.
+
+| | Old | New |
+| --- | --- | --- |
+| `register()` | no `name` or `description` | optional `name` and `description` |
+| `name` | not accepted | letters and underscores; the row id stays the derived id |
+| `description` | not accepted | a string, or omitted |
+| Policy output | does not record those settings | records the three settings above |
+
+Migration-bot checklist:
+
+- `register(`
+- Decide which rows get a `name` or `description`.
+- Regenerate committed lockfiles.
+- Review the new settings block.
+
 ## Request-time input fails closed
 
 `.authorized()` and `filter_by_permitted_content` return an empty queryset
