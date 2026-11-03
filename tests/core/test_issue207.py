@@ -104,7 +104,7 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
     def test_keyword_only_signature(self):
         signature = inspect.signature(Compiler.register)
         names = [name for name in signature.parameters if name != 'self']
-        self.assertEqual(names, ['trust', 'user', 'permission', 'content', 'group', 'delegate', 'sponsor', 'condition', 'along'])
+        self.assertEqual(names, ['trust', 'user', 'permission', 'content', 'group', 'delegate', 'sponsor', 'condition', 'along', 'name', 'description'])
         for name in names:
             self.assertEqual(signature.parameters[name].kind, inspect.Parameter.KEYWORD_ONLY, name)
         self.assertIs(Recorder.register, Registry.register)
@@ -123,7 +123,7 @@ def _wheel_install_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-_REGISTER_NAMES = ('trust', 'user', 'permission', 'content', 'group', 'delegate', 'sponsor', 'condition', 'along')
+_REGISTER_NAMES = ('trust', 'user', 'permission', 'content', 'group', 'delegate', 'sponsor', 'condition', 'along', 'name', 'description')
 
 def _fake_register(names=_REGISTER_NAMES, annotations=None, *, keyword_only=True):
 

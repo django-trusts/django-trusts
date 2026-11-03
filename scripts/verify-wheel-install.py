@@ -42,6 +42,7 @@ def assert_register_signature(register) -> None:
     expected_params = [
         'trust', 'user', 'permission', 'content', 'group',
         'delegate', 'sponsor', 'condition', 'along',
+        'name', 'description',
     ]
     if param_names != expected_params:
         raise SystemExit(
@@ -116,6 +117,13 @@ def assert_register_signature(register) -> None:
             'delegated condition Callable args are %r, expected '
             '[TypeVar, object] + object' % (shapes,)
         )
+    for role in ('name', 'description'):
+        role_hint = hints.get(role)
+        parts = get_args(role_hint)
+        if str not in parts or type(None) not in parts:
+            raise SystemExit(
+                '%s hint must be str | None, got %r' % (role, role_hint)
+            )
 
 
 def main() -> int:

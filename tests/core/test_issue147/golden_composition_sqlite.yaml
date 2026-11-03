@@ -1,6 +1,12 @@
 schema_version: 1
 database:
   engine: "django.db.backends.sqlite3"
+settings:
+  TRUSTS_SQL_BIND_ONCE: true
+  AUTH_USER_MODEL: "auth.User"
+  AUTHENTICATION_BACKENDS:
+    - "tests.kernel_host.listed_inquiry.ListedInquiryBackend0"
+    - "tests.myapp.listed_inquiry.ListedInquiryBackend1"
 backends:
   - path: "documents.backends.DocumentBackend"
     contents:

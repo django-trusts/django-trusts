@@ -28,7 +28,7 @@ from django.db.models.sql.query import Query
 from django.db.models.sql.where import ExtraWhere, NothingNode, WhereNode
 
 from trusts.errors import TrustsConfigurationError
-from django.conf import settings
+from trusts.utils import trusts_bind_once
 import django
 from django.db import connections
 from django.contrib.auth.models import Permission
@@ -53,16 +53,6 @@ _TERMINALS = (NothingNode, ExtraWhere)
 _BOUND_QUERY_CLASSES = {}
 _fallbacks = weakref.WeakSet()
 _warned = False
-
-
-def trusts_bind_once():
-    """Whether statements bind each distinct inquiry value once.
-
-    Missing ``TRUSTS_SQL_BIND_ONCE`` means on. ``False`` leaves the queryset
-    exactly as policy code built it.
-    """
-
-    return bool(getattr(settings, 'TRUSTS_SQL_BIND_ONCE', True))
 
 
 def bind_once(queryset, *also, user_model):

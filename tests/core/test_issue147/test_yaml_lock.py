@@ -21,6 +21,7 @@ from tests.core.test_issue147.test_sql_export import (
     TeamDocumentPermission,
     _document_handle,
     _handle,
+    golden_lock_bytes,
 )
 from trusts.plan.conditions import ModelIdentity
 from trusts.errors import TrustsConfigurationError
@@ -235,7 +236,9 @@ class PolicyCompositionTest(SimpleTestCase):
         finally:
             stop.set()
             watcher.join()
-        self.assertEqual(payload, GOLDEN_COMPOSITION)
+        self.assertEqual(
+            golden_lock_bytes(payload), golden_lock_bytes(GOLDEN_COMPOSITION),
+        )
         self.assertEqual(samples, [])
         self.assertIs(SQLCompiler.execute_sql, original)
 
@@ -257,7 +260,9 @@ class PolicyCompositionTest(SimpleTestCase):
 
     def test_lockfile_composition_matches_golden(self):
         payload = render_configured_policy(*self._handles())
-        self.assertEqual(payload, GOLDEN_COMPOSITION)
+        self.assertEqual(
+            golden_lock_bytes(payload), golden_lock_bytes(GOLDEN_COMPOSITION),
+        )
         self.assertEqual(payload, render_configured_policy(*self._handles()))
         document = yaml.safe_load(payload)
         self.assertEqual(document['schema_version'], 1)
@@ -313,7 +318,9 @@ class PolicyCompositionTest(SimpleTestCase):
 
     def test_document_lockfile_includes_content_sql(self):
         payload = render_configured_policy(_document_handle())
-        self.assertEqual(payload, GOLDEN_DOCUMENT)
+        self.assertEqual(
+            golden_lock_bytes(payload), golden_lock_bytes(GOLDEN_DOCUMENT),
+        )
         text = payload.decode('utf-8')
         self.assertNotIn('composition-evidence', text)
         self.assertNotIn('composition:', text)

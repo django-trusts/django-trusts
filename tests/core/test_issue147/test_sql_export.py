@@ -6,6 +6,7 @@ from tests.support import (
 )
 import datetime
 import json
+import re
 import tempfile
 import uuid
 import yaml
@@ -31,6 +32,24 @@ GOLDEN_SQLITE = Path(__file__).with_name('golden_document_sqlite.yaml').read_byt
 GOLDEN_CONSTANTS = Path(__file__).with_name('golden_condition_constants_sqlite.yaml').read_bytes()
 GOLDEN_ALONG = Path(__file__).with_name('golden_along_sqlite.yaml').read_bytes()
 _FORBIDDEN = ('fingerprint', 'sha256', '\nexpr:', '\nhandles:', '\nfamily:', '\ncompiler:')
+# The harness lists one backend class per mixin app. Kernel and the
+# Zero pair install different apps, so this list is not part of the
+# shared golden. The SQL and the other settings are.
+_HARNESS_BACKENDS = re.compile(
+    rb'(?m)^  AUTHENTICATION_BACKENDS:\n(?:    - "[^"\n]+"\n)+'
+)
+
+
+def golden_lock_bytes(payload):
+    """Lock bytes with the harness ``AUTHENTICATION_BACKENDS`` list removed."""
+    replaced, count = _HARNESS_BACKENDS.subn(
+        b'  AUTHENTICATION_BACKENDS:\n', payload, count=1,
+    )
+    if count != 1:
+        raise AssertionError(
+            'lock bytes have no AUTHENTICATION_BACKENDS list'
+        )
+    return replaced
 
 class HiddenDocument(models.Model):
     """Content model whose default manager is not named ``objects``."""
@@ -274,7 +293,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_sqlite_document_matches_the_guide_bytes(self):
         payload = render_configured_policy(_document_handle())
-        self.assertEqual(payload, GOLDEN_SQLITE)
+        self.assertEqual(golden_lock_bytes(payload), golden_lock_bytes(GOLDEN_SQLITE))
         self.assertTrue(payload.endswith(b'\n'))
         self.assertFalse(payload.endswith(b'\n\n'))
         self.assertFalse(payload.startswith(b'\xef\xbb\xbf'))
@@ -769,7 +788,9 @@ class PolicySqlConstantTest(SimpleTestCase):
 
     def test_supported_constant_families_match_golden_and_round_trip(self):
         payload = render_configured_policy(_constant_family_handle())
-        self.assertEqual(payload, GOLDEN_CONSTANTS)
+        self.assertEqual(
+            golden_lock_bytes(payload), golden_lock_bytes(GOLDEN_CONSTANTS),
+        )
         document = yaml.safe_load(payload)
         filters = document['backends'][0]['contents'][0]['named_filters']
         by_code = {row['id']: row['params'] for row in filters}
