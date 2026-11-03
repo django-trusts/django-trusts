@@ -115,9 +115,10 @@ performed by application code are outside that behavior.
 Literal Python `in` is not recovered through AST, bytecode, `dis`, or a
 `__contains__` side channel; the expression grammar is the
 [supported lambda expressions](index.rst#supported-lambda-expressions).
-The stored overlay is private and
-contains no callable. Public
-`register(condition=...)` rejects a prebuilt condition. `.contains` is a reserved condition-proxy method; a model field of
+Functions, arguments, and expression types are validated before storage.
+Stored conditions contain validated expression data and no runtime callable.
+Public `register(condition=...)` rejects a prebuilt condition. `.contains` is
+a reserved condition-proxy method; a model field of
 that name cannot be walked there. The `predicate=` keyword is reserved and
 unsupported. Invalid arity, foreign roots, empty or non-expression
 returns, unsupported operations, and condition exceptions fail closed.
@@ -442,6 +443,9 @@ walk, bound, generated recursive SQL, and returned-user parity together.
 
 Current CI exercises Along only for the database combinations listed in the
 support matrix.
+
+For time-dependent conditions, audit the
+[setup guide's clock and queryset-cache boundaries](index.rst#supported-lambda-expressions).
 
 ## Fail-closed principle
 
