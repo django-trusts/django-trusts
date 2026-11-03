@@ -235,8 +235,9 @@ Register the model paths when the application starts:
        name = "documents"
 
        def ready(self):
-           from .backends import DocumentBackend
            from trusts.functions import Now
+
+           from .backends import DocumentBackend
            from .models import (
                Document,
                DocumentDelegation,
@@ -729,7 +730,7 @@ time-zone behavior follow the database backend. An evaluated queryset keeps
 its cached results; make a fresh inquiry to check expiration again.
 
 Python ``in``, ``and`` / ``or`` / ``not``, unsupported calls, arithmetic,
-and indexing are rejected. A prebuilt condition is not accepted.
+and indexing are rejected.
 
 A path lambda, a ``condition=`` lambda, and a delegated condition builder
 are evaluated only when registering and compiling, never during a
