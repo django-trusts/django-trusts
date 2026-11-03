@@ -72,6 +72,8 @@ jobs:
         repository: django-trusts/django-trusts-zero
         ref: ${{ env.COMPANION_ZERO_SHA }}
         path: .deps/django-trusts-zero
+    - name: Apply Zero patch for parse_perm_code (#268)
+      run: patch -p1 -d .deps/django-trusts-zero < scripts/companion/django-trusts-zero-parse_perm_code-268.patch
     - uses: actions/setup-python@v5
       with:
         python-version: "3.12"
@@ -339,6 +341,10 @@ jobs:
         repository: ${{ matrix.repository }}
         ref: ${{ steps.companion.outputs.ref }}
         path: companion
+
+    - name: Apply Zero patch for parse_perm_code (#268)
+      if: matrix.companion == 'zero'
+      run: patch -p1 -d companion < core/scripts/companion/django-trusts-zero-parse_perm_code-268.patch
 
     - uses: actions/setup-python@v5
       with:
