@@ -10,7 +10,7 @@ permissions:
 
 env:
   # Zero #268 / django-trusts-zero #59.
-  COMPANION_ZERO_SHA: 827ff770985f47774c1ddeec4b554fbf0841541e
+  COMPANION_ZERO_SHA: a5bf4feb4033ac83d90f0af0a296524df45c9f4d
   # gh-permissions dev after #58.
   COMPANION_GH_SHA: 41cd5626da2db5bfa79a6dfe8ef4ba79e2da34b2
 
