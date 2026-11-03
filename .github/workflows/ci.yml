@@ -9,8 +9,9 @@ permissions:
   contents: read
 
 env:
-  # Zero #57.
-  COMPANION_ZERO_SHA: 3d91640a38933a70b6c0ffdd9ce0878d323185be
+  # Zero #268 candidate on branch cursor/fix-issue-268-perm-codename-579c.
+  # Push django-trusts-zero at 60b1e78f46a251a04c05c0fc6cf0c74824c90f4c before CI can fetch it.
+  COMPANION_ZERO_SHA: 60b1e78f46a251a04c05c0fc6cf0c74824c90f4c
   # gh-permissions dev after #58.
   COMPANION_GH_SHA: 41cd5626da2db5bfa79a6dfe8ef4ba79e2da34b2
 
@@ -72,8 +73,6 @@ jobs:
         repository: django-trusts/django-trusts-zero
         ref: ${{ env.COMPANION_ZERO_SHA }}
         path: .deps/django-trusts-zero
-    - name: Apply Zero patch for parse_perm_code (#268)
-      run: patch -p1 -d .deps/django-trusts-zero < scripts/companion/django-trusts-zero-parse_perm_code-268.patch
     - uses: actions/setup-python@v5
       with:
         python-version: "3.12"
@@ -341,10 +340,6 @@ jobs:
         repository: ${{ matrix.repository }}
         ref: ${{ steps.companion.outputs.ref }}
         path: companion
-
-    - name: Apply Zero patch for parse_perm_code (#268)
-      if: matrix.companion == 'zero'
-      run: patch -p1 -d companion < core/scripts/companion/django-trusts-zero-parse_perm_code-268.patch
 
     - uses: actions/setup-python@v5
       with:

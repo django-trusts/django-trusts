@@ -29,7 +29,7 @@ from management_archive import ships_trusts_management
 
 ROOT = Path(__file__).resolve().parents[1]
 # Exact Zero candidate companion.
-ZERO_HEAD = '3d91640a38933a70b6c0ffdd9ce0878d323185be'
+ZERO_HEAD = '60b1e78f46a251a04c05c0fc6cf0c74824c90f4c'
 FORBIDDEN_ZERO_PATHS = (
     'trusts/__init__.py',
     'trusts/apps.py',

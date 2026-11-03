@@ -11,7 +11,7 @@ from django.test import SimpleTestCase
 
 
 ROOT = Path(__file__).resolve().parents[2]
-ZERO_CANDIDATE = '3d91640a38933a70b6c0ffdd9ce0878d323185be'
+ZERO_CANDIDATE = '60b1e78f46a251a04c05c0fc6cf0c74824c90f4c'
 STALE_ZERO_R5A = '462c83b59edfb51011b4373e8214b2daaab7f500'
 STALE_ZERO_38 = 'c7dc4f11f728ad3c4c22249e471daa4bf9849404'
 

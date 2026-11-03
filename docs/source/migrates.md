@@ -272,7 +272,7 @@ Migration-bot checklist:
 - `has_perm(`
 - `get_permitted_users(`
 - `parse_perm_code(`
-- `parse_perm_code(perm)[3]`
+- `parse_perm_code(perm)[3]` (condition suffix index before the tuple change)
 
 ## Permission content type must match the object (#267)
 
