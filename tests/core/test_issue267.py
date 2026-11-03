@@ -212,14 +212,12 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
                 with self.subTest(unregistered=obj.name):
                     self.assertEqual(list(self.users.permitted(obj, permission).values_list('username', flat=True)), [])
 
-    def test_custom_codename_stays_a_same_model_instance_grant(self):
-        # has_perm parses can_publish as action can on model publish and misses
-        # the repository row (open #268). The other three inquiries grant.
+    def test_custom_codename_string_checks_match_instance_projections(self):
         self.assertEqual(self.publish.codename, 'can_publish')
         allowed = authorization_required(self.Repository, self.publish_code)(lambda request, pk: 'ok')
         with _installed(self.handle):
-            self.assertFalse(self.owner.has_perm(self.publish_code, self.specs))
-            self.assertFalse(built_catalog(self.handle).has_perm(self.owner, self.publish_code, self.specs))
+            self.assertTrue(self.owner.has_perm(self.publish_code, self.specs))
+            self.assertTrue(built_catalog(self.handle).has_perm(self.owner, self.publish_code, self.specs))
             self.assertFalse(self.owner.has_perm(self.publish_code, self.acme))
             self.assertFalse(built_catalog(self.handle).has_perm(self.owner, self.publish_code, self.acme))
             self.assertIn(self.publish_code, self.owner.get_all_permissions(self.specs))
@@ -228,6 +226,9 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
             self.assertEqual(list(self.Repository.objects.authorized(self.owner, self.publish)), [self.specs])
             self.assertEqual(list(self.Organization.objects.authorized(self.owner, self.publish)), [])
             self.assertEqual(list(self.specs.get_permitted_users(self.publish).values_list('username', flat=True)), ['owner-267'])
+            self.assertEqual(list(self.specs.get_permitted_users(self.publish_code).values_list('username', flat=True)), ['owner-267'])
+            self.assertEqual(list(self.users.permitted(self.specs, self.publish).values_list('username', flat=True)), ['owner-267'])
+            self.assertEqual(list(self.users.permitted(self.specs, self.publish_code).values_list('username', flat=True)), ['owner-267'])
             self.assertEqual(list(self.acme.get_permitted_users(self.publish).values_list('username', flat=True)), [])
 
     def test_foreign_object_stays_denied(self):

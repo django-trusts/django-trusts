@@ -78,12 +78,12 @@ Migration-bot checklist:
 ## `trusts.conditions` removed
 
 The package is gone. `PermissionConditionError` lives on `trusts.errors`.
-The condition suffix is the fourth item from `trusts.utils.parse_perm_code`.
+The condition suffix is the third item from `trusts.utils.parse_perm_code`.
 
 | | Old | New |
 | --- | --- | --- |
 | Condition error | `from trusts.conditions import PermissionConditionError` | `from trusts.errors import PermissionConditionError` |
-| Condition suffix | `permission_has_condition(perm)` / `permission_condition_code(perm)` | `parse_perm_code(perm)[3]` |
+| Condition suffix | `permission_has_condition(perm)` / `permission_condition_code(perm)` | `parse_perm_code(perm)[2]` |
 | Model label | `trusts.utils.get_short_model_name_lower(klass)` | removed. `trusts.utils` has no replacement |
 
 `trusts.E001` no longer re-checks a named filter after registration. Drop
@@ -243,6 +243,20 @@ Migration-bot checklist:
 
 Trusts superuser bypass now requires an explicit `set_user_override()`.
 See [User conditions and overrides](index.rst#user-conditions-and-overrides).
+
+## Permission string resolution (#268)
+
+Permission codes are matched by codename on the checked object's content
+model. Codenames that do not follow ``action_model`` now work on
+``has_perm`` and ``get_permitted_users`` the same way they already did on
+``.permitted()``. Code that relied on inferring the model from the
+codename suffix must use the content model of the object being checked.
+
+Migration-bot checklist:
+
+- `has_perm(`
+- `get_permitted_users(`
+- `parse_perm_code(`
 
 ## Permission content type must match the object (#267)
 

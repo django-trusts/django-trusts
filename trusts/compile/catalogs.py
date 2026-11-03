@@ -410,14 +410,14 @@ class Catalog(object):
         if not isinstance(permext, str):
             return PreparedInquiry(model, result=False)
         try:
-            applabel, modelname, action, cond = parse_perm_code(permext)
+            applabel, codename, cond = parse_perm_code(permext)
         except ValueError:
             return PreparedInquiry(model, result=False)
         plan = self.plan_for(obj, user=user_obj)
         if not plan.applicable:
             return PreparedInquiry(model, result=False)
         stored, extra_q = self._condition_overlay(permext, obj, user_obj)
-        perm = '%s.%s_%s' % (applabel, action, modelname)
+        perm = '%s.%s' % (applabel, codename)
         if cond and stored is None:
             return PreparedInquiry(model, result=False)
         binding = permission_binding(perm, model)
@@ -453,7 +453,7 @@ class Catalog(object):
         return _perm_codes(qs)
 
     def _condition_overlay(self, permext, obj, user_obj):
-        cond = parse_perm_code(permext)[3]
+        cond = parse_perm_code(permext)[2]
         if not cond:
             return None, None
         model = _content_model(obj)

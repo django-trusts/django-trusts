@@ -270,8 +270,8 @@ def main() -> int:
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager)
     print('filter_by_permitted_content', filter_by_permitted_content)
     parsed = parse_perm_code('app.change_trust:own')
-    if parsed[3] != 'own':
-        raise SystemExit('parse_perm_code suffix is %r' % (parsed[3],))
+    if parsed[2] != 'own':
+        raise SystemExit('parse_perm_code suffix is %r' % (parsed[2],))
     print('parse_perm_code', parse_perm_code)
     print('PermissionConditionError', PermissionConditionError)
     import trusts.decorators as decorators_mod

@@ -71,7 +71,7 @@ assert (init.parent / "zero" / "apps.py").is_file()
 assert (init.parent / "apps.py").is_file()
 from trusts.utils import parse_perm_code
 from trusts.errors import PermissionConditionError
-assert parse_perm_code("trusts.change_trust:own")[3] == "own"
+assert parse_perm_code("trusts.change_trust:own")[2] == "own"
 assert PermissionConditionError is not None
 print("companion-overlay-ok")
 '''
