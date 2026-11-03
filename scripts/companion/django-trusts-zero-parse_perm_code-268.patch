@@ -18,7 +18,7 @@ index cb78746..d1e01dd 100644
          content_type = django_apps.get_model('contenttypes', 'ContentType')
          ctype = content_type.objects.get_by_natural_key(applabel, modelname)
 diff --git a/trusts/zero/policy.py b/trusts/zero/policy.py
-index a3b9100..4150c0c 100644
+index a3b9100..2fda005 100644
 --- a/trusts/zero/policy.py
 +++ b/trusts/zero/policy.py
 @@ -29,7 +29,7 @@ def _condition_suffix(perm):
@@ -30,17 +30,3 @@ index a3b9100..4150c0c 100644
  
  
  def reject_queryable_condition(perm, api_name):
-@@ -64,10 +64,10 @@ def resolve_content_permission(model, perm):
-     perm = str(perm)
-     if '.' in perm:
-         try:
--            applabel, modelname, action, _cond = parse_perm_code(perm)
--            perm = '%s_%s' % (action, modelname)
-+            applabel, codename, _cond = parse_perm_code(perm)
-+            perm = codename
-             app_label = applabel
--            model_name = modelname
-+            model_name = model._meta.model_name
-         except ValueError:
-             app_label, perm = perm.split('.', 1)
-     if ':' in perm:
