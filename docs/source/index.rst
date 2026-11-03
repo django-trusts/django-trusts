@@ -236,7 +236,7 @@ Register the model paths when the application starts:
 
        def ready(self):
            from .backends import DocumentBackend
-           from django.db.models.functions import Now
+           from trusts.functions import Now
            from .models import (
                Document,
                DocumentDelegation,
@@ -708,13 +708,22 @@ to ``&`` of boolean fields. Parenthesize comparisons when combining them with
 ``&`` or ``|``.
 
 The supported SQL functions are ``Now()``, ``Lower(expression)``, and
-``Coalesce(first, second, ...)`` from ``django.db.models.functions``.
-Function arguments may be field references, typed constants, or nested
-supported functions. Comparisons put the symbolic field on the left; function
-calls may appear on the right or as function arguments. Use Django's ``Value``
-for a literal string inside a function. ``Lower`` accepts text; ``Coalesce``
-requires at least two compatible arguments. The same expressions can be used
-in named filters.
+``Coalesce(first, second, ...)`` from ``trusts.functions``. Only these
+three Trusts functions are supported; using Django's own versions is rejected
+by ``register()``. Function arguments may be field references, typed
+constants, or nested supported functions, and functions may appear on either
+side of a comparison. For example:
+
+.. code-block:: python
+
+   from django.db.models import Value
+   from trusts.functions import Lower
+
+   condition=lambda d: Lower(d.name) == Lower(Value("BOB"))
+
+Use Django's ``Value`` for a literal string inside a function. ``Lower``
+accepts text; ``Coalesce`` requires at least two compatible arguments. The
+same expressions can be used in named filters.
 
 ``Now()`` uses the database time when the query executes; clock precision and
 time-zone behavior follow the database backend. An evaluated queryset keeps
