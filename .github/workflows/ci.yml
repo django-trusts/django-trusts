@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 env:
-  # Zero #268 / django-trusts-zero #59.
-  COMPANION_ZERO_SHA: a5bf4feb4033ac83d90f0af0a296524df45c9f4d
+  # Zero #268 / django-trusts-zero #59 (a5bf4feb).
+  COMPANION_ZERO_SHA: baee94cd2b95a6df56c8df3a0737252d14ef568c
   # gh-permissions dev after #58.
   COMPANION_GH_SHA: 41cd5626da2db5bfa79a6dfe8ef4ba79e2da34b2
 
