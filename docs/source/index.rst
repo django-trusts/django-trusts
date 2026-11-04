@@ -751,6 +751,122 @@ authorization-policy output. See the `bounded-reach security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
 for the recursive-query and database boundaries.
 
+.. _nested-users:
+
+Nested users
+~~~~~~~~~~~~
+
+``via=`` reaches users by walking a relation from the grant. The path is
+any relation ``along=`` can walk, and the bound is required. The walk
+includes the starting row. The bound is the number of steps past that
+row, an integer from 1 to 64. The steps from a walked row to the user
+may end at a many-to-many membership.
+
+A group points at its parent, and ``subgroups`` is the reverse of that
+link. Members of a parent group are reached from a grant on a subgroup:
+
+.. code-block:: python
+
+   from django.db import models
+
+
+   class Group(models.Model):
+       parent = models.ForeignKey(
+           "self", null=True, blank=True, related_name="subgroups",
+           on_delete=models.CASCADE,
+       )
+       members = models.ManyToManyField("auth.User")
+
+   class Project(models.Model):
+       group = models.ForeignKey(
+           Group, related_name="projects", on_delete=models.CASCADE,
+       )
+
+   class GroupGrant(models.Model):
+       group = models.ForeignKey(Group, on_delete=models.CASCADE)
+       permission = models.ForeignKey(
+           "auth.Permission", on_delete=models.CASCADE,
+       )
+
+   registry.register(
+       trust=GroupGrant,
+       user="group__members",
+       permission="permission",
+       content="group__projects",
+       along=("group__parent", 8),
+       via=("group__subgroups", 8),
+   )
+
+``org`` is the parent of ``backend``, and ``backend`` is the parent of
+``api``. Alice is a member of ``org``. The grant's group is ``backend``.
+Alice has the permission on projects in ``backend`` and in ``api``. Bob,
+a member of ``backend``, does too. That user walk reaches members of
+``backend`` and of ``org``. With the bound at 1, a member of ``org``'s
+parent is out of reach. ``via=("group__parent", 8)`` walks
+toward subgroups: a grant on ``org`` reaches members of ``org`` and of
+the groups nested under it.
+
+``along=`` and ``via=`` on the same registration are two walks. The user
+must be reached by ``via=`` and the object must be reached by ``along=``.
+Each keeps its own path and bound.
+
+User conditions and named filters apply to every user the walk reaches,
+including the user on the grant. ``is_active`` is that check for an
+inactive user. When the walked row is a user, a user who fails the
+condition stops that path. When the walked row is a group or a link, the
+condition selects the users reached from that row, and the walk continues
+to the next group. An inactive Alice is left out; Bob is still reached.
+``skip_is_active=True`` skips that condition at every step. A named
+filter that reads the protected object applies to that object on every
+step. A named filter that reads the user applies to each user reached.
+The relationship ``condition=`` stays on the grant row.
+
+A repeated link adds no user. The bound stops the walk, and the users
+reached are the users reached with that link removed.
+
+``has_perm()``, ``.permitted()``, ``filter_by_permitted_content``,
+``get_all_permissions()``, ``get_group_permissions()``, and
+``get_permitted_users()`` use this walk and agree. A user override
+grants without this walk.
+
+On a delegated registration, ``via=`` walks ``delegate=`` or
+``sponsor=``, the one whose path shares the prefix. A delegate walk
+reaches the users who may act for that row. A sponsor walk reaches the
+users whose ordinary grants authorize that row, and each of those users
+must have that grant on the object. Sponsor conditions apply to each of
+those users. The delegation's ``along=``, and each sponsor grant's
+``along=``, still have to reach the object. One delegation cannot
+sponsor another.
+
+The third element is a field path. ``NULL`` and false inherit.
+In the direction the path walks, A then B then C, with the field true
+on B, a grant on A reaches the users of A and stops at B. A grant on B
+reaches the users of B and can continue to C. Every path into B is cut.
+
+``via=("group__subgroups", 8, "reset_inheritance")`` reads a concrete
+``BooleanField`` on the group's own table.
+``via=("group__parent_links__parent", 8, "parent_links__reset_inheritance")``
+reads a concrete ``BooleanField`` on the link row the walk already
+traverses. A true value cuts that one link. Another parent of the same
+group still reaches its members.
+``via=("group__subgroups", 8, "flags__reset_inheritance")`` reads a
+concrete ``BooleanField`` through another many-to-many from the group.
+The group is a stop when any of those rows is true. A grant on that
+group still reaches its members and can continue.
+``via=("group__subgroups", 8, "policies__reset_inheritance")`` reads a
+concrete ``BooleanField`` through a reverse one-to-many. The related
+row's foreign key points at the group. The group is a stop when any of
+those rows is true. A grant on that group still reaches its members and
+can continue.
+
+``register()`` rejects any other reset field, and it rejects a path or a
+bound listed in the `nested-user
+security audit
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#nested-users>`_.
+The recursive query and the databases are the ones ``along=`` uses.
+The policy output records the bound as ``$via_bound`` and a configured
+reset path as ``via.reset``.
+
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
 
