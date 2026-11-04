@@ -751,6 +751,22 @@ authorization-policy output. See the `bounded-reach security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
 for the recursive-query and database boundaries.
 
+``along=("parent", 8, "reset_inheritance")`` names a boolean field on
+the model the walk visits. The walk starts from a grant. That grant
+still applies to its own object and still reaches objects further
+along the walk, within the bound, including when the field is true on
+the grant's object. When the field is true on a later object, grants
+from earlier objects do not apply to that object or any further along
+the walk. ``NULL`` and false inherit those earlier grants. Another
+grant that reaches an object still allows it. A delegation walk and a
+sponsor grant honor the same field. ``parent`` reads the field on the
+content model. ``along=("trust__trust", 8, "reset_inheritance")``
+reads it on the trust model. ``register()`` rejects a third element
+that is not a boolean field of the model the walk visits.
+``along=("parent", 8)`` names no field. The policy lockfile records
+the field name on the along entry, beside the path and the
+``$along_bound`` depth.
+
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
 
