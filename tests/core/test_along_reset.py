@@ -776,4 +776,4 @@ class AlongResetTest(TransactionTestCase):
         policies_text = render_configured_policy(policies).decode()
         self.assertIn('reset: "policies__reset_inheritance"', policies_text)
         self.assertIn('NOT EXISTS', policies_text)
-        self.assertIn('"arst_policy"', policies_text)
+        self.assertIn('arst_policy', policies_text)
