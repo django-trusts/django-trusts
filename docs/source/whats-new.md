@@ -28,7 +28,7 @@ log.
   [user guide](index.rst) and [#304].
 
 - **Delegated authority.** `register(delegate=..., sponsor=...)` lets an actor
-  use a sponsor's live ordinary permissions within delegation scope. See the
+  use a sponsor's permissions within delegation scope. See the
   [user guide](index.rst), [driver contract](../dev/delegation-registration.md),
   and [#279].
 
@@ -40,7 +40,7 @@ log.
 - **Permission inquiry from content to users.**
   `content.get_permitted_users(permission)` and the optional
   `User.objects.permitted(content, permission)` adapter return the users
-  permitted on one saved object. See the
+  permitted on one object. See the
   [user guide](index.rst) and [#259].
 
 - **Explicit Django group registrations.** `register(group=...)` declares

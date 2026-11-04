@@ -34,7 +34,7 @@ django-trusts supplies no Django application or concrete permission schema. Do n
 the concrete Trusts implementation instead.
 
 A small dependency surface reduces supply-chain exposure, but dependency count
-is not a security proof. Review exact dependency constraints and artifacts as
+is not a security proof. Review dependency constraints and artifacts as
 part of each release.
 
 ## Models and persisted facts
@@ -116,7 +116,8 @@ Literal Python `in` is not recovered through AST, bytecode, `dis`, or a
 `__contains__` side channel; the expression grammar is the
 [supported lambda expressions](index.rst#supported-lambda-expressions).
 Functions, arguments, and expression types are validated before storage.
-Stored conditions contain validated expression data and no runtime callable.
+Registration keeps only the validated expression. The lambda is not kept and
+is never called when permissions are checked.
 Public `register(condition=...)` rejects a prebuilt condition. `.contains` is
 a reserved condition-proxy method; a model field of
 that name cannot be walked there. The `predicate=` keyword is reserved and
@@ -134,7 +135,7 @@ narrows only that branch and cannot create a grant.
 
 A delegated registration replaces the ordinary `user=` plus `permission=` or
 `group=` pair with `delegate=` plus `sponsor=`. The
-[setup guide's delegation example](index.rst#delegate-live-authority) shows
+[setup guide's delegation example](index.rst#delegate-authority) shows
 the registration and relationship data writes.
 
 `delegate` is the current actor receiving delegated access. `sponsor` is the
@@ -203,15 +204,15 @@ raise at registration. One skip removes a condition for every target in its
 
 Audit the following boundaries:
 
-- the exact delegation row must bind its delegate, sponsor, content, and
+- the delegation row must bind its delegate, sponsor, content, and
   condition state; rows must not borrow fields from one another;
-- the sponsor-grant query is the live OR-union of applicable ordinary grants
+- the sponsor-grant query is the OR-union of applicable ordinary grants
   on that backend;
 - the current compiler excludes delegated registrations from the sponsor
   ordinary-grant union, preventing an unbounded chain or cycle;
 - relationship scope can narrow the sponsor ceiling but cannot manufacture a
   permission the ordinary sponsor-grant query does not provide;
-- delegate and sponsor eligibility must be enforced inside the shared plan,
+- delegate and sponsor eligibility must be enforced in the same query branch,
   without loading the sponsor or issuing a second authorization inquiry;
 - the actor's independent ordinary grant remains a separate OR branch;
 - tenant, organization, approval, revocation, and expiry data require
@@ -264,7 +265,7 @@ The supported projections consume the same normalized registration:
 | Question | Public shape | Expected database behavior |
 | --- | --- | --- |
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
-| Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
+| Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same registrations |
 | Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Registered user conditions and overrides and relationship-family SQL before pagination |
 | Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | Each Trusts backend answers from its own registrations, including its user conditions and overrides; `backend=` selects one backend. |
 | View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
@@ -485,10 +486,9 @@ denies an ordinary user. The generated policy SQL carries the same
 condition. Any other permission terminal stays primary-key identity,
 including a custom model that has a `content_type` foreign key.
 
-String `has_perm` still infers the model from the codename suffix. That
-codec gap is [issue #268](https://github.com/django-trusts/django-trusts/issues/268).
-`.permitted()` and `authorization_required` bind the exact codename to the
-protected model's content type instead. `trusts.E008` is removed. Each
+`has_perm`, `.permitted()`, `get_permitted_users`, and
+`authorization_required` bind the codename to the protected model's content
+type. `trusts.E008` is removed. Each
 inquiry asks each backend; a backend that does not own the names
 contributes nothing. A runtime `.permitted()` call returns an empty
 queryset. `authorization_required` is 403 or 404. There is no system
@@ -567,9 +567,9 @@ security assessments.
 
 ## Validation and review discipline
 
-Run the complete supported test matrix, warning-fatal documentation build,
-package/fresh-install checks, Django system checks, and exact companion tests
-required by the changed surface. API changes require review of their migration
+Run the supported test matrix, warning-fatal documentation build,
+package/fresh-install checks, Django system checks, and companion tests required
+by the changed surface. API changes require review of their migration
 impact. Compatibility instructions for 0.x belong in
 `django-trusts-zero`.
 
@@ -583,10 +583,8 @@ answer:
 5. Is the final authorization query still within its tested statement bound?
 6. Did any unsupported database, callback, private registry, or private IR
    surface become reachable?
-7. If a policy lockfile is in play, does equality show only that the declared
-   authorization surface and rendered SQL match the reviewed artifact, and
-   has every change to the Trusts backend, registration, operation, parameter
-   roles, or rendered statement been reviewed on its own?
+7. If a policy lockfile is in play, does the lockfile diff show only the
+   changes you meant to make?
 8. If the implementation disagrees with this guide, is the code wrong, is the
    guide wrong, or has an explicit design decision changed the boundary?
 

@@ -63,7 +63,7 @@ Named filters use the [supported lambda expressions](index.rst#supported-lambda-
 | `PermissionConditionNotQueryable` (a `ValueError`, never raised) | importable | removed |
 | Base class of `PermissionConditionError` | `Exception` | `TrustsConfigurationError` |
 | Missing field on a `user=`, `permission=`, or `content=` path | `TrustsConfigurationError` | `PermissionConditionError` (still caught by `except TrustsConfigurationError`) |
-| Second `add_named_filter` with the same model and code | replaced the first filter | `PermissionConditionError`. The second builder is not stored |
+| Second `add_named_filter` with the same model and code | replaced the first filter | `PermissionConditionError`. The first filter remains registered |
 
 An `except TrustsConfigurationError` block now also catches condition
 errors. Catch `PermissionConditionError` first to tell them apart.
@@ -139,7 +139,7 @@ List the backend's dotted path in `AUTHENTICATION_BACKENDS`. That
 module must live in the app whose config extends `TrustsConfigMixin`.
 Call `Backend().get_registry().register(...)` and
 `get_registry().add_named_filter(...)` before `super().ready()`.
-`ready()` freezes that log and builds the catalog. A call after
+`ready()` finishes registration. A call after
 `super().ready()` raises `TrustsConfigurationError`. An app with
 registrations and no listed backend raises `TrustsConfigurationError`
 from `ready()`.
@@ -162,7 +162,7 @@ from `ready()`.
 | Backend compiler | `query_compiler = PlanQueryCompiler()` on the backend class. `compiler_for_class` required `complete_exists` and `group_exists`. | An optional `query_compiler` belongs on the backend class (`None` uses the default). `QueryCompiler`, `PlanQueryCompiler`, and `compiler_for_class` are not importable. |
 | Compiler check | `trusts.E004` from `check_query_compilers` | Removed. Drop `trusts.E004` from `SILENCED_SYSTEM_CHECKS`. |
 | Family override | `_authorization_family` on `TrustsImplementationConfig` | `family` on the backend class (default `'relationship'`) |
-| `authorization_required` when no listed backend has a plan for the model, or the selected condition names are not owned | `TrustsConfigurationError` at request time (`authorization_required has no applicable auth.Permission plan`, or the condition is not registered) | `PermissionDenied` when the row exists, `Http404` when it does not. A catalog that did not register the model, or that does not own every selected name, contributes nothing and does not raise. The result is an empty queryset. `trusts.E008` is removed. There is no system check for decorator condition names. |
+| `authorization_required` when no listed backend has a registration for the model, or the selected condition names are not owned | `TrustsConfigurationError` at request time for a missing registration or condition | `PermissionDenied` when the row exists, `Http404` when it does not. A backend that did not register the model, or that does not own every selected name, contributes nothing and does not raise. The result is an empty queryset. `trusts.E008` is removed. There is no system check for decorator condition names. |
 
 ```python
 # Old
@@ -407,8 +407,7 @@ registry.register(
 )
 ```
 
-The stored overlay is private `Equal` /
-`PermissionIn` / `All` and contains no callable. The expression grammar is the
+The expression grammar is the
 [supported lambda expressions](index.rst#supported-lambda-expressions).
 Public `register(condition=...)` rejects
 prebuilt `All` / `Equal` / `permission_in` values (`TypeError`).
@@ -455,7 +454,7 @@ Migration-bot checklist:
 
 | | Old | New |
 | --- | --- | --- |
-| Users who hold one permission on one saved content object | No public inquiry for users from content | `content.get_permitted_users(perm)` from `PermittedUsersMixin`. Optionally `User.objects.permitted(content, perm)` from `PermittedUsersManagerMixin` on the application's existing user manager |
+| Users who hold one permission on one content object | No public inquiry for users from content | `content.get_permitted_users(perm)` from `PermittedUsersMixin`. Optionally `User.objects.permitted(content, perm)` from `PermittedUsersManagerMixin` on the application's existing user manager |
 
 No mandatory consumer change to adopt this adapter. Stock `auth.User` does not
 grow the manager method, and a content manager still returns content rows.
