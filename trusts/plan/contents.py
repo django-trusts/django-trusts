@@ -10,7 +10,9 @@ from functools import reduce
 from operator import or_
 
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import BooleanField, Exists, F, Model, OuterRef, Q
+from django.db.models import (
+    BooleanField, Exists, F, Model, OuterRef, Q, Subquery,
+)
 from django.db.models.expressions import Expression
 
 from trusts.plan.rewrites import bind_once
@@ -159,12 +161,14 @@ class _ContentInGrantWalk(Expression):
     filterable = True
     subquery = True
 
-    def __init__(self, record):
+    def __init__(self, record, seed_query=None):
         super().__init__(output_field=BooleanField())
         walk = record.along
         self.record = record
         self.along_bound = walk.bound
-        self.seed_query = _this_grant_seed(record)
+        self.seed_query = (
+            _this_grant_seed(record) if seed_query is None else seed_query
+        )
         self.lhs = None
         self.suffix_query = None
         if walk.rewrite_attname or not walk.suffix_path:
@@ -226,16 +230,129 @@ def _grant_reaches_filtered_content(record, overlay):
     ))
 
 
-def _reject_delegated_ancestor_filter(record, position, content_overlay):
-    if (
-        content_overlay is not None
-        and position == 'before'
-        and getattr(record, 'along', None) is not None
-    ):
-        raise TrustsConfigurationError(
-            'filter_by_permitted_content cannot apply a content filter '
-            'to an ancestor prefix of a delegated along= walk.'
+def _outer_column(name, depth):
+    """``name`` on a query ``depth`` levels outside the current one."""
+    ref = name
+    for _index in range(depth):
+        ref = OuterRef(ref)
+    return ref
+
+
+def _walk_seed_from_rows(walk, rows):
+    """Reach seed selecting this walk's identity from ``rows``."""
+    if walk.walk_ident == 'ident':
+        seed = rows.values(walk.walk_field).distinct()
+    else:
+        seed = rows.values(ident=F(walk.walk_field)).distinct()
+    query = seed.query.clone()
+    query.subquery = True
+    return query
+
+
+def _sponsor_rows_for_handoff(delegation, ordinary, permission,
+                              content_identity, lookup, ordinary_lookup, *,
+                              depth):
+    """Sponsor grants on the same prefix as the delegation row.
+
+    The comparison is the prefix value stored on that row, so a grant
+    on another copy of the prefix does not authorize this sheet.
+    ``depth`` is 2 when these rows are the seed of a walk expression
+    on the sheet query, and 1 when they are a direct subquery of it.
+    A single stored foreign key compares columns. A longer lookup reads
+    the handoff's prefix through a subquery nested one level deeper.
+    """
+    handoff_column = _stored_prefix_column(delegation.root, lookup)
+    grant_column = _stored_prefix_column(ordinary.root, ordinary_lookup)
+    if handoff_column is not None and grant_column is not None:
+        correlation = Q(**{
+            grant_column: _outer_column(handoff_column, depth),
+        })
+    else:
+        prefix_on_handoff = Subquery(
+            delegation.root._default_manager.filter(
+                pk=_outer_column('pk', depth + 1),
+            ).values(lookup)[:1]
         )
+        correlation = Q(**{_root_relative_column(
+            ordinary.root, ordinary_lookup,
+        ): prefix_on_handoff})
+    return bind_record_qs(
+        ordinary,
+        permission=permission,
+        content_identity=content_identity,
+        user=_outer_column(delegation.sponsor_field, depth),
+        correlation=correlation,
+    )
+
+
+def _stored_prefix_column(model, lookup):
+    """Attname when ``lookup`` is one foreign key stored on ``model``."""
+    if not lookup or '__' in lookup:
+        return None
+    try:
+        field = model._meta.get_field(lookup)
+    except FieldDoesNotExist:
+        return None
+    if (
+        not getattr(field, 'concrete', False)
+        or not getattr(field, 'is_relation', False)
+        or getattr(field, 'many_to_many', False)
+    ):
+        return None
+    return field.attname
+
+
+def _same_sheet_in_both_walks(delegation, sponsor_records, permission,
+                              content_identity, prefix_model, lookup, overlay):
+    """One filtered sheet is in the delegation walk and the sponsor walk.
+
+    Two separate ``EXISTS`` checks can match different sheets and list
+    the prefix. The sheet query holds both walks, so one row has to
+    satisfy the filter and both reaches. Each walk seed is correlated
+    outside its recursive member.
+    """
+    sheet = delegation.content_model._default_manager.filter(overlay)
+    sheet = sheet.filter(Q(_ContentInGrantWalk(delegation)))
+    sponsor_parts = []
+    for ordinary in sponsor_records:
+        if not _sponsor_record_matches(ordinary, delegation):
+            continue
+        ordinary_lookups = _scope_prefix_lookups(ordinary, prefix_model)
+        if ordinary.along is not None:
+            _reject_unsupported_delegated_suffix(ordinary.along)
+        for ordinary_lookup, ordinary_attname in ordinary_lookups:
+            if ordinary.along is not None:
+                rows = _sponsor_rows_for_handoff(
+                    delegation, ordinary, permission, content_identity,
+                    lookup, ordinary_lookup, depth=2,
+                )
+                sponsor_parts.append(Q(_ContentInGrantWalk(
+                    ordinary,
+                    seed_query=_walk_seed_from_rows(ordinary.along, rows),
+                )))
+                continue
+            rows = _sponsor_rows_for_handoff(
+                delegation, ordinary, permission, content_identity,
+                lookup, ordinary_lookup, depth=1,
+            )
+            correlation = _content_scope_lookup(
+                ordinary, ordinary_lookup, ordinary_attname,
+            )
+            prefix_on_handoff = Subquery(
+                delegation.root._default_manager.filter(
+                    pk=OuterRef('pk'),
+                ).values(lookup)[:1]
+            )
+            sponsor_parts.append(
+                Q(**{correlation: prefix_on_handoff}) & Exists(rows)
+            )
+    if not sponsor_parts:
+        return Exists(sheet.none())
+    reached = (
+        sponsor_parts[0] if len(sponsor_parts) == 1
+        else reduce(or_, sponsor_parts)
+    )
+    return Exists(sheet.filter(reached))
 
 
 def _plan_for_permission(catalog, candidates, user, permission):
@@ -555,7 +672,7 @@ def _delegation_prefix_reach_q(record, user, lookup, target_attname, candidate,
 def _delegation_prefix_exists(record, sponsor_records, user, permission,
                              content_identity, prefix_model, lookup,
                              target_attname, candidate, position,
-                             skipped=()):
+                             skipped=(), content_overlay=None):
     """``EXISTS`` delegation row correlated to ``candidate``."""
     sponsor_q = _prefix_sponsor_q(
         record, sponsor_records, permission, content_identity, prefix_model,
@@ -574,6 +691,15 @@ def _delegation_prefix_exists(record, sponsor_records, user, permission,
     )
     if combined is None:
         return None
+    if (
+        content_overlay is not None
+        and position == 'before'
+        and record.along is not None
+    ):
+        combined &= _same_sheet_in_both_walks(
+            record, sponsor_records, permission, content_identity,
+            prefix_model, lookup, content_overlay,
+        )
     return Exists(record.root._default_manager.filter(combined))
 
 
@@ -598,14 +724,11 @@ def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
             _reject_unsupported_delegated_suffix(record.along)
         for lookup, target_attname in lookups:
             position = _prefix_walk_position(record, lookup)
-            _reject_delegated_ancestor_filter(
-                record, position, content_overlay,
-            )
             candidate = OuterRef(target_attname)
             found = _delegation_prefix_exists(
                 record, sponsor_records, user, permission, content_identity,
                 prefix_model, lookup, target_attname, candidate, position,
-                skipped=skipped,
+                skipped=skipped, content_overlay=content_overlay,
             )
             if found is not None:
                 parts.append(_apply_content_overlay(

@@ -3434,11 +3434,160 @@ class ViaPermittedContentFilterTest(TransactionTestCase):
                     along=('office__cabinets__parent', 1),
                 )
                 with _listed(delegated):
-                    with self.assertRaises(TrustsConfigurationError):
-                        filter_by_permitted_content(
+                    delegated_sheets = set(AncSheet.objects.permitted(
+                        code, delegate, conditions=('titled',),
+                    ).values_list('pk', flat=True))
+                    delegated_offices = set(filter_by_permitted_content(
+                        Office.objects.all(), delegate, change,
+                        content=AncSheet, conditions=('titled',),
+                    ).values_list('pk', flat=True))
+                self.assertEqual(delegated_sheets, {child_sheet.pk})
+                self.assertEqual(delegated_offices, {office.pk})
+                self.assertNotIn(other.pk, delegated_offices)
+
+    def test_delegated_ancestor_requires_one_sheet_in_both_walks(self):
+        """One sheet has to pass the filter and both along walks.
+
+        Office A holds ``root``. ``above`` is ``root``'s parent and lives
+        in another office. ``child`` is ``root``'s child and lives in a
+        third. The sponsor walks up (``children``) and the delegate walks
+        down (``parent``). ``root`` is in both walks. ``above`` is only
+        in the sponsor walk. ``child`` is only in the delegate walk.
+        """
+        User = self.User
+
+        class Office(models.Model):
+            title = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_both_office'
+
+        class Node(models.Model):
+            title = models.CharField(max_length=20)
+            office = models.ForeignKey(
+                Office, related_name='nodes', on_delete=models.CASCADE,
+            )
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_both_node'
+
+        class DocQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Doc(models.Model):
+            title = models.CharField(max_length=20)
+            node = models.ForeignKey(
+                Node, related_name='docs', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(DocQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_both_doc'
+
+        class OfficeGrant(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            office = models.ForeignKey(Office, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_both_grant'
+
+        class Handoff(models.Model):
+            office = models.ForeignKey(Office, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(
+                User, related_name='+', on_delete=models.CASCADE,
+            )
+            sponsor = models.ForeignKey(
+                User, related_name='+', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_both_handoff'
+
+        with _tables(Office, Node, Doc, OfficeGrant, Handoff):
+            change = _permission(Doc, 'change_bothdoc')
+            code = 'trusts_tests.change_bothdoc'
+            office = Office.objects.create(title='office')
+            other = Office.objects.create(title='other')
+            above_office = Office.objects.create(title='above')
+            above = Node.objects.create(title='above', office=above_office)
+            root = Node.objects.create(
+                title='root', office=office, parent=above,
+            )
+            child = Node.objects.create(
+                title='child', office=other, parent=root,
+            )
+            docs = {
+                'both': Doc.objects.create(title='both', node=root),
+                'up': Doc.objects.create(title='up', node=above),
+                'down': Doc.objects.create(title='down', node=child),
+            }
+            OfficeGrant.objects.create(
+                user=self.alice, office=office, permission=change,
+            )
+            delegate = User.objects.create_user(
+                'filter-both-delegate', password='x',
+            )
+            Handoff.objects.create(
+                office=office, delegate=delegate, sponsor=self.alice,
+            )
+            handle = compiler(path='tests.core.via-both-walks')
+            for name in ('both', 'up', 'down', 'split'):
+                handle.add_named_filter(
+                    Doc, name,
+                    lambda user, permission, content, name=name: (
+                        content.title != 'both' if name == 'split'
+                        else content.title == name
+                    ),
+                )
+            handle.register(
+                trust=OfficeGrant,
+                user='user',
+                permission='permission',
+                content='office__nodes__docs',
+                along=('office__nodes__children', 1),
+            )
+            handle.register(
+                trust=Handoff,
+                delegate='delegate',
+                sponsor='sponsor',
+                content='office__nodes__docs',
+                along=('office__nodes__parent', 1),
+            )
+            expected = {
+                'both': {docs['both'].pk},
+                'up': set(),
+                'down': set(),
+                'split': set(),
+            }
+            with _listed(handle):
+                for name, sheets in expected.items():
+                    with self.subTest(sheet=name):
+                        permitted = set(Doc.objects.permitted(
+                            code, delegate, conditions=(name,),
+                        ).values_list('pk', flat=True))
+                        offices = set(filter_by_permitted_content(
                             Office.objects.all(), delegate, change,
-                            content=AncSheet, conditions=('titled',),
-                        ).query
+                            content=Doc, conditions=(name,),
+                        ).values_list('pk', flat=True))
+                        self.assertEqual(permitted, sheets)
+                        if sheets:
+                            self.assertEqual(offices, {office.pk})
+                        else:
+                            self.assertEqual(offices, set())
 
     def test_delegated_walk_site_matches_permitted(self):
         User = self.User
