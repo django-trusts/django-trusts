@@ -969,6 +969,35 @@ class ViaDelegationTest(TransactionTestCase):
         self.DeskGrant.objects.filter(user=self.mid_lead).delete()
         self.assertIs(self._allowed(handle, self.actor), False)
 
+    def test_sponsor_walk_meets_the_ordinary_walk(self):
+        """Both walks run, and the actor needs a user who is on each."""
+        _attach_manager(self, self.User)
+        self.leaf_lead.via_manager = self.mid_lead
+        self.leaf_lead.save(update_fields=['via_manager'])
+        self._ordinary(self.leaf_lead)
+        self.Bridge.objects.create(
+            org=self.leaf, delegate_org=self.leaf, sponsor_org=self.leaf,
+            actor=self.actor,
+        )
+        handle = compiler(path='tests.core.via-meet')
+        handle.register(
+            trust=self.DeskGrant,
+            user='user',
+            permission='permission',
+            content='org__desks',
+            via=('user__via_manager', 8),
+        )
+        handle.register(
+            trust=self.Bridge,
+            delegate='actor',
+            sponsor='sponsor_org__lead',
+            content='org__desks',
+            via=('sponsor_org__subgroups', 8),
+        )
+        self.assertIs(self._allowed(handle, self.actor), True)
+        stranger = self.User.objects.create_user('via-stranger', password='x')
+        self.assertIs(self._allowed(handle, stranger), False)
+
 
 def _chain_models(table, job_name):
     """Team, job, and grant classes for one agreement tree."""
@@ -2451,6 +2480,59 @@ class ViaHopFilterTest(TransactionTestCase):
                     (direct_has, direct_permitted, walk_has, walk_permitted),
                     (direct_expected, direct_expected, walk_expected, walk_expected),
                 )
+
+    def test_contains_object_and_permission_on_the_hop(self):
+        """Membership, the protected object, and the permission terminal."""
+        self._activate()
+        ada = self.people['ada']
+        ben = self.people['ben']
+        ada.groups.add(self.group)
+        groups = compiler(path='tests.core.via-hop.groups')
+        groups.set_user_condition(
+            'member', lambda user: user.groups.contains(self.group),
+        )
+        groups.register(
+            trust=self.Seat, user='holder', group='auth_group',
+            content='task', via=('holder__via_manager', 8),
+        )
+        with _listed(groups):
+            self.assertIs(ada.has_perm(self.code, self.task), True)
+            self.assertIs(ben.has_perm(self.code, self.task), False)
+        ada.via_nick = 'hop-ada'
+        ada.save(update_fields=['via_nick'])
+        ben.via_manager = ada
+        ben.save(update_fields=['via_manager'])
+        held = compiler(path='tests.core.via-hop.manager')
+        held.set_user_condition(
+            'managed',
+            lambda user: user.via_manager.contains(ada) | (user.username == 'hop-ada'),
+        )
+        held.register(
+            trust=self.Seat, user='holder', group='auth_group',
+            content='task', via=('holder__via_manager', 8),
+        )
+        with _listed(held):
+            self.assertIs(ada.has_perm(self.code, self.task), True)
+            self.assertIs(ben.has_perm(self.code, self.task), True)
+            self.assertIs(self.people['cy'].has_perm(self.code, self.task), False)
+        ada.via_nick = self.task.name
+        ada.save(update_fields=['via_nick'])
+        named = self._seat(
+            'object-nick',
+            lambda user, permission, content: user.via_nick == content.name,
+            ('holder__via_manager', 8),
+        )
+        self._expect(named, ada, selected=True, plain=True)
+        self._expect(named, ben, selected=False, plain=True)
+        ada.via_nick = 'change_hoptask'
+        ada.save(update_fields=['via_nick'])
+        coded = self._seat(
+            'perm-code',
+            lambda user, permission, content: user.via_nick == permission.codename,
+            ('holder__via_manager', 8),
+        )
+        self._expect(coded, ada, selected=True, plain=True)
+        self._expect(coded, ben, selected=False, plain=True)
 
     def _holder_answer(self, handle, user):
         with _listed(handle):

@@ -22,6 +22,7 @@ from trusts.plan.conditions import condition_model_key
 from trusts.plan.grammar import Tree
 from trusts.plan.predicates import bind_record_qs, bind_terminal
 from trusts.plan.rewrites import CallInput
+from trusts.plan.writers import member_pk
 from trusts.plan.standards import (
     builtin_user_conditions,
     compile_user_rules,
@@ -31,6 +32,7 @@ from trusts.plan.standards import (
 from trusts.plan.walk import (
     _grant_walk_attname,
     _m2m_columns,
+    _quoted_column,
     _render_reach_sql,
     _require_along_renderer,
     _suffix_link,
@@ -534,10 +536,7 @@ def _field_sql(node, user_model, content_model, content, carriers, name, qn,
 
 
 def _const_value(node):
-    value = node.value
-    if isinstance(value, Model):
-        return value.pk
-    return value
+    return member_pk(node.value)
 
 
 def _compare_sql(node, user_model, content_model, content, carriers, name, qn,
@@ -606,8 +605,8 @@ def _other_operand(node, user_model, content_model, content, carriers, name, qn,
         target = getattr(field, 'target_field', None) if field is not None else None
         if isinstance(value, Model) and target is not None:
             value = getattr(value, target.attname)
-        elif isinstance(value, Model):
-            value = value.pk
+        else:
+            value = member_pk(value)
         index = _add_carrier(carriers, _HopValue(value, 'via.const'))
         return '{c%s}' % index
     if getattr(node, 'kind', None) == 'field' and node.root == 'object':
@@ -1250,8 +1249,10 @@ def _users_select(walk, w_sql, qn, principal):
     link = _suffix_link(walk, qn, principal)
     if link is None:
         alias = qn('w')
+        # The reach list's column is the walk identity's own name.
+        column = _quoted_column(walk.walk_model, walk.walk_ident, qn)
         return 'SELECT DISTINCT %s.%s AS %s FROM (%s) AS %s' % (
-            alias, qn('ident'), user_id, w_sql, alias,
+            alias, column, user_id, w_sql, alias,
         )
     table, alias, user_col, node_col = link
     return (
