@@ -497,9 +497,8 @@ model. ``conditions`` is the same tuple of named-filter names ``.permitted()``
 takes. The filter is resolved in SQL and applied at every ``via=`` and
 ``along=`` hop those inquiries already filter. A missing name, or a tuple
 that is not that exact form, returns an empty queryset. An object filter
-on an ancestor of a delegated ``along=`` walk raises
-``TrustsConfigurationError``: the sheet has to sit in both walks, and two
-separate checks can match different sheets. ``backend`` is
+on an ancestor of a delegated ``along=`` walk keeps the row only when one
+protected object passes that filter and both walks. ``backend`` is
 optional and defaults to the installed relationship backends; pass
 ``backend=`` to select one.
 
