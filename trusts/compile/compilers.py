@@ -1635,20 +1635,6 @@ def _boolean_column(model, name, text):
     return field.column
 
 
-def _reset_any_fk(rel, name, text):
-    """Stop when any row on the reverse side of ``rel`` is true."""
-    fk = rel.field
-    host = fk.model
-    return ResetAt(
-        path=text,
-        kind='any',
-        column=_boolean_column(host, name, text),
-        through_table=host._meta.db_table,
-        through_node=fk.column,
-        node_column=fk.target_field.column,
-    )
-
-
 def _reset_any_m2m(walk_model, field, name, text):
     """Stop when any row across ``field`` carries a true boolean."""
     forward = field if isinstance(field, ManyToManyField) else field.field
@@ -1657,15 +1643,10 @@ def _reset_any_m2m(walk_model, field, name, text):
         far = forward.remote_field.model
         node_column = forward.m2m_column_name()
         far_fk = forward.m2m_reverse_name()
-    elif walk_model is forward.remote_field.model:
+    else:
         far = forward.model
         node_column = forward.m2m_reverse_name()
         far_fk = forward.m2m_column_name()
-    else:
-        raise TrustsConfigurationError(
-            'along reset %r does not start from %s.'
-            % (text, walk_model._meta.label)
-        )
     source_fk = None
     for candidate in through._meta.local_fields:
         if (
@@ -1692,12 +1673,22 @@ def _reset_any_m2m(walk_model, field, name, text):
     )
 
 
+_RESET_RELATION = {
+    'reverse_o2m': 'a reverse one-to-many',
+    'reverse_o2o': 'a reverse one-to-one',
+    'single': 'a forward foreign key',
+    'gfk': 'a generic relation',
+    'reverse': 'a reverse relation',
+}
+
+
 def _resolve_reset(walk_model, shape, edge_path, edge_model, reset):
     """Resolve the third ``along`` element, or ``None`` when it is absent.
 
     One segment is a column on the walked model. Two segments name either
-    the link row this walk already traverses or one to-many from the node.
-    Anything else is rejected here, before a query is built.
+    the link row this walk already traverses or one many-to-many from
+    the node. A reverse foreign key is not one of those and is rejected
+    here, before a query is built.
     """
     if reset is None:
         return None
@@ -1740,12 +1731,11 @@ def _resolve_reset(walk_model, shape, edge_path, edge_model, reset):
     kind = _classify_field(field)
     if kind == 'm2m':
         return _reset_any_m2m(walk_model, field, name, reset)
-    if kind == 'reverse_o2m':
-        return _reset_any_fk(field, name, reset)
+    label = _RESET_RELATION.get(kind, 'relation %s' % kind)
     raise TrustsConfigurationError(
         'along reset %r is not the link this walk traverses and '
-        'is not a many-to-many from %s.'
-        % (reset, walk_model._meta.label)
+        'is not a many-to-many from %s. register() rejects %s.'
+        % (reset, walk_model._meta.label, label)
     )
 
 

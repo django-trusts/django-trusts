@@ -78,20 +78,15 @@ def _stop_predicate(walk, qn, node_alias):
     match = '%s.%s = %s.%s' % (
         probe, qn(spec.through_node), node_alias, qn(spec.node_column),
     )
-    flag = qn(spec.column)
-    if spec.far_table:
-        far = qn('rsf')
-        frm = (
-            '%s AS %s JOIN %s AS %s ON %s.%s = %s.%s'
-            % (
-                through, probe, qn(spec.far_table), far,
-                far, qn(spec.far_pk), probe, qn(spec.far_fk),
-            )
+    far = qn('rsf')
+    frm = (
+        '%s AS %s JOIN %s AS %s ON %s.%s = %s.%s'
+        % (
+            through, probe, qn(spec.far_table), far,
+            far, qn(spec.far_pk), probe, qn(spec.far_fk),
         )
-        flag_sql = '%s.%s IS TRUE' % (far, flag)
-    else:
-        frm = '%s AS %s' % (through, probe)
-        flag_sql = '%s.%s IS TRUE' % (probe, flag)
+    )
+    flag_sql = '%s.%s IS TRUE' % (far, qn(spec.column))
     return 'NOT EXISTS (SELECT 1 FROM %s WHERE %s AND %s)' % (
         frm, match, flag_sql,
     )

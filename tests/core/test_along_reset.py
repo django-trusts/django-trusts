@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import Group, Permission
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied
 from django.db import connection, models
@@ -87,20 +88,63 @@ class ResetRegistrationTest(SimpleTestCase):
     def setUp(self):
         super().setUp()
 
-        class Flag(models.Model):
+        class Note(models.Model):
+            content_type = models.ForeignKey(
+                ContentType, on_delete=models.CASCADE,
+            )
+            object_id = models.PositiveIntegerField()
+            content_object = GenericForeignKey()
             reset_inheritance = models.BooleanField(null=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Badge(models.Model):
+            reset_inheritance = models.BooleanField(null=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Flag(models.Model):
+            name = models.CharField(max_length=20)
+            reset_inheritance = models.BooleanField(null=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class WideBase(models.Model):
+            reset_inheritance = models.BooleanField(null=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Wide(WideBase):
 
             class Meta:
                 app_label = 'trusts_tests'
 
         class Node(models.Model):
             title = models.CharField(max_length=20)
+            rank = models.IntegerField(null=True)
             parent = models.ForeignKey(
                 'self', null=True, related_name='children',
                 on_delete=models.CASCADE,
             )
             reset_inheritance = models.BooleanField(null=True)
+            badge = models.OneToOneField(
+                Badge, null=True, related_name='owner',
+                on_delete=models.CASCADE,
+            )
             flags = models.ManyToManyField(Flag, related_name='nodes')
+            wide = models.ManyToManyField(Wide, related_name='nodes')
+            notes = GenericRelation(Note)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Mark(models.Model):
+            reset_inheritance = models.BooleanField(null=True)
+            nodes = models.ManyToManyField(Node, related_name='marks')
 
             class Meta:
                 app_label = 'trusts_tests'
@@ -143,6 +187,15 @@ class ResetRegistrationTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
+        class Portrait(models.Model):
+            node = models.OneToOneField(
+                Node, related_name='portrait', on_delete=models.CASCADE,
+            )
+            reset_inheritance = models.BooleanField(null=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
         class Grant(models.Model):
             user = models.ForeignKey(
                 get_user_model(), on_delete=models.CASCADE, related_name='+',
@@ -153,58 +206,128 @@ class ResetRegistrationTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
+        class Delegation(models.Model):
+            delegate = models.ForeignKey(
+                get_user_model(), on_delete=models.CASCADE, related_name='+',
+            )
+            sponsor = models.ForeignKey(
+                get_user_model(), on_delete=models.CASCADE, related_name='+',
+            )
+            node = models.ForeignKey(Node, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
         self.Node = Node
         self.Grant = Grant
+        self.Delegation = Delegation
 
-    def _register(self, along, **content):
+    def _register_role(self, role, along):
         handle = compiler()
-        return handle.register(
+        if role == 'delegation':
+            return handle.register(
+                trust=self.Delegation,
+                delegate='delegate',
+                sponsor='sponsor',
+                content='node',
+                along=along,
+            )
+        record = handle.register(
             trust=self.Grant,
             user='user',
             permission='permission',
-            content=content.get('content', 'node'),
+            content='node',
             along=along,
         )
+        if role == 'sponsor':
+            handle.register(
+                trust=self.Delegation,
+                delegate='delegate',
+                sponsor='sponsor',
+                content='node',
+                along=('node__parent', 2),
+            )
+        return record
 
     def test_two_element_tuple_sets_no_reset(self):
-        record = self._register(('node__parent', 4))
-        self.assertIsNone(record.along.reset)
+        for role in ('content', 'delegation', 'sponsor'):
+            with self.subTest(role=role):
+                record = self._register_role(role, ('node__parent', 4))
+                self.assertIsNone(record.along.reset)
 
-    def test_node_edge_and_related_fields_resolve(self):
-        node = self._register(('node__parent', 8, 'reset_inheritance'))
-        edge = self._register((
-            'node__parent_links__parent', 8, 'parent_links__reset_inheritance',
-        ))
-        policy = self._register(('node__parent', 8, 'policies__reset_inheritance'))
-        flags = self._register(('node__parent', 8, 'flags__reset_inheritance'))
-        self.assertEqual(node.along.reset.kind, 'node')
-        self.assertEqual(node.along.reset.path, 'reset_inheritance')
-        self.assertEqual(edge.along.reset.kind, 'edge')
-        self.assertEqual(edge.along.reset.column, 'reset_inheritance')
-        self.assertEqual(policy.along.reset.kind, 'any')
-        self.assertIsNone(policy.along.reset.far_table)
-        self.assertEqual(flags.along.reset.kind, 'any')
-        self.assertIsNotNone(flags.along.reset.far_table)
+    def test_allowed_placements_resolve_on_every_walk(self):
+        cases = (
+            ('node', ('node__parent', 4, 'reset_inheritance'), 'node'),
+            (
+                'edge',
+                ('node__parent_links__parent', 4, 'parent_links__reset_inheritance'),
+                'edge',
+            ),
+            ('m2m', ('node__parent', 4, 'flags__reset_inheritance'), 'any'),
+            (
+                'reverse-m2m',
+                ('node__parent', 4, 'marks__reset_inheritance'),
+                'any',
+            ),
+        )
+        for role in ('content', 'delegation', 'sponsor'):
+            for name, along, kind in cases:
+                with self.subTest(role=role, placement=name):
+                    reset = self._register_role(role, along).along.reset
+                    self.assertEqual(reset.kind, kind)
+                    self.assertEqual(reset.path, along[2])
+                    if kind == 'node':
+                        field = self.Node._meta.get_field('reset_inheritance')
+                        self.assertTrue(field.null)
+                        self.assertEqual(reset.column, field.column)
+                    elif name == 'm2m':
+                        field = self.Node._meta.get_field('flags')
+                        self.assertEqual(reset.through_node, field.m2m_column_name())
+                        self.assertEqual(reset.far_fk, field.m2m_reverse_name())
+                    elif name == 'reverse-m2m':
+                        forward = self.Node._meta.get_field('marks').field
+                        self.assertEqual(
+                            reset.through_node, forward.m2m_reverse_name(),
+                        )
+                        self.assertEqual(reset.far_fk, forward.m2m_column_name())
 
-    def test_register_rejects_unreadable_fields(self):
-        attempts = (
-            (('node__parent', 4, 'missing'), 'missing'),
+    def test_register_rejects_paths_outside_the_three_placements(self):
+        cases = (
+            (('node__parent', 4, 'policies__reset_inheritance'), 'reverse one-to-many'),
+            (('node__parent', 4, 'portrait__reset_inheritance'), 'reverse one-to-one'),
+            (('node__parent', 4, 'parent__reset_inheritance'), 'forward foreign key'),
+            (('node__parent', 4, 'badge__reset_inheritance'), 'forward foreign key'),
+            (
+                ('node__parent', 4, 'parent__children__reset_inheritance'),
+                'one relation',
+            ),
+            (('node__parent', 4, 'notes__reset_inheritance'), 'generic relation'),
             (('node__parent', 4, 'title'), 'BooleanField'),
+            (('node__parent', 4, 'rank'), 'BooleanField'),
+            (('node__parent', 4, 'flags__name'), 'BooleanField'),
+            (('node__parent', 4, 'missing'), 'missing'),
             (('node__parent', 4, None), 'field path'),
             (('node__parent', 4, ''), 'field path'),
-            (('node__parent', 4, 'a__b__c'), 'one relation'),
-            (('node__parent', 4, 'parent__reset_inheritance'), 'many-to-many'),
             (('node__parent', 4, 'reset_inheritance', 1), 'triple'),
-            ((
-                'node__held_parents__parent', 4,
-                'held_parents__reset_inheritance',
-            ), 'parent-table'),
+            (
+                ('node__parent_links__parent', 4, 'parent_links__parent'),
+                'BooleanField',
+            ),
+            (
+                (
+                    'node__held_parents__parent', 4,
+                    'held_parents__reset_inheritance',
+                ),
+                'parent-table',
+            ),
+            (('node__parent', 4, 'wide__reset_inheritance'), 'parent-table'),
         )
-        for along, snippet in attempts:
-            with self.subTest(along=along):
-                with self.assertRaises(TrustsConfigurationError) as caught:
-                    self._register(along)
-                self.assertIn(snippet, str(caught.exception))
+        for role in ('content', 'delegation', 'sponsor'):
+            for along, snippet in cases:
+                with self.subTest(role=role, along=along):
+                    with self.assertRaises(TrustsConfigurationError) as caught:
+                        self._register_role(role, along)
+                    self.assertIn(snippet, str(caught.exception))
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -216,7 +339,7 @@ class AlongResetTest(TransactionTestCase):
         self.User = get_user_model()
         models_ = self._models()
         (
-            self.Flag, self.Node, self.Link, self.Policy, self.Sheet,
+            self.Flag, self.Node, self.Link, self.Sheet,
             self.Grant, self.GroupGrant, self.Delegation,
         ) = models_
         self._table_cm = _tables(*models_)
@@ -282,16 +405,6 @@ class AlongResetTest(TransactionTestCase):
                 app_label = 'trusts_tests'
                 db_table = 'arst_link'
 
-        class Policy(models.Model):
-            node = models.ForeignKey(
-                Node, related_name='policies', on_delete=models.CASCADE,
-            )
-            reset_inheritance = models.BooleanField(null=True)
-
-            class Meta:
-                app_label = 'trusts_tests'
-                db_table = 'arst_policy'
-
         class SheetQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
             pass
 
@@ -339,7 +452,7 @@ class AlongResetTest(TransactionTestCase):
                 db_table = 'arst_delegation'
 
         return (
-            Flag, Node, Link, Policy, Sheet, Grant, GroupGrant, Delegation,
+            Flag, Node, Link, Sheet, Grant, GroupGrant, Delegation,
         )
 
     def _build_tree(self):
@@ -586,23 +699,25 @@ class AlongResetTest(TransactionTestCase):
         self._assert_user(handle, self.erin, ('LB',))
 
     def test_related_row_stops_the_node_when_any_value_is_true(self):
-        self.Policy.objects.create(node=self.nodes['B'], reset_inheritance=False)
-        self.Policy.objects.create(node=self.nodes['B'], reset_inheritance=True)
-        self.Policy.objects.create(node=self.nodes['C'], reset_inheritance=None)
+        false = self.Flag.objects.create(reset_inheritance=False)
+        true = self.Flag.objects.create(reset_inheritance=True)
+        empty = self.Flag.objects.create(reset_inheritance=None)
+        self.nodes['B'].flags.add(false, true)
+        self.nodes['C'].flags.add(empty)
         self._grant(self.alice, 'A')
         self._grant(self.bob, 'B')
-        handle = self._open('policy', (
-            'node__parent', 8, 'policies__reset_inheritance',
+        handle = self._open('flags', (
+            'node__parent', 8, 'flags__reset_inheritance',
         ))
         self._assert_user(handle, self.alice, ('A', 'S'))
         self._assert_user(handle, self.bob, ('B', 'C', 'D', 'E'))
-        flag = self.Flag.objects.create(reset_inheritance=True)
-        self.nodes['D'].flags.add(flag)
-        many = self._open('flags', ('node__parent', 8, 'flags__reset_inheritance'))
+        self.nodes['D'].flags.add(
+            self.Flag.objects.create(reset_inheritance=True),
+        )
         self._grant(self.dave, 'C')
-        self._assert_user(many, self.dave, ('C',))
+        self._assert_user(handle, self.dave, ('C',))
         self._grant(self.erin, 'D')
-        self._assert_user(many, self.erin, ('D', 'E'))
+        self._assert_user(handle, self.erin, ('D', 'E'))
 
     def test_lockfile_records_the_configured_field(self):
         handle = self._open('lock', ('node__parent', 8, 'reset_inheritance'))
@@ -615,9 +730,9 @@ class AlongResetTest(TransactionTestCase):
         plain_text = render_configured_policy(plain).decode()
         self.assertNotIn('reset:', plain_text)
         self.assertNotIn('IS NOT TRUE', plain_text)
-        policy = self._open('lock-policy', (
-            'node__parent', 8, 'policies__reset_inheritance',
+        flags = self._open('lock-flags', (
+            'node__parent', 8, 'flags__reset_inheritance',
         ))
-        policy_text = render_configured_policy(policy).decode()
-        self.assertIn('reset: "policies__reset_inheritance"', policy_text)
-        self.assertIn('NOT EXISTS', policy_text)
+        flags_text = render_configured_policy(flags).decode()
+        self.assertIn('reset: "flags__reset_inheritance"', flags_text)
+        self.assertIn('NOT EXISTS', flags_text)
