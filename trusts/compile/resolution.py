@@ -262,7 +262,8 @@ def _resolve_permission_path(root, path):
     target, a terminal other than ``auth.Permission``, and a multi-hop
     all-forward path fail closed. An intermediate many-to-many also
     fails closed; that shape is deferred, not rejected as a design
-    direction. Zero SQL.
+    direction. The first return value is those field objects, in order,
+    so hop SQL joins the columns this walk already accepted. Zero SQL.
     """
     role = 'permission'
     if not path:
@@ -271,6 +272,7 @@ def _resolve_permission_path(root, path):
             % (role, root._meta.label)
         )
     current = root
+    steps = []
     n = len(path)
     for index, name in enumerate(path):
         is_last = index == n - 1
@@ -305,7 +307,9 @@ def _resolve_permission_path(root, path):
                     'on this permission path.'
                     % (role, path_text(path), name, current._meta.label)
                 )
-            return _permission_m2m_result(field, path)
+            steps.append(field)
+            found = _permission_m2m_result(field, path)
+            return (steps,) + found
         if kind in ('reverse_o2o', 'reverse_o2m', 'reverse'):
             if kind == 'reverse_o2o':
                 raise TrustsConfigurationError(
@@ -338,7 +342,12 @@ def _resolve_permission_path(root, path):
                     'only direct paths are supported.'
                     % (role, path_text(path))
                 )
-            return tuple(path), related, lookup_text(path), _target_attname
+            steps.append(field)
+            return (
+                steps, tuple(path), related, lookup_text(path),
+                _target_attname,
+            )
+        steps.append(field)
         current = related
 
 
