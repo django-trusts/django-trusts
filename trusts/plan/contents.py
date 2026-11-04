@@ -25,7 +25,16 @@ from trusts.plan.recursions import (
     GrantReach,
     _AnchorInInverseReach,
     _KeyedReach,
+    _NonemptyKeyed,
     _PrefixInForwardWalk,
+)
+from trusts.plan.via import (
+    bind_grant_qs,
+    constrained_along_seed,
+    delegate_q,
+    delegate_user_q,
+    sponsor_constraint,
+    via_scope,
 )
 from trusts.plan.relations import (
     _bound_permission_identity,
@@ -73,6 +82,15 @@ def _compile_granted(catalog, candidates, user, permission, *, kind='complete',
 
     A delegation's sponsor rows are this catalog's ordinary records.
     """
+    with via_scope(catalog, skipped):
+        return _compile_granted_body(
+            catalog, candidates, user, permission, kind=kind,
+            permission_model=permission_model, skipped=skipped,
+        )
+
+
+def _compile_granted_body(catalog, candidates, user, permission, *, kind,
+                          permission_model, skipped):
     if permission_model is None and isinstance(permission, Model):
         permission_model = permission._meta.concrete_model
     content_identity = _candidate_model(candidates)
@@ -154,7 +172,7 @@ def _prefix_partial_suffix(record, lookup):
 def _exact_prefix_exists(record, lookup, target_attname, user, permission,
                         content_identity):
     """Grant row whose stored prefix is the outer row."""
-    inner = bind_record_qs(
+    inner = bind_grant_qs(
         record,
         user=user,
         permission=permission,
@@ -182,6 +200,48 @@ def _ordinary_prefix_predicate(record, lookup, target_attname, user, permission,
     )
 
 
+def _sponsor_reached(delegation, ordinary, permission, content_identity, *,
+                     content=None, correlation=None, forward=True,
+                     candidate=None, bound_content=None, along_walk=False):
+    """Sponsor-user walk in place of equality, or ``None`` to keep equality."""
+    constraint = sponsor_constraint(delegation, ordinary)
+    if constraint is None:
+        return None
+    permission = _shift_outer_ref(permission)
+    if along_walk:
+        _reject_unsupported_delegated_suffix(ordinary.along)
+    if along_walk and forward:
+        target = (
+            candidate if candidate is not None
+            else _candidate_outer_ref(ordinary.along)
+        )
+        return _NonemptyKeyed(
+            ordinary.along,
+            constrained_along_seed(
+                ordinary, permission, content_identity, constraint,
+            ),
+            target,
+        )
+    if along_walk:
+        return GrantReach(
+            ordinary,
+            None,
+            permission,
+            content=bound_content,
+            content_identity=content_identity,
+            user_q=constraint,
+        )
+    kwargs = {
+        'content_identity': content_identity,
+        'permission': permission,
+    }
+    if content is not None:
+        kwargs['content'] = content
+    if correlation is not None:
+        kwargs['correlation'] = correlation
+    return Exists(bind_record_qs(ordinary, **kwargs).filter(constraint))
+
+
 def _prefix_sponsor_q(record, sponsor_records, permission, content_identity,
                      prefix_model, candidate, lookup):
     """Sponsor ordinary-authority OR for one permitted-content prefix.
@@ -202,6 +262,21 @@ def _prefix_sponsor_q(record, sponsor_records, permission, content_identity,
             ordinary, prefix_model,
         ):
             ordinary_pos = _prefix_walk_position(ordinary, ordinary_lookup)
+            reached = _sponsor_reached(
+                record, ordinary, permission, content_identity,
+                correlation=Q(**{ordinary_lookup: (
+                    OuterRef(lookup) if record.along is None
+                    else _shift_outer_ref(candidate)
+                )}),
+                forward=True,
+                candidate=candidate,
+                along_walk=(
+                    ordinary.along is not None and ordinary_pos == 'site'
+                ),
+            )
+            if reached is not None:
+                parts.append(reached)
+                continue
             if ordinary.along is not None:
                 _reject_unsupported_delegated_suffix(ordinary.along)
                 if ordinary_pos == 'site':
@@ -240,7 +315,9 @@ def _delegation_prefix_reach_q(record, user, lookup, target_attname, candidate,
         return Q(**{lookup: OuterRef(target_attname)})
     return Q(_KeyedReach(
         record.along,
-        _delegation_walk_seed(record, user),
+        _delegation_walk_seed(
+            record, user, user_q=delegate_user_q(record, user),
+        ),
         F(record.root._meta.pk.attname),
         candidate,
     ))
@@ -257,9 +334,7 @@ def _delegation_prefix_exists(record, sponsor_records, user, permission,
     )
 
     def bound():
-        combined = Q(**{
-            record.delegate_field: bind_terminal(user, 'delegate'),
-        })
+        combined = delegate_q(record, user)
         combined &= _delegation_prefix_reach_q(
             record, user, lookup, target_attname, candidate, position,
         )
@@ -308,6 +383,15 @@ def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
 def permitted_content_q(scope_model, user, permission, *, content, catalog,
                         skipped=()):
     """Grant ``Q`` for scope rows that prefix ``content``, or ``None``."""
+    with via_scope(catalog, skipped):
+        return _permitted_content_body(
+            scope_model, user, permission, content=content, catalog=catalog,
+            skipped=skipped,
+        )
+
+
+def _permitted_content_body(scope_model, user, permission, *, content, catalog,
+                            skipped):
     scope_model = scope_model._meta.concrete_model
     content_identity = _candidate_model(content)
     plan = _plan_for_permission(catalog, content, user, permission)
@@ -439,6 +523,16 @@ def _delegation_sponsor_q(record, sponsor_records, permission, content_identity,
     for ordinary in sponsor_records:
         if not _sponsor_record_matches(ordinary, record):
             continue
+        reached = _sponsor_reached(
+            record, ordinary, permission, content_identity,
+            content=content_binding if ordinary.along is None else None,
+            forward=forward,
+            bound_content=bound_content,
+            along_walk=ordinary.along is not None,
+        )
+        if reached is not None:
+            parts.append(reached)
+            continue
         if ordinary.along is None:
             inner = bind_record_qs(
                 ordinary,
@@ -481,7 +575,9 @@ def _delegation_reaches(record, *, forward, user=None, content=None):
     if forward:
         return Q(_KeyedReach(
             record.along,
-            _delegation_walk_seed(record, user),
+            _delegation_walk_seed(
+                record, user, user_q=delegate_user_q(record, user),
+            ),
             F(record.root._meta.pk.attname),
             _candidate_outer_ref(record.along),
         ))
@@ -498,9 +594,7 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
         )
 
         def bound(record=record):
-            combined = Q(**{
-                record.delegate_field: bind_terminal(user, 'delegate'),
-            })
+            combined = delegate_q(record, user)
             combined &= _delegation_reaches(record, forward=True, user=user)
             return combined
 

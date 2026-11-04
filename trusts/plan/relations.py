@@ -22,6 +22,7 @@ from trusts.plan.predicates import (
     permission_terminal_is_auth_permission,
 )
 from trusts.plan.recursions import GrantReach
+from trusts.plan.via import replaces_user, via_grant_q
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.standards import (
     bind_skip_flags,
@@ -325,6 +326,24 @@ class RelationPlan:
                 continue
             terminal = getattr(record, terminal_field_attr)
             target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
+            if replaces_user(record):
+                local = dict(bindings)
+                actor = local.pop('user', None)
+                if terminal_field_attr == 'user_field':
+                    inner = bind_record_qs(
+                        record,
+                        content_identity=self.content_identity,
+                        **local,
+                    ).filter(via_grant_q(record, OuterRef(record.user_target)))
+                else:
+                    inner = bind_record_qs(
+                        record,
+                        correlation=Q(**{terminal: OuterRef(target)}),
+                        content_identity=self.content_identity,
+                        **local,
+                    ).filter(via_grant_q(record, actor))
+                parts.append(Exists(inner))
+                continue
             inner = self._bound_root_qs(
                 record,
                 correlation=Q(**{terminal: OuterRef(target)}),

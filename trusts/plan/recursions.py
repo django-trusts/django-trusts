@@ -10,6 +10,7 @@ from django.db.models import BooleanField, Exists, F, OuterRef, Q
 from django.db.models.expressions import Expression
 
 from trusts.plan.predicates import bind_record_qs
+from trusts.plan.via import bind_grant_qs
 from trusts.plan.walk import (
     _content_walk_seed,
     _grant_walk_attname,
@@ -104,7 +105,8 @@ class GrantReach(Expression):
     filterable = True
     subquery = True
 
-    def __init__(self, record, user, permission, content=None, *, content_identity=None):
+    def __init__(self, record, user, permission, content=None, *,
+                 content_identity=None, user_q=None):
         super().__init__(output_field=BooleanField())
         self.record = record
         self.content = content
@@ -115,22 +117,38 @@ class GrantReach(Expression):
         self.grant_query = None
         if content is not None:
             self.seed_query = _content_walk_seed(walk, content)
-            grant = bind_record_qs(
-                record,
-                user=user,
-                permission=permission,
-                content_identity=content_identity,
-            )
+            if user_q is not None:
+                grant = bind_record_qs(
+                    record,
+                    permission=permission,
+                    content_identity=content_identity,
+                ).filter(user_q)
+            else:
+                grant = bind_grant_qs(
+                    record,
+                    user=user,
+                    permission=permission,
+                    content_identity=content_identity,
+                )
             self.grant_query = grant.query.clone()
             self.grant_query.subquery = True
             return
-        seed = bind_record_qs(
-            record,
-            user=user,
-            permission=permission,
-            correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
-            content_identity=content_identity,
-        ).values(ident=F(walk.walk_field)).distinct()
+        if user_q is not None:
+            seed = bind_record_qs(
+                record,
+                permission=permission,
+                correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
+                content_identity=content_identity,
+            ).filter(user_q)
+        else:
+            seed = bind_grant_qs(
+                record,
+                user=user,
+                permission=permission,
+                correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
+                content_identity=content_identity,
+            )
+        seed = seed.values(ident=F(walk.walk_field)).distinct()
         self.seed_query = seed.query.clone()
         self.seed_query.subquery = True
         if walk.rewrite_attname:
@@ -254,6 +272,48 @@ class _KeyedReach(Expression):
         return sql, tuple(key_params) + tuple(w_params) + tuple(cand_params)
 
 
+class _NonemptyKeyed(Expression):
+    """The keyed content walk reaches the candidate.
+
+    The seed already limits grants to the users the sponsor walk
+    reaches, so the carrier is not compared with one sponsor column.
+    """
+
+    filterable = True
+    subquery = True
+
+    def __init__(self, walk, seed_query, candidate):
+        super().__init__(output_field=BooleanField())
+        self.walk = walk
+        self.along_bound = walk.bound
+        self.seed_query = seed_query
+        self.candidate = candidate
+
+    def copy(self):
+        clone = super().copy()
+        clone.seed_query = clone.seed_query.clone()
+        return clone
+
+    def get_source_expressions(self):
+        return [self.seed_query, self.candidate]
+
+    def set_source_expressions(self, exprs):
+        self.seed_query, self.candidate = exprs
+
+    def as_sql(self, compiler, connection):
+        _require_along_renderer(connection)
+        seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
+        seed_sql = _unwrap_seed_sql(seed_sql)
+        w_sql, w_params = _render_keyed_reach_sql(
+            self.walk, seed_sql, seed_params, connection,
+        )
+        cand_sql, cand_params = compiler.compile(self.candidate)
+        sql = 'EXISTS (SELECT 1 FROM (%s%s) AS %s)' % (
+            w_sql, cand_sql, connection.ops.quote_name('reached'),
+        )
+        return sql, tuple(w_params) + tuple(cand_params)
+
+
 class _AnchorInInverseReach(Expression):
     """Delegation walk column ``IN`` the inverse walk from a saved object.
 
@@ -341,7 +401,7 @@ class _PrefixInForwardWalk(Expression):
         super().__init__(output_field=BooleanField())
         walk = record.along
         self.along_bound = walk.bound
-        seed = bind_record_qs(
+        seed = bind_grant_qs(
             record,
             user=user,
             permission=permission,

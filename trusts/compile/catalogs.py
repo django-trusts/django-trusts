@@ -41,6 +41,7 @@ from trusts.plan.hops import (
     require_instance,
 )
 from trusts.plan.relations import _candidate_model, bind_checked_user
+from trusts.plan.via import via_scope
 from trusts.plan.users import (
     _named_filter_q,
     _permission_binding_for_plan,
@@ -254,6 +255,14 @@ class Catalog(object):
         plan = self.plan_for(content)
         if not plan.records and not plan.delegations:
             return None
+        with via_scope(self, skipped, content=content):
+            return self._permitted_users_body(
+                content, perm, plan, skipped=skipped,
+                accepts_permission=accepts_permission,
+            )
+
+    def _permitted_users_body(self, content, perm, plan, *, skipped,
+                              accepts_permission):
         bound = _permission_binding_for_plan(
             accepts_permission, content, perm, plan,
         )

@@ -58,6 +58,36 @@ def _and_sql(predicate):
     return ' AND ' + predicate
 
 
+def _hop_predicate(walk, qn, node_alias):
+    """User-condition text on a walked user. Empty for a group or a link.
+
+    ``{alias}`` in the stored template is this node's quoted alias.
+    ``{c0}`` and the following names are values copied onto the
+    recursive row. The text does not name the recursive result inside a
+    subquery and it does not read the outer query.
+    """
+    template = getattr(walk, 'hop_sql', None)
+    if not template:
+        return ''
+    values = {'alias': node_alias}
+    extra = getattr(walk, 'hop_format', None)
+    if extra:
+        values.update(extra)
+    return template.format(**values)
+
+
+def _entered_predicate(walk, qn, node_alias):
+    """Reset and user-condition tests for the row a hop is entering."""
+    parts = []
+    stop = _stop_predicate(walk, qn, node_alias)
+    if stop:
+        parts.append(stop)
+    hop = _hop_predicate(walk, qn, node_alias)
+    if hop:
+        parts.append(hop)
+    return ' AND '.join(parts)
+
+
 def _stop_predicate(walk, qn, node_alias):
     """Predicate on a walked-model alias. Empty for an edge reset.
 
@@ -111,9 +141,13 @@ def _node_guard(walk, qn, match_sql):
     The joined alias supplies the column that subquery reads.
     """
     spec = getattr(walk, 'reset', None)
-    if spec is None or spec.kind == 'edge':
+    hop = getattr(walk, 'hop_sql', None)
+    if (spec is None or spec.kind == 'edge') and not hop:
         return ''
     alias = qn('rstn')
+    predicate = _entered_predicate(walk, qn, alias)
+    if not predicate:
+        return ''
     return (
         'JOIN %s AS %s ON %s.%s = %s AND %s '
         % (
@@ -122,7 +156,7 @@ def _node_guard(walk, qn, match_sql):
             alias,
             qn(walk.walk_ident),
             match_sql,
-            _stop_predicate(walk, qn, alias),
+            predicate,
         )
     )
 
@@ -140,7 +174,7 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
             % {
                 'g': g, 'walk_table': walk_table, 'child': child,
                 'parent_col': parent_col, 'ident_col': ident_col,
-                'extra': _and_sql(_stop_predicate(walk, qn, child)),
+                'extra': _and_sql(_entered_predicate(walk, qn, child)),
             }
         )
         project = '%s.%s' % (child, ident_sql)
@@ -159,7 +193,7 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
                 'g': g, 'walk_table': walk_table, 'cur': cur,
                 'ident': ident_sql, 'ident_col': ident_col,
                 'parent': parent, 'parent_col': parent_col,
-                'extra': _and_sql(_stop_predicate(walk, qn, parent)),
+                'extra': _and_sql(_entered_predicate(walk, qn, parent)),
             }
         )
         project = '%s.%s' % (parent, ident_sql)
@@ -207,7 +241,7 @@ def _inverse_neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
             % {
                 'g': g, 'walk_table': walk_table, 'cur': cur,
                 'ident': ident_sql, 'ident_col': ident_col,
-                'extra': _and_sql(_stop_predicate(walk, qn, cur)),
+                'extra': _and_sql(_entered_predicate(walk, qn, cur)),
             }
         )
         return frm, '%s.%s' % (cur, parent_col)
@@ -263,7 +297,8 @@ def _along_cycle_clause(connection, ident_col, qn):
     )
 
 
-def _render_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None):
+def _render_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None,
+                      carriers=()):
     """Return ``(sql, params)`` for the uncorrelated W membership list.
 
     SQLite, PostgreSQL, and MySQL 8.4+ share one plain ``WITH RECURSIVE``:
@@ -291,12 +326,20 @@ def _render_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None):
     if neighbor is None:
         neighbor = _neighbor_sql
     frm, project = neighbor(walk, qn, gen, g, ident_col, ident)
+    carrier_cols = ''
+    carrier_seed = ''
+    carrier_copy = ''
+    for name in carriers:
+        quoted = qn(name)
+        carrier_cols += ', %s' % quoted
+        carrier_seed += ', %s.%s' % (seed_alias, quoted)
+        carrier_copy += ', %s.%s' % (g, quoted)
     sql = (
-        'WITH RECURSIVE %(gen)s(%(ident_col)s, %(depth)s) AS ('
-        'SELECT %(seed_alias)s.%(ident_col)s, 0 '
+        'WITH RECURSIVE %(gen)s(%(ident_col)s%(carrier_cols)s, %(depth)s) AS ('
+        'SELECT %(seed_alias)s.%(ident_col)s%(carrier_seed)s, 0 '
         'FROM (%(seed_sql)s) AS %(seed_alias)s '
         'UNION ALL '
-        'SELECT %(project)s, %(g)s.%(depth)s + 1 '
+        'SELECT %(project)s%(carrier_copy)s, %(g)s.%(depth)s + 1 '
         '%(frm)s '
         'WHERE %(g)s.%(depth)s < %%s AND %(project)s IS NOT NULL'
         ') '
@@ -311,6 +354,9 @@ def _render_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None):
             'project': project, 'g': g, 'frm': frm,
             'site': site, 'ident': ident, 'walk_table': walk_table,
             'cycle': _along_cycle_clause(connection, ident_col, qn),
+            'carrier_cols': carrier_cols,
+            'carrier_seed': carrier_seed,
+            'carrier_copy': carrier_copy,
         }
     )
     return sql, tuple(seed_params) + (walk.bound,)
@@ -345,17 +391,18 @@ def _content_walk_seed(walk, content):
     return query
 
 
-def _grant_walk_attname(record):
+def _grant_walk_attname(record, walk=None):
     """Grant-root column that stores a one-hop walk identity.
 
     A direct hop keeps that identity on the root row, and that column is
     the comparison outside the recursive CTE. A longer path does not.
     Callers join ``_walk_identity_column`` instead of reading this.
     """
-    walk = record.along
+    if walk is None:
+        walk = record.along
     if len(walk.walk_path) != 1:
         raise TrustsConfigurationError(
-            'Along walk path %r is not one hop; the walk identity is not '
+            'Walk path %r is not one hop; the walk identity is not '
             'a column of %s.'
             % ('__'.join(walk.walk_path), record.root._meta.label)
         )
@@ -479,17 +526,20 @@ def _sponsor_walk_seed(ordinary, permission, content_identity):
     return query
 
 
-def _delegation_walk_seed(record, user):
+def _delegation_walk_seed(record, user, user_q=None):
     """Delegation-row identities for one delegate.
 
     ``user`` is the bound actor, a constant in the seed. Reach is matched
     back to ``carrier`` (the delegation primary key) outside the CTE.
+    ``user_q`` replaces delegate equality when the delegate is a walk.
     """
     walk = record.along
-    qs = record.root._default_manager.filter(**{
-        record.delegate_field: bind_terminal(user, 'delegate'),
-        '%s__isnull' % walk.walk_field: False,
-    })
+    filt = {'%s__isnull' % walk.walk_field: False}
+    if user_q is None:
+        filt[record.delegate_field] = bind_terminal(user, 'delegate')
+    qs = record.root._default_manager.filter(**filt)
+    if user_q is not None:
+        qs = qs.filter(user_q)
     seed = qs.values(
         carrier=F(record.root._meta.pk.attname),
         ident=F(walk.walk_field),

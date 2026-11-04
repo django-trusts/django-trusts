@@ -47,6 +47,7 @@ class Registry(Protocol):
             Callable[[T], object] | Callable[[T, object], object] | None
         ) = None,
         along=None,
+        via=None,
         name: str | None = None,
         description: str | None = None,
     ):
@@ -60,6 +61,7 @@ class Registry(Protocol):
             'sponsor': sponsor,
             'condition': condition,
             'along': along,
+            'via': via,
             'name': name,
             'description': description,
         })

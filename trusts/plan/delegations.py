@@ -14,6 +14,7 @@ from django.db.models import Q
 from trusts.plan.predicates import compile_predicate
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.relations import bind_checked_user
+from trusts.plan.via import selects_reached_users
 
 
 def _sponsor_record_matches(ordinary, delegation):
@@ -87,10 +88,13 @@ def _matched_delegation_q(record, sponsor_q, permission, skipped, bound):
     """
     if sponsor_q is None:
         return None
-    eligibility = _principal_eligibility_q(
-        record.sponsor_model, record.sponsor_field,
-        record.sponsor_rules, skipped,
-    )
+    if selects_reached_users(record):
+        eligibility = Q()
+    else:
+        eligibility = _principal_eligibility_q(
+            record.sponsor_model, record.sponsor_field,
+            record.sponsor_rules, skipped,
+        )
     if eligibility is None:
         return None
     combined = bound()
