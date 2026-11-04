@@ -18,8 +18,9 @@ fails a rule without executing the grant query.
 
 ## Boundaries that must be resolved
 
-- `get_permitted_users()` and `filter_by_permitted_content()` operate over
-  many users or rows and have no single supplied user instance.
+- `get_permitted_users()` has no single supplied user. By contrast,
+  `filter_by_permitted_content()` receives one user while filtering many
+  content rows; those two shapes cannot share the same instance shortcut.
 - A delegation sponsor is not the checked-user instance. Evaluating sponsor
   rules would require a separate load or a return to SQL.
 - A Python evaluator and SQL compiler would need identical grouping, skip
@@ -44,7 +45,7 @@ A decision must cover every permission surface, not only `has_perm()`:
 | Permission enumeration | Yes | Must it use the same instance rules as the object check? |
 | Permitted-content queryset | Yes | Are instance rules fixed when the queryset is built or evaluated? |
 | Permitted users | No single user | Is instance evaluation rejected or replaced by SQL? |
-| Rows with permitted content | No single user row | Is instance evaluation rejected or replaced by SQL? |
+| Rows with permitted content | Yes, one checked user | Does the user rule run once while content restrictions remain in SQL? |
 | Delegated sponsor ceiling | Sponsor is not supplied | Is the sponsor loaded or always checked in SQL? |
 | Policy SQL and lockfile | n/a | How are non-SQL terms represented for audit? |
 
