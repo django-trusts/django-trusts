@@ -33,9 +33,10 @@ from trusts.compile.graph import (
     _require_ref,
 )
 from trusts.plan.grammar import (
+    ORDERED_KINDS,
     Symbol,
     Tree,
-    invoke,
+    contains_call,
     is_predicate,
     symbol_path,
     symbol_token,
@@ -57,11 +58,12 @@ from trusts.errors import PermissionConditionError, TrustsConfigurationError
 T = TypeVar('T', bound=Model)
 from trusts.compile.catalogs import Catalog, Question
 from trusts.plan.conditions import (
+    capture_expression,
     check_comparison_types,
     check_const_member,
+    check_ordered_comparison,
     condition_model_key,
     condition_model_label,
-    normalize_expression,
     parse_named_filter,
     validate_expression,
     require_boolean_field,
@@ -1279,10 +1281,16 @@ def _validate_relation_node(node, root, permission_model, *,
             root, node.item.path, 'condition', where='a relation condition',
         )
         return
+    if node.kind in ('eq', 'ne') and contains_call(node):
+        _validate_function_comparison(node, root, delegated=delegated)
+        return
     if node.kind in ('eq', 'ne'):
         _validate_row_comparison(
             node, root, delegated=delegated, matches=matches,
         )
+        return
+    if node.kind in ORDERED_KINDS:
+        _validate_ordered_row(node, root, delegated=delegated)
         return
     if node.kind == 'contains':
         _validate_row_contains(
@@ -1293,6 +1301,56 @@ def _validate_relation_node(node, root, permission_model, *,
         )
         return
     raise unsupported(node.kind, where)
+
+
+def _call_args(node):
+    if node.value == 'lower':
+        return (node.item,)
+    if node.value == 'coalesce':
+        return node.item
+    return ()
+
+
+def _reject_inquiry_operand(node, where):
+    if isinstance(node, Tree) and node.kind == 'field' and node.root == 'inquiry':
+        raise unsupported(
+            'Comparing the requested permission with a function',
+            where,
+            hint='Compare a column on the trust row.',
+        )
+    if isinstance(node, Tree) and node.kind == 'call':
+        for arg in _call_args(node):
+            _reject_inquiry_operand(arg, where)
+
+
+def _validate_row_operand(node, root, where):
+    if node.kind == 'const':
+        return
+    if node.kind == 'field':
+        _require_row_field(node)
+        return
+    if node.kind == 'call':
+        for arg in _call_args(node):
+            _validate_row_operand(arg, root, where)
+        return
+    raise unsupported('This condition', where)
+
+
+def _validate_function_comparison(node, root, *, delegated):
+    where = _relation_where(delegated)
+    for side in (node.left, node.right):
+        _reject_inquiry_operand(side, where)
+        _validate_row_operand(side, root, where)
+    check_comparison_types(node, root, root)
+
+
+def _validate_ordered_row(node, root, *, delegated):
+    where = _relation_where(delegated)
+    for side in (node.left, node.right):
+        _reject_inquiry_hop(side, where, member=False)
+        _reject_inquiry_operand(side, where)
+        _validate_row_operand(side, root, where)
+    check_ordered_comparison(node, root, root)
 
 
 def _validate_row_comparison(node, root, *, delegated, matches):
@@ -1810,7 +1868,7 @@ def _normalize_public_condition(trust, condition):
     if _prepare_condition_builder(condition) is None:
         return None
     _require_condition_arity(condition)
-    return normalize_expression(invoke(condition, ('row',)))
+    return capture_expression(condition, ('row',))
 
 
 def _normalize_delegated_condition(trust, condition):
@@ -1821,7 +1879,7 @@ def _normalize_delegated_condition(trust, condition):
         roots = ('row', 'inquiry')
     else:
         roots = ('row',)
-    return normalize_expression(invoke(condition, roots))
+    return capture_expression(condition, roots)
 
 def _normalize_public_role(trust, value, role, *, token):
     """Normalize a public string or path builder to a Django ``__`` path."""

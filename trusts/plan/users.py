@@ -9,7 +9,7 @@ __all__ = []
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import Permission
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Exists, F, Model, OuterRef, Q
+from django.db.models import Exists, F, Model, OuterRef, Q, Value
 
 from trusts.plan.conditions import (
     condition_model_key,
@@ -19,6 +19,8 @@ from trusts.plan.conditions import (
 from trusts.plan.writers import (
     boolean_holds,
     boolean_q,
+    call_expression,
+    comparison_q,
     negate_q,
     column_q,
     columns_q,
@@ -30,7 +32,7 @@ from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.utils import parse_perm_code
 from trusts.plan.contents import _as_q
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
-from trusts.plan.grammar import Tree
+from trusts.plan.grammar import ORDERED_KINDS, Tree, contains_call
 
 
 def _reverse_checked(plan, exists, user_model, permission, content, values,
@@ -141,7 +143,9 @@ def _condition_outcome(expr, content, singular, user_model):
             _condition_outcome(expr.left, content, singular, user_model),
             _condition_outcome(expr.right, content, singular, user_model),
         )
-    if isinstance(expr, Tree) and expr.kind in ('eq', 'ne'):
+    if isinstance(expr, Tree) and expr.kind in ('eq', 'ne', *ORDERED_KINDS):
+        if expr.kind in ORDERED_KINDS or contains_call(expr):
+            return _expression_outcome(expr, content, singular, user_model)
         return _comparison_outcome(
             expr, content, singular, user_model,
             equal=expr.kind == 'eq',
@@ -246,6 +250,98 @@ def _side_value(node, content, singular, user_model):
             'node %r.' % (node,)
         )
     return value
+
+
+def _expression_outcome(expr, content, singular, user_model):
+    """Ordered comparison or function, in SQL. NULL does not grant."""
+    left_place = _expression_place(expr.left)
+    right_place = _expression_place(expr.right)
+    if 'mixed' in (left_place, right_place):
+        raise TrustsConfigurationError(
+            'Reverse permission inquiry cannot compile permission condition %r.'
+            % (expr,)
+        )
+    places = {left_place, right_place} - {'either'}
+    if places <= {'user'}:
+        return comparison_q(
+            expr.kind,
+            _reverse_expr(expr.left, 'user', content, singular, user_model),
+            _reverse_expr(expr.right, 'user', content, singular, user_model),
+        )
+    if places == {'object'}:
+        return _exists_q(content, comparison_q(
+            expr.kind,
+            _reverse_expr(expr.left, 'object', content, singular, user_model),
+            _reverse_expr(expr.right, 'object', content, singular, user_model),
+        ))
+    if left_place in ('user', 'either') and right_place == 'object':
+        return _exists_q(content, comparison_q(
+            expr.kind,
+            _reverse_expr(expr.left, 'outer', content, singular, user_model),
+            _reverse_expr(expr.right, 'object', content, singular, user_model),
+        ))
+    if left_place == 'object' and right_place in ('user', 'either'):
+        return _exists_q(content, comparison_q(
+            expr.kind,
+            _reverse_expr(expr.left, 'object', content, singular, user_model),
+            _reverse_expr(expr.right, 'outer', content, singular, user_model),
+        ))
+    raise TrustsConfigurationError(
+        'Reverse permission inquiry cannot compile permission condition %r.'
+        % (expr,)
+    )
+
+
+def _expression_place(node):
+    roots = set()
+    _collect_field_roots(node, roots)
+    roots.discard('permission')
+    if not roots:
+        return 'either'
+    if roots == {'user'}:
+        return 'user'
+    if roots == {'object'}:
+        return 'object'
+    return 'mixed'
+
+
+def _collect_field_roots(node, roots):
+    if not isinstance(node, Tree):
+        return
+    if node.kind == 'field':
+        roots.add(node.root)
+    for child in (node.left, node.right, node.item):
+        if isinstance(child, tuple):
+            for item in child:
+                _collect_field_roots(item, roots)
+        else:
+            _collect_field_roots(child, roots)
+
+
+def _reverse_expr(node, place, content, singular, user_model):
+    if node.kind == 'const':
+        return Value(member_pk(node.value))
+    if node.kind == 'call':
+        return call_expression(
+            node,
+            lambda arg: _reverse_expr(
+                arg, place, content, singular, user_model,
+            ),
+        )
+    if node.kind == 'field' and node.root == 'permission':
+        return Value(singular)
+    if node.kind == 'field' and node.root == 'user':
+        lookup = _user_lookup(user_model, node.path)
+        if place == 'outer':
+            return OuterRef(lookup)
+        if place == 'user':
+            return F(lookup)
+    if node.kind == 'field' and node.root == 'object' and place == 'object':
+        return F(_object_lookup(content, node.path))
+    raise TrustsConfigurationError(
+        'Reverse permission inquiry cannot compile permission condition '
+        'node %r.' % (node,)
+    )
 
 
 def _comparison_outcome(expr, content, singular, user_model, *, equal):

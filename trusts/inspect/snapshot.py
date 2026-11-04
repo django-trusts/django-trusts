@@ -830,6 +830,14 @@ class _PolicyConditionText(object):
                 return self._eq(node)
             if node.kind == 'ne':
                 return self._pair(node, '!=')
+            if node.kind == 'lt':
+                return self._pair(node, '<')
+            if node.kind == 'le':
+                return self._pair(node, '<=')
+            if node.kind == 'gt':
+                return self._pair(node, '>')
+            if node.kind == 'ge':
+                return self._pair(node, '>=')
             if node.kind == 'contains':
                 return self._contains(node)
             if node.kind == 'not':
@@ -896,7 +904,19 @@ def _condition_path(operand):
 def _operand_text(operand):
     if operand.kind == 'field':
         return _condition_path(operand)
+    if operand.kind == 'call':
+        return _call_text(operand)
     return _constant_text(operand.value)
+
+
+def _call_text(node):
+    if node.value == 'now':
+        return 'Now()'
+    if node.value == 'lower':
+        return 'Lower(%s)' % _operand_text(node.item)
+    return 'Coalesce(%s)' % ', '.join(
+        _operand_text(arg) for arg in node.item
+    )
 
 
 def _constant_text(value):
