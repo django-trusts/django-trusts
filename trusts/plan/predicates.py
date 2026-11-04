@@ -104,7 +104,10 @@ class _PredicateCompiler(object):
         if node.kind == 'not':
             return negate_q(self.record.root, self.compile(node.item))
         if needs_expression(node):
-            return expression_q(node, self._row_field)
+            return expression_q(
+                node, self._row_field,
+                model=self.record.root, user_model=self.record.root,
+            )
         if node.kind == 'eq':
             return self._eq(node)
         if node.kind == 'ne':

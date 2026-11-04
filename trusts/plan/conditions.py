@@ -261,12 +261,14 @@ def _lower_value(value, token, *, inside=False):
         if token is None or symbol_token(value) is not token:
             raise unsupported('A path from another builder')
         path = symbol_path(value)
-        if not path:
+        root = symbol_root(value)
+        # The permission root is the codename. User and object still need a field.
+        if not path and root != 'permission':
             raise unsupported(
                 'A root without a field',
                 hint='Name a field, for example o.owner.',
             )
-        return Tree('field', root=symbol_root(value), path=path)
+        return Tree('field', root=root, path=path)
     if type(value) in _FUNCTIONS:
         return _lower_function(value, token)
     if inside and type(value) is Value:
@@ -430,6 +432,19 @@ def _spec_from_field(field):
     return ('scalar', types, '%s %s' % (field.get_internal_type(), field.name))
 
 
+def _column_field(field, name):
+    """The stored column. ``owner_id`` is the target key, not the relation."""
+    if (
+        field.is_relation
+        and not field.many_to_many
+        and not field.one_to_many
+        and field.get_attname() == name
+        and name != field.name
+    ):
+        return field.target_field
+    return field
+
+
 def _model_from_identity(identity):
 
     return django_apps.get_model(identity.app_label, identity.model_name)
@@ -502,14 +517,14 @@ def _operand_spec(node, model, user_model):
     if _node(node, 'field'):
         if node.root in ('object', 'row'):
             ref = 'object' if node.root == 'object' else 'condition'
-            return _spec_from_field(_terminal_field(model, node.path, ref))
+            field = _terminal_field(model, node.path, ref)
+            return _spec_from_field(_column_field(field, node.path[-1]))
         if node.root == 'user':
             entity = user_model
             if not node.path:
                 return ('instance', entity, entity._meta.label)
-            return _spec_from_field(
-                _terminal_field(entity, node.path, 'principal')
-            )
+            field = _terminal_field(entity, node.path, 'principal')
+            return _spec_from_field(_column_field(field, node.path[-1]))
         if node.root == 'permission':
             return ('scalar', (str,), 'permission')
     raise PermissionConditionError(
@@ -541,12 +556,57 @@ def _call_spec(node, model, user_model):
         raise PermissionConditionError(
             'Coalesce() does not accept None. NULL does not grant.'
         )
+    classes = _coalesce_fields(node, model, user_model)
+    if len(classes) > 1:
+        raise PermissionConditionError(
+            'Coalesce() arguments must share one field type (%s).'
+            % ', '.join(sorted(classes))
+        )
     if any(not _specs_compatible(specs[0], spec) for spec in specs[1:]):
         raise PermissionConditionError(
             'Coalesce() arguments must share one type (%s).'
             % ', '.join(spec[2] for spec in specs)
         )
+    if classes:
+        return _spec_from_field(next(iter(classes.values())))
     return specs[0]
+
+
+def _coalesce_fields(node, model, user_model):
+    """One example field for each column class, or ``Now()``, inside a call."""
+    found = {}
+    for leaf in walk(node):
+        if leaf.kind == 'call' and leaf.value == 'now':
+            found['DateTimeField'] = DateTimeField()
+            continue
+        if leaf.kind != 'field' or not leaf.path or leaf.root == 'permission':
+            continue
+        host = user_model if leaf.root == 'user' else model
+        ref = 'principal' if leaf.root == 'user' else (
+            'object' if leaf.root == 'object' else 'condition'
+        )
+        field = _column_field(
+            _terminal_field(host, leaf.path, ref), leaf.path[-1],
+        )
+        if field.is_relation:
+            raise PermissionConditionError(
+                'Coalesce() does not accept relation %s.' % field.name
+            )
+        found[type(field).__name__] = field
+    return found
+
+
+def coalesce_output_field(node, model, user_model):
+    """The field Django must use so ``Value()`` does not pick a sibling type."""
+    found = _coalesce_fields(node, model, user_model)
+    if len(found) != 1:
+        return None
+    field = next(iter(found.values()))
+    if isinstance(field, DecimalField):
+        return DecimalField(
+            max_digits=field.max_digits, decimal_places=field.decimal_places,
+        )
+    return type(field)()
 
 
 def check_comparison_types(node, model, user_model):

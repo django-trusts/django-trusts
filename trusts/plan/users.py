@@ -266,12 +266,17 @@ def _expression_outcome(expr, content, singular, user_model):
         return leaf
 
     if 'object' not in places:
-        return expression_q(expr, field('user'))
+        return expression_q(
+            expr, field('user'),
+            model=content.__class__, user_model=user_model,
+        )
     # A user column outside the saved-row subquery is an outer reference.
     left, right = (
         field('object' if place == 'object' else 'outer') for place in places
     )
-    return _exists_q(content, expression_q(expr, left, right))
+    return _exists_q(content, expression_q(
+        expr, left, right, model=content.__class__, user_model=user_model,
+    ))
 
 
 def _expression_place(node):

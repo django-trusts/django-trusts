@@ -6,7 +6,8 @@ read the same stored tree. Django's own functions are rejected there.
 """
 import re
 from contextlib import contextmanager
-from datetime import timedelta
+from datetime import date, timedelta
+from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
@@ -254,7 +255,7 @@ class FunctionRegisterTest(TransactionTestCase):
             (lambda d, p: Lower(d.expires_at) == 'a', 'accepts text', Pass, False),
             (
                 lambda d, p: Coalesce(d.label, d.expires_at) == 'a',
-                'share one type', Pass, False,
+                'field type', Pass, False,
             ),
             (lambda d, p: d.expires_at > None, 'NULL does not grant', Pass, False),  # noqa: E711
             (lambda d, p: Lower(d.label) == None, 'NULL does not grant', Pass, False),  # noqa: E711
@@ -758,3 +759,539 @@ def _date_literal(parts):
     if matched is None:
         return None
     return matched.group(0)
+
+
+def _py_op(op, left, right):
+    if op == '==':
+        return left == right
+    if op == '!=':
+        return left != right
+    if op == '<':
+        return left < right
+    if op == '<=':
+        return left <= right
+    if op == '>':
+        return left > right
+    return left >= right
+
+
+def _tree_op(op, left, right):
+    if op == '==':
+        return left == right
+    if op == '!=':
+        return left != right
+    if op == '<':
+        return left < right
+    if op == '<=':
+        return left <= right
+    if op == '>':
+        return left > right
+    return left >= right
+
+
+_MATRIX_OPS = ('==', '!=', '<', '<=', '>', '>=')
+
+
+def _wide_models():
+    User = get_user_model()
+
+    class Wide(PermittedUsersMixin, models.Model):
+        objects = models.Manager.from_queryset(PermittedQuerySet)()
+        chars = models.CharField(max_length=20, null=True)
+        notes = models.TextField(null=True)
+        rank = models.IntegerField(null=True)
+        big = models.BigIntegerField(null=True)
+        small = models.SmallIntegerField(null=True)
+        positive = models.PositiveIntegerField(null=True)
+        amount = models.DecimalField(
+            max_digits=8, decimal_places=2, null=True,
+        )
+        ratio = models.FloatField(null=True)
+        opened = models.DateField(null=True)
+        expires = models.DateTimeField(null=True)
+        flag = models.BooleanField(null=True)
+        owner = models.ForeignKey(
+            User, null=True, on_delete=models.CASCADE, related_name='+',
+        )
+
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'sqlfn_wide'
+
+    class WideGrant(models.Model):
+        wide = models.ForeignKey(Wide, on_delete=models.CASCADE)
+        user = models.ForeignKey(
+            User, on_delete=models.CASCADE, related_name='+',
+        )
+        permission = models.ForeignKey(
+            Permission, on_delete=models.CASCADE, related_name='+',
+        )
+
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'sqlfn_wide_grant'
+
+    class WidePass(models.Model):
+        wide = models.ForeignKey(Wide, on_delete=models.CASCADE)
+        delegate = models.ForeignKey(
+            User, on_delete=models.CASCADE, related_name='+',
+        )
+        sponsor = models.ForeignKey(
+            User, on_delete=models.CASCADE, related_name='+',
+        )
+        notes = models.TextField(null=True)
+        big = models.BigIntegerField(null=True)
+
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'sqlfn_wide_pass'
+
+    return Wide, WideGrant, WidePass
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class FunctionMatrixTest(TransactionTestCase):
+    """Every function shape agrees across the three APIs, or dies at register."""
+
+    def test_mismatched_coalesce_is_rejected_at_register(self):
+        Wide, _Grant, _Pass = _wide_models()
+        rejected = (
+            (lambda u, p, o: Coalesce(o.notes, o.chars) == 'a', 'field type'),
+            (lambda u, p, o: Coalesce(o.big, o.rank) == 0, 'field type'),
+            (lambda u, p, o: Coalesce(Value(0), o.notes) == 'a', 'share one type'),
+            (lambda u, p, o: Coalesce(o.owner, Value(0)) == 0, 'relation'),
+            (lambda u, p, o: Coalesce(o.opened, Now()) > Now(), 'field type'),
+        )
+        for builder, needle in rejected:
+            with self.subTest(needle=needle):
+                handle = compiler()
+                with self.assertNumQueries(0):
+                    with self.assertRaises(PermissionConditionError) as caught:
+                        handle.add_named_filter(Wide, 'bad', builder)
+                self.assertIn(needle, str(caught.exception))
+                self.assertEqual(handle.records, ())
+
+    def test_shapes_agree_or_reject_at_register(self):
+        User = get_user_model()
+        Wide, Grant, Pass = _wide_models()
+        future = (timezone.now() + timedelta(days=2)).replace(microsecond=0)
+        past = (timezone.now() - timedelta(days=2)).replace(microsecond=0)
+        opened = date(2024, 6, 1)
+        earlier = date(2020, 1, 1)
+        columns = (
+            ('chars', 'a', 'm', True),
+            ('notes', 'a', 'm', True),
+            ('rank', 0, 3, True),
+            ('big', 0, 3, True),
+            ('small', 0, 3, True),
+            ('positive', 0, 3, True),
+            ('amount', Decimal('0'), Decimal('2.50'), True),
+            ('ratio', 0, 2.5, True),
+            ('opened', earlier, opened, True),
+            ('expires', past, future, True),
+            ('flag', False, True, False),
+        )
+        text = ('chars', 'notes')
+        must_work = []
+        must_reject = []
+        for name, fallback, sample, ordered in columns:
+            ops = _MATRIX_OPS if ordered else ('==', '!=')
+            for value_first in (False, True):
+                for op in ops:
+                    must_work.append((
+                        'coalesce %s %s %s' % (
+                            name, 'value' if value_first else 'field', op,
+                        ),
+                        _coalesce_builder(name, fallback, sample, op, value_first),
+                        _coalesce_expect(name, fallback, sample, op, value_first),
+                    ))
+            if not ordered:
+                must_reject.append((
+                    'ordered %s' % name,
+                    _coalesce_builder(name, fallback, sample, '<', False),
+                ))
+        for name, _fallback, sample, ordered in columns:
+            if name in text:
+                for op in _MATRIX_OPS:
+                    must_work.append((
+                        'lower %s %s' % (name, op),
+                        _lower_builder(name, sample, op),
+                        _lower_expect(name, sample, op),
+                    ))
+            else:
+                must_reject.append((
+                    'lower %s' % name,
+                    lambda u, p, o, name=name: Lower(getattr(o, name)) == 'a',
+                ))
+        for op in _MATRIX_OPS:
+            must_work.append((
+                'now expires %s' % op,
+                _now_builder('expires', op, False),
+                _now_expect(op, False),
+            ))
+        for name, _fallback, _sample, _ordered in columns:
+            if name == 'expires':
+                continue
+            must_reject.append((
+                'now %s' % name,
+                lambda u, p, o, name=name: getattr(o, name) > Now(),
+            ))
+        must_work.extend(_root_cases())
+        must_work.extend(_pair_cases(future))
+        must_reject.extend((
+            ('notes with chars', lambda u, p, o: Coalesce(o.notes, o.chars) == 'a'),
+            ('big with rank', lambda u, p, o: Coalesce(o.big, o.rank) == 0),
+            ('notes with int', lambda u, p, o: Coalesce(o.notes, Value(1)) == 1),
+            ('relation', lambda u, p, o: Coalesce(o.owner, Value(0)) == 0),
+            ('date with now', lambda u, p, o: Coalesce(o.opened, Now()) > Now()),
+            ('mixed roots', lambda u, p, o: Coalesce(u.username, o.notes) == 'a'),
+            ('ordered active', lambda u, p, o: u.is_active < True),  # noqa: E712
+        ))
+        with _tables(Wide, Grant, Pass):
+            change = _permission(Wide)
+            user = User.objects.create_user('matrix-sqlfn', password='x')
+            user.date_joined = past
+            user.save(update_fields=['date_joined'])
+            filled = Wide.objects.create(
+                chars='m', notes='m', rank=3, big=3, small=3, positive=3,
+                amount=Decimal('2.50'), ratio=2.5, opened=opened,
+                expires=future, flag=True, owner=user,
+            )
+            blank = Wide.objects.create(
+                chars=None, notes=None, rank=None, big=None, small=None,
+                positive=None, amount=None, ratio=None, opened=None,
+                expires=None, flag=None, owner=None,
+            )
+            for row in (filled, blank):
+                Grant.objects.create(wide=row, user=user, permission=change)
+            past_row = Wide.objects.create(expires=past)
+            Grant.objects.create(wide=past_row, user=user, permission=change)
+            rows = (filled, blank, past_row)
+            factory = compiler(path=BACKEND)
+            factory.register(
+                trust=Grant, user='user', permission='permission',
+                content='wide',
+            )
+            for label, builder in must_reject:
+                with self.subTest(label=label, phase='reject'):
+                    with self.assertNumQueries(0):
+                        with self.assertRaises(PermissionConditionError):
+                            factory.add_named_filter(Wide, 'bad', builder)
+            accepted = []
+            for index, (label, builder, expect) in enumerate(must_work):
+                code = 'm%s' % index
+                with self.subTest(label=label, phase='register'):
+                    with self.assertNumQueries(0):
+                        factory.add_named_filter(Wide, code, builder)
+                    accepted.append((code, label, expect))
+            codename = 'trusts_tests.change_sheet'
+            with _published(factory):
+                for code, label, expect in accepted:
+                    with self.subTest(label=label, phase='agree'):
+                        _agree_filter(
+                            self, Wide, rows, user, code,
+                            lambda row, user, expect=expect, codename=codename: (
+                                expect(row, user)
+                            ),
+                        )
+            self._delegation(Wide, Grant, Pass, user, filled)
+
+    def _delegation(self, Wide, Grant, Pass, user, sheet):
+        other = get_user_model().objects.create_user('matrix-other', password='x')
+        live = Pass.objects.create(
+            wide=sheet, delegate=other, sponsor=user, notes=None, big=None,
+        )
+        rejected = compiler(path=BACKEND)
+        with self.assertNumQueries(0):
+            with self.assertRaises(PermissionConditionError):
+                rejected.register(
+                    trust=Pass, delegate='delegate', sponsor='sponsor',
+                    content='wide',
+                    condition=lambda d: Coalesce(d.notes, Value(0)) == 0,
+                )
+        cases = []
+        for value_first in (False, True):
+            for op in _MATRIX_OPS:
+                side = 'value' if value_first else 'field'
+                cases.append((
+                    'text %s %s' % (side, op),
+                    _deleg_call('notes', 'a', value_first, op),
+                    lambda row, op=op, value_first=value_first: _py_op(
+                        op,
+                        'a' if value_first or row.notes is None else row.notes,
+                        'a',
+                    ),
+                ))
+                cases.append((
+                    'big %s %s' % (side, op),
+                    _deleg_call('big', 0, value_first, op),
+                    lambda row, op=op, value_first=value_first: _py_op(
+                        op,
+                        0 if value_first or row.big is None else row.big,
+                        0,
+                    ),
+                ))
+        cases.append((
+            'lower',
+            lambda d: Lower(Coalesce(d.notes, Value('A'))) == 'a',
+            lambda row: (row.notes or 'A').lower() == 'a',
+        ))
+        for label, builder, expect in cases:
+            factory = compiler(path=BACKEND)
+            factory.register(
+                trust=Grant, user='user', permission='permission',
+                content='wide',
+            )
+            with self.assertNumQueries(0):
+                factory.register(
+                    trust=Pass, delegate='delegate', sponsor='sponsor',
+                    content='wide', condition=builder,
+                )
+            with _published(factory):
+                with self.subTest(label='delegation %s' % label):
+                    self.assertIs(
+                        other.has_perm(PERM, sheet), expect(live),
+                    )
+                    listed = Wide.objects.permitted(PERM, other)
+                    self.assertEqual(
+                        set(listed.values_list('pk', flat=True)),
+                        {sheet.pk} if expect(live) else set(),
+                    )
+                    found = sheet.get_permitted_users(PERM)
+                    self.assertEqual(
+                        other.pk in set(found.values_list('pk', flat=True)),
+                        expect(live),
+                    )
+
+
+def _coalesce_builder(name, fallback, sample, op, value_first):
+    def builder(u, p, o, name=name, fallback=fallback, sample=sample,
+                op=op, value_first=value_first):
+        column = getattr(o, name)
+        call = (
+            Coalesce(Value(fallback), column)
+            if value_first else Coalesce(column, Value(fallback))
+        )
+        return _tree_op(op, call, sample)
+    return builder
+
+
+def _coalesce_expect(name, fallback, sample, op, value_first):
+    def expect(row, user, name=name, fallback=fallback, sample=sample, op=op,
+               value_first=value_first):
+        # A leading Value() is never NULL, so COALESCE keeps it.
+        if value_first:
+            value = fallback
+        else:
+            value = getattr(row, name)
+            if value is None:
+                value = fallback
+        return _py_op(op, value, sample)
+    return expect
+
+
+def _lower_builder(name, sample, op):
+    folded = sample.lower()
+
+    def builder(u, p, o, name=name, folded=folded, op=op):
+        return _tree_op(op, Lower(getattr(o, name)), folded)
+    return builder
+
+
+def _lower_expect(name, sample, op):
+    folded = sample.lower()
+
+    def expect(row, user, name=name, folded=folded, op=op):
+        value = getattr(row, name)
+        if value is None:
+            return False
+        return _py_op(op, value.lower(), folded)
+    return expect
+
+
+def _now_builder(name, op, clock):
+    def builder(u, p, o, name=name, op=op):
+        return _tree_op(op, getattr(o, name), Now())
+    return builder
+
+
+def _now_expect(op, clock):
+    def expect(row, user, op=op):
+        if row.expires is None:
+            return False
+        return _py_op(op, row.expires, timezone.now())
+    return expect
+
+
+def _root_cases():
+    codename = 'trusts_tests.change_sheet'
+    cases = []
+    for value_first in (False, True):
+        side = 'value' if value_first else 'field'
+        for op in _MATRIX_OPS:
+            cases.append((
+                'user id %s %s' % (side, op),
+                _user_id_builder(op, value_first),
+                lambda row, user, op=op, value_first=value_first: _py_op(
+                    op, 0 if value_first else user.pk, user.pk,
+                ),
+            ))
+            cases.append((
+                'owner id %s %s' % (side, op),
+                _owner_builder(op, value_first),
+                lambda row, user, op=op, value_first=value_first: _py_op(
+                    op,
+                    0 if value_first or row.owner_id is None else row.owner_id,
+                    user.pk,
+                ),
+            ))
+    for op in _MATRIX_OPS:
+        cases.append((
+            'user name %s' % op,
+            lambda u, p, o, op=op: _tree_op(
+                op, Coalesce(u.username, Value('a')), u.username,
+            ),
+            lambda row, user, op=op: _py_op(op, user.username, user.username),
+        ))
+        cases.append((
+            'user lower %s' % op,
+            lambda u, p, o, op=op: _tree_op(
+                op, Lower(u.username), Lower(Value('matrix-sqlfn')),
+            ),
+            lambda row, user, op=op: _py_op(
+                op, user.username.lower(), user.username.lower(),
+            ),
+        ))
+        cases.append((
+            'user joined %s' % op,
+            lambda u, p, o, op=op: _tree_op(op, u.date_joined, Now()),
+            lambda row, user, op=op: _py_op(
+                op, user.date_joined, timezone.now(),
+            ),
+        ))
+        cases.append((
+            'permission %s' % op,
+            lambda u, p, o, op=op: _tree_op(
+                op, Coalesce(p, Value('x')), codename,
+            ),
+            lambda row, user, op=op: _py_op(op, codename, codename),
+        ))
+        cases.append((
+            'nested text %s' % op,
+            lambda u, p, o, op=op: _tree_op(
+                op, Lower(Coalesce(o.notes, Value('A'))), 'm',
+            ),
+            lambda row, user, op=op: _py_op(
+                op, (row.notes or 'A').lower(), 'm',
+            ),
+        ))
+        cases.append((
+            'nested lower %s' % op,
+            lambda u, p, o, op=op: _tree_op(
+                op, Coalesce(Lower(o.notes), Value('a')), 'm',
+            ),
+            lambda row, user, op=op: _py_op(
+                op, 'a' if row.notes is None else row.notes.lower(), 'm',
+            ),
+        ))
+    for op in ('==', '!='):
+        cases.append((
+            'user active %s' % op,
+            lambda u, p, o, op=op: _tree_op(
+                op, Coalesce(u.is_active, Value(False)), True,
+            ),
+            lambda row, user, op=op: _py_op(op, True, True),
+        ))
+    return cases
+
+
+def _owner_builder(op, value_first):
+    def builder(u, p, o, op=op, value_first=value_first):
+        call = (
+            Coalesce(Value(0), o.owner_id)
+            if value_first else Coalesce(o.owner_id, Value(0))
+        )
+        return _tree_op(op, call, u.id)
+    return builder
+
+
+def _pair_cases(mark):
+    """Two function calls, and a column coalesced with Now() or the permission."""
+    cases = []
+    for op in _MATRIX_OPS:
+        cases.append((
+            'lower both %s' % op,
+            lambda u, p, o, op=op: _tree_op(op, Lower(o.chars), Lower(o.notes)),
+            lambda row, user, op=op: (
+                False if row.chars is None or row.notes is None
+                else _py_op(op, row.chars.lower(), row.notes.lower())
+            ),
+        ))
+        cases.append((
+            'int both %s' % op,
+            lambda u, p, o, op=op: _tree_op(
+                op, Coalesce(o.rank, Value(0)), Coalesce(o.big, Value(0)),
+            ),
+            lambda row, user, op=op: _py_op(
+                op,
+                0 if row.rank is None else row.rank,
+                0 if row.big is None else row.big,
+            ),
+        ))
+        cases.append((
+            'expires with now %s' % op,
+            lambda u, p, o, op=op, mark=mark: _tree_op(
+                op, Coalesce(o.expires, Now()), mark,
+            ),
+            lambda row, user, op=op, mark=mark: _py_op(
+                op,
+                timezone.now() if row.expires is None else row.expires,
+                mark,
+            ),
+        ))
+        cases.append((
+            'permission field %s' % op,
+            lambda u, p, o, op=op: _tree_op(
+                op, Coalesce(o.chars, p), 'm',
+            ),
+            lambda row, user, op=op: _py_op(
+                op,
+                row.chars if row.chars is not None else 'trusts_tests.change_sheet',
+                'm',
+            ),
+        ))
+    return cases
+
+
+def _deleg_call(name, fallback, value_first, op):
+    def builder(d):
+        column = getattr(d, name)
+        call = (
+            Coalesce(Value(fallback), column)
+            if value_first else Coalesce(column, Value(fallback))
+        )
+        return _tree_op(op, call, fallback)
+    return builder
+
+
+def _user_id_builder(op, value_first):
+    def builder(u, p, o, op=op, value_first=value_first):
+        call = (
+            Coalesce(Value(0), u.id) if value_first else Coalesce(u.id, Value(0))
+        )
+        return _tree_op(op, call, u.id)
+    return builder
+
+
+def _agree_filter(test, model, rows, user, code, expect):
+    colon = '%s:%s' % (PERM, code)
+    wanted = {row.pk for row in rows if expect(row, user)}
+    listed = model.objects.permitted(PERM, user, conditions=(code,))
+    test.assertEqual(set(listed.values_list('pk', flat=True)), wanted)
+    for row in rows:
+        test.assertIs(user.has_perm(colon, row), row.pk in wanted)
+        found = row.get_permitted_users(colon)
+        test.assertEqual(
+            set(found.values_list('pk', flat=True)),
+            {user.pk} if row.pk in wanted else set(),
+        )

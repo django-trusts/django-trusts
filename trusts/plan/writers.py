@@ -20,6 +20,7 @@ from django.db.models.lookups import (
 from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
     ModelIdentity,
+    coalesce_output_field,
     resolve_field_path,
 )
 from trusts.plan.grammar import Tree, needs_expression
@@ -284,26 +285,33 @@ def comparison_q(kind, lhs, rhs):
     return Q(_COMPARISON_LOOKUPS[kind](lhs, rhs))
 
 
-def sql_expression(node, field):
+def sql_expression(node, field, model=None, user_model=None):
     """One comparison operand as Django's own function call or value.
 
-    ``field`` builds the leaf for a ``field`` node.
+    ``field`` builds the leaf for a ``field`` node. A ``Coalesce`` whose
+    arguments include a column uses that column's field as ``output_field``
+    so a ``Value()`` cannot disagree with it at query time.
     """
     if node.kind == 'const':
         return Value(member_pk(node.value))
     if node.kind == 'call':
-        return _FUNCTIONS[node.value](
-            *(sql_expression(arg, field) for arg in node.item)
-        )
+        expr = _FUNCTIONS[node.value](*(
+            sql_expression(arg, field, model, user_model) for arg in node.item
+        ))
+        if node.value == 'coalesce' and model is not None:
+            output = coalesce_output_field(node, model, user_model)
+            if output is not None:
+                expr.output_field = output
+        return expr
     return field(node)
 
 
-def expression_q(node, field, right_field=None):
+def expression_q(node, field, right_field=None, *, model=None, user_model=None):
     """The ``Q`` for one ordered or function comparison."""
     return comparison_q(
         node.kind,
-        sql_expression(node.left, field),
-        sql_expression(node.right, right_field or field),
+        sql_expression(node.left, field, model, user_model),
+        sql_expression(node.right, right_field or field, model, user_model),
     )
 
 
@@ -313,7 +321,7 @@ def _compile_sql_comparison(node, model, user, perm, user_model):
             return F('__'.join(leaf.path))
         return Value(member_pk(_bound_value(leaf, user, perm, user_model)))
 
-    return expression_q(node, field)
+    return expression_q(node, field, model=model, user_model=user_model)
 
 
 def compile_to_q(node, model, user, perm, user_model=None):
