@@ -493,8 +493,15 @@ permitted content sits under those rows. The result is a lazy queryset of
 the same model.
 
 ``permission`` is an ``auth.Permission`` instance. ``content`` is the protected
-model. ``backend`` is optional and defaults to the installed relationship
-backends; pass ``backend=`` to select one.
+model. ``conditions`` is the same tuple of named-filter names ``.permitted()``
+takes. The filter is resolved in SQL and applied at every ``via=`` and
+``along=`` hop those inquiries already filter. A missing name, or a tuple
+that is not that exact form, returns an empty queryset. An object filter
+on an ancestor of a delegated ``along=`` walk raises
+``TrustsConfigurationError``: the sheet has to sit in both walks, and two
+separate checks can match different sheets. ``backend`` is
+optional and defaults to the installed relationship backends; pass
+``backend=`` to select one.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
 the user may read:
