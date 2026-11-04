@@ -452,11 +452,9 @@ Filter a queryset to the objects permitted for a particular permission:
 
 The permission may instead be the corresponding ``auth.Permission``
 instance. The queryset supplies the protected content model. A string is the
-``app_label.codename`` for that model's content type; the
-codename is not parsed to guess a model. This is the same kind of question
-as ``user.has_perm(permission, document)``, not the same string codec.
-``has_perm`` still infers a model from the codename suffix
-(`issue #268 <https://github.com/django-trusts/django-trusts/issues/268>`_).
+``app_label.codename`` for that model's content type. ``.permitted()``,
+``has_perm``, and ``get_permitted_users`` bind the codename to the protected
+content model; they do not parse it to guess a model.
 
 A relationship-family backend participates only when it has an applicable
 ``auth.Permission`` registration for the queryset model and owns every selected
