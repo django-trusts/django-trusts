@@ -93,7 +93,9 @@ class GrantReach(Expression):
 
     The forward walk is uncorrelated with candidate rows. One plain
     ``IN (WITH RECURSIVE …)`` per recursive record, with a depth counter
-    capped at the bound. The reverse walk is also uncorrelated. It
+    capped at the bound. ``seed_query`` replaces that grant filter with
+    a prepared seed, which permitted content uses for the grant row that
+    owns the subquery. The reverse walk is also uncorrelated. It
     derives walk-site identities from the bound content, walks the
     inverse edges once without the outer user, then joins eligible
     grants and candidate users outside the CTE. The grant query is
@@ -107,8 +109,8 @@ class GrantReach(Expression):
     filterable = True
     subquery = True
 
-    def __init__(self, record, user, permission, content=None, *,
-                 content_identity=None, user_q=None):
+    def __init__(self, record, user=None, permission=None, content=None, *,
+                 content_identity=None, user_q=None, seed_query=None):
         super().__init__(output_field=BooleanField())
         self.record = record
         self.content = content
@@ -135,24 +137,26 @@ class GrantReach(Expression):
             self.grant_query = grant.query.clone()
             self.grant_query.subquery = True
             return
-        if user_q is not None:
-            seed = bind_record_qs(
-                record,
-                permission=permission,
-                correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
-                content_identity=content_identity,
-            ).filter(user_q)
-        else:
-            seed = bind_grant_qs(
-                record,
-                user=user,
-                permission=permission,
-                correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
-                content_identity=content_identity,
-            )
-        seed = seed.values(ident=F(walk.walk_field)).distinct()
-        self.seed_query = seed.query.clone()
-        self.seed_query.subquery = True
+        if seed_query is None:
+            if user_q is not None:
+                seed = bind_record_qs(
+                    record,
+                    permission=permission,
+                    correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
+                    content_identity=content_identity,
+                ).filter(user_q)
+            else:
+                seed = bind_grant_qs(
+                    record,
+                    user=user,
+                    permission=permission,
+                    correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
+                    content_identity=content_identity,
+                )
+            seed = seed.values(ident=F(walk.walk_field)).distinct()
+            seed_query = seed.query.clone()
+            seed_query.subquery = True
+        self.seed_query = seed_query
         if walk.rewrite_attname:
             self.lhs = F(walk.rewrite_attname)
         elif not walk.suffix_path:

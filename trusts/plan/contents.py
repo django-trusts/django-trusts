@@ -10,10 +10,7 @@ from functools import reduce
 from operator import or_
 
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import (
-    BooleanField, Exists, F, Model, OuterRef, Q, Subquery,
-)
-from django.db.models.expressions import Expression
+from django.db.models import Exists, F, Model, OuterRef, Q, Subquery
 
 from trusts.plan.rewrites import bind_once
 from trusts.plan.hops import lookup_text, path_text, resolved_hop
@@ -25,15 +22,11 @@ from trusts.plan.delegations import (
 )
 from trusts.plan.walk import (
     _delegation_walk_seed,
-    _render_reach_sql,
-    _require_along_renderer,
     _sponsor_walk_seed,
-    _unwrap_seed_sql,
 )
 from trusts.plan.recursions import (
     GrantReach,
     _AnchorInInverseReach,
-    _IdentInReach,
     _KeyedReach,
     _PrefixInForwardWalk,
 )
@@ -139,84 +132,10 @@ def _this_grant_seed(record):
     return query
 
 
-class _ContentInGrantWalk(Expression):
-    """Filtered content whose walk identity is in this grant row's walk.
-
-    The seed is the grant row that owns the content subquery.
-    ``OuterRef(OuterRef('pk'))`` skips the content row and names that
-    grant. One reverse hop compares the content foreign key. A longer
-    suffix joins the walk site.
-    """
-
-    filterable = True
-    subquery = True
-
-    def __init__(self, record, seed_query=None):
-        super().__init__(output_field=BooleanField())
-        walk = record.along
-        self.record = record
-        self.along_bound = walk.bound
-        self.seed_query = (
-            _this_grant_seed(record) if seed_query is None else seed_query
-        )
-        self.lhs = None
-        self.suffix_query = None
-        if walk.rewrite_attname or not walk.suffix_path:
-            self.lhs = F(walk.rewrite_attname or walk.walk_ident)
-        else:
-            self.suffix_query = walk.walk_model._default_manager.filter(
-                **{walk.suffix_field: OuterRef(record.content_target)},
-            ).query.clone()
-            self.suffix_query.subquery = True
-
-    def copy(self):
-        clone = super().copy()
-        clone.seed_query = self.seed_query.clone()
-        if self.suffix_query is not None:
-            clone.suffix_query = self.suffix_query.clone()
-        return clone
-
-    def get_source_expressions(self):
-        exprs = [self.seed_query]
-        if self.lhs is not None:
-            exprs.append(self.lhs)
-        if self.suffix_query is not None:
-            exprs.append(self.suffix_query)
-        return exprs
-
-    def set_source_expressions(self, exprs):
-        exprs = list(exprs)
-        self.seed_query = exprs.pop(0)
-        if self.lhs is not None:
-            self.lhs = exprs.pop(0)
-        if self.suffix_query is not None:
-            self.suffix_query = exprs.pop(0)
-
-    def as_sql(self, compiler, connection):
-        _require_along_renderer(connection)
-        seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
-        seed_sql = _unwrap_seed_sql(seed_sql)
-        w_sql, w_params = _render_reach_sql(
-            self.record.along, seed_sql, seed_params, connection,
-        )
-        if self.lhs is not None:
-            lhs_sql, lhs_params = compiler.compile(self.lhs)
-            return (
-                '%s IN (%s)' % (lhs_sql, w_sql),
-                tuple(lhs_params) + tuple(w_params),
-            )
-        inner = self.suffix_query.clone()
-        inner.add_q(Q(_IdentInReach(
-            self.record.along.walk_ident, w_sql, w_params,
-            self.record.along.bound,
-        )))
-        return Exists(inner).as_sql(compiler, connection)
-
-
 def _grant_reaches_filtered_content(record, overlay):
     """This grant row authorizes a content row that passes ``overlay``."""
     return Exists(record.content_model._default_manager.filter(overlay).filter(
-        Q(_ContentInGrantWalk(record)),
+        Q(GrantReach(record, seed_query=_this_grant_seed(record))),
     ))
 
 
@@ -302,7 +221,9 @@ def _same_sheet_in_both_walks(delegation, sponsor_records, permission,
     outside its recursive member.
     """
     sheet = delegation.content_model._default_manager.filter(overlay)
-    sheet = sheet.filter(Q(_ContentInGrantWalk(delegation)))
+    sheet = sheet.filter(Q(GrantReach(
+        delegation, seed_query=_this_grant_seed(delegation),
+    )))
     sponsor_parts = []
     for ordinary in sponsor_records:
         if not _sponsor_record_matches(ordinary, delegation):
@@ -316,7 +237,7 @@ def _same_sheet_in_both_walks(delegation, sponsor_records, permission,
                     delegation, ordinary, permission, content_identity,
                     lookup, ordinary_lookup, depth=2,
                 )
-                sponsor_parts.append(Q(_ContentInGrantWalk(
+                sponsor_parts.append(Q(GrantReach(
                     ordinary,
                     seed_query=_walk_seed_from_rows(ordinary.along, rows),
                 )))
