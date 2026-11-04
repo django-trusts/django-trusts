@@ -463,11 +463,7 @@ class _PolicyVisitor(object):
                     row['condition'] = condition
                 along = getattr(record, 'along', None)
                 if along is not None:
-                    row['along'] = {
-                        'path': '__'.join(along.path),
-                        'shape': along.shape,
-                        'bound': along.bound,
-                    }
+                    row['along'] = _along_mapping(along)
                 if multi:
                     row['or_group'] = True
                 delegated_rows.append(row)
@@ -484,11 +480,7 @@ class _PolicyVisitor(object):
             row['content'] = _relation(record, 'content')
             along = getattr(record, 'along', None)
             if along is not None:
-                row['along'] = {
-                    'path': '__'.join(along.path),
-                    'shape': along.shape,
-                    'bound': along.bound,
-                }
+                row['along'] = _along_mapping(along)
             condition = _render_condition(
                 record.condition,
                 permission_token=_permission_token(
@@ -936,6 +928,19 @@ def _dotless_id(*parts):
     return '__'.join(parts).replace('.', '__')
 
 
+def _along_mapping(along):
+    """Policy output for one walk, including its configured reset field."""
+    mapping = {
+        'path': '__'.join(along.path),
+        'shape': along.shape,
+        'bound': along.bound,
+    }
+    reset = getattr(along, 'reset', None)
+    if reset is not None:
+        mapping['reset'] = reset.path
+    return mapping
+
+
 def _base_id(record):
     """Stable leg id. The root qname's dots become ``__``.
 
@@ -953,6 +958,9 @@ def _base_id(record):
             getattr(along, 'shape', None),
             getattr(along, 'bound', None),
         )
+        reset = getattr(along, 'reset', None)
+        if reset is not None:
+            label += '__reset_%s' % reset.path
     return label.replace('.', '__')
 
 

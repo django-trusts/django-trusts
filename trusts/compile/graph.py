@@ -77,14 +77,16 @@ class Along(object):
     """Bounded directed walk that replaces equality at one walk-site.
 
     ``ref`` names the directed edge from the walk-site. ``bound`` is the
-    maximum hop distance (1..64). Depth 0 is always included.
+    maximum hop distance (1..64). Depth 0 is always included. ``reset``
+    is the optional field path resolved onto the walked model.
     """
 
-    __slots__ = ('ref', 'bound')
+    __slots__ = ('ref', 'bound', 'reset')
 
-    def __init__(self, ref, bound):
+    def __init__(self, ref, bound, reset=None):
         object.__setattr__(self, 'ref', ref)
         object.__setattr__(self, 'bound', bound)
+        object.__setattr__(self, 'reset', reset)
 
     def __setattr__(self, name, value):
         raise TrustsConfigurationError('Along is immutable.')
@@ -97,13 +99,16 @@ class Along(object):
             isinstance(other, Along)
             and self.ref == other.ref
             and self.bound == other.bound
+            and self.reset == other.reset
         )
 
     def __hash__(self):
-        return hash((self.ref, self.bound))
+        return hash((self.ref, self.bound, self.reset))
 
     def __repr__(self):
-        return 'Along(%r, bound=%r)' % (self.ref, self.bound)
+        if self.reset is None:
+            return 'Along(%r, bound=%r)' % (self.ref, self.bound)
+        return 'Along(%r, bound=%r, reset=%r)' % (self.ref, self.bound, self.reset)
 
 
 def _require_ref(value, role):
@@ -112,6 +117,26 @@ def _require_ref(value, role):
             '%s must be a root-relative Ref, not %r.' % (role, value)
         )
     return value
+
+
+@dataclass(frozen=True, slots=True)
+class ResetAt:
+    """Inheritance stop resolved from the third ``along`` element.
+
+    ``kind`` is ``node`` (column on the walked model), ``edge`` (column
+    on the link row this walk already joins), or ``any`` (true when any
+    row reached through another relation is true).
+    """
+
+    path: str
+    kind: str
+    column: str
+    through_table: str | None = None
+    through_node: str | None = None
+    far_table: str | None = None
+    far_pk: str | None = None
+    far_fk: str | None = None
+    node_column: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,3 +158,4 @@ class AlongWalk:
     edge_parent_attname: str | None
     edge_child_attname: str | None
     rewrite_attname: str | None
+    reset: ResetAt | None = None

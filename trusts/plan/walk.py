@@ -52,6 +52,81 @@ def _require_along_renderer(connection):
     )
 
 
+def _and_sql(predicate):
+    if not predicate:
+        return ''
+    return ' AND ' + predicate
+
+
+def _stop_predicate(walk, qn, node_alias):
+    """Predicate on a walked-model alias. Empty for an edge reset.
+
+    ``node`` reads that alias's column. ``any`` is ``NOT EXISTS`` against
+    another table, correlated to the alias, never to the recursive name.
+    """
+    spec = getattr(walk, 'reset', None)
+    if spec is None or spec.kind == 'edge':
+        return ''
+    if spec.kind == 'node':
+        return '%s.%s IS NOT TRUE' % (node_alias, qn(spec.column))
+    if spec.kind != 'any':
+        raise TrustsConfigurationError(
+            'along reset kind %r cannot be rendered.' % (spec.kind,)
+        )
+    probe = qn('rst')
+    through = qn(spec.through_table)
+    match = '%s.%s = %s.%s' % (
+        probe, qn(spec.through_node), node_alias, qn(spec.node_column),
+    )
+    flag = qn(spec.column)
+    if spec.far_table:
+        far = qn('rsf')
+        frm = (
+            '%s AS %s JOIN %s AS %s ON %s.%s = %s.%s'
+            % (
+                through, probe, qn(spec.far_table), far,
+                far, qn(spec.far_pk), probe, qn(spec.far_fk),
+            )
+        )
+        flag_sql = '%s.%s IS TRUE' % (far, flag)
+    else:
+        frm = '%s AS %s' % (through, probe)
+        flag_sql = '%s.%s IS TRUE' % (probe, flag)
+    return 'NOT EXISTS (SELECT 1 FROM %s WHERE %s AND %s)' % (
+        frm, match, flag_sql,
+    )
+
+
+def _edge_predicate(walk, qn, link_alias):
+    spec = getattr(walk, 'reset', None)
+    if spec is None or spec.kind != 'edge':
+        return ''
+    return '%s.%s IS NOT TRUE' % (link_alias, qn(spec.column))
+
+
+def _node_guard(walk, qn, match_sql):
+    """Join the walked row when this step does not already expose it.
+
+    The recursive member must not name the CTE inside ``NOT EXISTS``.
+    The joined alias supplies the column that subquery reads.
+    """
+    spec = getattr(walk, 'reset', None)
+    if spec is None or spec.kind == 'edge':
+        return ''
+    alias = qn('rstn')
+    return (
+        'JOIN %s AS %s ON %s.%s = %s AND %s '
+        % (
+            qn(walk.walk_model._meta.db_table),
+            alias,
+            alias,
+            qn(walk.walk_ident),
+            match_sql,
+            _stop_predicate(walk, qn, alias),
+        )
+    )
+
+
 def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
     """Join generation ``g`` to the next identity. The CTE is referenced once."""
     source = 'FROM %(gen)s AS %(g)s ' % {'gen': gen, 'g': g}
@@ -61,10 +136,11 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
         walk_table = qn(walk.walk_model._meta.db_table)
         frm = source + (
             'JOIN %(walk_table)s AS %(child)s '
-            'ON %(child)s.%(parent_col)s = %(g)s.%(ident_col)s'
+            'ON %(child)s.%(parent_col)s = %(g)s.%(ident_col)s%(extra)s'
             % {
                 'g': g, 'walk_table': walk_table, 'child': child,
                 'parent_col': parent_col, 'ident_col': ident_col,
+                'extra': _and_sql(_stop_predicate(walk, qn, child)),
             }
         )
         project = '%s.%s' % (child, ident_sql)
@@ -78,11 +154,12 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
             'JOIN %(walk_table)s AS %(cur)s '
             'ON %(cur)s.%(ident)s = %(g)s.%(ident_col)s '
             'JOIN %(walk_table)s AS %(parent)s '
-            'ON %(parent)s.%(ident)s = %(cur)s.%(parent_col)s'
+            'ON %(parent)s.%(ident)s = %(cur)s.%(parent_col)s%(extra)s'
             % {
                 'g': g, 'walk_table': walk_table, 'cur': cur,
                 'ident': ident_sql, 'ident_col': ident_col,
                 'parent': parent, 'parent_col': parent_col,
+                'extra': _and_sql(_stop_predicate(walk, qn, parent)),
             }
         )
         project = '%s.%s' % (parent, ident_sql)
@@ -94,12 +171,16 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
         child_col = qn(walk.edge_child_attname)
         frm = source + (
             'JOIN %(edge_table)s AS %(link)s '
-            'ON %(link)s.%(parent_col)s = %(g)s.%(ident_col)s'
+            'ON %(link)s.%(parent_col)s = %(g)s.%(ident_col)s%(extra)s'
             % {
                 'g': g, 'edge_table': edge_table, 'link': link,
                 'parent_col': parent_col, 'ident_col': ident_col,
+                'extra': _and_sql(_edge_predicate(walk, qn, link)),
             }
         )
+        guard = _node_guard(walk, qn, '%s.%s' % (link, child_col))
+        if guard:
+            frm += ' ' + guard
         project = '%s.%s' % (link, child_col)
         return frm, project
     raise TrustsConfigurationError(
@@ -122,10 +203,11 @@ def _inverse_neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
         walk_table = qn(walk.walk_model._meta.db_table)
         frm = source + (
             'JOIN %(walk_table)s AS %(cur)s '
-            'ON %(cur)s.%(ident)s = %(g)s.%(ident_col)s'
+            'ON %(cur)s.%(ident)s = %(g)s.%(ident_col)s%(extra)s'
             % {
                 'g': g, 'walk_table': walk_table, 'cur': cur,
                 'ident': ident_sql, 'ident_col': ident_col,
+                'extra': _and_sql(_stop_predicate(walk, qn, cur)),
             }
         )
         return frm, '%s.%s' % (cur, parent_col)
@@ -133,7 +215,9 @@ def _inverse_neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
         child = qn('child')
         parent_col = qn(walk.parent_attname)
         walk_table = qn(walk.walk_model._meta.db_table)
-        frm = source + (
+        frm = source + _node_guard(
+            walk, qn, '%s.%s' % (g, ident_col),
+        ) + (
             'JOIN %(walk_table)s AS %(child)s '
             'ON %(child)s.%(parent_col)s = %(g)s.%(ident_col)s'
             % {
@@ -147,12 +231,15 @@ def _inverse_neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
         edge_table = qn(walk.edge_model._meta.db_table)
         parent_col = qn(walk.edge_parent_attname)
         child_col = qn(walk.edge_child_attname)
-        frm = source + (
+        frm = source + _node_guard(
+            walk, qn, '%s.%s' % (g, ident_col),
+        ) + (
             'JOIN %(edge_table)s AS %(link)s '
-            'ON %(link)s.%(child_col)s = %(g)s.%(ident_col)s'
+            'ON %(link)s.%(child_col)s = %(g)s.%(ident_col)s%(extra)s'
             % {
                 'g': g, 'edge_table': edge_table, 'link': link,
                 'child_col': child_col, 'ident_col': ident_col,
+                'extra': _and_sql(_edge_predicate(walk, qn, link)),
             }
         )
         return frm, '%s.%s' % (link, parent_col)

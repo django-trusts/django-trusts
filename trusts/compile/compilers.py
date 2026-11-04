@@ -15,7 +15,7 @@ from django.apps import apps as django_apps
 from django.conf import settings
 from django.contrib.auth.models import Permission
 from django.core.exceptions import AppRegistryNotReady, FieldDoesNotExist
-from django.db.models import Model, Q
+from django.db.models import ManyToManyField, Model, Q
 
 from trusts.plan.hops import (
     concrete_model,
@@ -29,6 +29,7 @@ from trusts.compile.graph import (
     Along,
     AlongWalk,
     Ref,
+    ResetAt,
     _is_model_class,
     _require_ref,
 )
@@ -1606,6 +1607,148 @@ def _suffix_rewrite_attname(walk_model, suffix_path, content_model, walk_ident):
         return None
     return fk.name
 
+def _boolean_column(model, name, text):
+    """Concrete boolean column stored on ``model``'s own table."""
+    try:
+        field = model._meta.get_field(name)
+    except FieldDoesNotExist:
+        raise TrustsConfigurationError(
+            'along reset %r refers to missing field %r on %s.'
+            % (text, name, model._meta.label)
+        )
+    internal = field.get_internal_type()
+    if (
+        not getattr(field, 'concrete', False)
+        or getattr(field, 'many_to_many', False)
+        or internal != 'BooleanField'
+    ):
+        raise TrustsConfigurationError(
+            'along reset %r must be a concrete BooleanField on %s, '
+            'not %s.' % (text, model._meta.label, internal)
+        )
+    if field.model._meta.db_table != model._meta.db_table:
+        raise TrustsConfigurationError(
+            'along reset %r is stored on %s, not on %s. '
+            'register() rejects a parent-table join.'
+            % (text, field.model._meta.label, model._meta.label)
+        )
+    return field.column
+
+
+def _reset_any_fk(rel, name, text):
+    """Stop when any row on the reverse side of ``rel`` is true."""
+    fk = rel.field
+    host = fk.model
+    return ResetAt(
+        path=text,
+        kind='any',
+        column=_boolean_column(host, name, text),
+        through_table=host._meta.db_table,
+        through_node=fk.column,
+        node_column=fk.target_field.column,
+    )
+
+
+def _reset_any_m2m(walk_model, field, name, text):
+    """Stop when any row across ``field`` carries a true boolean."""
+    forward = field if isinstance(field, ManyToManyField) else field.field
+    through = forward.remote_field.through
+    if walk_model is forward.model:
+        far = forward.remote_field.model
+        node_column = forward.m2m_column_name()
+        far_fk = forward.m2m_reverse_name()
+    elif walk_model is forward.remote_field.model:
+        far = forward.model
+        node_column = forward.m2m_reverse_name()
+        far_fk = forward.m2m_column_name()
+    else:
+        raise TrustsConfigurationError(
+            'along reset %r does not start from %s.'
+            % (text, walk_model._meta.label)
+        )
+    source_fk = None
+    for candidate in through._meta.local_fields:
+        if (
+            getattr(candidate, 'column', None) == node_column
+            and getattr(candidate, 'is_relation', False)
+        ):
+            source_fk = candidate
+            break
+    if source_fk is None:
+        raise TrustsConfigurationError(
+            'along reset %r cannot be read from %s.'
+            % (text, walk_model._meta.label)
+        )
+    return ResetAt(
+        path=text,
+        kind='any',
+        column=_boolean_column(far, name, text),
+        through_table=through._meta.db_table,
+        through_node=node_column,
+        far_table=far._meta.db_table,
+        far_pk=far._meta.pk.column,
+        far_fk=far_fk,
+        node_column=source_fk.target_field.column,
+    )
+
+
+def _resolve_reset(walk_model, shape, edge_path, edge_model, reset):
+    """Resolve the third ``along`` element, or ``None`` when it is absent.
+
+    One segment is a column on the walked model. Two segments name either
+    the link row this walk already traverses or one to-many from the node.
+    Anything else is rejected here, before a query is built.
+    """
+    if reset is None:
+        return None
+    if (
+        not isinstance(reset, str)
+        or not reset
+        or reset.startswith('__')
+        or reset.endswith('__')
+    ):
+        raise TrustsConfigurationError(
+            'along reset must be a field path, not %r.' % (reset,)
+        )
+    parts = reset.split('__')
+    if len(parts) == 1:
+        return ResetAt(
+            path=reset,
+            kind='node',
+            column=_boolean_column(walk_model, parts[0], reset),
+        )
+    if len(parts) != 2 or not all(parts):
+        raise TrustsConfigurationError(
+            'along reset %r must name a field on the walked model '
+            'or one relation from it.' % (reset,)
+        )
+    relation, name = parts
+    edge_name = edge_path[0] if edge_path else None
+    if shape == 'E' and edge_model is not None and relation == edge_name:
+        return ResetAt(
+            path=reset,
+            kind='edge',
+            column=_boolean_column(edge_model, name, reset),
+        )
+    try:
+        field = walk_model._meta.get_field(relation)
+    except FieldDoesNotExist:
+        raise TrustsConfigurationError(
+            'along reset %r refers to missing field %r on %s.'
+            % (reset, relation, walk_model._meta.label)
+        )
+    kind = _classify_field(field)
+    if kind == 'm2m':
+        return _reset_any_m2m(walk_model, field, name, reset)
+    if kind == 'reverse_o2m':
+        return _reset_any_fk(field, name, reset)
+    raise TrustsConfigurationError(
+        'along reset %r is not the link this walk traverses and '
+        'is not a many-to-many from %s.'
+        % (reset, walk_model._meta.label)
+    )
+
+
 def _build_along_walk(root, content_path, content_model, along):
     along_ref = _require_ref(along.ref, 'along')
     if along_ref._root is not root:
@@ -1684,6 +1827,13 @@ def _build_along_walk(root, content_path, content_model, along):
         edge_parent_attname=edge_parent_attname,
         edge_child_attname=edge_child_attname,
         rewrite_attname=rewrite_attname,
+        reset=_resolve_reset(
+            walk_model,
+            shape,
+            edge_path,
+            edge_model,
+            getattr(along, 'reset', None),
+        ),
     )
 
 def _same_terminal_bindings(existing, record):
@@ -1902,23 +2052,34 @@ def _public_ref(root, value, role, *, allow_empty=False):
     ))
 
 def _bind_public_along(root, along):
-    """Normalize ``(path, bound)`` to an internal ``Along``."""
+    """Normalize ``(path, bound)`` or ``(path, bound, field)`` to ``Along``."""
     if along is None:
         return None
     if isinstance(along, Along):
         raise TypeError(
-            'along must be a (path, bound) pair, not an Along instance.'
+            'along must be a (path, bound) pair or a '
+            '(path, bound, field) triple, not an Along instance.'
         )
     if isinstance(along, Ref):
         raise TypeError(
-            'along must be a (path, bound) pair, not a Ref.'
+            'along must be a (path, bound) pair or a '
+            '(path, bound, field) triple, not a Ref.'
         )
-    if not isinstance(along, tuple) or len(along) != 2:
+    if not isinstance(along, tuple) or len(along) not in (2, 3):
         raise TrustsConfigurationError(
-            'along must be a (path, bound) pair, not %r.' % (along,)
+            'along must be a (path, bound) pair or a '
+            '(path, bound, field) triple, not %r.' % (along,)
         )
-    path, bound = along
-    return Along(_public_ref(root, path, 'along'), bound)
+    if len(along) == 2:
+        path, bound = along
+        reset = None
+    else:
+        path, bound, reset = along
+        if not isinstance(reset, str) or not reset:
+            raise TrustsConfigurationError(
+                'along reset must be a field path, not %r.' % (reset,)
+            )
+    return Along(_public_ref(root, path, 'along'), bound, reset)
 
 
 class RegistrationListener(object):
