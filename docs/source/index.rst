@@ -450,7 +450,9 @@ Filter a queryset to the objects permitted for a particular permission:
        user,
    )
 
-The permission may instead be the corresponding ``auth.Permission`` instance. The queryset supplies the protected content model. A string is the ``app_label.codename`` for that model's content type; the
+The permission may instead be the corresponding ``auth.Permission``
+instance. The queryset supplies the protected content model. A string is the
+``app_label.codename`` for that model's content type; the
 codename is not parsed to guess a model. This is the same kind of question
 as ``user.has_perm(permission, document)``, not the same string codec.
 ``has_perm`` still infers a model from the codename suffix
