@@ -2359,6 +2359,109 @@ class ViaHopFilterTest(TransactionTestCase):
             )
         self.assertIn('Ordered comparison', str(raised.exception))
 
+    def test_hop_matches_permitted_on_null_bool_negation_and_compare(self):
+        """The walked user and a direct ``.permitted()`` stay pinned.
+
+        Each case is the grant holder, so the hop seed and the queryset
+        condition read the same row. A single expected value means both
+        answers. A pair is (queryset, hop). They differ for ``!=`` on a
+        NULL boolean: the queryset keeps that row and the hop does not.
+        """
+        self._activate()
+        ada = self.people['ada']
+        cases = (
+            ('null-eq', lambda user: user.via_nick == None,  # noqa: E711
+             dict(via_nick=None, via_other=None, via_reset=None), True),
+            ('null-ne', lambda user: user.via_nick != None,  # noqa: E711
+             dict(via_nick=None, via_other=None, via_reset=None), False),
+            ('value-eq-null', lambda user: user.via_nick == None,  # noqa: E711
+             dict(via_nick='ada', via_other='ada', via_reset=True), False),
+            ('value-ne-null', lambda user: user.via_nick != None,  # noqa: E711
+             dict(via_nick='ada', via_other='ada', via_reset=True), True),
+            ('null-eq-const', lambda user: user.via_nick == 'ada',
+             dict(via_nick=None, via_other=None, via_reset=None), False),
+            ('null-ne-const', lambda user: user.via_nick != 'ada',
+             dict(via_nick=None, via_other=None, via_reset=None), True),
+            ('eq-const', lambda user: user.via_nick == 'ada',
+             dict(via_nick='ada', via_other='ada', via_reset=True), True),
+            ('ne-const', lambda user: user.via_nick != 'ada',
+             dict(via_nick='ada', via_other='ada', via_reset=True), False),
+            ('null-eq-col', lambda user: user.via_nick == user.via_other,
+             dict(via_nick=None, via_other=None, via_reset=None), False),
+            ('eq-col', lambda user: user.via_nick == user.via_other,
+             dict(via_nick='ada', via_other='ada', via_reset=True), True),
+            ('ne-col', lambda user: user.via_nick != user.via_other,
+             dict(via_nick='ada', via_other='bee', via_reset=True), True),
+            ('null-ne-col', lambda user: user.via_nick != user.via_other,
+             dict(via_nick=None, via_other=None, via_reset=None), False),
+            ('bool-true', lambda user: user.via_reset == True,  # noqa: E712
+             dict(via_nick='ada', via_other='ada', via_reset=True), True),
+            ('bool-false', lambda user: user.via_reset == False,  # noqa: E712
+             dict(via_nick='ada', via_other='ada', via_reset=False), True),
+            ('bool-null-eq', lambda user: user.via_reset == True,  # noqa: E712
+             dict(via_nick=None, via_other=None, via_reset=None), False),
+            ('bool-null-eq-false', lambda user: user.via_reset == False,  # noqa: E712
+             dict(via_nick=None, via_other=None, via_reset=None), False),
+            ('bool-ne-true', lambda user: user.via_reset != True,  # noqa: E712
+             dict(via_nick='ada', via_other='ada', via_reset=False), True),
+            ('ne-bool-null', lambda user: user.via_reset != True,  # noqa: E712
+             dict(via_nick=None, via_other=None, via_reset=None), (True, False)),
+            ('ne-bool-held', lambda user: user.via_reset != True,  # noqa: E712
+             dict(via_nick='ada', via_other='ada', via_reset=True), False),
+            ('not-bool', lambda user: ~user.via_reset,
+             dict(via_nick='ada', via_other='ada', via_reset=True), False),
+            ('not-bool-false', lambda user: ~user.via_reset,
+             dict(via_nick='ada', via_other='ada', via_reset=False), True),
+            ('not-bool-null', lambda user: ~user.via_reset,
+             dict(via_nick=None, via_other=None, via_reset=None), True),
+            ('or-null', lambda user: (user.via_nick == None) | (user.via_reset == True),  # noqa: E711, E712
+             dict(via_nick=None, via_other=None, via_reset=None), True),
+            ('or-miss', lambda user: (user.via_nick == None) | (user.via_reset == True),  # noqa: E711, E712
+             dict(via_nick='ada', via_other='ada', via_reset=False), False),
+            ('and-pass', lambda user: (user.via_nick != None) & (user.via_reset == True),  # noqa: E711, E712
+             dict(via_nick='ada', via_other='ada', via_reset=True), True),
+            ('and-null', lambda user: (user.via_nick != None) & (user.via_reset == True),  # noqa: E711, E712
+             dict(via_nick=None, via_other=None, via_reset=True), False),
+        )
+        for label, predicate, values, expected in cases:
+            with self.subTest(label):
+                ada.via_nick = values['via_nick']
+                ada.via_other = values['via_other']
+                ada.via_reset = values['via_reset']
+                ada.save(update_fields=['via_nick', 'via_other', 'via_reset'])
+                direct = compiler(path='tests.core.via-pin.direct-%s' % label)
+                direct.set_user_condition('pin', predicate)
+                direct.register(
+                    trust=self.Seat, user='holder', group='auth_group',
+                    content='task',
+                )
+                walked = compiler(path='tests.core.via-pin.walk-%s' % label)
+                walked.set_user_condition('pin', predicate)
+                walked.register(
+                    trust=self.Seat, user='holder', group='auth_group',
+                    content='task', via=('holder__via_manager', 8),
+                )
+                if isinstance(expected, tuple):
+                    direct_expected, walk_expected = expected
+                else:
+                    direct_expected = walk_expected = expected
+                direct_has, direct_permitted = self._holder_answer(direct, ada)
+                walk_has, walk_permitted = self._holder_answer(walked, ada)
+                self.assertEqual(
+                    (direct_has, direct_permitted, walk_has, walk_permitted),
+                    (direct_expected, direct_expected, walk_expected, walk_expected),
+                )
+
+    def _holder_answer(self, handle, user):
+        with _listed(handle):
+            has = user.has_perm(self.code, self.task)
+            permitted = self.task.name in set(
+                self.Task.objects.permitted(
+                    self.code, user,
+                ).values_list('name', flat=True)
+            )
+        return has, permitted
+
 
 def _request(user):
     request = HttpRequest()
