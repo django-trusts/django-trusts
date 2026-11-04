@@ -759,7 +759,7 @@ permitted-content querysets, permission enumeration, users from content, and
 authorization-policy output. See the `bounded-reach security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
 for the recursive-query and database boundaries. Inquiry agreement for
-that walk is :ref:`inquiry-agreement`.
+that walk is :ref:`stated above <inquiry-agreement>`.
 
 .. _nested-users:
 
@@ -836,7 +836,7 @@ The relationship ``condition=`` stays on the grant row.
 A repeated link adds no user. The bound stops the walk, and the users
 reached are the users reached with that link removed.
 
-Inquiry agreement for this walk is :ref:`inquiry-agreement`. A user
+Inquiry agreement for this walk is :ref:`stated above <inquiry-agreement>`. A user
 override grants without this walk.
 
 On a delegated registration, ``via=`` walks ``delegate=`` or
