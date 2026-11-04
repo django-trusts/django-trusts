@@ -21,9 +21,11 @@ tree out. The compiler stores that tree. This module does not.
 
 V1 grammar: principal/object field refs and relationship traversal
 (``_meta`` fields on the content model and the entity/user model; not
-Python properties); literal constants; ``==`` / ``!=``; nested ``&`` /
-``|``; ``.contains()`` on a forward many-to-many; a bare boolean field;
-and ``~`` on a boolean field or on ``&`` / ``|``. Operand types must
+Python properties); literal constants; ``==`` / ``!=`` and ordered
+comparisons of ordered scalars; ``Now``, ``Lower``, and ``Coalesce``
+from ``trusts.functions``; nested ``&`` / ``|``; ``.contains()`` on a
+forward many-to-many; a bare boolean field; and ``~`` on a boolean
+field or on ``&`` / ``|``. Operand types must
 match without Django field coercion:
 ``CharField`` compares to ``str``, relations compare to model identity
 (not raw primary keys). Missing attribute names fail closed; they are
@@ -42,10 +44,12 @@ from uuid import UUID
 from django.core.exceptions import FieldDoesNotExist
 from django.contrib.auth.models import Permission
 from django.db.models import (
+    F,
     Manager,
     Model,
     QuerySet,
     Subquery,
+    Value,
     BinaryField,
     BooleanField,
     CharField,
@@ -66,11 +70,18 @@ from django.http import HttpRequest
 from django.utils.functional import Promise, SimpleLazyObject
 
 from trusts.errors import PermissionConditionError
+from trusts.functions import Coalesce, Lower, Now
 from trusts.plan.grammar import (
+    ORDERED_KINDS,
+    Symbol,
     Tree,
+    contains_call,
     invoke,
     is_predicate,
     missing_field,
+    symbol_path,
+    symbol_root,
+    symbol_token,
     unsupported,
 )
 from trusts.plan.rewrites import CallInput
@@ -205,25 +216,152 @@ def normalize_constant(value):
     return value
 
 
-def normalize_expression(node):
-    """Return a tree whose constants are durable values."""
-    if _node(node, 'and', 'or', 'eq', 'ne', 'contains'):
-        left = normalize_expression(node.left)
-        right = normalize_expression(node.right)
+_FUNCTION_NAMES = {
+    Now: 'now',
+    Lower: 'lower',
+    Coalesce: 'coalesce',
+}
+_FIELD_ROOTS = ('row', 'object', 'user')
+
+
+def capture_expression(builder, roots):
+    """Run ``builder`` once and lower functions before the tree is stored."""
+    def prepare(tree, token):
+        return normalize_expression(tree, roots, token)
+
+    return invoke(builder, roots, prepare=prepare)
+
+
+def normalize_expression(node, roots=(), token=None):
+    """Return a tree whose constants are durable values.
+
+    ``Now``, ``Lower``, and ``Coalesce`` become ``call`` nodes. A symbol
+    or ``Value`` wrapped by Django's function parser becomes a field or
+    a constant. The stored tree holds no Django expression.
+    """
+    if _node(node, 'and', 'or', 'eq', 'ne', 'contains') or _node(
+        node, *ORDERED_KINDS,
+    ):
+        left = normalize_expression(node.left, roots, token)
+        right = normalize_expression(node.right, roots, token)
         if left is node.left and right is node.right:
             return node
         return Tree(node.kind, left=left, right=right)
     if _node(node, 'not', 'bare'):
-        item = normalize_expression(node.item)
+        item = normalize_expression(node.item, roots, token)
         if item is node.item:
             return node
         return Tree(node.kind, item=item)
+    if _node(node, 'call'):
+        return _normalize_call(node, roots, token)
     if _node(node, 'const'):
-        value = normalize_constant(node.value)
-        if value is node.value:
+        lowered = _lower_value(node.value, roots, token)
+        if lowered.kind == 'const' and lowered.value is node.value:
             return node
-        return Tree('const', value=value)
+        return normalize_expression(lowered, roots, token)
     return node
+
+
+def _normalize_call(node, roots, token):
+    if node.value == 'now':
+        return node
+    if node.value == 'lower':
+        item = normalize_expression(node.item, roots, token)
+        if item is node.item:
+            return node
+        return Tree('call', value='lower', item=item)
+    if node.value != 'coalesce':
+        return node
+    items = tuple(
+        normalize_expression(arg, roots, token) for arg in node.item
+    )
+    if items == node.item:
+        return node
+    return Tree('call', value='coalesce', item=items)
+
+
+def _lower_value(value, roots, token, *, inside=False):
+    """One builder-time operand as a field, constant, or call.
+
+    ``F`` and ``Value`` are accepted only inside a Trusts function.
+    A comparison operand that is already one of those Django objects
+    stays rejected.
+    """
+    if isinstance(value, Symbol):
+        if token is None or symbol_token(value) is not token:
+            raise unsupported('A path from another builder')
+        path = symbol_path(value)
+        if not path:
+            raise unsupported(
+                'A root without a field',
+                hint='Name a field, for example o.owner.',
+            )
+        return Tree('field', root=symbol_root(value), path=path)
+    function = _FUNCTION_NAMES.get(type(value))
+    if function is not None:
+        return _lower_function(function, value, roots, token)
+    if inside and type(value) is F:
+        return _lower_lookup(value.name, roots)
+    if inside and type(value) is Value:
+        return _lower_value(value.value, roots, token, inside=True)
+    if hasattr(value, 'resolve_expression'):
+        raise PermissionConditionError(
+            'A %s constant is not supported in a named filter. '
+            'SQL functions in a condition must be Now, Lower, and Coalesce '
+            'from trusts.functions.' % type(value).__name__
+        )
+    return Tree('const', value=normalize_constant(value))
+
+
+def _lower_function(name, expr, roots, token):
+    if expr.extra or 'output_field' in expr.__dict__:
+        raise PermissionConditionError(
+            'Now, Lower, and Coalesce from trusts.functions do not take '
+            'template, function, output_field, or other keyword arguments.'
+        )
+    sources = expr.get_source_expressions()
+    if name == 'now':
+        if sources:
+            raise PermissionConditionError(
+                'Now() from trusts.functions takes no arguments.'
+            )
+        return Tree('call', value='now')
+    if name == 'lower':
+        if len(sources) != 1:
+            raise PermissionConditionError(
+                'Lower() from trusts.functions takes one argument.'
+            )
+        return Tree(
+            'call', value='lower',
+            item=_lower_value(sources[0], roots, token, inside=True),
+        )
+    if len(sources) < 2:
+        raise PermissionConditionError(
+            'Coalesce() from trusts.functions needs at least two arguments.'
+        )
+    return Tree(
+        'call', value='coalesce',
+        item=tuple(
+            _lower_value(source, roots, token, inside=True)
+            for source in sources
+        ),
+    )
+
+
+def _lower_lookup(name, roots):
+    parts = tuple(name.split('__'))
+    if not name or any(part == '' for part in parts):
+        raise PermissionConditionError(
+            'A field path inside a function must name a field, not %r.'
+            % (name,)
+        )
+    found = [root for root in roots if root in _FIELD_ROOTS]
+    if len(found) != 1:
+        raise PermissionConditionError(
+            'A bare string or F() inside a function does not name a root. '
+            'Use a symbolic field from the condition builder.'
+        )
+    return Tree('field', root=found[0], path=parts)
 
 
 def _collection_terminal(field, last, collection):
@@ -392,7 +530,32 @@ def _spec_from_const(value):
     return ('scalar', (type(value),), type(value).__name__)
 
 
+_ORDERED_TYPES = (int, float, Decimal, str, datetime, date, time, timedelta)
+
+
+def _spec_is_ordered(spec):
+    return (
+        spec[0] == 'scalar'
+        and bool(spec[1])
+        and all(kind in _ORDERED_TYPES for kind in spec[1])
+    )
+
+
+def _is_text_spec(spec):
+    return spec[0] == 'scalar' and spec[1] == (str,)
+
+
+def _call_args(node):
+    if node.value == 'lower':
+        return (node.item,)
+    if node.value == 'coalesce':
+        return node.item
+    return ()
+
+
 def _operand_spec(node, model, user_model):
+    if _node(node, 'call'):
+        return _call_spec(node, model, user_model)
     if _node(node, 'const'):
         return _spec_from_const(node.value)
     if _node(node, 'field'):
@@ -423,9 +586,47 @@ def _specs_compatible(left, right):
     return False
 
 
+def _call_spec(node, model, user_model):
+    if node.value == 'now':
+        return ('scalar', (datetime,), 'Now')
+    if node.value == 'lower':
+        spec = _operand_spec(node.item, model, user_model)
+        if not _is_text_spec(spec):
+            raise PermissionConditionError(
+                'Lower() accepts text, not %s.' % (spec[2],)
+            )
+        return ('scalar', (str,), 'Lower')
+    if node.value != 'coalesce':
+        raise PermissionConditionError(
+            'Cannot type-check permission condition node %r.' % (node,)
+        )
+    specs = [
+        _operand_spec(arg, model, user_model) for arg in node.item
+    ]
+    if len(specs) < 2:
+        raise PermissionConditionError(
+            'Coalesce() needs at least two arguments.'
+        )
+    if any(spec[0] == 'null' for spec in specs):
+        raise PermissionConditionError(
+            'Coalesce() does not accept None. NULL does not grant.'
+        )
+    if any(not _specs_compatible(specs[0], spec) for spec in specs[1:]):
+        raise PermissionConditionError(
+            'Coalesce() arguments must share one type (%s).'
+            % ', '.join(spec[2] for spec in specs)
+        )
+    return specs[0]
+
+
 def check_comparison_types(node, model, user_model):
     left = _operand_spec(node.left, model, user_model)
     right = _operand_spec(node.right, model, user_model)
+    if contains_call(node) and (left[0] == 'null' or right[0] == 'null'):
+        raise PermissionConditionError(
+            'NULL does not grant in a function comparison. Use Coalesce '
+            'to supply a value.'
+        )
     if _specs_compatible(left, right):
         return
     raise PermissionConditionError(
@@ -494,6 +695,28 @@ def require_boolean_field(model, path, ref_kind, *, where=None, name=None):
     )
 
 
+def check_ordered_comparison(node, model, user_model):
+    """Ordered scalars only. ``Now()`` matches a datetime and NULL does not."""
+    left = _operand_spec(node.left, model, user_model)
+    right = _operand_spec(node.right, model, user_model)
+    if left[0] == 'null' or right[0] == 'null':
+        raise PermissionConditionError(
+            'Ordered comparison does not accept None. NULL does not grant; '
+            'use Coalesce to supply a value.'
+        )
+    if (
+        _specs_compatible(left, right)
+        and _spec_is_ordered(left)
+        and _spec_is_ordered(right)
+    ):
+        return
+    raise PermissionConditionError(
+        'Ordered comparison needs matching ordered scalars (numeric, date, '
+        'time, duration, or text), not %s vs %s. Now() matches a '
+        'DateTimeField only.' % (left[2], right[2])
+    )
+
+
 def check_const_member(model, collection_path, value, ref_kind='condition'):
     """A constant ``.contains()`` member must fit the related primary key."""
     field = _terminal_field(
@@ -546,6 +769,11 @@ def _validate_node(node, model, user_model):
         _validate_node(node.right, model, user_model)
         check_comparison_types(node, model, user_model)
         return
+    if _node(node, *ORDERED_KINDS):
+        _validate_node(node.left, model, user_model)
+        _validate_node(node.right, model, user_model)
+        check_ordered_comparison(node, model, user_model)
+        return
     if _node(node, 'contains'):
         _validate_contains(node, model, user_model)
         return
@@ -556,6 +784,10 @@ def _validate_node(node, model, user_model):
         _validate_node(node.item, model, user_model)
         return
     if _node(node, 'const'):
+        return
+    if _node(node, 'call'):
+        for arg in _call_args(node):
+            _validate_node(arg, model, user_model)
         return
     if _node(node, 'field'):
         if node.root == 'object':
@@ -605,8 +837,8 @@ def parse_named_filter(builder, model, code, user_model):
     expr = _PARSED_NAMED_FILTERS.get(key)
     if expr is not None:
         return expr
-    expr = normalize_expression(
-        invoke(builder, ('user', 'permission', 'object')),
+    expr = capture_expression(
+        builder, ('user', 'permission', 'object'),
     )
     if getattr(model, '_meta', None) is not None:
         validate_expression(expr, model, user_model)
