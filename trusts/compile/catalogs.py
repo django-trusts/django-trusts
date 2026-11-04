@@ -7,7 +7,7 @@ from django.db import router
 from django.db.models import Model, Q, QuerySet
 
 from trusts.errors import TrustsConfigurationError
-from trusts.utils import parse_perm_code
+from trusts.utils import guard_conditions, parse_perm_code
 from trusts.plan.aggregates import (
     _ExistsQuery,
     _bound_all_match,
@@ -41,7 +41,7 @@ from trusts.plan.hops import (
     require_instance,
 )
 from trusts.plan.relations import _candidate_model, bind_checked_user
-from trusts.plan.via import via_scope
+from trusts.plan.via import _mentions, via_scope
 from trusts.plan.users import (
     _named_filter_q,
     _permission_binding_for_plan,
@@ -192,8 +192,15 @@ class Catalog(object):
         )
 
     def filter_by_permitted_content(self, queryset, user, permission, *,
-                                    content, skipped=None, **skip_flags):
-        """Scope rows that are a proper prefix of ``content`` for this catalog."""
+                                    content, conditions=(), skipped=None,
+                                    **skip_flags):
+        """Scope rows that are a proper prefix of ``content`` for this catalog.
+
+        ``conditions`` is the named-filter tuple ``permitted`` takes.
+        A name this catalog did not register returns an empty queryset.
+        Filters are captured while the predicate is built, so each
+        ``via=`` hop sees the same trees as ``permitted``.
+        """
         if (
             not isinstance(queryset, QuerySet)
             or not isinstance(user, Model)
@@ -207,13 +214,39 @@ class Catalog(object):
                 and isinstance(queryset[0], Model)
                 else queryset
             )
+        try:
+            conditions = guard_conditions(
+                conditions, api='filter_by_permitted_content',
+            )
+        except (TypeError, TrustsConfigurationError):
+            return queryset.none()
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if denied:
             return queryset.none()
-        return _compile_permitted_content_queryset(
-            queryset, user, permission, content=content, catalog=self,
-            skipped=values,
-        )
+        if not conditions:
+            return _compile_permitted_content_queryset(
+                queryset, user, permission, content=content, catalog=self,
+                skipped=values,
+            )
+        model = content_model(content)
+        if not _owns_selected_conditions(self, model, conditions):
+            return queryset.none()
+        trees = _selected_filter_trees(self, model, conditions)
+        if len(trees) != len(conditions):
+            return queryset.none()
+        on_content = any(_mentions(tree, 'object') for tree in trees)
+        overlay = None
+        for tree in trees:
+            part = compile_to_q(
+                tree, model, user, permission, self.user_model,
+            )
+            overlay = part if overlay is None else overlay & part
+        with via_scope(filters=trees):
+            return _compile_permitted_content_queryset(
+                queryset, user, permission, content=content, catalog=self,
+                skipped=values, content_overlay=overlay,
+                on_content=on_content,
+            )
 
     def permissions_for(self, user, content, *, kind='complete',
                         skipped=None, **skip_flags):

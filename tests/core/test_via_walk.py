@@ -27,7 +27,7 @@ from tests.support import (
 )
 from trusts.backends import TrustModelBackendMixin
 from trusts.compile.graph import Along, Ref
-from trusts.decorators import authorization_required
+from trusts.decorators import authorization_required, filter_by_permitted_content
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.models import (
     AuthorizedQuerySet,
@@ -2988,4 +2988,554 @@ class ViaInquiryParityTest(TransactionTestCase):
             with self.subTest(user=name):
                 answers = self._answers(self.people[name])
                 self.assertEqual(set(answers.values()), {allowed}, answers)
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class ViaPermittedContentFilterTest(TransactionTestCase):
+    """``conditions=`` matches ``permitted()`` on the same registration.
+
+    The settled row is a grant on cabinet ``root`` with
+    ``along=("cabinet__parent", 1)`` and sheets titled ``root``,
+    ``child``, and ``past``. ``conditions=("titled",)`` where
+    ``titled`` is ``content.title == "child"`` keeps the child sheet.
+    ``filter_by_permitted_content`` then keeps the child cabinet, which
+    is that sheet's prefix, and not ``root``.
+
+    An office stored on the grant stays listed when the matching sheet
+    hangs off a cabinet in another office. ``get_all_permissions``
+    still returns the codename: that inquiry does not take
+    ``conditions``.
+    """
+
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+
+        class Cabinet(models.Model):
+            title = models.CharField(max_length=20)
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_cabinet'
+
+        class SheetQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Sheet(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=20)
+            cabinet = models.ForeignKey(
+                Cabinet, related_name='sheets', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(SheetQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_sheet'
+
+        class Grant(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            cabinet = models.ForeignKey(Cabinet, on_delete=models.CASCADE)
+            auth_group = models.ForeignKey(
+                Group, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_grant'
+
+        self.User, self.Cabinet, self.Sheet, self.Grant = (
+            User, Cabinet, Sheet, Grant,
+        )
+        cm = _tables(Cabinet, Sheet, Grant)
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        self.change = _permission(Sheet, 'change_filtersheet')
+        self.code = 'trusts_tests.change_filtersheet'
+        self.alice = User.objects.create_user('filter-alice', password='x')
+        self.root = Cabinet.objects.create(title='root')
+        self.child = Cabinet.objects.create(title='child', parent=self.root)
+        self.past = Cabinet.objects.create(title='past', parent=self.child)
+        self.sheets = {}
+        for cabinet in (self.root, self.child, self.past):
+            self.sheets[cabinet.pk] = Sheet.objects.create(
+                title=cabinet.title, cabinet=cabinet,
+            )
+        group = Group.objects.create(name='via-filter')
+        group.permissions.add(self.change)
+        Grant.objects.create(
+            user=self.alice, cabinet=self.root, auth_group=group,
+        )
+        self.handle = compiler(path='tests.core.via-content-filter')
+        self.handle.add_named_filter(
+            Sheet, 'titled',
+            lambda user, permission, content: content.title == 'child',
+        )
+        self.handle.register(
+            trust=Grant,
+            user='user',
+            group='auth_group',
+            content='cabinet__sheets',
+            along=('cabinet__parent', 1),
+        )
+
+    def _listed(self, user, conditions=()):
+        with _listed(self.handle):
+            sheets = set(self.Sheet.objects.permitted(
+                self.code, user, conditions=conditions,
+            ).values_list('pk', flat=True))
+            cabinets = set(filter_by_permitted_content(
+                self.Cabinet.objects.all(), user, self.change,
+                content=self.Sheet, conditions=conditions,
+            ).values_list('pk', flat=True))
+            codes = user.get_all_permissions(self.sheets[self.child.pk])
+        return sheets, cabinets, codes
+
+    def test_content_filter_matches_permitted_sheets(self):
+        plain_sheets, plain_cabinets, _codes = self._listed(self.alice)
+        self.assertEqual(plain_sheets, {
+            self.sheets[self.root.pk].pk,
+            self.sheets[self.child.pk].pk,
+        })
+        self.assertEqual(plain_cabinets, {self.root.pk, self.child.pk})
+        sheets, cabinets, codes = self._listed(self.alice, ('titled',))
+        self.assertEqual(sheets, {self.sheets[self.child.pk].pk})
+        self.assertEqual(cabinets, {self.child.pk})
+        self.assertIn(self.code, codes)
+        self.assertNotIn(self.past.pk, cabinets)
+
+    def test_missing_and_malformed_conditions_return_nothing(self):
+        with _listed(self.handle):
+            with self.assertNumQueries(0):
+                missing = list(filter_by_permitted_content(
+                    self.Cabinet.objects.all(), self.alice, self.change,
+                    content=self.Sheet, conditions=('missing',),
+                ))
+                malformed = list(filter_by_permitted_content(
+                    self.Cabinet.objects.all(), self.alice, self.change,
+                    content=self.Sheet, conditions=['titled'],
+                ))
+        self.assertEqual(missing, [])
+        self.assertEqual(malformed, [])
+
+    def test_user_filter_on_a_via_walk_matches_permitted(self):
+        User = self.User
+        _attach_manager(self, User)
+        ada = User.objects.create_user('pcf-ada', password='x')
+        ben = User.objects.create_user('pcf-ben', password='x')
+        cy = User.objects.create_user('pcf-cy', password='x')
+        ben.via_manager = ada
+        ben.save()
+        cy.via_manager = ben
+        cy.save()
+
+        class Folder(models.Model):
+            name = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_folder'
+
+        class TaskQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Task(models.Model):
+            name = models.CharField(max_length=20)
+            folder = models.ForeignKey(
+                Folder, related_name='tasks', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(TaskQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_task'
+
+        class Seat(models.Model):
+            holder = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            auth_group = models.ForeignKey(
+                Group, on_delete=models.CASCADE, related_name='+',
+            )
+            folder = models.ForeignKey(Folder, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_seat'
+
+        with _tables(Folder, Task, Seat):
+            change = _permission(Task, 'change_filtertask')
+            code = 'trusts_tests.change_filtertask'
+            folder = Folder.objects.create(name='folder')
+            Task.objects.create(name='task', folder=folder)
+            group = Group.objects.create(name='via-user-filter')
+            group.permissions.add(change)
+            Seat.objects.create(
+                holder=ada, auth_group=group, folder=folder,
+            )
+            handle = compiler(path='tests.core.via-user-filter')
+            handle.add_named_filter(
+                Task, 'kept',
+                lambda user, permission, content: user.username != 'pcf-ben',
+            )
+            handle.register(
+                trust=Seat,
+                user='holder',
+                group='auth_group',
+                content='folder__tasks',
+                via=('holder__via_manager', 8),
+            )
+            expected = {ada: True, ben: False, cy: False}
+            with _listed(handle):
+                plain = set(Task.objects.permitted(
+                    code, ben,
+                ).values_list('pk', flat=True))
+                self.assertTrue(plain)
+                for user, allowed in expected.items():
+                    with self.subTest(user=user.username):
+                        permitted = set(Task.objects.permitted(
+                            code, user, conditions=('kept',),
+                        ).values_list('folder_id', flat=True))
+                        folders = set(filter_by_permitted_content(
+                            Folder.objects.all(), user, change,
+                            content=Task, conditions=('kept',),
+                        ).values_list('pk', flat=True))
+                        if allowed:
+                            self.assertEqual(permitted, {folder.pk})
+                            self.assertEqual(folders, {folder.pk})
+                        else:
+                            self.assertEqual(permitted, set())
+                            self.assertEqual(folders, set())
+
+    def test_content_filter_correlates_on_to_field(self):
+        User = self.User
+
+        class Node(models.Model):
+            code = models.CharField(max_length=20, unique=True)
+            parent = models.ForeignKey(
+                'self', to_field='code', db_column='parent_code',
+                null=True, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_tf_node'
+
+        class DocQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Doc(models.Model):
+            title = models.CharField(max_length=20)
+            node = models.ForeignKey(
+                Node, to_field='code', db_column='node_code',
+                related_name='docs', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(DocQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_tf_doc'
+
+        class NodeGrant(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            node = models.ForeignKey(
+                Node, to_field='code', db_column='grant_node',
+                on_delete=models.CASCADE,
+            )
+            auth_group = models.ForeignKey(
+                Group, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_tf_grant'
+
+        with _tables(Node, Doc, NodeGrant):
+            change = _permission(Doc, 'change_filterdoc')
+            code = 'trusts_tests.change_filterdoc'
+            root = Node.objects.create(code='root')
+            child = Node.objects.create(code='child', parent=root)
+            Doc.objects.create(title='root', node=root)
+            child_doc = Doc.objects.create(title='child', node=child)
+            group = Group.objects.create(name='via-filter-tf')
+            group.permissions.add(change)
+            NodeGrant.objects.create(
+                user=self.alice, node=root, auth_group=group,
+            )
+            handle = compiler(path='tests.core.via-content-to-field')
+            handle.add_named_filter(
+                Doc, 'titled',
+                lambda user, permission, content: content.title == 'child',
+            )
+            handle.register(
+                trust=NodeGrant,
+                user='user',
+                group='auth_group',
+                content='node__docs',
+                along=('node__parent', 1),
+            )
+            with _listed(handle):
+                docs = set(Doc.objects.permitted(
+                    code, self.alice, conditions=('titled',),
+                ).values_list('pk', flat=True))
+                nodes = set(filter_by_permitted_content(
+                    Node.objects.all(), self.alice, change,
+                    content=Doc, conditions=('titled',),
+                ).values_list('pk', flat=True))
+            self.assertEqual(docs, {child_doc.pk})
+            self.assertEqual(nodes, {child.pk})
+
+    def test_ancestor_prefix_follows_the_grant_not_the_sheet_office(self):
+        User = self.User
+
+        class Office(models.Model):
+            title = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_office'
+
+        class AncCabinet(models.Model):
+            title = models.CharField(max_length=20)
+            office = models.ForeignKey(
+                Office, related_name='cabinets', on_delete=models.CASCADE,
+            )
+            parent = models.ForeignKey(
+                'self', null=True, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_anc_cabinet'
+
+        class AncQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class AncSheet(models.Model):
+            title = models.CharField(max_length=20)
+            cabinet = models.ForeignKey(
+                AncCabinet, related_name='sheets', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(AncQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_anc_sheet'
+
+        class OfficeGrant(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            office = models.ForeignKey(Office, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_office_grant'
+
+        with _tables(Office, AncCabinet, AncSheet, OfficeGrant):
+            change = _permission(AncSheet, 'change_ancsheet')
+            code = 'trusts_tests.change_ancsheet'
+            # A grant created first keeps the real grant's pk off the
+            # office pk, so the walk seed cannot pass by matching those.
+            decoy_user = User.objects.create_user(
+                'filter-anc-decoy', password='x',
+            )
+            decoy_office = Office.objects.create(title='decoy')
+            office = Office.objects.create(title='office')
+            other = Office.objects.create(title='other')
+            OfficeGrant.objects.create(
+                user=decoy_user, office=decoy_office, permission=change,
+            )
+            root = AncCabinet.objects.create(title='root', office=office)
+            child = AncCabinet.objects.create(
+                title='child', office=other, parent=root,
+            )
+            AncSheet.objects.create(title='root', cabinet=root)
+            child_sheet = AncSheet.objects.create(title='child', cabinet=child)
+            OfficeGrant.objects.create(
+                user=self.alice, office=office, permission=change,
+            )
+            handle = compiler(path='tests.core.via-ancestor-filter')
+            handle.add_named_filter(
+                AncSheet, 'titled',
+                lambda user, permission, content: content.title == 'child',
+            )
+            handle.register(
+                trust=OfficeGrant,
+                user='user',
+                permission='permission',
+                content='office__cabinets__sheets',
+                along=('office__cabinets__parent', 1),
+            )
+            with _listed(handle):
+                sheets = set(AncSheet.objects.permitted(
+                    code, self.alice, conditions=('titled',),
+                ).values_list('pk', flat=True))
+                offices = set(filter_by_permitted_content(
+                    Office.objects.all(), self.alice, change,
+                    content=AncSheet, conditions=('titled',),
+                ).values_list('pk', flat=True))
+                cabinets = set(filter_by_permitted_content(
+                    AncCabinet.objects.all(), self.alice, change,
+                    content=AncSheet, conditions=('titled',),
+                ).values_list('pk', flat=True))
+            self.assertEqual(sheets, {child_sheet.pk})
+            self.assertEqual(offices, {office.pk})
+            self.assertNotIn(other.pk, offices)
+            self.assertEqual(cabinets, {child.pk})
+
+            class Handoff(models.Model):
+                office = models.ForeignKey(Office, on_delete=models.CASCADE)
+                delegate = models.ForeignKey(
+                    User, related_name='+', on_delete=models.CASCADE,
+                )
+                sponsor = models.ForeignKey(
+                    User, related_name='+', on_delete=models.CASCADE,
+                )
+
+                class Meta:
+                    app_label = 'trusts_tests'
+                    db_table = 'via_filter_anc_handoff'
+
+            with _tables(Handoff):
+                delegate = User.objects.create_user(
+                    'filter-anc-delegate', password='x',
+                )
+                Handoff.objects.create(
+                    office=office, delegate=delegate, sponsor=self.alice,
+                )
+                delegated = compiler(path='tests.core.via-ancestor-delegated')
+                delegated.add_named_filter(
+                    AncSheet, 'titled',
+                    lambda user, permission, content: content.title == 'child',
+                )
+                delegated.register(
+                    trust=OfficeGrant,
+                    user='user',
+                    permission='permission',
+                    content='office__cabinets__sheets',
+                    along=('office__cabinets__parent', 1),
+                )
+                delegated.register(
+                    trust=Handoff,
+                    delegate='delegate',
+                    sponsor='sponsor',
+                    content='office__cabinets__sheets',
+                    along=('office__cabinets__parent', 1),
+                )
+                with _listed(delegated):
+                    with self.assertRaises(TrustsConfigurationError):
+                        filter_by_permitted_content(
+                            Office.objects.all(), delegate, change,
+                            content=AncSheet, conditions=('titled',),
+                        ).query
+
+    def test_delegated_walk_site_matches_permitted(self):
+        User = self.User
+
+        class Box(models.Model):
+            title = models.CharField(max_length=20)
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_box'
+
+        class PageQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Page(models.Model):
+            title = models.CharField(max_length=20)
+            box = models.ForeignKey(
+                Box, related_name='pages', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(PageQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_page'
+
+        class PageGrant(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            box = models.ForeignKey(Box, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_page_grant'
+
+        class Handoff(models.Model):
+            box = models.ForeignKey(Box, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(
+                User, related_name='+', on_delete=models.CASCADE,
+            )
+            sponsor = models.ForeignKey(
+                User, related_name='+', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_filter_handoff'
+
+        with _tables(Box, Page, PageGrant, Handoff):
+            change = _permission(Page, 'change_filterpage')
+            code = 'trusts_tests.change_filterpage'
+            sponsor = User.objects.create_user('filter-sponsor', password='x')
+            delegate = User.objects.create_user('filter-delegate', password='x')
+            root = Box.objects.create(title='root')
+            child = Box.objects.create(title='child', parent=root)
+            Page.objects.create(title='root', box=root)
+            child_page = Page.objects.create(title='child', box=child)
+            PageGrant.objects.create(
+                user=sponsor, box=root, permission=change,
+            )
+            Handoff.objects.create(
+                box=root, delegate=delegate, sponsor=sponsor,
+            )
+            handle = compiler(path='tests.core.via-delegate-filter')
+            handle.add_named_filter(
+                Page, 'titled',
+                lambda user, permission, content: content.title == 'child',
+            )
+            handle.register(
+                trust=PageGrant,
+                user='user',
+                permission='permission',
+                content='box__pages',
+                along=('box__parent', 1),
+            )
+            handle.register(
+                trust=Handoff,
+                delegate='delegate',
+                sponsor='sponsor',
+                content='box__pages',
+                along=('box__parent', 1),
+            )
+            with _listed(handle):
+                pages = set(Page.objects.permitted(
+                    code, delegate, conditions=('titled',),
+                ).values_list('pk', flat=True))
+                boxes = set(filter_by_permitted_content(
+                    Box.objects.all(), delegate, change,
+                    content=Page, conditions=('titled',),
+                ).values_list('pk', flat=True))
+            self.assertEqual(pages, {child_page.pk})
+            self.assertEqual(boxes, {child.pk})
 

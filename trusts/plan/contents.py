@@ -10,7 +10,8 @@ from functools import reduce
 from operator import or_
 
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Exists, F, Model, OuterRef, Q
+from django.db.models import BooleanField, Exists, F, Model, OuterRef, Q
+from django.db.models.expressions import Expression
 
 from trusts.plan.rewrites import bind_once
 from trusts.plan.hops import lookup_text, path_text, resolved_hop
@@ -20,10 +21,17 @@ from trusts.plan.delegations import (
     _matched_delegation_q,
     _sponsor_record_matches,
 )
-from trusts.plan.walk import _delegation_walk_seed, _sponsor_walk_seed
+from trusts.plan.walk import (
+    _delegation_walk_seed,
+    _render_reach_sql,
+    _require_along_renderer,
+    _sponsor_walk_seed,
+    _unwrap_seed_sql,
+)
 from trusts.plan.recursions import (
     GrantReach,
     _AnchorInInverseReach,
+    _IdentInReach,
     _KeyedReach,
     _PrefixInForwardWalk,
 )
@@ -48,6 +56,186 @@ def _as_q(predicate):
     if isinstance(predicate, Q):
         return predicate
     return Q(predicate)
+
+
+def _and_predicate(left, right):
+    """AND two grant predicates. ``None`` on the left stays inapplicable."""
+    if left is None:
+        return None
+    return _as_q(left) & _as_q(right)
+
+
+def _is_reverse_relation(field):
+    return bool(
+        getattr(field, 'auto_created', False)
+        and not getattr(field, 'concrete', False)
+    )
+
+
+def _content_scope_lookup(record, prefix_lookup, target_attname):
+    """Content-model lookup equal to the outer scope row's identity.
+
+    The lookup walks back from the protected object to this prefix.
+    A forward hop uses the reverse accessor. A reverse hop uses the
+    foreign key that points at the scope row.
+    """
+    names = tuple(prefix_lookup.split('__'))
+    path = tuple(record.content_path)
+    if path[:len(names)] != names:
+        raise TrustsConfigurationError(
+            'filter_by_permitted_content cannot correlate prefix %r '
+            'on %s.' % (prefix_lookup, record.root._meta.label)
+        )
+    suffix = path[len(names):]
+    if not suffix:
+        raise TrustsConfigurationError(
+            'filter_by_permitted_content cannot apply a content filter '
+            'when %r is the content terminal.' % prefix_lookup
+        )
+    current = record.root
+    for name in names:
+        field = current._meta.get_field(name)
+        current, _attname = resolved_hop(field, 'content', path)
+    steps = []
+    for name in suffix:
+        field = current._meta.get_field(name)
+        if getattr(field, 'many_to_many', False):
+            raise TrustsConfigurationError(
+                'filter_by_permitted_content cannot apply a content '
+                'filter through many-to-many hop %r.' % name
+            )
+        steps.append(field)
+        current, _attname = resolved_hop(field, 'content', path)
+    parts = []
+    for index, field in enumerate(reversed(steps)):
+        last = index == len(steps) - 1
+        if _is_reverse_relation(field):
+            fk = field.field
+            parts.append(fk.attname if last else fk.name)
+            continue
+        if not getattr(field, 'concrete', False) or not field.is_relation:
+            raise TrustsConfigurationError(
+                'filter_by_permitted_content cannot apply a content '
+                'filter through %r.' % prefix_lookup
+            )
+        accessor = field.remote_field.get_accessor_name()
+        if last:
+            parts.append('%s__%s' % (accessor, target_attname))
+        else:
+            parts.append(accessor)
+    return '__'.join(parts)
+
+
+def _content_under_outer(record, lookup, target_attname, overlay):
+    """Filtered content rows that sit on this outer prefix row."""
+    correlation = _content_scope_lookup(record, lookup, target_attname)
+    return Exists(record.content_model._default_manager.filter(overlay).filter(
+        **{correlation: OuterRef(target_attname)},
+    ))
+
+
+def _this_grant_seed(record):
+    """Walk seed for the grant row that contains this subquery."""
+    walk = record.along
+    rows = record.root._default_manager.filter(pk=OuterRef(OuterRef('pk')))
+    if walk.walk_ident == 'ident':
+        seed = rows.values(walk.walk_field).distinct()
+    else:
+        seed = rows.values(ident=F(walk.walk_field)).distinct()
+    query = seed.query.clone()
+    query.subquery = True
+    return query
+
+
+class _ContentInGrantWalk(Expression):
+    """Filtered content whose walk identity is in this grant row's walk.
+
+    The seed is the grant row that owns the content subquery.
+    ``OuterRef(OuterRef('pk'))`` skips the content row and names that
+    grant. One reverse hop compares the content foreign key. A longer
+    suffix joins the walk site.
+    """
+
+    filterable = True
+    subquery = True
+
+    def __init__(self, record):
+        super().__init__(output_field=BooleanField())
+        walk = record.along
+        self.record = record
+        self.along_bound = walk.bound
+        self.seed_query = _this_grant_seed(record)
+        self.lhs = None
+        self.suffix_query = None
+        if walk.rewrite_attname or not walk.suffix_path:
+            self.lhs = F(walk.rewrite_attname or walk.walk_ident)
+        else:
+            self.suffix_query = walk.walk_model._default_manager.filter(
+                **{walk.suffix_field: OuterRef(record.content_target)},
+            ).query.clone()
+            self.suffix_query.subquery = True
+
+    def copy(self):
+        clone = super().copy()
+        clone.seed_query = self.seed_query.clone()
+        if self.suffix_query is not None:
+            clone.suffix_query = self.suffix_query.clone()
+        return clone
+
+    def get_source_expressions(self):
+        exprs = [self.seed_query]
+        if self.lhs is not None:
+            exprs.append(self.lhs)
+        if self.suffix_query is not None:
+            exprs.append(self.suffix_query)
+        return exprs
+
+    def set_source_expressions(self, exprs):
+        exprs = list(exprs)
+        self.seed_query = exprs.pop(0)
+        if self.lhs is not None:
+            self.lhs = exprs.pop(0)
+        if self.suffix_query is not None:
+            self.suffix_query = exprs.pop(0)
+
+    def as_sql(self, compiler, connection):
+        _require_along_renderer(connection)
+        seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
+        seed_sql = _unwrap_seed_sql(seed_sql)
+        w_sql, w_params = _render_reach_sql(
+            self.record.along, seed_sql, seed_params, connection,
+        )
+        if self.lhs is not None:
+            lhs_sql, lhs_params = compiler.compile(self.lhs)
+            return (
+                '%s IN (%s)' % (lhs_sql, w_sql),
+                tuple(lhs_params) + tuple(w_params),
+            )
+        inner = self.suffix_query.clone()
+        inner.add_q(Q(_IdentInReach(
+            self.record.along.walk_ident, w_sql, w_params,
+            self.record.along.bound,
+        )))
+        return Exists(inner).as_sql(compiler, connection)
+
+
+def _grant_reaches_filtered_content(record, overlay):
+    """This grant row authorizes a content row that passes ``overlay``."""
+    return Exists(record.content_model._default_manager.filter(overlay).filter(
+        Q(_ContentInGrantWalk(record)),
+    ))
+
+
+def _reject_delegated_ancestor_filter(record, position, content_overlay):
+    if (
+        content_overlay is not None
+        and position == 'before'
+        and getattr(record, 'along', None) is not None
+    ):
+        raise TrustsConfigurationError(
+            'filter_by_permitted_content cannot apply a content filter '
+            'to an ancestor prefix of a delegated along= walk.'
+        )
 
 
 def _plan_for_permission(catalog, candidates, user, permission):
@@ -168,7 +356,7 @@ def _prefix_partial_suffix(record, lookup):
 
 
 def _exact_prefix_exists(record, lookup, target_attname, user, permission,
-                        content_identity):
+                        content_identity, grant_q=None):
     """Grant row whose stored prefix is the outer row."""
     inner = bind_grant_qs(
         record,
@@ -177,24 +365,64 @@ def _exact_prefix_exists(record, lookup, target_attname, user, permission,
         correlation=Q(**{lookup: OuterRef(target_attname)}),
         content_identity=content_identity,
     )
+    if grant_q is not None:
+        inner = inner.filter(grant_q)
     return Exists(inner)
 
 
+def _apply_content_overlay(predicate, record, lookup, target_attname, position,
+                           content_overlay):
+    """Keep a prefix only when filtered content sits on that same proof.
+
+    An ancestor of an ``along=`` walk is the grant's stored prefix. The
+    walk, not the content row's own parent, decides which objects that
+    grant authorizes, so that case filters inside the grant. Every other
+    prefix is the content path of the outer row.
+    """
+    if content_overlay is None or predicate is None:
+        return predicate
+    if position == 'before' and getattr(record, 'along', None) is not None:
+        return predicate
+    return _and_predicate(
+        predicate,
+        _content_under_outer(
+            record, lookup, target_attname, content_overlay,
+        ),
+    )
+
+
 def _ordinary_prefix_predicate(record, lookup, target_attname, user, permission,
-                              content_identity):
+                              content_identity, content_overlay=None):
     """One ordinary permitted-content predicate, including an ``along=`` walk."""
     position = _prefix_walk_position(record, lookup)
     if position in ('exact', 'before'):
-        return _exact_prefix_exists(
-            record, lookup, target_attname, user, permission, content_identity,
+        grant_q = None
+        if (
+            content_overlay is not None
+            and position == 'before'
+            and record.along is not None
+        ):
+            grant_q = _grant_reaches_filtered_content(
+                record, content_overlay,
+            )
+        predicate = _exact_prefix_exists(
+            record, lookup, target_attname, user, permission,
+            content_identity, grant_q=grant_q,
+        )
+        return _apply_content_overlay(
+            predicate, record, lookup, target_attname, position,
+            content_overlay,
         )
     suffix = None
     if position == 'after':
         suffix = _prefix_partial_suffix(record, lookup)
-    return _PrefixInForwardWalk(
+    predicate = _PrefixInForwardWalk(
         record, user, permission, target_attname,
         content_identity=content_identity,
         suffix_lookup=suffix,
+    )
+    return _apply_content_overlay(
+        predicate, record, lookup, target_attname, position, content_overlay,
     )
 
 
@@ -351,7 +579,7 @@ def _delegation_prefix_exists(record, sponsor_records, user, permission,
 
 def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
                                 prefix_model, *, content_identity,
-                                skipped=()):
+                                skipped=(), content_overlay=None):
     """Permitted-content predicates for one-level delegated authority.
 
     The delegate is included on a prefix only where the delegation and
@@ -370,6 +598,9 @@ def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
             _reject_unsupported_delegated_suffix(record.along)
         for lookup, target_attname in lookups:
             position = _prefix_walk_position(record, lookup)
+            _reject_delegated_ancestor_filter(
+                record, position, content_overlay,
+            )
             candidate = OuterRef(target_attname)
             found = _delegation_prefix_exists(
                 record, sponsor_records, user, permission, content_identity,
@@ -377,22 +608,35 @@ def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
                 skipped=skipped,
             )
             if found is not None:
-                parts.append(found)
+                parts.append(_apply_content_overlay(
+                    found, record, lookup, target_attname, position,
+                    content_overlay,
+                ))
     return parts
 
 
 def permitted_content_q(scope_model, user, permission, *, content, catalog,
-                        skipped=()):
-    """Grant ``Q`` for scope rows that prefix ``content``, or ``None``."""
+                        skipped=(), content_overlay=None, on_content=False):
+    """Grant ``Q`` for scope rows that prefix ``content``, or ``None``.
+
+    ``content_overlay`` is the selected named filters. ``on_content``
+    means that overlay reads the protected object, so it constrains the
+    content row under each prefix. Otherwise it is a user or permission
+    check and combines with the scope predicate.
+    """
     with via_scope(catalog, skipped):
-        return _permitted_content_body(
+        wrapped = _permitted_content_body(
             scope_model, user, permission, content=content, catalog=catalog,
             skipped=skipped,
+            content_overlay=content_overlay if on_content else None,
         )
+    if content_overlay is not None and not on_content and wrapped is not None:
+        wrapped = _as_q(wrapped) & content_overlay
+    return wrapped
 
 
 def _permitted_content_body(scope_model, user, permission, *, content, catalog,
-                            skipped):
+                            skipped, content_overlay=None):
     scope_model = scope_model._meta.concrete_model
     content_identity = _candidate_model(content)
     plan = _plan_for_permission(catalog, content, user, permission)
@@ -405,7 +649,7 @@ def _permitted_content_body(scope_model, user, permission, *, content, catalog,
         ):
             plan_parts.append(_ordinary_prefix_predicate(
                 record, lookup, target_attname, user, permission,
-                content_identity,
+                content_identity, content_overlay=content_overlay,
             ))
     if plan.delegations:
         plan_parts.extend(_delegated_prefix_predicates(
@@ -415,7 +659,7 @@ def _permitted_content_body(scope_model, user, permission, *, content, catalog,
             ),
             user, permission, scope_model,
             content_identity=content_identity,
-            skipped=skipped,
+            skipped=skipped, content_overlay=content_overlay,
         ))
     grant = None
     if plan_parts:
@@ -442,10 +686,12 @@ def bind_filtered_queryset(queryset, predicate, *, user_model):
 
 def _compile_permitted_content_queryset(
     queryset, user, permission, *, content, catalog, skipped=(),
+    content_overlay=None, on_content=False,
 ):
     wrapped = permitted_content_q(
         queryset.model, user, permission, content=content, catalog=catalog,
-        skipped=skipped,
+        skipped=skipped, content_overlay=content_overlay,
+        on_content=on_content,
     )
     return bind_filtered_queryset(
         queryset, wrapped, user_model=catalog.user_model,
