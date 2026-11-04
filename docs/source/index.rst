@@ -494,11 +494,13 @@ the same model.
 
 ``permission`` is an ``auth.Permission`` instance. ``content`` is the protected
 model. ``conditions`` is the same tuple of named-filter names ``.permitted()``
-takes. The filter is resolved in SQL and applied at every ``via=`` and
-``along=`` hop those inquiries already filter. A missing name, or a tuple
-that is not that exact form, returns an empty queryset. An object filter
-on an ancestor of a delegated ``along=`` walk keeps the row only when one
-protected object passes that filter and both walks. ``backend`` is
+takes. The filter is resolved in SQL. A filter that reads the user is
+checked for each user a ``via=`` walk reaches. A filter that reads the
+protected object constrains that object. ``along=`` decides which content
+is reachable. A missing name, or a tuple that is not that exact form,
+returns an empty queryset. An object filter on an ancestor of a delegated
+``along=`` walk keeps the row only when one protected object passes that
+filter and both walks. ``backend`` is
 optional and defaults to the installed relationship backends; pass
 ``backend=`` to select one.
 
@@ -828,16 +830,17 @@ member of the group above ``org`` is out of reach.
 must be reached by ``via=`` and the object must be reached by ``along=``.
 Each keeps its own path and bound.
 
-User conditions and named filters apply to every user the walk reaches,
-including the user on the grant. ``is_active`` is that check for an
-inactive user. When the walked row is a user, a user who fails the
-condition stops that path. When the walked row is a group or a link, the
-condition selects the users reached from that row, and the walk continues
-to the next group. An inactive Alice is left out; Bob is still reached.
-``skip_is_active=True`` skips that condition at every step. A named
-filter that reads the protected object applies to that object on every
-step. A named filter that reads the user applies to each user reached.
-The relationship ``condition=`` stays on the grant row.
+User conditions, and a named filter that reads the user, are checked for
+each user the walk reaches, including the user on the grant. ``is_active``
+is that check for an inactive user. When the walked row is a user, a user
+who fails the condition stops that path. When the walked row is a group or
+a link, the condition selects the users reached from that row, and the walk
+continues to the next group. An inactive Alice is left out; Bob is still
+reached. ``skip_is_active=True`` skips that condition for every user the
+walk reaches. A named filter that reads the protected object constrains
+that object, and its value is carried into a user-row ``via=`` walk.
+``along=`` decides which content is reachable. The relationship
+``condition=`` stays on the grant row.
 
 A repeated link adds no user. The bound stops the walk, and the users
 reached are the users reached with that link removed.

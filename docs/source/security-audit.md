@@ -471,18 +471,19 @@ link removed. SQLite and MySQL may revisit a row inside the bound; the
 final set has each user once. MariaDB and other engines are rejected
 before this SQL, as they are for `along=`.
 
-User conditions and the selected named filters are applied to every user
-reached, including the user on the grant. On a walked user, a failing
-condition stops that path. On a group or a link, the condition selects the
-users reached from that row, and the next group is still visited. A filter
-that reads the protected object uses that object's value, carried into the
-walk so the recursive member stays free of the outer query.
-`skip_<name>` removes that condition at every depth. A condition with
-`on="sponsor"` applies to each sponsor user the walk reaches. A condition
-with `on="user"` applies to the checked user and to users reached on the
-delegate side. The relationship `condition=` stays on the grant row. The
-content walk's rule is unchanged: its condition stays off intermediate
-content nodes.
+User conditions, and a named filter that reads the user, are checked for
+each user reached, including the user on the grant. On a walked user, a
+failing condition stops that path. On a group or a link, the condition
+selects the users reached from that row, and the next group is still
+visited. A filter that reads the protected object constrains that object.
+On a user-row walk its value is carried into the recursive member, which
+stays free of the outer query. `along=` decides which content is reachable;
+its condition stays off intermediate content nodes.
+`skip_<name>` removes that condition for every user the walk reaches. A
+condition with `on="sponsor"` applies to each sponsor user the walk
+reaches. A condition with `on="user"` applies to the checked user and to
+users reached on the delegate side. The relationship `condition=` stays on
+the grant row.
 
 Inquiry agreement for this walk is the setup guide's
 [inquiry agreement](index.rst#inquiry-agreement). The inquiry for users
