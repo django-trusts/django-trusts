@@ -1635,6 +1635,20 @@ def _boolean_column(model, name, text):
     return field.column
 
 
+def _reset_any_fk(rel, name, text):
+    """Stop when any row on the reverse side of ``rel`` is true."""
+    fk = rel.field
+    host = fk.model
+    return ResetAt(
+        path=text,
+        kind='any',
+        column=_boolean_column(host, name, text),
+        through_table=host._meta.db_table,
+        through_node=fk.column,
+        node_column=fk.target_field.column,
+    )
+
+
 def _reset_any_m2m(walk_model, field, name, text):
     """Stop when any row across ``field`` carries a true boolean."""
     forward = field if isinstance(field, ManyToManyField) else field.field
@@ -1674,7 +1688,6 @@ def _reset_any_m2m(walk_model, field, name, text):
 
 
 _RESET_RELATION = {
-    'reverse_o2m': 'a reverse one-to-many',
     'reverse_o2o': 'a reverse one-to-one',
     'single': 'a forward foreign key',
     'gfk': 'a generic relation',
@@ -1685,10 +1698,10 @@ _RESET_RELATION = {
 def _resolve_reset(walk_model, shape, edge_path, edge_model, reset):
     """Resolve the third ``along`` element, or ``None`` when it is absent.
 
-    One segment is a column on the walked model. Two segments name either
-    the link row this walk already traverses or one many-to-many from
-    the node. A reverse foreign key is not one of those and is rejected
-    here, before a query is built.
+    One segment is a column on the walked model. Two segments name the
+    link row this walk already traverses, one many-to-many, or one
+    reverse one-to-many. Anything else is rejected here, before a query
+    is built.
     """
     if reset is None:
         return None
@@ -1731,6 +1744,8 @@ def _resolve_reset(walk_model, shape, edge_path, edge_model, reset):
     kind = _classify_field(field)
     if kind == 'm2m':
         return _reset_any_m2m(walk_model, field, name, reset)
+    if kind == 'reverse_o2m':
+        return _reset_any_fk(field, name, reset)
     label = _RESET_RELATION.get(kind, 'relation %s' % kind)
     raise TrustsConfigurationError(
         'along reset %r is not the link this walk traverses and '

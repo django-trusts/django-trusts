@@ -125,7 +125,7 @@ class ResetAt:
 
     ``kind`` is ``node`` (column on the walked model), ``edge`` (column
     on the link row this walk already joins), or ``any`` (true when any
-    row of another many-to-many is true).
+    row of another many-to-many, or of a reverse one-to-many, is true).
     """
 
     path: str

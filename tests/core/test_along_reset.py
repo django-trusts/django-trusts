@@ -269,6 +269,11 @@ class ResetRegistrationTest(SimpleTestCase):
                 ('node__parent', 4, 'marks__reset_inheritance'),
                 'any',
             ),
+            (
+                'reverse-fk',
+                ('node__parent', 4, 'policies__reset_inheritance'),
+                'any',
+            ),
         )
         for role in ('content', 'delegation', 'sponsor'):
             for name, along, kind in cases:
@@ -290,10 +295,17 @@ class ResetRegistrationTest(SimpleTestCase):
                             reset.through_node, forward.m2m_reverse_name(),
                         )
                         self.assertEqual(reset.far_fk, forward.m2m_column_name())
+                    elif name == 'reverse-fk':
+                        fk = self.Node._meta.get_field('policies').field
+                        self.assertIsNone(reset.far_table)
+                        self.assertEqual(reset.through_node, fk.column)
+                        self.assertEqual(reset.column, 'reset_inheritance')
+                        self.assertTrue(fk.model._meta.get_field(
+                            'reset_inheritance',
+                        ).null)
 
     def test_register_rejects_paths_outside_the_three_placements(self):
         cases = (
-            (('node__parent', 4, 'policies__reset_inheritance'), 'reverse one-to-many'),
             (('node__parent', 4, 'portrait__reset_inheritance'), 'reverse one-to-one'),
             (('node__parent', 4, 'parent__reset_inheritance'), 'forward foreign key'),
             (('node__parent', 4, 'badge__reset_inheritance'), 'forward foreign key'),
@@ -339,7 +351,7 @@ class AlongResetTest(TransactionTestCase):
         self.User = get_user_model()
         models_ = self._models()
         (
-            self.Flag, self.Node, self.Link, self.Sheet,
+            self.Flag, self.Node, self.Link, self.Policy, self.Sheet,
             self.Grant, self.GroupGrant, self.Delegation,
         ) = models_
         self._table_cm = _tables(*models_)
@@ -405,6 +417,16 @@ class AlongResetTest(TransactionTestCase):
                 app_label = 'trusts_tests'
                 db_table = 'arst_link'
 
+        class Policy(models.Model):
+            node = models.ForeignKey(
+                Node, related_name='policies', on_delete=models.CASCADE,
+            )
+            reset_inheritance = models.BooleanField(null=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'arst_policy'
+
         class SheetQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
             pass
 
@@ -452,7 +474,7 @@ class AlongResetTest(TransactionTestCase):
                 db_table = 'arst_delegation'
 
         return (
-            Flag, Node, Link, Sheet, Grant, GroupGrant, Delegation,
+            Flag, Node, Link, Policy, Sheet, Grant, GroupGrant, Delegation,
         )
 
     def _build_tree(self):
@@ -719,6 +741,18 @@ class AlongResetTest(TransactionTestCase):
         self._grant(self.erin, 'D')
         self._assert_user(handle, self.erin, ('D', 'E'))
 
+    def test_reverse_fk_stops_the_node_when_any_row_is_true(self):
+        self.Policy.objects.create(node=self.nodes['B'], reset_inheritance=False)
+        self.Policy.objects.create(node=self.nodes['B'], reset_inheritance=True)
+        self.Policy.objects.create(node=self.nodes['C'], reset_inheritance=None)
+        self._grant(self.alice, 'A')
+        self._grant(self.bob, 'B')
+        handle = self._open('policies', (
+            'node__parent', 8, 'policies__reset_inheritance',
+        ))
+        self._assert_user(handle, self.alice, ('A', 'S'))
+        self._assert_user(handle, self.bob, ('B', 'C', 'D', 'E'))
+
     def test_lockfile_records_the_configured_field(self):
         handle = self._open('lock', ('node__parent', 8, 'reset_inheritance'))
         text = render_configured_policy(handle).decode()
@@ -736,3 +770,10 @@ class AlongResetTest(TransactionTestCase):
         flags_text = render_configured_policy(flags).decode()
         self.assertIn('reset: "flags__reset_inheritance"', flags_text)
         self.assertIn('NOT EXISTS', flags_text)
+        policies = self._open('lock-policies', (
+            'node__parent', 8, 'policies__reset_inheritance',
+        ))
+        policies_text = render_configured_policy(policies).decode()
+        self.assertIn('reset: "policies__reset_inheritance"', policies_text)
+        self.assertIn('NOT EXISTS', policies_text)
+        self.assertIn('"arst_policy"', policies_text)
