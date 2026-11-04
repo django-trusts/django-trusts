@@ -208,6 +208,15 @@ class Tree(object):
         return 'Tree(%s)' % self.kind
 
 
+def _comparison(kind):
+    def compare(self, other):
+        return Tree(
+            kind, left=self._field(), right=_operand(other, self._token),
+        )
+
+    return compare
+
+
 class Symbol(object):
     """One symbolic root or a field path off it. Not stored.
 
@@ -245,35 +254,12 @@ class Symbol(object):
             raise _root_rejection()
         return Tree('contains', left=self._field(), right=right)
 
-    def __eq__(self, other):
-        return Tree(
-            'eq', left=self._field(), right=_operand(other, self._token),
-        )
-
-    def __ne__(self, other):
-        return Tree(
-            'ne', left=self._field(), right=_operand(other, self._token),
-        )
-
-    def __lt__(self, other):
-        return Tree(
-            'lt', left=self._field(), right=_operand(other, self._token),
-        )
-
-    def __le__(self, other):
-        return Tree(
-            'le', left=self._field(), right=_operand(other, self._token),
-        )
-
-    def __gt__(self, other):
-        return Tree(
-            'gt', left=self._field(), right=_operand(other, self._token),
-        )
-
-    def __ge__(self, other):
-        return Tree(
-            'ge', left=self._field(), right=_operand(other, self._token),
-        )
+    __eq__ = _comparison('eq')
+    __ne__ = _comparison('ne')
+    __lt__ = _comparison('lt')
+    __le__ = _comparison('le')
+    __gt__ = _comparison('gt')
+    __ge__ = _comparison('ge')
 
     def __and__(self, other):
         return _join('and', self, other)
@@ -385,19 +371,27 @@ def symbol_token(symbol):
     return symbol._token
 
 
+def walk(node):
+    """Every ``Tree`` in ``node``, operands and call arguments included."""
+    if isinstance(node, tuple):
+        for item in node:
+            yield from walk(item)
+    elif isinstance(node, Tree):
+        yield node
+        for child in (node.left, node.right, node.item):
+            yield from walk(child)
+
+
 def contains_call(node):
     """True when ``node`` or one of its operands is a function call."""
-    if not isinstance(node, Tree):
-        return False
-    if node.kind == 'call':
-        return True
-    for child in (node.left, node.right, node.item):
-        if isinstance(child, tuple):
-            if any(contains_call(item) for item in child):
-                return True
-        elif contains_call(child):
-            return True
-    return False
+    return any(item.kind == 'call' for item in walk(node))
+
+
+def needs_expression(node):
+    """True for a comparison that compiles as one SQL expression."""
+    return node.kind in ORDERED_KINDS or (
+        node.kind in ('eq', 'ne') and contains_call(node)
+    )
 
 
 def is_inquiry(node):
@@ -437,12 +431,10 @@ def invoke(fn, roots, prepare=None):
     return prepare(result, token)
 
 
-_SYMBOL_ORDERING = frozenset(('__lt__', '__le__', '__gt__', '__ge__'))
-
 for _name in _OP_LABELS:
-    # Symbol keeps its own ``in`` message, which names ``.contains``.
-    # Ordering is a real comparison. The loop must not replace it.
-    if _name != '__contains__' and _name not in _SYMBOL_ORDERING:
+    # Symbol keeps what it defines: ordering and its ``in`` message.
+    # ``__hash__`` stays ``None`` because ``__eq__`` is defined.
+    if _name not in Symbol.__dict__:
         setattr(Symbol, _name, _unsupported(_name))
     # Stored nodes are data, not callbacks, so Tree has no ``__call__``.
     # ``t.team()`` is rejected on Symbol. Calling a finished tree is a

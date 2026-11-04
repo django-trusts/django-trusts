@@ -25,7 +25,7 @@ from trusts.backends import TrustModelBackendMixin
 from trusts.errors import PermissionConditionError
 from trusts.functions import Coalesce, Lower, Now
 from trusts.models import PermittedQuerySet, PermittedUsersMixin
-from trusts.plan.grammar import Symbol, Tree
+from trusts.plan.grammar import Symbol, walk
 
 PERM = 'trusts_tests.change_sheet'
 BACKEND = 'tests.core.test_sql_functions._SqlBackend'
@@ -127,35 +127,21 @@ def _permission(model):
     )[0]
 
 
-def _walk(node, found):
-    if isinstance(node, (Symbol, Tree)):
-        found.append(node)
-    if hasattr(node, 'resolve_expression'):
-        found.append(node)
-    if not isinstance(node, Tree):
-        return
-    for child in (node.left, node.right, node.item, node.value):
-        if isinstance(child, tuple):
-            for item in child:
-                _walk(item, found)
-        elif child is not None:
-            _walk(child, found)
-
-
 def _assert_stored(test, node):
-    found = []
-    _walk(node, found)
+    found = list(walk(node))
     for item in found:
-        test.assertNotIsInstance(item, Symbol)
-        test.assertFalse(hasattr(item, 'resolve_expression'))
+        test.assertNotIsInstance(item.value, Symbol)
+        value = item.value
+        test.assertFalse(
+            value is not None and hasattr(value, 'resolve_expression'),
+        )
     return found
 
 
 def _assert_lowered(test, node):
     found = _assert_stored(test, node)
     test.assertTrue(any(
-        isinstance(item, Tree) and item.kind == 'call' and item.value == 'now'
-        for item in found
+        item.kind == 'call' and item.value == 'now' for item in found
     ))
 
 
@@ -219,7 +205,6 @@ class FunctionRegisterTest(TransactionTestCase):
                     & (Lower(d.label) == Lower(Value('BOB')))
                     & (Coalesce(d.expires_at, Value(deadline)) >= Now())
                     & (Lower(Coalesce(d.label, Value('x'))) == 'x')
-                    & (Lower('label') == 'x')
                 ),
             )
         _assert_lowered(self, record.condition)
@@ -245,65 +230,48 @@ class FunctionRegisterTest(TransactionTestCase):
         class Extra(Lower):
             pass
 
-        self._reject(
-            lambda d, p: Extra(d.label) == 'a', 'Extra',
-            model=Pass, functions=True,
+        cases = (
+            (lambda d, p: Extra(d.label) == 'a', 'Extra'),
+            (
+                lambda d, p: Lower(d.label, output_field=CharField()) == 'a',
+                'output_field',
+            ),
+            (lambda d, p: Lower(d.label, function='LOWER') == 'a', 'function'),
+            (
+                lambda d, p: Now(template='CURRENT_TIMESTAMP') < d.expires_at,
+                'template',
+            ),
+            (lambda d, p: Now(d.label) < d.expires_at, 'takes no arguments'),
+            (lambda d, p: Coalesce(d.label) == 'a', 'at least two'),
         )
-        self._reject(
-            lambda d, p: Lower(d.label, output_field=CharField()) == 'a',
-            'output_field', model=Pass, functions=True,
-        )
-        self._reject(
-            lambda d, p: Lower(d.label, function='LOWER') == 'a',
-            'function', model=Pass, functions=True,
-        )
-        self._reject(
-            lambda d, p: Now(template='CURRENT_TIMESTAMP') < d.expires_at,
-            'template', model=Pass, functions=True,
-        )
-        self._reject(
-            lambda d, p: Now(d.label) < d.expires_at,
-            'takes no arguments', model=Pass, functions=True,
-        )
-        self._reject(
-            lambda d, p: Coalesce(d.label) == 'a',
-            'at least two', model=Pass, functions=True,
-        )
+        for builder, needle in cases:
+            with self.subTest(needle=needle):
+                self._reject(builder, needle, model=Pass, functions=True)
 
     def test_types_null_and_ambiguous_lookups_are_rejected(self):
         Sheet, _Grant, Pass = _models()
-        self._reject(
-            lambda d, p: Lower(d.expires_at) == 'a',
-            'accepts text', model=Pass,
+        cases = (
+            (lambda d, p: Lower(d.expires_at) == 'a', 'accepts text', Pass, False),
+            (
+                lambda d, p: Coalesce(d.label, d.expires_at) == 'a',
+                'share one type', Pass, False,
+            ),
+            (lambda d, p: d.expires_at > None, 'NULL does not grant', Pass, False),  # noqa: E711
+            (lambda d, p: Lower(d.label) == None, 'NULL does not grant', Pass, False),  # noqa: E711
+            (lambda d, p: d.opened_on > Now(), 'DateTimeField', Pass, False),
+            (
+                lambda u, p, o: Lower(F('title')) == Lower(Value('a')),
+                'not supported', Sheet, True,
+            ),
+            (lambda u, p, o: Lower('title') == 'a', 'not supported', Sheet, True),
+            (lambda u, p, o: o.title == Value('a'), 'Value', Sheet, True),
         )
-        self._reject(
-            lambda d, p: Coalesce(d.label, d.expires_at) == 'a',
-            'share one type', model=Pass,
-        )
-        self._reject(
-            lambda d, p: d.expires_at > None,  # noqa: E711
-            'does not accept None', model=Pass,
-        )
-        self._reject(
-            lambda d, p: Lower(d.label) == None,  # noqa: E711
-            'NULL does not grant', model=Pass,
-        )
-        self._reject(
-            lambda d, p: d.opened_on > Now(),
-            'DateTimeField', model=Pass,
-        )
-        self._reject(
-            lambda u, p, o: Lower(F('title')) == Lower(Value('a')),
-            'Use a symbolic field', named=True, model=Sheet,
-        )
-        self._reject(
-            lambda u, p, o: Lower('title') == 'a',
-            'Use a symbolic field', named=True, model=Sheet,
-        )
-        self._reject(
-            lambda u, p, o: o.title == Value('a'),
-            'Value', named=True, model=Sheet, functions=True,
-        )
+        for builder, needle, model, named in cases:
+            with self.subTest(needle=needle):
+                self._reject(
+                    builder, needle, named=named, model=model,
+                    functions=named and needle == 'Value',
+                )
 
     def test_mixed_user_and_object_function_is_rejected_at_register(self):
         Sheet, _Grant, Pass = _models()
@@ -329,7 +297,7 @@ class FunctionRegisterTest(TransactionTestCase):
             )
         self._reject(
             lambda d, p: Coalesce(d.label, p.codename) == 'x',
-            'requested permission', model=Pass,
+            'trust row', model=Pass,
         )
 
     def test_user_rules_reject_functions_and_ordering(self):
@@ -400,11 +368,14 @@ class FunctionAgreementTest(TransactionTestCase):
             )
             self._policy(Grant, Pass)
 
-    def _register(self, Grant, Pass, condition):
-        factory = compiler(path=BACKEND)
+    def _grant(self, factory, Grant):
         factory.register(
             trust=Grant, user='user', permission='permission', content='sheet',
         )
+
+    def _register(self, Grant, Pass, condition):
+        factory = compiler(path=BACKEND)
+        self._grant(factory, Grant)
         with self.assertNumQueries(0):
             record = factory.register(
                 trust=Pass, delegate='delegate', sponsor='sponsor',
@@ -427,21 +398,27 @@ class FunctionAgreementTest(TransactionTestCase):
             return False
         return predicate(row, change)
 
-    def _agree(self, Sheet, users, sheets, allowed):
+    def _agree(self, Sheet, users, sheets, allowed, code=None):
+        perm = PERM if code is None else '%s:%s' % (PERM, code)
         for user in users:
             expected = {row.pk for row in sheets if allowed(user, row)}
-            with self.subTest(user=user.username, check='permitted'):
-                listed = Sheet.objects.permitted(PERM, user)
+            with self.subTest(code=code, user=user.username, check='permitted'):
+                if code is None:
+                    listed = Sheet.objects.permitted(PERM, user)
+                else:
+                    listed = Sheet.objects.permitted(
+                        PERM, user, conditions=(code,),
+                    )
                 self.assertEqual(
                     set(listed.values_list('pk', flat=True)), expected,
                 )
-            with self.subTest(user=user.username, check='has_perm'):
-                held = {row.pk for row in sheets if user.has_perm(PERM, row)}
+            with self.subTest(code=code, user=user.username, check='has_perm'):
+                held = {row.pk for row in sheets if user.has_perm(perm, row)}
                 self.assertEqual(held, expected)
         for row in sheets:
             expected = {user.pk for user in users if allowed(user, row)}
-            with self.subTest(row=row.pk, check='permitted_users'):
-                found = row.get_permitted_users(PERM)
+            with self.subTest(code=code, row=row.pk, check='permitted_users'):
+                found = row.get_permitted_users(perm)
                 self.assertEqual(
                     set(found.values_list('pk', flat=True)), expected,
                 )
@@ -495,10 +472,7 @@ class FunctionAgreementTest(TransactionTestCase):
                 set(sheet.get_permitted_users(PERM).values_list('pk', flat=True)),
             )
             plain = compiler(path=BACKEND)
-            plain.register(
-                trust=Grant, user='user', permission='permission',
-                content='sheet',
-            )
+            self._grant(plain, Grant)
             plain.register(
                 trust=Pass, delegate='delegate', sponsor='sponsor',
                 content='sheet',
@@ -646,45 +620,12 @@ class FunctionAgreementTest(TransactionTestCase):
             Grant.objects.create(sheet=row, user=alice, permission=change)
             Grant.objects.create(sheet=row, user=bob, permission=change)
         Grant.objects.create(sheet=live, user=erin, permission=change)
-        factory = compiler(path=BACKEND)
-        factory.register(
-            trust=Grant, user='user', permission='permission', content='sheet',
-        )
-        with self.assertNumQueries(0):
-            factory.add_named_filter(
-                Sheet, 'fresh', lambda u, p, o: o.expires_at > Now(),
-            )
-            factory.add_named_filter(
-                Sheet, 'titled',
-                lambda u, p, o: Lower(o.title) == Lower(Value('OPEN')),
-            )
-            factory.add_named_filter(
-                Sheet, 'other',
-                lambda u, p, o: Lower(o.title) != Lower(Value('OPEN')),
-            )
-            def fallback(u, p, o):
-                return Coalesce(o.expires_at, Value(far)) > Now()
-
-            factory.add_named_filter(Sheet, 'fallback', fallback)
-            factory.add_named_filter(
-                Sheet, 'ranked',
-                lambda u, p, o: (o.rank >= 1) & (o.rank < 5),
-            )
-            factory.add_named_filter(
-                Sheet, 'who',
-                lambda u, p, o: Lower(u.username) == Lower(o.title),
-            )
-            factory.add_named_filter(
-                Sheet, 'nested',
-                lambda u, p, o: (
-                    Lower(Coalesce(o.title, Value('OPEN'))) == 'open'
-                ),
-            )
         granted = {alice.pk, bob.pk}
         now = timezone.now()
-        cases = (
+        filters = (
             (
                 'fresh',
+                lambda u, p, o: o.expires_at > Now(),
                 lambda user, row: (
                     user.pk in granted
                     and row.expires_at is not None
@@ -693,6 +634,7 @@ class FunctionAgreementTest(TransactionTestCase):
             ),
             (
                 'titled',
+                lambda u, p, o: Lower(o.title) == Lower(Value('OPEN')),
                 lambda user, row: (
                     user.pk in granted
                     and row.title is not None
@@ -701,6 +643,7 @@ class FunctionAgreementTest(TransactionTestCase):
             ),
             (
                 'other',
+                lambda u, p, o: Lower(o.title) != Lower(Value('OPEN')),
                 lambda user, row: (
                     user.pk in granted
                     and row.title is not None
@@ -709,12 +652,14 @@ class FunctionAgreementTest(TransactionTestCase):
             ),
             (
                 'fallback',
+                lambda u, p, o: Coalesce(o.expires_at, Value(far)) > Now(),
                 lambda user, row: user.pk in granted and (
                     far > now if row.expires_at is None else row.expires_at > now
                 ),
             ),
             (
                 'ranked',
+                lambda u, p, o: (o.rank >= 1) & (o.rank < 5),
                 lambda user, row: (
                     user.pk in granted
                     and row.rank is not None
@@ -723,6 +668,7 @@ class FunctionAgreementTest(TransactionTestCase):
             ),
             (
                 'who',
+                lambda u, p, o: Lower(u.username) == Lower(o.title),
                 lambda user, row: (
                     user.pk in granted
                     and row.title is not None
@@ -731,15 +677,32 @@ class FunctionAgreementTest(TransactionTestCase):
             ),
             (
                 'nested',
+                lambda u, p, o: (
+                    Lower(Coalesce(o.title, Value('OPEN'))) == 'open'
+                ),
                 lambda user, row: user.pk in granted and (
                     'open' if row.title is None else row.title.lower()
                 ) == 'open',
             ),
+            (
+                'early',
+                lambda u, p, o: (u.username < 'b') & (u.date_joined <= now),
+                lambda user, row: (
+                    user.pk in granted
+                    and user.username < 'b'
+                    and user.date_joined <= now
+                ),
+            ),
         )
+        factory = compiler(path=BACKEND)
+        self._grant(factory, Grant)
+        with self.assertNumQueries(0):
+            for code, builder, _predicate in filters:
+                factory.add_named_filter(Sheet, code, builder)
         with _published(factory):
-            for code, predicate in cases:
-                self._filter_agree(
-                    Sheet, (alice, bob), rows, code, predicate,
+            for code, _builder, predicate in filters:
+                self._agree(
+                    Sheet, (alice, bob), rows, predicate, code=code,
                 )
             backend = _SqlBackend()
             colon = '%s:fresh' % PERM
@@ -766,33 +729,9 @@ class FunctionAgreementTest(TransactionTestCase):
                 ).values_list('pk', flat=True)),
             )
 
-    def _filter_agree(self, Sheet, users, rows, code, predicate):
-        colon = '%s:%s' % (PERM, code)
-        for user in users:
-            expected = {row.pk for row in rows if predicate(user, row)}
-            with self.subTest(code=code, user=user.username, check='permitted'):
-                listed = Sheet.objects.permitted(
-                    PERM, user, conditions=(code,),
-                )
-                self.assertEqual(
-                    set(listed.values_list('pk', flat=True)), expected,
-                )
-            with self.subTest(code=code, user=user.username, check='has_perm'):
-                held = {row.pk for row in rows if user.has_perm(colon, row)}
-                self.assertEqual(held, expected)
-        for row in rows:
-            expected = {user.pk for user in users if predicate(user, row)}
-            with self.subTest(code=code, row=row.pk, check='permitted_users'):
-                found = row.get_permitted_users(colon)
-                self.assertEqual(
-                    set(found.values_list('pk', flat=True)), expected,
-                )
-
     def _policy(self, Grant, Pass):
         factory = compiler(path=BACKEND)
-        factory.register(
-            trust=Grant, user='user', permission='permission', content='sheet',
-        )
+        self._grant(factory, Grant)
         factory.register(
             trust=Pass, delegate='delegate', sponsor='sponsor',
             content='sheet',

@@ -1,15 +1,14 @@
 """One ``Q`` per record so a repeated many-to-many hop stays one join."""
 
 from django.contrib.auth.models import Permission
-from django.db.models import F, Model, Q, Value
+from django.db.models import F, Model, Q
 
 from trusts.errors import PermissionConditionError
-from trusts.plan.grammar import ORDERED_KINDS, Tree, contains_call, unsupported
+from trusts.plan.grammar import Tree, needs_expression, unsupported
 from trusts.plan.hops import lookup_text, require_instance
 from trusts.plan.writers import (
     boolean_q,
-    call_expression,
-    comparison_q,
+    expression_q,
     negate_q,
     column_q,
     columns_q,
@@ -104,10 +103,8 @@ class _PredicateCompiler(object):
             return self.compile(node.left) | self.compile(node.right)
         if node.kind == 'not':
             return negate_q(self.record.root, self.compile(node.item))
-        if node.kind in ('eq', 'ne') and contains_call(node):
-            return self._ordered(node)
-        if node.kind in ORDERED_KINDS:
-            return self._ordered(node)
+        if needs_expression(node):
+            return expression_q(node, self._row_field)
         if node.kind == 'eq':
             return self._eq(node)
         if node.kind == 'ne':
@@ -118,19 +115,10 @@ class _PredicateCompiler(object):
             return boolean_q(lookup_text(node.item.path))
         raise unsupported(node.kind, 'a relation condition')
 
-    def _expr(self, node):
-        if node.kind == 'const':
-            return Value(member_pk(node.value))
-        if node.kind == 'call':
-            return call_expression(node, self._expr)
-        if node.kind == 'field' and node.root == 'row' and node.path:
+    def _row_field(self, node):
+        if node.root == 'row' and node.path:
             return F(lookup_text(node.path))
         raise unsupported('This condition', 'a relation condition')
-
-    def _ordered(self, node):
-        return comparison_q(
-            node.kind, self._expr(node.left), self._expr(node.right),
-        )
 
     def _eq(self, node):
         partner = node.inquiry_partner()

@@ -8,9 +8,7 @@ NULL rules for values already loaded while compiling.
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import F, Model, Q, Value
-from django.db.models.functions import Coalesce as DjangoCoalesce
-from django.db.models.functions import Lower as DjangoLower
-from django.db.models.functions import Now as DjangoNow
+from django.db.models.functions import Coalesce, Lower, Now
 from django.db.models.lookups import (
     Exact,
     GreaterThan,
@@ -24,7 +22,7 @@ from trusts.plan.conditions import (
     ModelIdentity,
     resolve_field_path,
 )
-from trusts.plan.grammar import ORDERED_KINDS, Tree, contains_call
+from trusts.plan.grammar import Tree, needs_expression
 
 
 def contains_q(lookup, member):
@@ -265,6 +263,7 @@ def _compile_contains(node, model, user, perm, user_model):
     return Q(pk__in=())
 
 
+_FUNCTIONS = {'now': Now, 'lower': Lower, 'coalesce': Coalesce}
 _COMPARISON_LOOKUPS = {
     'eq': Exact,
     'lt': LessThan,
@@ -285,80 +284,36 @@ def comparison_q(kind, lhs, rhs):
     return Q(_COMPARISON_LOOKUPS[kind](lhs, rhs))
 
 
-def call_expression(node, operand):
-    """Django's own function for one stored call. Not the Trusts wrapper."""
-    if node.value == 'now':
-        return DjangoNow()
-    if node.value == 'lower':
-        return DjangoLower(operand(node.item))
-    if node.value == 'coalesce':
-        return DjangoCoalesce(*(operand(arg) for arg in node.item))
-    raise PermissionConditionError(
-        'Cannot compile permission condition node %r.' % (node,)
-    )
+def sql_expression(node, field):
+    """One comparison operand as Django's own function call or value.
 
-
-def _sql_operand(node, model, user, perm, user_model):
-    if _node(node, 'const'):
+    ``field`` builds the leaf for a ``field`` node.
+    """
+    if node.kind == 'const':
         return Value(member_pk(node.value))
-    if _node(node, 'call'):
-        return call_expression(
-            node,
-            lambda arg: _sql_operand(arg, model, user, perm, user_model),
+    if node.kind == 'call':
+        return _FUNCTIONS[node.value](
+            *(sql_expression(arg, field) for arg in node.item)
         )
-    if _node(node, 'field') and node.root == 'object':
-        return F('__'.join(node.path))
-    if _node(node, 'field'):
-        return Value(member_pk(_bound_value(node, user, perm, user_model)))
-    raise PermissionConditionError(
-        'Cannot compile permission condition node %r.' % (node,)
+    return field(node)
+
+
+def expression_q(node, field, right_field=None):
+    """The ``Q`` for one ordered or function comparison."""
+    return comparison_q(
+        node.kind,
+        sql_expression(node.left, field),
+        sql_expression(node.right, right_field or field),
     )
-
-
-def _has_object_field(node):
-    if not isinstance(node, Tree):
-        return False
-    if node.kind == 'field' and node.root == 'object':
-        return True
-    for child in (node.left, node.right, node.item):
-        if isinstance(child, tuple):
-            if any(_has_object_field(item) for item in child):
-                return True
-        elif _has_object_field(child):
-            return True
-    return False
-
-
-def _loaded(node, user, perm, user_model):
-    if _node(node, 'const'):
-        return node.value
-    return _bound_value(node, user, perm, user_model)
-
-
-def _python_ordered(node, model, user, perm, user_model):
-    left = _loaded(node.left, user, perm, user_model)
-    right = _loaded(node.right, user, perm, user_model)
-    if left is None or right is None:
-        return Q(pk__in=())
-    matched = {
-        'lt': left < right,
-        'le': left <= right,
-        'gt': left > right,
-        'ge': left >= right,
-    }[node.kind]
-    if matched:
-        return Q()
-    return Q(pk__in=())
 
 
 def _compile_sql_comparison(node, model, user, perm, user_model):
-    if not contains_call(node) and not _has_object_field(node):
-        return _python_ordered(node, model, user, perm, user_model)
-    return comparison_q(
-        node.kind,
-        _sql_operand(node.left, model, user, perm, user_model),
-        _sql_operand(node.right, model, user, perm, user_model),
-    )
+    def field(leaf):
+        if leaf.root == 'object':
+            return F('__'.join(leaf.path))
+        return Value(member_pk(_bound_value(leaf, user, perm, user_model)))
+
+    return expression_q(node, field)
 
 
 def compile_to_q(node, model, user, perm, user_model=None):
@@ -371,10 +326,10 @@ def compile_to_q(node, model, user, perm, user_model=None):
         return compile_to_q(node.left, model, user, perm, user_model) | compile_to_q(
             node.right, model, user, perm, user_model
         )
-    if _node(node, 'eq', 'ne') and not contains_call(node):
-        return _compile_comparison(node, model, user, perm, user_model)
-    if _node(node, 'eq', 'ne') or _node(node, *ORDERED_KINDS):
+    if needs_expression(node):
         return _compile_sql_comparison(node, model, user, perm, user_model)
+    if _node(node, 'eq', 'ne'):
+        return _compile_comparison(node, model, user, perm, user_model)
     if _node(node, 'contains'):
         return _compile_contains(node, model, user, perm, user_model)
     if _node(node, 'bare'):

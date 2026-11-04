@@ -33,14 +33,14 @@ from trusts.compile.graph import (
     _require_ref,
 )
 from trusts.plan.grammar import (
-    ORDERED_KINDS,
     Symbol,
     Tree,
-    contains_call,
     is_predicate,
+    needs_expression,
     symbol_path,
     symbol_token,
     unsupported,
+    walk,
 )
 from trusts.compile.resolution import (
     _SUFFIX_KINDS,
@@ -61,7 +61,6 @@ from trusts.plan.conditions import (
     capture_expression,
     check_comparison_types,
     check_const_member,
-    check_ordered_comparison,
     condition_model_key,
     condition_model_label,
     parse_named_filter,
@@ -1281,16 +1280,13 @@ def _validate_relation_node(node, root, permission_model, *,
             root, node.item.path, 'condition', where='a relation condition',
         )
         return
-    if node.kind in ('eq', 'ne') and contains_call(node):
-        _validate_function_comparison(node, root, delegated=delegated)
+    if needs_expression(node):
+        _validate_expression_comparison(node, root)
         return
     if node.kind in ('eq', 'ne'):
         _validate_row_comparison(
             node, root, delegated=delegated, matches=matches,
         )
-        return
-    if node.kind in ORDERED_KINDS:
-        _validate_ordered_row(node, root, delegated=delegated)
         return
     if node.kind == 'contains':
         _validate_row_contains(
@@ -1303,54 +1299,11 @@ def _validate_relation_node(node, root, permission_model, *,
     raise unsupported(node.kind, where)
 
 
-def _call_args(node):
-    if node.value == 'lower':
-        return (node.item,)
-    if node.value == 'coalesce':
-        return node.item
-    return ()
-
-
-def _reject_inquiry_operand(node, where):
-    if isinstance(node, Tree) and node.kind == 'field' and node.root == 'inquiry':
-        raise unsupported(
-            'Comparing the requested permission with a function',
-            where,
-            hint='Compare a column on the trust row.',
-        )
-    if isinstance(node, Tree) and node.kind == 'call':
-        for arg in _call_args(node):
-            _reject_inquiry_operand(arg, where)
-
-
-def _validate_row_operand(node, root, where):
-    if node.kind == 'const':
-        return
-    if node.kind == 'field':
-        _require_row_field(node)
-        return
-    if node.kind == 'call':
-        for arg in _call_args(node):
-            _validate_row_operand(arg, root, where)
-        return
-    raise unsupported('This condition', where)
-
-
-def _validate_function_comparison(node, root, *, delegated):
-    where = _relation_where(delegated)
-    for side in (node.left, node.right):
-        _reject_inquiry_operand(side, where)
-        _validate_row_operand(side, root, where)
+def _validate_expression_comparison(node, root):
+    for leaf in walk((node.left, node.right)):
+        if leaf.kind == 'field':
+            _require_row_field(leaf)
     check_comparison_types(node, root, root)
-
-
-def _validate_ordered_row(node, root, *, delegated):
-    where = _relation_where(delegated)
-    for side in (node.left, node.right):
-        _reject_inquiry_hop(side, where, member=False)
-        _reject_inquiry_operand(side, where)
-        _validate_row_operand(side, root, where)
-    check_ordered_comparison(node, root, root)
 
 
 def _validate_row_comparison(node, root, *, delegated, matches):
