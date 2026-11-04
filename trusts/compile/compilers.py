@@ -35,11 +35,12 @@ from trusts.compile.graph import (
 from trusts.plan.grammar import (
     Symbol,
     Tree,
-    invoke,
     is_predicate,
+    needs_expression,
     symbol_path,
     symbol_token,
     unsupported,
+    walk,
 )
 from trusts.compile.resolution import (
     _SUFFIX_KINDS,
@@ -57,11 +58,11 @@ from trusts.errors import PermissionConditionError, TrustsConfigurationError
 T = TypeVar('T', bound=Model)
 from trusts.compile.catalogs import Catalog, Question
 from trusts.plan.conditions import (
+    capture_expression,
     check_comparison_types,
     check_const_member,
     condition_model_key,
     condition_model_label,
-    normalize_expression,
     parse_named_filter,
     validate_expression,
     require_boolean_field,
@@ -1279,6 +1280,9 @@ def _validate_relation_node(node, root, permission_model, *,
             root, node.item.path, 'condition', where='a relation condition',
         )
         return
+    if needs_expression(node):
+        _validate_expression_comparison(node, root)
+        return
     if node.kind in ('eq', 'ne'):
         _validate_row_comparison(
             node, root, delegated=delegated, matches=matches,
@@ -1293,6 +1297,13 @@ def _validate_relation_node(node, root, permission_model, *,
         )
         return
     raise unsupported(node.kind, where)
+
+
+def _validate_expression_comparison(node, root):
+    for leaf in walk((node.left, node.right)):
+        if leaf.kind == 'field':
+            _require_row_field(leaf)
+    check_comparison_types(node, root, root)
 
 
 def _validate_row_comparison(node, root, *, delegated, matches):
@@ -1810,7 +1821,7 @@ def _normalize_public_condition(trust, condition):
     if _prepare_condition_builder(condition) is None:
         return None
     _require_condition_arity(condition)
-    return normalize_expression(invoke(condition, ('row',)))
+    return capture_expression(condition, ('row',))
 
 
 def _normalize_delegated_condition(trust, condition):
@@ -1821,7 +1832,7 @@ def _normalize_delegated_condition(trust, condition):
         roots = ('row', 'inquiry')
     else:
         roots = ('row',)
-    return normalize_expression(invoke(condition, roots))
+    return capture_expression(condition, roots)
 
 def _normalize_public_role(trust, value, role, *, token):
     """Normalize a public string or path builder to a Django ``__`` path."""
