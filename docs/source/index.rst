@@ -770,10 +770,15 @@ traverses. A true value cuts that one link. With A and D both linked
 to B, a grant on A does not reach B on a true A → B link. A grant on
 D still reaches B on the other link.
 
-``along=("parent", 8, "policies__reset_inheritance")`` reads a concrete
+``along=("parent", 8, "flags__reset_inheritance")`` reads a concrete
 ``BooleanField`` through another many-to-many from the node. The node
 is a stop when any of those rows is true. A grant on that node still
 applies there and can continue.
+
+``along=("parent", 8, "policies__reset_inheritance")`` reads a concrete
+``BooleanField`` through a reverse one-to-many. ``Policy.node`` is a
+foreign key to the node. The node is a stop when any of those rows
+is true. A grant on that node still applies there and can continue.
 
 Forward and reverse inquiries agree, including ``has_perm()``,
 ``.permitted()``, and ``get_permitted_users()``. A reverse inquiry

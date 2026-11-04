@@ -443,7 +443,7 @@ or simplify the query for users from content is not emitted. Audit the declared
 walk, bound, generated recursive SQL, and returned-user parity together.
 
 The third element of `along` is a field path. `NULL` and false inherit.
-Three placements are accepted:
+Four placements are accepted:
 
 - a concrete `BooleanField` on the walked model's own table
   (`reset_inheritance`), which cuts every path into that node;
@@ -451,8 +451,12 @@ Three placements are accepted:
   (`parent_links__reset_inheritance`), which cuts that link and leaves
   the node's other parents;
 - a concrete `BooleanField` reached through another many-to-many from
-  the node (`policies__reset_inheritance`), which makes the node a stop
-  when any linked row is true.
+  the node (`flags__reset_inheritance`), which makes the node a stop
+  when any linked row is true;
+- a concrete `BooleanField` reached through a reverse one-to-many from
+  the node (`policies__reset_inheritance`, where the related row's
+  foreign key points at the node), which makes the node a stop when
+  any related row is true.
 
 A path the walk cannot read, including a field on a multi-table parent,
 is rejected at `register()`.
