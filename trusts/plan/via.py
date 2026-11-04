@@ -16,7 +16,6 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import BooleanField, Model, OuterRef, Q, Subquery
 from django.db.models.expressions import Expression
 
-from trusts.compile.resolution import _resolve_permission_path
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.conditions import condition_model_key
 from trusts.plan.grammar import Tree
@@ -778,20 +777,27 @@ def _permission_is_collection(record, name):
 
 
 def _permission_steps(record, name):
-    """Fields ``register()`` stored for this permission terminal.
-
-    The hop joins those columns. A path register would reject cannot
-    be written into the recursive member.
-    """
     path = tuple(getattr(record, 'permission_path', ()) or ())
     if not path:
         raise _cannot(name)
-    try:
-        steps, _path, _model, _lookup, _target = _resolve_permission_path(
-            record.root, path,
-        )
-    except TrustsConfigurationError:
-        raise _cannot(name)
+    current = record.root
+    steps = []
+    for index, part in enumerate(path):
+        try:
+            field = current._meta.get_field(part)
+        except Exception as exc:
+            raise _cannot(name) from exc
+        steps.append(field)
+        if getattr(field, 'many_to_many', False):
+            if index != len(path) - 1:
+                raise _cannot(name)
+            return steps
+        if not (
+            getattr(field, 'concrete', False)
+            and getattr(field, 'many_to_one', False)
+        ):
+            raise _cannot(name)
+        current = field.remote_field.model
     return steps
 
 

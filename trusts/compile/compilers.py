@@ -828,10 +828,9 @@ class Compiler(object):
             ) = _append_group_permissions(group_path, group_field)
             via_group = True
         else:
-            (
-                _steps, permission_path, permission_model, permission_field,
-                permission_target,
-            ) = _resolve_permission_path(root, permission_ref._path)
+            permission_path, permission_model, permission_field, permission_target = (
+                _resolve_permission_path(root, permission_ref._path)
+            )
             group_path, group_model, group_field, group_target = (), None, '', ''
             via_group = False
         condition = _validate_condition(
@@ -1341,7 +1340,7 @@ def _validate_row_comparison(node, root, *, delegated, matches):
                 ),
             )
         _require_row_field(column)
-        _steps, _path, model, _field, target = _resolve_permission_path(
+        _path, model, _field, target = _resolve_permission_path(
             root, column.path,
         )
         if matches is not None:
@@ -1368,7 +1367,7 @@ def _validate_row_contains(node, root, permission_model, *,
         check_const_member(root, node.left.path, node.right.value)
         return
     if node.inquiry_partner() is not None:
-        _steps, _path, model, _field, target = _resolve_permission_path(
+        _path, model, _field, target = _resolve_permission_path(
             root, node.left.path,
         )
         if matches is not None:
