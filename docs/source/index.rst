@@ -166,7 +166,7 @@ the same queryset with ``from_queryset``:
 concrete forms when no custom queryset is required. Plain
 ``user.has_perm(permission, document)`` object checks do not require
 either one. ``.authorized(user, permission, extra_q=None)`` remains the lower-level instance
-projection. It accepts a saved permission instance rather than a permission
+projection. It accepts a permission instance rather than a permission
 string and does not select named conditions. ``.permitted(permission, user,
 conditions=())`` is the public content-list inquiry and keeps the same
 registered user conditions, overrides, and relationship grants as the object
@@ -174,7 +174,7 @@ check.
 
 ``PermittedUsersMixin`` adds
 ``document.get_permitted_users(permission)``, which returns the users whose
-object check succeeds for one saved document and permission. The optional
+object check succeeds for one document and permission. The optional
 ``User.objects.permitted(document, permission)`` manager adapter asks the same
 question. Neither changes ``Document.objects``.
 
@@ -305,11 +305,11 @@ equivalent of the first registration is:
    )
 
 
-Delegate live authority
------------------------
+Delegate authority
+------------------
 
-A delegation lets a **delegate** act with a **sponsor**'s live ordinary
-permissions on the protected content. For a requested permission,
+A delegation lets a **delegate** act with a **sponsor**'s permissions on the
+protected content. For a requested permission,
 django-trusts requires the same delegation row, its selected content and
 condition, and sponsor authority on that content. Conditions that apply to
 the sponsor are described in :ref:`user conditions and overrides
@@ -363,12 +363,12 @@ One or more reverse one-to-one relations may be chained as single-valued
 prefix hops before that gateway. A reverse one-to-one is not itself a
 supported content terminal or gateway.
 
-A sponsor's ordinary grant may use ``along=``. That bounded walk is part of
-the sponsor's live authority on every object it reaches, including when the
+A sponsor's grant may use ``along=``. That bounded walk is part of the
+sponsor's authority on every object it reaches, including when the
 check is a delegation. A delegated registration may use ``along=`` on the
 same call. The delegate is allowed on an object only when the delegation walk
 and the sponsor's ordinary grant both reach that object. Each contributing
-ordinary sponsor grant's ``along=`` walk or exact match must reach the object.
+sponsor grant's ``along=`` walk or direct match must reach the object.
 A delegate cannot sponsor a further delegation.
 
 
@@ -450,16 +450,14 @@ Filter a queryset to the objects permitted for a particular permission:
        user,
    )
 
-The permission may instead be the corresponding saved ``auth.Permission``
-instance. The queryset supplies the protected content model. A string is
-the exact ``app_label.codename`` bound to that model's content type; the
+The permission may instead be the corresponding ``auth.Permission`` instance. The queryset supplies the protected content model. A string is the ``app_label.codename`` for that model's content type; the
 codename is not parsed to guess a model. This is the same kind of question
 as ``user.has_perm(permission, document)``, not the same string codec.
 ``has_perm`` still infers a model from the codename suffix
 (`issue #268 <https://github.com/django-trusts/django-trusts/issues/268>`_).
 
 A relationship-family backend participates only when it has an applicable
-``auth.Permission`` plan for the queryset model and owns every selected
+``auth.Permission`` registration for the queryset model and owns every selected
 name as a queryable condition. Other backends contribute nothing. If none
 own the full set, the queryset is empty before SQL. In
 ``authorization_required``, the view is 403 or 404.
@@ -485,7 +483,7 @@ Filter by permitted content
 permitted content sits under those rows. The result is a lazy queryset of
 the same model.
 
-``permission`` is a saved permission row. ``content`` is the protected
+``permission`` is an ``auth.Permission`` instance. ``content`` is the protected
 model. ``backend`` is optional and defaults to the installed relationship
 backends; pass ``backend=`` to select one.
 
@@ -506,7 +504,7 @@ the user may read:
 ``filter_by_permitted_content`` follows ``along=`` walks and one-level
 delegation.
 
-List the users who may perform one permission on one saved object:
+List the users who may perform one permission on one object:
 
 .. code-block:: python
 
@@ -780,8 +778,7 @@ A host app opts in with ``management/commands/trusts_policy_sql.py``:
    from trusts.inspect.commands import PolicySqlCommand as Command
 
 This output is for examining the queries and noticing changes. It is not a
-public file format or an input API. Write the current output to a lockfile
-after registration is complete:
+public file format or an input API. Write the output to a lockfile:
 
 .. code-block:: console
 
