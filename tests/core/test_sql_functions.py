@@ -305,6 +305,33 @@ class FunctionRegisterTest(TransactionTestCase):
             'Value', named=True, model=Sheet, functions=True,
         )
 
+    def test_mixed_user_and_object_function_is_rejected_at_register(self):
+        Sheet, _Grant, Pass = _models()
+        self._reject(
+            lambda u, p, o: Coalesce(u.username, o.title) == 'fallback',
+            'mixes a user field and an object field',
+            named=True, model=Sheet,
+        )
+        self._reject(
+            lambda u, p, o: Coalesce(u.username, o.title) == Value('fallback'),
+            'Value', named=True, model=Sheet, functions=True,
+        )
+        handle = compiler()
+        with self.assertNumQueries(0):
+            handle.add_named_filter(
+                Sheet, 'sides',
+                lambda u, p, o: Lower(u.username) == Lower(o.title),
+            )
+            handle.register(
+                trust=Pass, delegate='delegate', sponsor='sponsor',
+                content='sheet',
+                condition=lambda d: Coalesce(d.label, Value('open')) == 'open',
+            )
+        self._reject(
+            lambda d, p: Coalesce(d.label, p.codename) == 'x',
+            'requested permission', model=Pass,
+        )
+
     def test_user_rules_reject_functions_and_ordering(self):
         handle = compiler()
         cases = (

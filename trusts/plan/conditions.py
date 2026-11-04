@@ -553,6 +553,32 @@ def _call_args(node):
     return ()
 
 
+def _reject_split_function(node):
+    """One function stays on one root. User and object cannot share a call."""
+    roots = set()
+    _function_roots(node, roots)
+    if 'user' in roots and 'object' in roots:
+        raise PermissionConditionError(
+            '%s() mixes a user field and an object field. '
+            'Keep each function on one root.'
+            % node.value.capitalize()
+        )
+
+
+def _function_roots(node, roots):
+    if not isinstance(node, Tree):
+        return
+    if node.kind == 'field':
+        roots.add(node.root)
+        return
+    child = node.item
+    if isinstance(child, tuple):
+        for item in child:
+            _function_roots(item, roots)
+        return
+    _function_roots(child, roots)
+
+
 def _operand_spec(node, model, user_model):
     if _node(node, 'call'):
         return _call_spec(node, model, user_model)
@@ -788,6 +814,7 @@ def _validate_node(node, model, user_model):
     if _node(node, 'call'):
         for arg in _call_args(node):
             _validate_node(arg, model, user_model)
+        _reject_split_function(node)
         return
     if _node(node, 'field'):
         if node.root == 'object':
