@@ -12,8 +12,7 @@ import copy
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-from django.db.models import BooleanField, F, Model, OuterRef, Q, Subquery
-from django.db.models.fields.related import ManyToManyRel
+from django.db.models import BooleanField, Model, OuterRef, Q, Subquery
 from django.db.models.expressions import Expression
 
 from trusts.errors import TrustsConfigurationError
@@ -28,8 +27,10 @@ from trusts.plan.standards import (
 )
 from trusts.plan.walk import (
     _grant_walk_attname,
+    _m2m_columns,
     _render_reach_sql,
     _require_along_renderer,
+    _suffix_link,
     _walk_identity_column,
 )
 
@@ -245,24 +246,6 @@ def bind_grant_qs(record, *, user, permission=None, correlation=None,
     if reach is not None:
         qs = qs.filter(reach)
     return qs
-
-
-def constrained_along_seed(ordinary, permission, content_identity, constraint):
-    """Content-walk seed limited to grants whose user walk matches."""
-    walk = ordinary.along
-    qs = bind_record_qs(
-        ordinary,
-        permission=permission,
-        correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
-        content_identity=content_identity,
-    ).filter(constraint)
-    seed = qs.values(
-        carrier=F(ordinary.root._meta.pk.attname),
-        ident=F(walk.walk_field),
-    ).distinct()
-    query = seed.query.clone()
-    query.subquery = True
-    return query
 
 
 def _reached_sponsor_q(delegation, ordinary):
@@ -699,23 +682,16 @@ def _user_source(user):
     return user
 
 
-class ViaReach(Expression):
-    """Bounded user reach for one grant or delegation row.
+class _ViaSources(Expression):
+    """User, captured rules, and carrier expressions for one walk."""
 
-    ``from_row`` seeds the walk from this row and matches ``user``.
-    ``from_value`` seeds the walk from ``user`` and matches the user
-    column of ``match_record``. The recursive member does not read the
-    outer query.
-    """
-
-    filterable = True
-    subquery = True
-
-    def __init__(self, record, user, *, mode, match_record=None):
-        super().__init__(output_field=BooleanField())
+    def __init__(self, record, user, *, mode, output_field=None):
+        if output_field is None:
+            super().__init__()
+        else:
+            super().__init__(output_field=output_field)
         self.record = record
         self.mode = mode
-        self.match_record = record if match_record is None else match_record
         self.via_bound = record.via.bound
         self.user = _user_source(user)
         self.rules, self.filters, self.content = _capture(record)
@@ -735,6 +711,23 @@ class ViaReach(Expression):
         if self.user is not None and exprs:
             self.user = exprs.pop(0)
         self.carriers = exprs
+
+
+class ViaReach(_ViaSources):
+    """Bounded user reach for one grant or delegation row.
+
+    ``from_row`` seeds the walk from this row and matches ``user``.
+    ``from_value`` seeds the walk from ``user`` and matches the user
+    column of ``match_record``. The recursive member does not read the
+    outer query.
+    """
+
+    filterable = True
+    subquery = True
+
+    def __init__(self, record, user, *, mode, match_record=None):
+        super().__init__(record, user, mode=mode, output_field=BooleanField())
+        self.match_record = record if match_record is None else match_record
 
     def as_sql(self, compiler, connection):
         _require_along_renderer(connection)
@@ -760,32 +753,8 @@ class ViaReach(Expression):
         return sql, user_params
 
 
-class _ReachedUsers(Expression):
+class _ReachedUsers(_ViaSources):
     """User ids reached by one walk. The depth cap is ``via_bound``."""
-
-    def __init__(self, record, user, *, mode):
-        super().__init__()
-        self.record = record
-        self.mode = mode
-        self.via_bound = record.via.bound
-        self.user = _user_source(user)
-        self.rules, self.filters, self.content = _capture(record)
-        _ignored, self.carriers = _render_hop(
-            record, self.rules, self.filters, self.content, lambda name: name,
-        )
-
-    def get_source_expressions(self):
-        exprs = []
-        if self.user is not None:
-            exprs.append(self.user)
-        exprs.extend(self.carriers)
-        return exprs
-
-    def set_source_expressions(self, exprs):
-        exprs = list(exprs)
-        if self.user is not None and exprs:
-            self.user = exprs.pop(0)
-        self.carriers = exprs
 
     def as_sql(self, compiler, connection):
         _require_along_renderer(connection)
@@ -795,15 +764,6 @@ class _ReachedUsers(Expression):
             self.record.via, w_sql, qn, principal_model(self.record),
         )
         return sql, tuple(w_params)
-
-    def resolve_expression(
-        self, query=None, allow_joins=True, reuse=None,
-        summarize=False, for_save=False,
-    ):
-        clone = super().resolve_expression(
-            query, allow_joins, reuse, summarize, for_save,
-        )
-        return clone
 
 
 class ViaMeet(Expression):
@@ -961,111 +921,30 @@ class _UserColumn(object):
         self.walk_ident = record.user_target
 
 
-def _m2m_columns(field):
-    """Through columns ``(forward field, node column, user column)``."""
-    if isinstance(field, ManyToManyRel):
-        forward = field.field
-        return forward, forward.m2m_reverse_name(), forward.m2m_column_name()
-    return field, field.m2m_column_name(), field.m2m_reverse_name()
-
-
 def _user_in_reach(walk, user_sql, w_sql, qn, principal):
     """SQL: ``user_sql`` is a user reached from the walk result ``w_sql``."""
-    if not walk.suffix_path:
+    link = _suffix_link(walk, qn, principal)
+    if link is None:
         return '%s IN (%s)' % (user_sql, w_sql)
-    if len(walk.suffix_path) != 1:
-        raise TrustsConfigurationError(
-            'via suffix %r cannot be compiled.'
-            % ('__'.join(walk.suffix_path),)
-        )
-    field = walk.walk_model._meta.get_field(walk.suffix_path[0])
-    if getattr(field, 'many_to_many', False):
-        member = qn('mem')
-        forward, node_col, user_col = _m2m_columns(field)
-        return (
-            'EXISTS (SELECT 1 FROM %s AS %s '
-            'WHERE %s.%s = %s AND %s.%s IN (%s))'
-            % (
-                qn(forward.remote_field.through._meta.db_table), member,
-                member, qn(user_col), user_sql,
-                member, qn(node_col), w_sql,
-            )
-        )
-    if getattr(field, 'concrete', False) and getattr(field, 'many_to_one', False):
-        site = qn('site')
-        table = qn(walk.walk_model._meta.db_table)
-        return (
-            'EXISTS (SELECT 1 FROM %s AS %s '
-            'WHERE %s.%s = %s AND %s.%s IN (%s))'
-            % (
-                table, site, site, qn(field.column), user_sql,
-                site, qn(walk.walk_ident), w_sql,
-            )
-        )
-    if walk.rewrite_attname:
-        user_alias = qn('reached_user')
-        table = qn(principal._meta.db_table)
-        fk = principal._meta.get_field(walk.rewrite_attname)
-        pk = qn(principal._meta.pk.column)
-        return (
-            'EXISTS (SELECT 1 FROM %s AS %s '
-            'WHERE %s.%s = %s AND %s.%s IN (%s))'
-            % (
-                table, user_alias, user_alias, pk, user_sql,
-                user_alias, qn(fk.column), w_sql,
-            )
-        )
-    raise TrustsConfigurationError(
-        'via suffix %r cannot be compiled.' % (walk.suffix_field,)
+    table, alias, user_col, node_col = link
+    return (
+        'EXISTS (SELECT 1 FROM %s AS %s '
+        'WHERE %s.%s = %s AND %s.%s IN (%s))'
+        % (table, alias, alias, user_col, user_sql, alias, node_col, w_sql)
     )
 
 
 def _users_select(walk, w_sql, qn, principal):
     """SQL selecting ``user_id`` for every user the walk reaches."""
     user_id = qn('user_id')
-    if not walk.suffix_path:
+    link = _suffix_link(walk, qn, principal)
+    if link is None:
         alias = qn('w')
         return 'SELECT DISTINCT %s.%s AS %s FROM (%s) AS %s' % (
             alias, qn('ident'), user_id, w_sql, alias,
         )
-    if len(walk.suffix_path) != 1:
-        raise TrustsConfigurationError(
-            'via suffix %r cannot be compiled.'
-            % ('__'.join(walk.suffix_path),)
-        )
-    field = walk.walk_model._meta.get_field(walk.suffix_path[0])
-    if getattr(field, 'many_to_many', False):
-        member = qn('mem')
-        forward, node_col, user_col = _m2m_columns(field)
-        return (
-            'SELECT DISTINCT %s.%s AS %s FROM %s AS %s WHERE %s.%s IN (%s)'
-            % (
-                member, qn(user_col), user_id,
-                qn(forward.remote_field.through._meta.db_table), member,
-                member, qn(node_col), w_sql,
-            )
-        )
-    if getattr(field, 'concrete', False) and getattr(field, 'many_to_one', False):
-        site = qn('site')
-        return (
-            'SELECT DISTINCT %s.%s AS %s FROM %s AS %s WHERE %s.%s IN (%s)'
-            % (
-                site, qn(field.column), user_id,
-                qn(walk.walk_model._meta.db_table), site,
-                site, qn(walk.walk_ident), w_sql,
-            )
-        )
-    if walk.rewrite_attname:
-        user_alias = qn('reached_user')
-        fk = principal._meta.get_field(walk.rewrite_attname)
-        return (
-            'SELECT DISTINCT %s.%s AS %s FROM %s AS %s WHERE %s.%s IN (%s)'
-            % (
-                user_alias, qn(principal._meta.pk.column), user_id,
-                qn(principal._meta.db_table), user_alias,
-                user_alias, qn(fk.column), w_sql,
-            )
-        )
-    raise TrustsConfigurationError(
-        'via suffix %r cannot be compiled.' % (walk.suffix_field,)
+    table, alias, user_col, node_col = link
+    return (
+        'SELECT DISTINCT %s.%s AS %s FROM %s AS %s WHERE %s.%s IN (%s)'
+        % (alias, user_col, user_id, table, alias, alias, node_col, w_sql)
     )

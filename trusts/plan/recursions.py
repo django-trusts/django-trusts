@@ -235,6 +235,9 @@ class _KeyedReach(Expression):
     Used on a delegation queryset. ``key`` is a column of that row (the
     sponsor foreign key, or the delegation primary key). ``candidate`` is
     the requested object's walk identity on the outer content query.
+    ``key`` is ``None`` when the seed already limits grants to the users
+    a sponsor walk reaches: the predicate is then that the walk reaches
+    the candidate at all.
     """
 
     filterable = True
@@ -254,10 +257,19 @@ class _KeyedReach(Expression):
         return clone
 
     def get_source_expressions(self):
-        return [self.seed_query, self.key, self.candidate]
+        exprs = [self.seed_query]
+        if self.key is not None:
+            exprs.append(self.key)
+        exprs.append(self.candidate)
+        return exprs
 
     def set_source_expressions(self, exprs):
-        self.seed_query, self.key, self.candidate = exprs
+        self.seed_query = exprs[0]
+        if self.key is not None:
+            self.key = exprs[1]
+            self.candidate = exprs[2]
+        else:
+            self.candidate = exprs[1]
 
     def as_sql(self, compiler, connection):
         _require_along_renderer(connection)
@@ -266,52 +278,15 @@ class _KeyedReach(Expression):
         w_sql, w_params = _render_keyed_reach_sql(
             self.walk, seed_sql, seed_params, connection,
         )
-        key_sql, key_params = compiler.compile(self.key)
         cand_sql, cand_params = compiler.compile(self.candidate)
+        if self.key is None:
+            sql = 'EXISTS (SELECT 1 FROM (%s%s) AS %s)' % (
+                w_sql, cand_sql, connection.ops.quote_name('reached'),
+            )
+            return sql, tuple(w_params) + tuple(cand_params)
+        key_sql, key_params = compiler.compile(self.key)
         sql = '(%s) IN (%s(%s))' % (key_sql, w_sql, cand_sql)
         return sql, tuple(key_params) + tuple(w_params) + tuple(cand_params)
-
-
-class _NonemptyKeyed(Expression):
-    """The keyed content walk reaches the candidate.
-
-    The seed already limits grants to the users the sponsor walk
-    reaches, so the carrier is not compared with one sponsor column.
-    """
-
-    filterable = True
-    subquery = True
-
-    def __init__(self, walk, seed_query, candidate):
-        super().__init__(output_field=BooleanField())
-        self.walk = walk
-        self.along_bound = walk.bound
-        self.seed_query = seed_query
-        self.candidate = candidate
-
-    def copy(self):
-        clone = super().copy()
-        clone.seed_query = clone.seed_query.clone()
-        return clone
-
-    def get_source_expressions(self):
-        return [self.seed_query, self.candidate]
-
-    def set_source_expressions(self, exprs):
-        self.seed_query, self.candidate = exprs
-
-    def as_sql(self, compiler, connection):
-        _require_along_renderer(connection)
-        seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
-        seed_sql = _unwrap_seed_sql(seed_sql)
-        w_sql, w_params = _render_keyed_reach_sql(
-            self.walk, seed_sql, seed_params, connection,
-        )
-        cand_sql, cand_params = compiler.compile(self.candidate)
-        sql = 'EXISTS (SELECT 1 FROM (%s%s) AS %s)' % (
-            w_sql, cand_sql, connection.ops.quote_name('reached'),
-        )
-        return sql, tuple(w_params) + tuple(cand_params)
 
 
 class _AnchorInInverseReach(Expression):

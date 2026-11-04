@@ -25,12 +25,10 @@ from trusts.plan.recursions import (
     GrantReach,
     _AnchorInInverseReach,
     _KeyedReach,
-    _NonemptyKeyed,
     _PrefixInForwardWalk,
 )
 from trusts.plan.via import (
     bind_grant_qs,
-    constrained_along_seed,
     delegate_q,
     delegate_user_q,
     sponsor_constraint,
@@ -215,11 +213,14 @@ def _sponsor_reached(delegation, ordinary, permission, content_identity, *,
             candidate if candidate is not None
             else _candidate_outer_ref(ordinary.along)
         )
-        return _NonemptyKeyed(
+        return _KeyedReach(
             ordinary.along,
-            constrained_along_seed(
-                ordinary, permission, content_identity, constraint,
+            _sponsor_walk_seed(
+                ordinary, permission, content_identity,
+                constraint=constraint,
+                carrier=F(ordinary.root._meta.pk.attname),
             ),
+            None,
             target,
         )
     if along_walk:

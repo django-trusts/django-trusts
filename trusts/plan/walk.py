@@ -9,6 +9,7 @@ stays in ``trusts.compile.graph``. Record binding lives in
 __all__ = []
 
 from django.db.models import F, Q
+from django.db.models.fields.related import ManyToManyRel
 
 from trusts.plan.predicates import bind_record_qs, bind_terminal
 from trusts.errors import TrustsConfigurationError
@@ -56,6 +57,56 @@ def _and_sql(predicate):
     if not predicate:
         return ''
     return ' AND ' + predicate
+
+
+def _m2m_columns(field):
+    """Through columns ``(forward field, node column, user column)``."""
+    if isinstance(field, ManyToManyRel):
+        forward = field.field
+        return forward, forward.m2m_reverse_name(), forward.m2m_column_name()
+    return field, field.m2m_column_name(), field.m2m_reverse_name()
+
+
+def _suffix_link(walk, qn, principal):
+    """One-hop table that joins a user to a walk ident, or ``None``.
+
+    The same link is the membership test and the user-id projection.
+    Columns are already quoted.
+    """
+    if not walk.suffix_path:
+        return None
+    if len(walk.suffix_path) != 1:
+        raise TrustsConfigurationError(
+            'via suffix %r cannot be compiled.'
+            % ('__'.join(walk.suffix_path),)
+        )
+    field = walk.walk_model._meta.get_field(walk.suffix_path[0])
+    if getattr(field, 'many_to_many', False):
+        forward, node_col, user_col = _m2m_columns(field)
+        return (
+            qn(forward.remote_field.through._meta.db_table),
+            qn('mem'),
+            qn(user_col),
+            qn(node_col),
+        )
+    if getattr(field, 'concrete', False) and getattr(field, 'many_to_one', False):
+        return (
+            qn(walk.walk_model._meta.db_table),
+            qn('site'),
+            qn(field.column),
+            qn(walk.walk_ident),
+        )
+    if walk.rewrite_attname:
+        fk = principal._meta.get_field(walk.rewrite_attname)
+        return (
+            qn(principal._meta.db_table),
+            qn('reached_user'),
+            qn(principal._meta.pk.column),
+            qn(fk.column),
+        )
+    raise TrustsConfigurationError(
+        'via suffix %r cannot be compiled.' % (walk.suffix_field,)
+    )
 
 
 def _hop_predicate(walk, qn, node_alias):
@@ -503,12 +554,15 @@ def _unwrap_seed_sql(seed_sql):
     return seed_sql
 
 
-def _sponsor_walk_seed(ordinary, permission, content_identity):
+def _sponsor_walk_seed(ordinary, permission, content_identity, *,
+                       constraint=None, carrier=None):
     """Grant identities that carry the sponsoring user through the walk.
 
     The seed is not filtered to one user. The delegation row matches its
     sponsor column to ``carrier`` outside the recursive member, so the
-    CTE does not reference the delegation row.
+    CTE does not reference the delegation row. ``constraint`` limits the
+    seed to users a sponsor walk reaches, and ``carrier`` replaces the
+    user column when that comparison is the grant's own primary key.
     """
     walk = ordinary.along
     qs = bind_record_qs(
@@ -517,8 +571,12 @@ def _sponsor_walk_seed(ordinary, permission, content_identity):
         correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
         content_identity=content_identity,
     )
+    if constraint is not None:
+        qs = qs.filter(constraint)
+    if carrier is None:
+        carrier = F(ordinary.user_field)
     seed = qs.values(
-        carrier=F(ordinary.user_field),
+        carrier=carrier,
         ident=F(walk.walk_field),
     ).distinct()
     query = seed.query.clone()
