@@ -12,6 +12,7 @@ import copy
 from contextlib import contextmanager
 from contextvars import ContextVar
 
+from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import BooleanField, Model, OuterRef, Q, Subquery
 from django.db.models.expressions import Expression
 
@@ -475,6 +476,65 @@ def _local_field(model, path, name):
     return field
 
 
+def _user_expr(model, path, name, qn):
+    """SQL for one user path on the walked row.
+
+    One local column stays ``{alias}.column``, so an unnested comparison
+    is unchanged. A longer forward chain is a scalar subquery off that
+    row: each hop joins the related table, and the last column is the
+    stored target (``to_field`` and ``db_column``). The subquery does
+    not name the recursive result.
+    """
+    if len(path) <= 1:
+        field = _local_field(model, path, name)
+        return '{alias}.%s' % qn(field.column), field
+    current = model
+    prev = '{alias}'
+    from_sql = ''
+    where_sql = ''
+    for index, part in enumerate(path[:-1]):
+        try:
+            field = current._meta.get_field(part)
+        except Exception as exc:
+            raise _cannot(name) from exc
+        if not (
+            getattr(field, 'concrete', False)
+            and getattr(field, 'many_to_one', False)
+        ):
+            raise _cannot(name)
+        dest = 'hopu%s' % (index + 1)
+        related = field.remote_field.model
+        quoted = qn(dest)
+        if not from_sql:
+            from_sql = '%s AS %s' % (qn(related._meta.db_table), quoted)
+            where_sql = '%s.%s = %s.%s' % (
+                quoted, qn(field.target_field.column),
+                prev, qn(field.column),
+            )
+        else:
+            from_sql += ' JOIN %s AS %s ON %s.%s = %s.%s' % (
+                qn(related._meta.db_table), quoted,
+                quoted, qn(field.target_field.column),
+                prev, qn(field.column),
+            )
+        prev = quoted
+        current = related
+    try:
+        last = current._meta.get_field(path[-1])
+    except Exception as exc:
+        raise _cannot(name) from exc
+    if (
+        not getattr(last, 'concrete', False)
+        or getattr(last, 'many_to_many', False)
+        or last.model._meta.db_table != current._meta.db_table
+    ):
+        raise _cannot(name)
+    sql = '(SELECT %s.%s FROM %s WHERE %s)' % (
+        prev, qn(last.column), from_sql, where_sql,
+    )
+    return sql, last
+
+
 def _field_sql(node, user_model, content_model, content, carriers, name, qn,
                force):
     if node.root == 'user':
@@ -538,8 +598,7 @@ def _compare_sql(node, user_model, content_model, content, carriers, name, qn,
         )
     if getattr(left, 'kind', None) != 'field' or left.root != 'user':
         raise _cannot(name)
-    user_field = _local_field(user_model, left.path, name)
-    user_sql = '{alias}.%s' % qn(user_field.column)
+    user_sql, user_field = _user_expr(user_model, left.path, name, qn)
     if getattr(right, 'kind', None) == 'const' and _const_value(right) is None:
         word = 'IS NULL' if node.kind == 'eq' else 'IS NOT NULL'
         return '%s %s' % (user_sql, word)
@@ -559,8 +618,8 @@ def _compare_sql(node, user_model, content_model, content, carriers, name, qn,
 def _user_operand(node, user_model, content_model, content, carriers, name, qn):
     if getattr(node, 'kind', None) != 'field' or node.root != 'user':
         raise _cannot(name)
-    field = _local_field(user_model, node.path, name)
-    return '{alias}.%s' % qn(field.column)
+    sql, _field = _user_expr(user_model, node.path, name, qn)
+    return sql
 
 
 def _other_operand(node, user_model, content_model, content, carriers, name, qn,
@@ -580,8 +639,8 @@ def _other_operand(node, user_model, content_model, content, carriers, name, qn,
         ))
         return '{c%s}' % index
     if getattr(node, 'kind', None) == 'field' and node.root == 'user':
-        field = _local_field(user_model, node.path, name)
-        return '{alias}.%s' % qn(field.column)
+        sql, _field = _user_expr(user_model, node.path, name, qn)
+        return sql
     if getattr(node, 'kind', None) == 'field' and node.root == 'permission':
         index = _add_carrier(carriers, _permission_value(node.path, name))
         return '{c%s}' % index
@@ -820,19 +879,42 @@ def _permission_join_sql(root, steps, source_alias, qn, name):
 
 
 def _read_instance(obj, path, name):
+    """Value of ``path`` on a saved object.
+
+    An intermediate relation is the related object. Only the last step
+    reads the stored target: a foreign key's attname, which is the
+    ``to_field`` value rather than the related primary key, or another
+    concrete column. ``db_column`` stays the SQL name. A null relation
+    is NULL, the same result as the queryset form.     A missing name cannot
+    be written into the walk.
+    """
+    if not path:
+        raise _cannot(name)
     current = obj
-    for part in path:
+    last = len(path) - 1
+    field = None
+    for index, part in enumerate(path):
         if current is None:
-            raise _cannot(name)
+            return None
         try:
             field = current._meta.get_field(part)
         except Exception as exc:
             raise _cannot(name) from exc
-        if getattr(field, 'concrete', False) and getattr(field, 'many_to_one', False):
-            current = getattr(current, field.attname)
-        else:
-            current = getattr(current, part)
+        terminal = index == last
+        if (
+            terminal
+            and getattr(field, 'concrete', False)
+            and not getattr(field, 'many_to_many', False)
+        ):
+            return getattr(current, field.attname)
+        try:
+            current = getattr(current, field.name)
+        except ObjectDoesNotExist:
+            return None
     if isinstance(current, Model):
+        target = getattr(field, 'target_field', None)
+        if target is not None:
+            return getattr(current, target.attname)
         return current.pk
     return current
 

@@ -3688,3 +3688,247 @@ class ViaPermittedContentFilterTest(TransactionTestCase):
             self.assertEqual(pages, {child_page.pk})
             self.assertEqual(boxes, {child.pk})
 
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class SavedObjectPathTest(TransactionTestCase):
+    """A saved path walks relations and reads the target at the last step.
+
+    ``desk.unit`` stores ``unit.code`` (``to_field``) in column
+    ``unit_code`` (``db_column``). The related primary key is a different
+    value. Instance checks, ``.permitted()``, ``get_permitted_users()``,
+    and ``filter_by_permitted_content`` agree, including a null hop, a
+    one-to-one, and a third hop. Delegate, sponsor, ``along=``, and
+    ``via=`` use that same value.
+    """
+
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+        _attach_manager(self, User)
+        self.User = User
+
+        class Unit(models.Model):
+            code = models.CharField(max_length=20, unique=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_path_unit'
+
+        class Desk(models.Model):
+            unit = models.ForeignKey(
+                Unit, to_field='code', db_column='unit_code',
+                null=True, on_delete=models.CASCADE, related_name='desks',
+            )
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+            twin = models.OneToOneField(
+                'self', null=True, related_name='card',
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_path_desk'
+
+        class Badge(models.Model):
+            mark = models.ForeignKey(
+                Unit, to_field='code', db_column='mark_code',
+                null=True, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_path_badge'
+
+        class SheetQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Sheet(PermittedUsersMixin, models.Model):
+            desk = models.ForeignKey(
+                Desk, null=True, related_name='sheets',
+                on_delete=models.CASCADE,
+            )
+            card = models.OneToOneField(
+                Desk, null=True, related_name='card_sheet',
+                on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(SheetQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_path_sheet'
+
+        class Grant(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            desk = models.ForeignKey(Desk, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_path_grant'
+
+        class Handoff(models.Model):
+            desk = models.ForeignKey(Desk, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(
+                User, related_name='+', on_delete=models.CASCADE,
+            )
+            sponsor = models.ForeignKey(
+                User, related_name='+', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_path_handoff'
+
+        self.Desk, self.Sheet = Desk, Sheet
+        self.Grant, self.Handoff = Grant, Handoff
+        cm = _tables(Unit, Desk, Badge, Sheet, Grant, Handoff)
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        _add_user_column(
+            self, User, 'unit',
+            models.ForeignKey(
+                Unit, to_field='code', db_column='unit_code',
+                null=True, on_delete=models.DO_NOTHING,
+                related_name='+', db_constraint=False, db_index=False,
+            ),
+        )
+        _add_user_column(
+            self, User, 'badge',
+            models.ForeignKey(
+                Badge, null=True, on_delete=models.DO_NOTHING,
+                related_name='+', db_constraint=False, db_index=False,
+            ),
+        )
+        eng = Unit.objects.create(code='ENG')
+        Unit.objects.create(code='OTHER')
+        self.assertNotEqual(eng.pk, eng.code)
+        parent = Desk.objects.create(unit=None)
+        home = Desk.objects.create(unit=eng, parent=parent)
+        card = Desk.objects.create(unit=eng)
+        home.twin = card
+        home.save(update_fields=['twin'])
+        bare = Desk.objects.create(unit=None)
+        self.parent, self.home, self.bare = parent, home, bare
+        self.matched = Sheet.objects.create(desk=home, card=card)
+        self.empty = Sheet.objects.create(desk=bare, card=None)
+        self.change = _permission(Sheet, 'change_pathsheet')
+        self.code = 'trusts_tests.change_pathsheet'
+        self.alice = User.objects.create_user('path-alice', password='x')
+        self.bob = User.objects.create_user('path-bob', password='x')
+        self.dan = User.objects.create_user('path-dan', password='x')
+        self.alice.unit = eng
+        self.alice.via_manager = self.bob
+        self.alice.badge = Badge.objects.create(mark=eng)
+        self.alice.save()
+        self.bob.unit = Unit.objects.get(code='OTHER')
+        self.bob.badge = Badge.objects.create(mark=self.bob.unit)
+        self.bob.save()
+        self.dan.unit = self.bob.unit
+        self.dan.save()
+        self.grant = Grant.objects.create(
+            user=self.alice, desk=home, permission=self.change,
+        )
+        self.handoff = Handoff.objects.create(
+            desk=home, delegate=self.dan, sponsor=self.alice,
+        )
+
+    def _register(self, name, predicate, *, via=None, along=None, delegate=False):
+        handle = compiler(path='tests.core.via-path-%s' % name)
+        handle.add_named_filter(self.Sheet, 'marked', predicate)
+        grant = dict(
+            trust=self.Grant,
+            user='user',
+            permission='permission',
+            content='desk__sheets',
+        )
+        hand = dict(
+            trust=self.Handoff,
+            delegate='delegate',
+            sponsor='sponsor',
+            content='desk__sheets',
+        )
+        if along is not None:
+            grant['along'] = along
+            hand['along'] = along
+        if not delegate:
+            if via is not None:
+                grant['via'] = via
+            handle.register(**grant)
+        else:
+            handle.register(**grant)
+            if via is not None:
+                hand['via'] = via
+            handle.register(**hand)
+        return handle
+
+    def _surfaces(self, handle, sheet, user):
+        code = '%s:marked' % self.code
+        with _listed(handle):
+            has = user.has_perm(code, sheet)
+            permitted = set(self.Sheet.objects.permitted(
+                self.code, user, conditions=('marked',),
+            ).values_list('pk', flat=True))
+            reached = set(sheet.get_permitted_users(code).values_list(
+                'pk', flat=True,
+            ))
+            desks = set(filter_by_permitted_content(
+                self.Desk.objects.all(), user, self.change,
+                content=self.Sheet, conditions=('marked',),
+            ).values_list('pk', flat=True))
+        return has, permitted, reached, desks
+
+    def test_saved_path_agrees_across_inquiries(self):
+        desk_unit = (
+            lambda user, permission, content: user.unit == content.desk.unit
+        )
+        card_unit = (
+            lambda user, permission, content: user.unit == content.card.unit
+        )
+        deep_unit = (
+            lambda user, permission, content: user.unit == content.desk.twin.unit
+        )
+        badge_mark = (
+            lambda user, permission, content: user.badge.mark == content.desk.unit
+        )
+        cases = (
+            ('via', desk_unit, dict(via=('user__via_manager', 1)), self.matched, self.alice, True, {self.alice.pk}, {self.home.pk}),
+            ('via-other', desk_unit, dict(via=('user__via_manager', 1)), self.matched, self.bob, False, {self.alice.pk}, set()),
+            ('null-unit', desk_unit, dict(via=('user__via_manager', 1)), self.empty, self.alice, False, set(), {self.home.pk}),
+            ('one-to-one', card_unit, dict(via=('user__via_manager', 1)), self.matched, self.alice, True, {self.alice.pk}, {self.home.pk}),
+            ('null-card', card_unit, dict(via=('user__via_manager', 1)), self.empty, self.alice, False, set(), {self.home.pk}),
+            ('three-hop', deep_unit, dict(via=('user__via_manager', 1)), self.matched, self.alice, True, {self.alice.pk}, {self.home.pk}),
+            ('null-twin', deep_unit, dict(via=('user__via_manager', 1)), self.empty, self.alice, False, set(), {self.home.pk}),
+            ('badge', badge_mark, {}, self.matched, self.alice, True, {self.alice.pk}, {self.home.pk}),
+            ('via-badge', badge_mark, dict(via=('user__via_manager', 1)), self.matched, self.alice, True, {self.alice.pk}, {self.home.pk}),
+            ('badge-other', badge_mark, {}, self.matched, self.bob, False, {self.alice.pk}, set()),
+            ('along', desk_unit, dict(via=('user__via_manager', 1), along=('desk__parent', 1)), self.matched, self.alice, True, {self.alice.pk}, {self.home.pk}),
+            ('delegate', desk_unit, dict(via=('delegate__via_manager', 1), delegate=True), self.matched, self.dan, True, {self.alice.pk, self.dan.pk}, {self.home.pk}),
+            ('sponsor', desk_unit, dict(via=('sponsor__via_manager', 1), delegate=True), self.matched, self.dan, False, {self.alice.pk}, set()),
+        )
+        for name, predicate, options, sheet, user, allowed, users, desks in cases:
+            with self.subTest(name):
+                self.dan.unit = (
+                    self.alice.unit if name == 'delegate' else self.bob.unit
+                )
+                self.dan.save(update_fields=['unit'])
+                anchor = self.parent if name == 'along' else self.home
+                self.grant.desk = anchor
+                self.grant.save(update_fields=['desk'])
+                self.handoff.desk = anchor
+                self.handoff.save(update_fields=['desk'])
+                handle = self._register(name, predicate, **options)
+                has, permitted, reached, listed = self._surfaces(
+                    handle, sheet, user,
+                )
+                self.assertIs(has, allowed)
+                self.assertEqual(sheet.pk in permitted, allowed)
+                self.assertEqual(reached, users)
+                self.assertEqual(listed, desks)
+

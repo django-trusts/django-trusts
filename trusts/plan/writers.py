@@ -48,6 +48,10 @@ def _walk_model_path(instance, model, path, *, collection=False):
         if current is None:
             return None
         if field.is_relation and not field.many_to_many and not field.one_to_many:
+            # The last hop is the stored target (``to_field``, not the
+            # related primary key). Earlier hops are the related object.
+            if last and getattr(field, 'concrete', False):
+                return getattr(current, field.attname)
             try:
                 current = getattr(current, field.name)
             except ObjectDoesNotExist:
