@@ -1649,6 +1649,17 @@ def _reset_any_fk(rel, name, text):
     )
 
 
+def _through_fk(through, column):
+    """Concrete through-FK whose database column is ``column``."""
+    for candidate in through._meta.local_fields:
+        if (
+            getattr(candidate, 'column', None) == column
+            and getattr(candidate, 'is_relation', False)
+        ):
+            return candidate
+    return None
+
+
 def _reset_any_m2m(walk_model, field, name, text):
     """Stop when any row across ``field`` carries a true boolean."""
     forward = field if isinstance(field, ManyToManyField) else field.field
@@ -1661,15 +1672,9 @@ def _reset_any_m2m(walk_model, field, name, text):
         far = forward.model
         node_column = forward.m2m_reverse_name()
         far_fk = forward.m2m_column_name()
-    source_fk = None
-    for candidate in through._meta.local_fields:
-        if (
-            getattr(candidate, 'column', None) == node_column
-            and getattr(candidate, 'is_relation', False)
-        ):
-            source_fk = candidate
-            break
-    if source_fk is None:
+    source_fk = _through_fk(through, node_column)
+    far_field = _through_fk(through, far_fk)
+    if source_fk is None or far_field is None:
         raise TrustsConfigurationError(
             'along reset %r cannot be read from %s.'
             % (text, walk_model._meta.label)
@@ -1681,7 +1686,7 @@ def _reset_any_m2m(walk_model, field, name, text):
         through_table=through._meta.db_table,
         through_node=node_column,
         far_table=far._meta.db_table,
-        far_pk=far._meta.pk.column,
+        far_column=far_field.target_field.column,
         far_fk=far_fk,
         node_column=source_fk.target_field.column,
     )

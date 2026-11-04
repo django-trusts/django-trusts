@@ -58,6 +58,32 @@ def _and_sql(predicate):
     return ' AND ' + predicate
 
 
+def _model_column(model, attname):
+    """Database column for ``attname``. ``db_column`` may differ from it."""
+    for field in model._meta.concrete_fields:
+        if field.attname == attname:
+            return field.column
+    raise TrustsConfigurationError(
+        'Along column %r is not a concrete field on %s.'
+        % (attname, model._meta.label)
+    )
+
+
+def _column_or_attname(model, attname):
+    """Column for ``attname`` when ``model`` owns it, else ``attname``.
+
+    A bind-once probe compiles an along predicate with the outer query's
+    model. That probe must not raise. The statement compiler resolves
+    the column on the query that owns the field.
+    """
+    if model is None:
+        return attname
+    for field in model._meta.concrete_fields:
+        if field.attname == attname:
+            return field.column
+    return attname
+
+
 def _stop_predicate(walk, qn, node_alias):
     """Predicate on a walked-model alias. Empty for an edge reset.
 
@@ -85,7 +111,7 @@ def _stop_predicate(walk, qn, node_alias):
             '%s AS %s JOIN %s AS %s ON %s.%s = %s.%s'
             % (
                 through, probe, qn(spec.far_table), far,
-                far, qn(spec.far_pk), probe, qn(spec.far_fk),
+                far, qn(spec.far_column), probe, qn(spec.far_fk),
             )
         )
         flag_sql = '%s.%s IS TRUE' % (far, flag)
@@ -120,7 +146,7 @@ def _node_guard(walk, qn, match_sql):
             qn(walk.walk_model._meta.db_table),
             alias,
             alias,
-            qn(walk.walk_ident),
+            qn(_model_column(walk.walk_model, walk.walk_ident)),
             match_sql,
             _stop_predicate(walk, qn, alias),
         )
@@ -132,7 +158,7 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
     source = 'FROM %(gen)s AS %(g)s ' % {'gen': gen, 'g': g}
     if walk.shape == 'S':
         child = qn('child')
-        parent_col = qn(walk.parent_attname)
+        parent_col = qn(_model_column(walk.walk_model, walk.parent_attname))
         walk_table = qn(walk.walk_model._meta.db_table)
         frm = source + (
             'JOIN %(walk_table)s AS %(child)s '
@@ -148,7 +174,7 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
     if walk.shape == 'C':
         cur = qn('cur')
         parent = qn('parent')
-        parent_col = qn(walk.parent_attname)
+        parent_col = qn(_model_column(walk.walk_model, walk.parent_attname))
         walk_table = qn(walk.walk_model._meta.db_table)
         frm = source + (
             'JOIN %(walk_table)s AS %(cur)s '
@@ -167,8 +193,8 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
     if walk.shape == 'E':
         link = qn('link')
         edge_table = qn(walk.edge_model._meta.db_table)
-        parent_col = qn(walk.edge_parent_attname)
-        child_col = qn(walk.edge_child_attname)
+        parent_col = qn(_model_column(walk.edge_model, walk.edge_parent_attname))
+        child_col = qn(_model_column(walk.edge_model, walk.edge_child_attname))
         frm = source + (
             'JOIN %(edge_table)s AS %(link)s '
             'ON %(link)s.%(parent_col)s = %(g)s.%(ident_col)s%(extra)s'
@@ -199,7 +225,7 @@ def _inverse_neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
     source = 'FROM %(gen)s AS %(g)s ' % {'gen': gen, 'g': g}
     if walk.shape == 'S':
         cur = qn('cur')
-        parent_col = qn(walk.parent_attname)
+        parent_col = qn(_model_column(walk.walk_model, walk.parent_attname))
         walk_table = qn(walk.walk_model._meta.db_table)
         frm = source + (
             'JOIN %(walk_table)s AS %(cur)s '
@@ -213,7 +239,7 @@ def _inverse_neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
         return frm, '%s.%s' % (cur, parent_col)
     if walk.shape == 'C':
         child = qn('child')
-        parent_col = qn(walk.parent_attname)
+        parent_col = qn(_model_column(walk.walk_model, walk.parent_attname))
         walk_table = qn(walk.walk_model._meta.db_table)
         frm = source + _node_guard(
             walk, qn, '%s.%s' % (g, ident_col),
@@ -229,8 +255,8 @@ def _inverse_neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
     if walk.shape == 'E':
         link = qn('link')
         edge_table = qn(walk.edge_model._meta.db_table)
-        parent_col = qn(walk.edge_parent_attname)
-        child_col = qn(walk.edge_child_attname)
+        parent_col = qn(_model_column(walk.edge_model, walk.edge_parent_attname))
+        child_col = qn(_model_column(walk.edge_model, walk.edge_child_attname))
         frm = source + _node_guard(
             walk, qn, '%s.%s' % (g, ident_col),
         ) + (
@@ -284,7 +310,7 @@ def _render_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None):
     g = qn('g')
     depth = qn('depth')
     ident_col = qn('ident')
-    ident = qn(walk.walk_ident)
+    ident = qn(_model_column(walk.walk_model, walk.walk_ident))
     walk_table = qn(walk.walk_model._meta.db_table)
     site = qn('s')
     seed_alias = qn('seed_rows')
@@ -417,7 +443,7 @@ def _render_keyed_reach_sql(walk, seed_sql, seed_params, connection, neighbor=No
     depth = qn('depth')
     ident_col = qn('ident')
     carrier = qn('carrier')
-    ident = qn(walk.walk_ident)
+    ident = qn(_model_column(walk.walk_model, walk.walk_ident))
     walk_table = qn(walk.walk_model._meta.db_table)
     site = qn('s')
     seed_alias = qn('seed_rows')

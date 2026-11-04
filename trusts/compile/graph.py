@@ -126,6 +126,8 @@ class ResetAt:
     ``kind`` is ``node`` (column on the walked model), ``edge`` (column
     on the link row this walk already joins), or ``any`` (true when any
     row of another many-to-many, or of a reverse one-to-many, is true).
+    ``far_column`` is the column the far through-FK targets. That is
+    the far primary key only when the FK has no ``to_field``.
     """
 
     path: str
@@ -134,7 +136,7 @@ class ResetAt:
     through_table: str | None = None
     through_node: str | None = None
     far_table: str | None = None
-    far_pk: str | None = None
+    far_column: str | None = None
     far_fk: str | None = None
     node_column: str | None = None
 

@@ -289,12 +289,19 @@ class ResetRegistrationTest(SimpleTestCase):
                         field = self.Node._meta.get_field('flags')
                         self.assertEqual(reset.through_node, field.m2m_column_name())
                         self.assertEqual(reset.far_fk, field.m2m_reverse_name())
+                        self.assertEqual(
+                            reset.far_column,
+                            field.remote_field.model._meta.pk.column,
+                        )
                     elif name == 'reverse-m2m':
                         forward = self.Node._meta.get_field('marks').field
                         self.assertEqual(
                             reset.through_node, forward.m2m_reverse_name(),
                         )
                         self.assertEqual(reset.far_fk, forward.m2m_column_name())
+                        self.assertEqual(
+                            reset.far_column, forward.model._meta.pk.column,
+                        )
                     elif name == 'reverse-fk':
                         fk = self.Node._meta.get_field('policies').field
                         self.assertIsNone(reset.far_table)
@@ -777,3 +784,363 @@ class AlongResetTest(TransactionTestCase):
         self.assertIn('reset: "policies__reset_inheritance"', policies_text)
         self.assertIn('NOT EXISTS', policies_text)
         self.assertIn('arst_policy', policies_text)
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class AlongResetTargetColumnTest(TransactionTestCase):
+    """Non-PK ``to_field`` and ``db_column`` still cut the walk.
+
+    Every foreign key in the tree targets ``code`` and stores that
+    value under a column name that is not the attname. Forward
+    ``has_perm`` and inverse ``get_permitted_users`` agree.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.User = get_user_model()
+        models_ = self._models()
+        (
+            self.Flag, self.Mark, self.Node, self.FlagLink, self.MarkLink,
+            self.Policy, self.Link, self.Sheet, self.Grant, self.Delegation,
+        ) = models_
+        self._table_cm = _tables(*models_)
+        self._table_cm.__enter__()
+        self.addCleanup(self._table_cm.__exit__, None, None, None)
+        self.change = _permission(self.Sheet, 'change_along_reset_field')
+        self.perm = '%s.%s' % (
+            self.change.content_type.app_label, self.change.codename,
+        )
+        self.sponsor = self.User.objects.create_user('arf-sponsor', password='x')
+        self.delegate = self.User.objects.create_user('arf-delegate', password='x')
+        self.bob = self.User.objects.create_user('arf-bob', password='x')
+        self.nodes = {}
+        self.sheets = {}
+        parent = None
+        for code, stopped in (('A', None), ('B', True), ('C', False)):
+            node = self.Node.objects.create(
+                code=code, parent=parent, reset_inheritance=stopped,
+            )
+            parent = node
+            self.nodes[code] = node
+            self.sheets[code] = self.Sheet.objects.create(title=code, node=node)
+        self.Link.objects.create(
+            parent=self.nodes['A'], child=self.nodes['B'], reset_inheritance=True,
+        )
+        self.Link.objects.create(
+            parent=self.nodes['B'], child=self.nodes['C'], reset_inheritance=False,
+        )
+        kept = self.Flag.objects.create(code='keep', reset_inheritance=False)
+        stopped = self.Flag.objects.create(code='stop', reset_inheritance=True)
+        self.nodes['B'].flags.add(kept, stopped)
+        mark = self.Mark.objects.create(code='stop', reset_inheritance=True)
+        mark.nodes.add(self.nodes['B'])
+        self.Policy.objects.create(node=self.nodes['B'], reset_inheritance=False)
+        self.Policy.objects.create(node=self.nodes['B'], reset_inheritance=True)
+
+    def _models(self):
+        class Flag(models.Model):
+            code = models.CharField(max_length=20, unique=True, db_column='flag_key')
+            reset_inheritance = models.BooleanField(null=True, db_column='flag_stop')
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'arf_flag'
+
+        class Mark(models.Model):
+            code = models.CharField(max_length=20, unique=True, db_column='mark_key')
+            reset_inheritance = models.BooleanField(null=True, db_column='mark_stop')
+            nodes = models.ManyToManyField(
+                'Node', through='MarkLink', through_fields=('mark', 'node'),
+                related_name='marks',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'arf_mark'
+
+        class NodeQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Node(PermittedUsersMixin, models.Model):
+            code = models.CharField(max_length=20, unique=True, db_column='node_key')
+            parent = models.ForeignKey(
+                'self', to_field='code', db_column='parent_key', null=True,
+                related_name='children', on_delete=models.CASCADE,
+            )
+            reset_inheritance = models.BooleanField(null=True, db_column='stop_flag')
+            flags = models.ManyToManyField(
+                Flag, through='FlagLink', through_fields=('node', 'flag'),
+                related_name='nodes',
+            )
+            objects = models.Manager.from_queryset(NodeQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'arf_node'
+
+        class FlagLink(models.Model):
+            node = models.ForeignKey(
+                Node, to_field='code', db_column='from_node',
+                related_name='flag_links', on_delete=models.CASCADE,
+            )
+            flag = models.ForeignKey(
+                Flag, to_field='code', db_column='to_flag',
+                related_name='node_links', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'arf_flag_link'
+
+        class MarkLink(models.Model):
+            mark = models.ForeignKey(
+                Mark, to_field='code', db_column='to_mark',
+                related_name='node_links', on_delete=models.CASCADE,
+            )
+            node = models.ForeignKey(
+                Node, to_field='code', db_column='mark_node',
+                related_name='mark_links', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'arf_mark_link'
+
+        class Policy(models.Model):
+            node = models.ForeignKey(
+                Node, to_field='code', db_column='policy_node',
+                related_name='policies', on_delete=models.CASCADE,
+            )
+            reset_inheritance = models.BooleanField(null=True, db_column='policy_stop')
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'arf_policy'
+
+        class Link(models.Model):
+            parent = models.ForeignKey(
+                Node, to_field='code', db_column='edge_parent',
+                related_name='child_links', on_delete=models.CASCADE,
+            )
+            child = models.ForeignKey(
+                Node, to_field='code', db_column='edge_child',
+                related_name='parent_links', on_delete=models.CASCADE,
+            )
+            reset_inheritance = models.BooleanField(null=True, db_column='link_stop')
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'arf_link'
+
+        class SheetQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Sheet(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=20)
+            node = models.ForeignKey(
+                Node, to_field='code', db_column='sheet_node',
+                related_name='sheets', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(SheetQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'arf_sheet'
+
+        class Grant(models.Model):
+            user = models.ForeignKey(
+                get_user_model(), on_delete=models.CASCADE, related_name='+',
+            )
+            node = models.ForeignKey(
+                Node, to_field='code', db_column='grant_node',
+                on_delete=models.CASCADE,
+            )
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'arf_grant'
+
+        class Delegation(models.Model):
+            delegate = models.ForeignKey(
+                get_user_model(), on_delete=models.CASCADE, related_name='+',
+            )
+            sponsor = models.ForeignKey(
+                get_user_model(), on_delete=models.CASCADE, related_name='+',
+            )
+            node = models.ForeignKey(
+                Node, to_field='code', db_column='deleg_node',
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'arf_delegation'
+
+        return (
+            Flag, Mark, Node, FlagLink, MarkLink, Policy, Link, Sheet,
+            Grant, Delegation,
+        )
+
+    def _register(self, name, along, delegation_along=None):
+        handle = compiler(path='tests.core.along-reset-field.%s' % name)
+        record = handle.register(
+            trust=self.Grant,
+            user='user',
+            permission='permission',
+            content='node__sheets',
+            along=along,
+        )
+        if delegation_along is not None:
+            handle.register(
+                trust=self.Delegation,
+                delegate='delegate',
+                sponsor='sponsor',
+                content='node__sheets',
+                along=delegation_along,
+            )
+        return handle, record
+
+    def test_resolved_columns_follow_the_foreign_key_target(self):
+        cases = (
+            ('node', ('node__parent', 8, 'reset_inheritance'), {
+                'kind': 'node', 'column': 'stop_flag',
+            }),
+            ('children', ('node__children', 8, 'reset_inheritance'), {
+                'kind': 'node', 'column': 'stop_flag',
+            }),
+            ('edge', (
+                'node__parent_links__parent', 8, 'parent_links__reset_inheritance',
+            ), {
+                'kind': 'edge', 'column': 'link_stop',
+            }),
+            ('m2m', ('node__parent', 8, 'flags__reset_inheritance'), {
+                'kind': 'any', 'column': 'flag_stop',
+                'node_column': 'node_key', 'through_node': 'from_node',
+                'far_column': 'flag_key', 'far_fk': 'to_flag',
+            }),
+            ('reverse-m2m', ('node__parent', 8, 'marks__reset_inheritance'), {
+                'kind': 'any', 'column': 'mark_stop',
+                'node_column': 'node_key', 'through_node': 'mark_node',
+                'far_column': 'mark_key', 'far_fk': 'to_mark',
+            }),
+            ('reverse-fk', ('node__parent', 8, 'policies__reset_inheritance'), {
+                'kind': 'any', 'column': 'policy_stop',
+                'node_column': 'node_key', 'through_node': 'policy_node',
+                'far_table': None,
+            }),
+        )
+        for name, along, expect in cases:
+            with self.subTest(placement=name):
+                handle, record = self._register(name, along)
+                reset = record.along.reset
+                for key, value in expect.items():
+                    self.assertEqual(getattr(reset, key), value, key)
+                if name == 'm2m':
+                    self.assertNotEqual(
+                        reset.far_column, self.Flag._meta.pk.column,
+                    )
+                    text = render_configured_policy(handle).decode()
+                    self.assertIn('flag_key', text)
+                    self.assertIn('from_node', text)
+                    self.assertIn('to_flag', text)
+                    self.assertIn('flag_stop', text)
+                    self.assertIn('node_key', text)
+                    self.assertIn('parent_key', text)
+                if name == 'node':
+                    text = render_configured_policy(handle).decode()
+                    self.assertIn('stop_flag', text)
+                    self.assertIn('node_key', text)
+                    self.assertIn('parent_key', text)
+                    self.assertIn('grant_node', text)
+
+    def test_non_pk_target_cuts_forward_and_inverse(self):
+        placements = (
+            ('node', ('node__parent', 8, 'reset_inheritance'), 'down'),
+            ('children', ('node__children', 8, 'reset_inheritance'), 'up'),
+            ('edge', (
+                'node__parent_links__parent', 8,
+                'parent_links__reset_inheritance',
+            ), 'down'),
+            ('m2m', ('node__parent', 8, 'flags__reset_inheritance'), 'down'),
+            ('reverse-m2m', ('node__parent', 8, 'marks__reset_inheritance'), 'down'),
+            ('reverse-fk', ('node__parent', 8, 'policies__reset_inheritance'), 'down'),
+        )
+        users = {
+            'sponsor': self.sponsor,
+            'delegate': self.delegate,
+            'bob': self.bob,
+        }
+        for role in ('content', 'delegation', 'sponsor'):
+            for name, along, direction in placements:
+                with self.subTest(role=role, placement=name):
+                    self.Grant.objects.all().delete()
+                    self.Delegation.objects.all().delete()
+                    start = 'A' if direction == 'down' else 'C'
+                    self.Grant.objects.create(
+                        user=self.sponsor, node=self.nodes[start],
+                        permission=self.change,
+                    )
+                    self.Grant.objects.create(
+                        user=self.bob, node=self.nodes['B'],
+                        permission=self.change,
+                    )
+                    plain = along[:2]
+                    if role == 'content':
+                        handle, _record = self._register(
+                            '%s-%s' % (role, name), along,
+                        )
+                    elif role == 'delegation':
+                        handle, _record = self._register(
+                            '%s-%s' % (role, name), plain,
+                            delegation_along=along,
+                        )
+                        self.Delegation.objects.create(
+                            delegate=self.delegate, sponsor=self.sponsor,
+                            node=self.nodes[start],
+                        )
+                    else:
+                        handle, _record = self._register(
+                            '%s-%s' % (role, name), along,
+                            delegation_along=plain,
+                        )
+                        self.Delegation.objects.create(
+                            delegate=self.delegate, sponsor=self.sponsor,
+                            node=self.nodes[start],
+                        )
+                    if direction == 'down':
+                        start_set, own = {'A'}, {'B', 'C'}
+                        plain_set = {'A', 'B', 'C'}
+                    else:
+                        start_set, own = {'C'}, {'B', 'A'}
+                        plain_set = {'A', 'B', 'C'}
+                    if role == 'delegation':
+                        expect = {
+                            'sponsor': plain_set,
+                            'delegate': start_set,
+                            'bob': own,
+                        }
+                    elif role == 'sponsor':
+                        expect = {
+                            'sponsor': start_set,
+                            'delegate': start_set,
+                            'bob': own,
+                        }
+                    else:
+                        expect = {'sponsor': start_set, 'bob': own}
+                    with _listed(handle):
+                        for label, want in expect.items():
+                            got = self._reached(users[label])
+                            self.assertEqual(got, want, label)
+
+    def _reached(self, user):
+        forward = set()
+        inverse = set()
+        for code, sheet in self.sheets.items():
+            if user.has_perm(self.perm, sheet):
+                forward.add(code)
+            holders = sheet.get_permitted_users(self.change)
+            if user.pk in set(holders.values_list('pk', flat=True)):
+                inverse.add(code)
+        self.assertEqual(forward, inverse)
+        return forward
