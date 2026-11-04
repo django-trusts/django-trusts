@@ -877,10 +877,12 @@ def _seed_sql(node, compiler, connection, qn, template, names):
     ident = qn('ident')
     carrier_sql = []
     carrier_params = []
+    carrier_lists = []
     for expr in node.carriers:
         sql, params = compiler.compile(expr)
         carrier_sql.append(sql)
         carrier_params.extend(params)
+        carrier_lists.append(tuple(params))
     model = principal_model(node.record)
     cutting = cuts_users(node.record.via, model) and (template or names)
     if not cutting:
@@ -889,31 +891,45 @@ def _seed_sql(node, compiler, connection, qn, template, names):
                 'via named filter cannot be written in the recursive member.'
             )
         return 'SELECT %s AS %s' % (value_sql, ident), value_params
+    # The starting row is a user. The predicate has to read that row:
+    # a projection of ident and carriers has no user columns, so a
+    # failing user on the grant would not stop the path.
     alias = qn('hop_user')
     table = qn(model._meta.db_table)
     pk = qn(model._meta.pk.column)
     selected = ['%s.%s AS %s' % (alias, pk, ident)]
     for index, sql in enumerate(carrier_sql):
         selected.append('(%s) AS %s' % (sql, qn(names[index])))
-    inner = (
-        'SELECT %s FROM %s AS %s WHERE %s.%s = (%s)'
-        % (', '.join(selected), table, alias, alias, pk, value_sql)
+    where = '%s.%s = (%s)' % (alias, pk, value_sql)
+    params = list(carrier_params)
+    params.extend(value_params)
+    if template:
+        values = {'alias': alias}
+        for index, sql in enumerate(carrier_sql):
+            values['c%s' % index] = '(%s)' % sql
+        where = '%s AND (%s)' % (where, template.format(**values))
+        params.extend(_placeholder_params(template, carrier_lists))
+    sql = 'SELECT %s FROM %s AS %s WHERE %s' % (
+        ', '.join(selected), table, alias, where,
     )
-    params = tuple(carrier_params) + tuple(value_params)
-    if not template:
-        return inner, params
-    wrapped = qn('hop_seed')
-    columns = [ident]
-    columns.extend(qn(name) for name in names)
-    values = {'alias': wrapped}
-    for name in names:
-        values[name] = '%s.%s' % (wrapped, qn(name))
-    hop = template.format(**values)
-    projected = ', '.join('%s.%s' % (wrapped, column) for column in columns)
-    sql = 'SELECT %s FROM (%s) AS %s WHERE %s' % (
-        projected, inner, wrapped, hop,
-    )
-    return sql, params
+    return sql, tuple(params)
+
+
+def _placeholder_params(template, carrier_lists):
+    """Params for ``{cN}`` placeholders, in the order ``format`` emits them."""
+    params = []
+    cursor = 0
+    while True:
+        start = template.find('{c', cursor)
+        if start < 0:
+            return params
+        end = template.find('}', start)
+        if end < 0:
+            return params
+        token = template[start + 2:end]
+        if token.isdigit():
+            params.extend(carrier_lists[int(token)])
+        cursor = end + 1
 
 
 def _row_ident_sql(record, compiler, connection, qn):
