@@ -7,8 +7,8 @@ NULL rules for values already loaded while compiling.
 """
 
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import F, Model, Q, Value
-from django.db.models.functions import Coalesce, Lower, Now
+from django.db.models import DateTimeField, F, Model, Q, Value
+from django.db.models.functions import Cast, Coalesce, Lower, Now
 from django.db.models.lookups import (
     Exact,
     GreaterThan,
@@ -285,7 +285,32 @@ def comparison_q(kind, lhs, rhs):
     return Q(_COMPARISON_LOOKUPS[kind](lhs, rhs))
 
 
-def sql_expression(node, field, model=None, user_model=None):
+class _DateTimeArgument(Cast):
+    """A datetime constant inside a call.
+
+    MySQL types a placeholder as text. ``COALESCE`` of a ``DATETIME(6)``
+    column and that text returns text, so ``...00.000000`` is greater than
+    ``...00``. The cast keeps the argument a datetime. Other backends
+    already compare the parameter as a datetime.
+    """
+
+    def __init__(self, expression):
+        super().__init__(expression, DateTimeField())
+
+    def as_sql(self, compiler, connection, **extra_context):
+        return compiler.compile(self.source_expressions[0])
+
+    def as_sqlite(self, compiler, connection, **extra_context):
+        return compiler.compile(self.source_expressions[0])
+
+    def as_postgresql(self, compiler, connection, **extra_context):
+        return compiler.compile(self.source_expressions[0])
+
+    def as_mysql(self, compiler, connection, **extra_context):
+        return Cast.as_sql(self, compiler, connection, **extra_context)
+
+
+def sql_expression(node, field, model=None, user_model=None, *, inside=False):
     """One comparison operand as Django's own function call or value.
 
     ``field`` builds the leaf for a ``field`` node. A ``Coalesce`` whose
@@ -293,10 +318,14 @@ def sql_expression(node, field, model=None, user_model=None):
     so a ``Value()`` cannot disagree with it at query time.
     """
     if node.kind == 'const':
-        return Value(member_pk(node.value))
+        expr = Value(member_pk(node.value))
+        if inside and isinstance(expr.output_field, DateTimeField):
+            expr = _DateTimeArgument(expr)
+        return expr
     if node.kind == 'call':
         expr = _FUNCTIONS[node.value](*(
-            sql_expression(arg, field, model, user_model) for arg in node.item
+            sql_expression(arg, field, model, user_model, inside=True)
+            for arg in node.item
         ))
         if node.value == 'coalesce' and model is not None:
             output = coalesce_output_field(node, model, user_model)
