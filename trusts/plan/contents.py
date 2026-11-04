@@ -83,17 +83,7 @@ def _content_scope_lookup(record, prefix_lookup, target_attname):
     """
     names = tuple(prefix_lookup.split('__'))
     path = tuple(record.content_path)
-    if path[:len(names)] != names:
-        raise TrustsConfigurationError(
-            'filter_by_permitted_content cannot correlate prefix %r '
-            'on %s.' % (prefix_lookup, record.root._meta.label)
-        )
     suffix = path[len(names):]
-    if not suffix:
-        raise TrustsConfigurationError(
-            'filter_by_permitted_content cannot apply a content filter '
-            'when %r is the content terminal.' % prefix_lookup
-        )
     current = record.root
     for name in names:
         field = current._meta.get_field(name)

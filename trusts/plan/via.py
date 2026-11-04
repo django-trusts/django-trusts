@@ -112,21 +112,10 @@ def via_side(record):
     if getattr(record, 'user_path', None) is not None:
         return 'user'
     path = tuple(walk.walk_path)
-    delegate = tuple(record.delegate_path[:len(path)]) == path
-    sponsor = tuple(record.sponsor_path[:len(path)]) == path
-    if delegate and sponsor:
-        raise TrustsConfigurationError(
-            'via path %r shares a prefix with delegate and sponsor.'
-            % ('__'.join(walk.path),)
-        )
-    if delegate:
+    if tuple(record.delegate_path[:len(path)]) == path:
         return 'delegate'
-    if sponsor:
+    if tuple(record.sponsor_path[:len(path)]) == path:
         return 'sponsor'
-    raise TrustsConfigurationError(
-        'via path %r does not share a walk-site prefix.'
-        % ('__'.join(walk.path),)
-    )
 
 
 def cuts_users(walk, model):
@@ -1188,10 +1177,6 @@ def _seed_sql(node, compiler, connection, qn, template, names):
     model = principal_model(node.record)
     cutting = cuts_users(node.record.via, model) and (template or names)
     if not cutting:
-        if names:
-            raise TrustsConfigurationError(
-                'via named filter cannot be written in the recursive member.'
-            )
         return 'SELECT %s AS %s' % (value_sql, ident), value_params
     # The starting row is a user. The predicate has to read that row:
     # a projection of ident and carriers has no user columns, so a

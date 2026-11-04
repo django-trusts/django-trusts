@@ -1728,11 +1728,6 @@ def _reset_any_m2m(walk_model, field, name, text, role='along'):
         ):
             far_field = candidate
             break
-    if far_field is None:
-        raise TrustsConfigurationError(
-            '%s reset %r cannot be read from %s.'
-            % (role, text, walk_model._meta.label)
-        )
     return ResetAt(
         path=text,
         kind='any',
@@ -1915,10 +1910,6 @@ def _build_via_walk(root, via, anchors):
     """One user walk. Exactly one anchor shares its walk-site prefix."""
     if via is None:
         return None
-    if not isinstance(via, Along):
-        raise TrustsConfigurationError(
-            'via must be an Along instance or None, not %r.' % (via,)
-        )
     matched = []
     for anchor_role, path, model in anchors:
         if _common_prefix(tuple(via.ref._path), tuple(path)):

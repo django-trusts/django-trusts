@@ -210,8 +210,6 @@ def _node_guard(walk, qn, match_sql):
         return ''
     alias = qn('rstn')
     predicate = _entered_predicate(walk, qn, alias)
-    if not predicate:
-        return ''
     return (
         'JOIN %s AS %s ON %s.%s = %s AND %s '
         % (
