@@ -442,6 +442,31 @@ The policy output does the same for that statement, so output that would omit
 or simplify the query for users from content is not emitted. Audit the declared
 walk, bound, generated recursive SQL, and returned-user parity together.
 
+The third element of `along` is a field path. `NULL` and false inherit.
+Three placements are accepted:
+
+- a concrete `BooleanField` on the walked model's own table
+  (`reset_inheritance`), which cuts every path into that node;
+- a concrete `BooleanField` on the link row this walk already traverses
+  (`parent_links__reset_inheritance`), which cuts that link and leaves
+  the node's other parents;
+- a concrete `BooleanField` reached through another many-to-many from
+  the node (`policies__reset_inheritance`), which makes the node a stop
+  when any linked row is true.
+
+A path the walk cannot read, including a field on a multi-table parent,
+is rejected at `register()`.
+
+An incoming earlier grant is cut at a true node, or at a true link when
+the field is on that link. A grant that starts on a node still applies
+there and can continue. A forward inquiry and a reverse inquiry agree,
+including `has_perm()`, `.permitted()`, and `get_permitted_users()`. A
+content walk, a delegation walk, and a sponsor walk each apply the reset
+path configured for that walk. A cycle does not carry an earlier grant
+through a true node or across a true link. An independent grant that
+reaches the object is combined with OR. The policy output records the
+configured reset field.
+
 Current CI exercises Along only for the database combinations listed in the
 support matrix.
 
