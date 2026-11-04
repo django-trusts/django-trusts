@@ -116,6 +116,8 @@ Literal Python `in` is not recovered through AST, bytecode, `dis`, or a
 `__contains__` side channel; the expression grammar is the
 [supported lambda expressions](index.rst#supported-lambda-expressions).
 Functions, arguments, and expression types are validated before storage.
+Registration keeps only the validated expression. The lambda is not kept and
+is never called when permissions are checked.
 Public `register(condition=...)` rejects a prebuilt condition. `.contains` is
 a reserved condition-proxy method; a model field of
 that name cannot be walked there. The `predicate=` keyword is reserved and
@@ -484,10 +486,9 @@ denies an ordinary user. The generated policy SQL carries the same
 condition. Any other permission terminal stays primary-key identity,
 including a custom model that has a `content_type` foreign key.
 
-String `has_perm` still infers the model from the codename suffix. That
-codec gap is [issue #268](https://github.com/django-trusts/django-trusts/issues/268).
-`.permitted()` and `authorization_required` bind the codename to the
-protected model's content type instead. `trusts.E008` is removed. Each
+`has_perm`, `.permitted()`, `get_permitted_users`, and
+`authorization_required` bind the codename to the protected model's content
+type. `trusts.E008` is removed. Each
 inquiry asks each backend; a backend that does not own the names
 contributes nothing. A runtime `.permitted()` call returns an empty
 queryset. `authorization_required` is 403 or 404. There is no system
