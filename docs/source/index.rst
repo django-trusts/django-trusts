@@ -751,9 +751,12 @@ authorization-policy output. See the `bounded-reach security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
 for the recursive-query and database boundaries.
 
-The third element is a field path on the model the walk visits.
-``NULL`` and false inherit. ``register()`` rejects a path that the
-walk cannot read, including a field on a multi-table parent.
+The third element is a field path. ``NULL`` and false inherit.
+``register()`` rejects any other shape: a reverse one-to-one, a
+forward foreign key or forward one-to-one, a generic relation, more
+than one relation, a non-boolean field, a missing field, a third
+element that is not a field path, an ``along`` value that is not a
+pair or a triple, and a field on a multi-table parent.
 
 ``along=("parent", 8, "reset_inheritance")`` reads a concrete
 ``BooleanField`` on that model's own table. In the registered
@@ -785,8 +788,8 @@ Forward and reverse inquiries agree, including ``has_perm()``,
 runs from the object. A content walk, a delegation walk, and a sponsor
 walk each apply the reset path configured for that walk.
 ``along=("parent", 8)`` names no field. Another grant that reaches the
-object still allows it. The policy output records the configured reset
-field.
+object still allows it. The policy output records a configured path
+as ``along.reset``.
 
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~

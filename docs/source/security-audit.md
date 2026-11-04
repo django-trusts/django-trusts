@@ -446,7 +446,8 @@ The third element of `along` is a field path. `NULL` and false inherit.
 Four placements are accepted:
 
 - a concrete `BooleanField` on the walked model's own table
-  (`reset_inheritance`), which cuts every path into that node;
+  (`reset_inheritance`), which makes that node a stop and cuts every
+  path into it;
 - a concrete `BooleanField` on the link row this walk already traverses
   (`parent_links__reset_inheritance`), which cuts that link and leaves
   the node's other parents;
@@ -458,18 +459,21 @@ Four placements are accepted:
   foreign key points at the node), which makes the node a stop when
   any related row is true.
 
-A path the walk cannot read, including a field on a multi-table parent,
-is rejected at `register()`.
+`register()` rejects any other shape: a reverse one-to-one, a forward
+foreign key or forward one-to-one, a generic relation, more than one
+relation, a non-boolean field, a missing field, a third element that
+is not a field path, an `along` value that is not a pair or a triple,
+and a field on a multi-table parent.
 
-An incoming earlier grant is cut at a true node, or at a true link when
+An incoming earlier grant is cut at a stop node, or at a true link when
 the field is on that link. A grant that starts on a node still applies
 there and can continue. A forward inquiry and a reverse inquiry agree,
 including `has_perm()`, `.permitted()`, and `get_permitted_users()`. A
 content walk, a delegation walk, and a sponsor walk each apply the reset
 path configured for that walk. A cycle does not carry an earlier grant
-through a true node or across a true link. An independent grant that
-reaches the object is combined with OR. The policy output records the
-configured reset field.
+through a stop node or across a true link. An independent grant that
+reaches the object is combined with OR. The policy output records a
+configured path as `along.reset`.
 
 Current CI exercises Along only for the database combinations listed in the
 support matrix.
