@@ -441,6 +441,15 @@ A ``permission=`` registration is not treated as group-derived merely because it
 ``user=`` path crosses ``auth.Group``; only explicit ``group=`` registrations
 contribute to ``get_group_permissions()``.
 
+.. _inquiry-agreement:
+
+Those six inquiries agree only for an applicable ordinary ``group=``
+registration: ``has_perm()``, ``.permitted()``,
+``filter_by_permitted_content``, ``get_all_permissions()``,
+``get_group_permissions()``, and ``get_permitted_users()``.
+``get_group_permissions()`` does not include a delegation or an ordinary
+``permission=`` record.
+
 Filter a queryset to the objects permitted for a particular permission:
 
 .. code-block:: python
@@ -749,7 +758,8 @@ delegated registrations. For example, ``along=("parent", 8)`` on
 permitted-content querysets, permission enumeration, users from content, and
 authorization-policy output. See the `bounded-reach security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
-for the recursive-query and database boundaries.
+for the recursive-query and database boundaries. Inquiry agreement for
+that walk is :ref:`inquiry-agreement`.
 
 .. _nested-users:
 
@@ -826,10 +836,8 @@ The relationship ``condition=`` stays on the grant row.
 A repeated link adds no user. The bound stops the walk, and the users
 reached are the users reached with that link removed.
 
-``has_perm()``, ``.permitted()``, ``filter_by_permitted_content``,
-``get_all_permissions()``, ``get_group_permissions()``, and
-``get_permitted_users()`` use this walk and agree. A user override
-grants without this walk.
+Inquiry agreement for this walk is :ref:`inquiry-agreement`. A user
+override grants without this walk.
 
 On a delegated registration, ``via=`` walks ``delegate=`` or
 ``sponsor=``, the one whose path shares the prefix. A delegate walk

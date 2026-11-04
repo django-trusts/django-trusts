@@ -429,7 +429,9 @@ bounded reachability. Audit:
 - termination in the presence of cycles;
 - the resolved identity at every hop;
 - the supported database renderer; and
-- agreement among object, queryset, enumeration, and users-from-content projections.
+- agreement among object, queryset, enumeration, and users-from-content
+  projections, as stated in the setup guide's
+  [inquiry agreement](index.rst#inquiry-agreement).
 
 The inquiry for users from content derives walk-site identities from the bound content and
 traverses the inverse graph without the outer candidate user. Eligible grants
@@ -482,9 +484,8 @@ delegate side. The relationship `condition=` stays on the grant row. The
 content walk's rule is unchanged: its condition stays off intermediate
 content nodes.
 
-`has_perm()`, `.permitted()`, `filter_by_permitted_content`,
-`get_all_permissions()`, `get_group_permissions()`, and
-`get_permitted_users()` compile this walk and agree. The inquiry for users
+Inquiry agreement for this walk is the setup guide's
+[inquiry agreement](index.rst#inquiry-agreement). The inquiry for users
 from content seeds the walk from grants on that content. An object check
 can walk the inverse from the candidate user. Either form must return the
 same users. If the walk cannot be rendered, the inquiry raises before SQL
