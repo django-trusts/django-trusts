@@ -1720,6 +1720,19 @@ def _reset_any_m2m(walk_model, field, name, text, role='along'):
             '%s reset %r cannot be read from %s.'
             % (role, text, walk_model._meta.label)
         )
+    far_field = None
+    for candidate in through._meta.local_fields:
+        if (
+            getattr(candidate, 'column', None) == far_fk
+            and getattr(candidate, 'is_relation', False)
+        ):
+            far_field = candidate
+            break
+    if far_field is None:
+        raise TrustsConfigurationError(
+            '%s reset %r cannot be read from %s.'
+            % (role, text, walk_model._meta.label)
+        )
     return ResetAt(
         path=text,
         kind='any',
@@ -1727,7 +1740,7 @@ def _reset_any_m2m(walk_model, field, name, text, role='along'):
         through_table=through._meta.db_table,
         through_node=node_column,
         far_table=far._meta.db_table,
-        far_pk=far._meta.pk.column,
+        far_column=far_field.target_field.column,
         far_fk=far_fk,
         node_column=source_fk.target_field.column,
     )

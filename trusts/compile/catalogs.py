@@ -269,24 +269,31 @@ class Catalog(object):
         if bound is None:
             return None
         binding, condition = bound
-        exists = plan.user_exists(content, binding) if plan.records else None
-        if plan.delegations:
-            permission_model = (
-                binding._meta.concrete_model
-                if isinstance(binding, Model) else Permission
-            )
-            sponsor_records = _ordinary_records(
-                self, content, permission_model,
-            )
-            delegated = _delegated_user_exists(
-                plan.delegations, sponsor_records, content, binding,
-                content_identity=plan.content_identity,
-                skipped=skipped,
-            )
-            if delegated is not None:
-                exists = (
-                    delegated if exists is None else (_as_q(exists) | delegated)
+        selected = ()
+        if condition:
+            stored = _condition_entry(self, content.__class__, condition[1])
+            if stored is not None:
+                selected = (stored[1],)
+        with via_scope(filters=selected):
+            exists = plan.user_exists(content, binding) if plan.records else None
+            if plan.delegations:
+                permission_model = (
+                    binding._meta.concrete_model
+                    if isinstance(binding, Model) else Permission
                 )
+                sponsor_records = _ordinary_records(
+                    self, content, permission_model,
+                )
+                delegated = _delegated_user_exists(
+                    plan.delegations, sponsor_records, content, binding,
+                    content_identity=plan.content_identity,
+                    skipped=skipped,
+                )
+                if delegated is not None:
+                    exists = (
+                        delegated if exists is None
+                        else (_as_q(exists) | delegated)
+                    )
         user_model = _plan_user_model(plan, content)
         permission_model = plan.permission_model
         if permission_model is None and not isinstance(binding, Model):
@@ -369,10 +376,12 @@ class Catalog(object):
             )
             if overlay is None:
                 return None, False
-            part = granted(
-                self, candidates, user, binding, kind='complete',
-                permission_model=Permission, skipped=skipped,
-            )
+            trees = _selected_filter_trees(self, model, conditions)
+            with via_scope(filters=trees):
+                part = granted(
+                    self, candidates, user, binding, kind='complete',
+                    permission_model=Permission, skipped=skipped,
+                )
             if part is None:
                 return None, True
             return part & overlay, True
@@ -431,21 +440,24 @@ class Catalog(object):
             return PreparedInquiry(model, result=False)
         binding = permission_binding(perm, model)
         values = dict(skipped) if isinstance(skipped, dict) else {}
+        selected = () if stored is None else (stored[1],)
         if isinstance(obj, QuerySet):
-            bound = _bound_all_match(
-                self, obj, user_obj, binding,
-                kind='complete', extra_q=extra_q,
-                permission_model=Permission, skipped=values,
-            )
+            with via_scope(filters=selected):
+                bound = _bound_all_match(
+                    self, obj, user_obj, binding,
+                    kind='complete', extra_q=extra_q,
+                    permission_model=Permission, skipped=values,
+                )
             if bound is None:
                 return PreparedInquiry(model, result=False)
             qs, granted_q = bound
             return PreparedInquiry(model, qs=qs, granted_q=granted_q)
-        queryset = _bound_saved_row(
-            self, obj, user_obj, binding,
-            kind='complete', extra_q=extra_q,
-            permission_model=Permission, skipped=values,
-        )
+        with via_scope(filters=selected):
+            queryset = _bound_saved_row(
+                self, obj, user_obj, binding,
+                kind='complete', extra_q=extra_q,
+                permission_model=Permission, skipped=values,
+            )
         if queryset is None:
             return PreparedInquiry(model, result=False)
         return PreparedInquiry(model, qs=queryset)
@@ -546,17 +558,19 @@ class Catalog(object):
             permext = '%s.change_%s:%s' % (meta.app_label, meta.model_name, code)
         else:
             return None
-        _stored, extra_q = self._condition_overlay(permext, content, user)
+        stored, extra_q = self._condition_overlay(permext, content, user)
         if extra_q is None:
             return None
         plan = self.plan_for(content, user=user)
         if not plan.applicable:
             return None
-        queryset = _bound_saved_row(
-            self, content, user, binding,
-            kind='complete', extra_q=extra_q,
-            permission_model=Permission, skipped=values,
-        )
+        selected = () if stored is None else (stored[1],)
+        with via_scope(filters=selected):
+            queryset = _bound_saved_row(
+                self, content, user, binding,
+                kind='complete', extra_q=extra_q,
+                permission_model=Permission, skipped=values,
+            )
         if queryset is None:
             return None
         return _ExistsQuery(
@@ -675,6 +689,20 @@ def _owns_selected_conditions(catalog, model, conditions):
         if stored is None:
             return False
     return True
+
+
+def _selected_filter_trees(catalog, model, names):
+    """Trees for every selected name. Missing names are an empty tuple.
+
+    The caller has already rejected a missing name. An empty result
+    means this inquiry selected nothing the walk can read.
+    """
+    trees = []
+    for name in names:
+        stored = _condition_entry(catalog, model, name)
+        if stored is not None:
+            trees.append(stored[1])
+    return tuple(trees)
 
 
 def _condition_entry(catalog, model, code):

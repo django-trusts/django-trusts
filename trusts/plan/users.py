@@ -270,11 +270,23 @@ def _condition_side(node, content, singular, user_model):
     if _is_field(node, 'object'):
         return ('object', _object_lookup(content, node.path))
     if _is_field(node, 'permission'):
-        if node.path:
-            raise TrustsConfigurationError(
-                'Permission references cannot traverse attributes.'
-            )
-        return ('value', singular)
+        if not node.path:
+            return ('value', singular)
+        if (
+            node.path == ('codename',)
+            and isinstance(singular, str)
+            and '.' in singular
+        ):
+            return ('const', singular.split('.', 1)[1])
+        if (
+            node.path == ('app_label',)
+            and isinstance(singular, str)
+            and '.' in singular
+        ):
+            return ('const', singular.split('.', 1)[0])
+        raise TrustsConfigurationError(
+            'Permission references cannot traverse attributes.'
+        )
     if _is_field(node, 'user'):
         return ('user', _user_lookup(user_model, node.path))
     raise TrustsConfigurationError(

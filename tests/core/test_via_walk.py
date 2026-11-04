@@ -12,7 +12,9 @@ from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import PermissionDenied
 from django.db import connection, models
+from django.http import HttpRequest
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
 
@@ -25,7 +27,8 @@ from tests.support import (
 )
 from trusts.backends import TrustModelBackendMixin
 from trusts.compile.graph import Along, Ref
-from trusts.errors import TrustsConfigurationError
+from trusts.decorators import authorization_required
+from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.models import (
     AuthorizedQuerySet,
     PermittedQuerySetMixin,
@@ -1792,3 +1795,1197 @@ class ViaUserStopTest(TransactionTestCase):
         finally:
             ada.is_active = True
             ada.save(update_fields=['is_active'])
+
+
+def _add_user_column(test, model, name, field):
+    """Add one column for this test, then drop it."""
+    model.add_to_class(name, field)
+    stored = model._meta.get_field(name)
+    try:
+        with connection.schema_editor() as editor:
+            editor.add_field(model, stored)
+    except Exception:
+        _forget_field(model, stored)
+        raise
+
+    def detach():
+        try:
+            try:
+                _drop_column(model, stored.column)
+            except Exception:
+                with connection.schema_editor() as editor:
+                    editor.remove_field(model, stored)
+        finally:
+            _forget_field(model, stored)
+
+    test.addCleanup(detach)
+    return stored
+
+
+def _drop_column(model, column):
+    table = model._meta.db_table
+    quote = connection.ops.quote_name
+    with connection.cursor() as cursor:
+        present = {
+            item.name
+            for item in connection.introspection.get_table_description(
+                cursor, table,
+            )
+        }
+        if column not in present:
+            return
+        cursor.execute(
+            'ALTER TABLE %s DROP COLUMN %s' % (quote(table), quote(column))
+        )
+
+
+def _bind_m2m(model, name, related):
+    """Finish an isolated many-to-many so ``.add()`` can see its columns."""
+    field = model._meta.get_field(name)
+    if not hasattr(field, 'm2m_field_name'):
+        field.contribute_to_related_class(related, field.remote_field)
+
+
+def _forget_field(model, field):
+    meta = model._meta
+    if field in meta.local_fields:
+        meta.local_fields.remove(field)
+    meta._expire_cache()
+    if hasattr(model, field.name):
+        delattr(model, field.name)
+    remote = getattr(field, 'remote_field', None)
+    if remote is None:
+        return
+    accessor = remote.get_accessor_name()
+    if hasattr(model, accessor):
+        delattr(model, accessor)
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class ViaHopFilterTest(TransactionTestCase):
+    """Selected filters and null comparisons on a walked user."""
+
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+        _attach_manager(self, User)
+        _add_user_column(
+            self, User, 'via_nick',
+            models.CharField(max_length=20, null=True),
+        )
+        _add_user_column(
+            self, User, 'via_other',
+            models.CharField(max_length=20, null=True),
+        )
+        _add_user_column(
+            self, User, 'via_reset',
+            models.BooleanField(null=True),
+        )
+        self.User = User
+        self.people = {}
+        for name in ('ada', 'ben', 'cy', 'dee', 'eve'):
+            self.people[name] = User.objects.create_user(
+                'hop-%s' % name, password='x',
+            )
+        ada, ben, cy, dee, eve = (
+            self.people[name] for name in ('ada', 'ben', 'cy', 'dee', 'eve')
+        )
+        ben.via_manager = ada
+        ben.save()
+        cy.via_manager = ben
+        cy.save()
+        dee.via_manager = ada
+        dee.save()
+        eve.via_manager = dee
+        eve.save()
+
+        class TaskQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Task(PermittedUsersMixin, models.Model):
+            name = models.CharField(max_length=20)
+            objects = models.Manager.from_queryset(TaskQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_hop_task'
+
+        class Seat(models.Model):
+            holder = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            auth_group = models.ForeignKey(
+                Group, on_delete=models.CASCADE, related_name='+',
+            )
+            task = models.ForeignKey(Task, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_hop_seat'
+
+        class Crew(models.Model):
+            name = models.CharField(max_length=20, unique=True)
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+            members = models.ManyToManyField(User, related_name='+')
+            auth_group = models.ForeignKey(
+                Group, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_hop_crew'
+
+        class CrewGrant(models.Model):
+            crew = models.ForeignKey(Crew, on_delete=models.CASCADE)
+            auth_group = models.ForeignKey(
+                Group, on_delete=models.CASCADE, related_name='+',
+            )
+            task = models.ForeignKey(Task, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_hop_crew_grant'
+
+        self.Task, self.Seat = Task, Seat
+        _bind_m2m(Crew, 'members', User)
+        self.Crew, self.CrewGrant = Crew, CrewGrant
+        cm = _tables(Task, Seat, Crew, CrewGrant)
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        self.change = _permission(Task, 'change_hoptask')
+        self.code = 'trusts_tests.change_hoptask'
+        self.task = Task.objects.create(name='task')
+        self.group = Group.objects.create(name='via-hop')
+        self.group.permissions.add(self.change)
+        self.seat = Seat.objects.create(
+            holder=ada, auth_group=self.group, task=self.task,
+        )
+
+    def _activate(self):
+        self.User.objects.filter(username__startswith='hop-').update(is_active=True)
+
+    def _bundle(self, handle, user, *, filtered):
+        code = '%s:kept' % self.code if filtered else self.code
+        conditions = ('kept',) if filtered else ()
+        users = code if filtered else self.change
+        catalog = built_catalog(handle)
+        with _listed(handle):
+            permitted = self.task.name in set(
+                self.Task.objects.permitted(
+                    self.code, user, conditions=conditions,
+                ).values_list('name', flat=True)
+            )
+            has = user.has_perm(code, self.task)
+            reached = self.task.get_permitted_users(users).filter(
+                pk=user.pk,
+            ).exists()
+            complete = self.code in user.get_all_permissions(self.task)
+            grouped = self.code in user.get_group_permissions(self.task)
+            authorized = self.task.name in set(
+                self.Task.objects.authorized(
+                    user, self.change,
+                ).values_list('name', flat=True)
+            )
+        folders = self.task.name in set(
+            scoped_permitted_content(
+                self.Task.objects.all(), user, self.change,
+                content=self.Task, registry=catalog,
+            ).values_list('name', flat=True)
+        )
+        return {
+            'has': has,
+            'permitted': permitted,
+            'reached': reached,
+            'complete': complete,
+            'grouped': grouped,
+            'authorized': authorized,
+            'folders': folders,
+        }
+
+    def _expect(self, handle, user, *, selected, plain, group=True):
+        asked = self._bundle(handle, user, filtered=True)
+        for key in ('has', 'permitted', 'reached'):
+            self.assertEqual(asked[key], selected, key)
+        bare = self._bundle(handle, user, filtered=False)
+        for key in ('complete', 'grouped', 'authorized'):
+            if key == 'grouped' and not group:
+                self.assertIs(bare[key], False)
+            else:
+                self.assertEqual(bare[key], plain, key)
+        for key in ('has', 'permitted', 'reached', 'complete', 'authorized'):
+            self.assertEqual(bare[key], plain, 'bare %s' % key)
+
+    def _seat(self, name, predicate, via):
+        handle = compiler(path='tests.core.via-hop.%s' % name)
+        handle.add_named_filter(self.Task, 'kept', predicate)
+        handle.register(
+            trust=self.Seat,
+            user='holder',
+            group='auth_group',
+            content='task',
+            via=via,
+        )
+        return handle
+
+    def test_named_filter_stops_a_failing_user_and_not_a_group(self):
+        self._activate()
+        kept = lambda user, permission, content: user.username != 'hop-ben'
+        handle = self._seat('user', kept, ('holder__via_manager', 8))
+        reached = ('ada', 'dee', 'eve')
+        stopped = ('ben', 'cy')
+        for name in reached:
+            with self.subTest(user=name, walk='user'):
+                self._expect(handle, self.people[name], selected=True, plain=True)
+        for name in stopped:
+            with self.subTest(user=name, walk='user'):
+                self._expect(
+                    handle, self.people[name], selected=False, plain=True,
+                )
+        seed = self._seat(
+            'seed',
+            lambda user, permission, content: user.username != 'hop-ada',
+            ('holder__via_manager', 8),
+        )
+        for name in ('ada', 'ben', 'cy', 'dee', 'eve'):
+            with self.subTest(user=name, walk='seed'):
+                self._expect(
+                    seed, self.people[name], selected=False, plain=True,
+                )
+        leaf = self._seat(
+            'leaf',
+            lambda user, permission, content: user.username != 'hop-cy',
+            ('holder__via_manager', 8),
+        )
+        for name, selected in (
+            ('ada', True), ('ben', True), ('cy', False),
+            ('dee', True), ('eve', True),
+        ):
+            with self.subTest(user=name, walk='leaf'):
+                self._expect(
+                    leaf, self.people[name], selected=selected, plain=True,
+                )
+
+        parent = self.Crew.objects.create(name='parent', auth_group=self.group)
+        child = self.Crew.objects.create(
+            name='child', parent=parent, auth_group=self.group,
+        )
+        parent.members.add(self.people['ada'])
+        child.members.add(self.people['ben'], self.people['cy'])
+        self.CrewGrant.objects.create(
+            crew=child, auth_group=self.group, task=self.task,
+        )
+        crew = compiler(path='tests.core.via-hop.crew')
+        crew.add_named_filter(self.Task, 'kept', kept)
+        crew.register(
+            trust=self.CrewGrant,
+            user='crew__members',
+            group='auth_group',
+            content='task',
+            via=('crew__children', 8),
+        )
+        for name, selected in (('ben', False), ('cy', True), ('ada', True)):
+            with self.subTest(user=name, walk='group'):
+                self._expect(
+                    crew, self.people[name], selected=selected, plain=True,
+                )
+
+    def test_filter_on_delegate_sponsor_and_reset(self):
+        self._activate()
+        User = self.User
+        ada, ben, cy, dee, eve = (
+            self.people[name] for name in ('ada', 'ben', 'cy', 'dee', 'eve')
+        )
+        zed = User.objects.create_user('hop-zed', password='x')
+
+        class DeskGrant(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, related_name='+',
+            )
+            task = models.ForeignKey(self.Task, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_hop_desk_grant'
+
+        class Bridge(models.Model):
+            task = models.ForeignKey(self.Task, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            sponsor = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_hop_bridge'
+
+        cm = _tables(DeskGrant, Bridge)
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        kept = lambda user, permission, content: user.username != 'hop-ben'
+        DeskGrant.objects.create(
+            user=ada, permission=self.change, task=self.task,
+        )
+        Bridge.objects.create(task=self.task, delegate=ada, sponsor=ada)
+        delegate = compiler(path='tests.core.via-hop.delegate')
+        delegate.add_named_filter(self.Task, 'kept', kept)
+        delegate.register(
+            trust=DeskGrant,
+            user='user',
+            permission='permission',
+            content='task',
+        )
+        delegate.register(
+            trust=Bridge,
+            delegate='delegate',
+            sponsor='sponsor',
+            content='task',
+            via=('delegate__via_manager', 8),
+        )
+        for name, selected in (
+            ('ada', True), ('dee', True), ('eve', True),
+            ('ben', False), ('cy', False),
+        ):
+            with self.subTest(user=name, walk='delegate'):
+                self._expect(
+                    delegate, self.people[name],
+                    selected=selected, plain=True, group=False,
+                )
+        self.assertIs(
+            self._bundle(delegate, zed, filtered=True)['has'], False,
+        )
+
+        sponsor = compiler(path='tests.core.via-hop.sponsor')
+        sponsor.add_named_filter(self.Task, 'kept', kept)
+        sponsor.register(
+            trust=DeskGrant,
+            user='user',
+            permission='permission',
+            content='task',
+        )
+        sponsor.register(
+            trust=Bridge,
+            delegate='delegate',
+            sponsor='sponsor',
+            content='task',
+            via=('sponsor__via_manager', 8),
+        )
+        Bridge.objects.all().delete()
+        Bridge.objects.create(task=self.task, delegate=zed, sponsor=ada)
+        DeskGrant.objects.filter(user=ada).update(user=dee)
+        with self.subTest(walk='sponsor', grant='dee'):
+            self.assertIs(self._bundle(sponsor, zed, filtered=True)['has'], True)
+        DeskGrant.objects.filter(user=dee).update(user=cy)
+        with self.subTest(walk='sponsor', grant='cy'):
+            self.assertIs(self._bundle(sponsor, zed, filtered=True)['has'], False)
+
+        dee.via_reset = True
+        dee.save(update_fields=['via_reset'])
+        reset = self._seat(
+            'reset',
+            lambda user, permission, content: user.username != 'hop-nobody',
+            ('holder__via_manager', 8, 'via_reset'),
+        )
+        for name, selected in (
+            ('ada', True), ('ben', True), ('cy', True),
+            ('dee', False), ('eve', False),
+        ):
+            with self.subTest(user=name, walk='reset'):
+                self._expect(
+                    reset, self.people[name], selected=selected, plain=selected,
+                )
+        blocked = self._seat(
+            'reset-seed',
+            lambda user, permission, content: user.username != 'hop-ada',
+            ('holder__via_manager', 8, 'via_reset'),
+        )
+        for name, plain in (
+            ('ada', True), ('ben', True), ('cy', True),
+            ('dee', False), ('eve', False),
+        ):
+            with self.subTest(user=name, walk='reset-seed'):
+                self._expect(
+                    blocked, self.people[name], selected=False, plain=plain,
+                )
+
+    def test_user_condition_stops_at_each_hop(self):
+        self._activate()
+        places = (
+            ('grant', 'ada', {'ada': False, 'ben': False, 'cy': False, 'dee': False, 'eve': False}),
+            ('middle', 'ben', {'ada': True, 'ben': False, 'cy': False, 'dee': True, 'eve': True}),
+            ('last', 'cy', {'ada': True, 'ben': True, 'cy': False, 'dee': True, 'eve': True}),
+        )
+        for place, stopped, expected in places:
+            with self.subTest(place=place):
+                handle = compiler(path='tests.core.via-hop.cond-%s' % place)
+                handle.set_user_condition(
+                    'called',
+                    lambda user, stopped=stopped: user.username != 'hop-%s' % stopped,
+                )
+                handle.register(
+                    trust=self.Seat,
+                    user='holder',
+                    group='auth_group',
+                    content='task',
+                    via=('holder__via_manager', 8),
+                )
+                with _listed(handle):
+                    seen = {
+                        name: user.has_perm(self.code, self.task)
+                        for name, user in self.people.items()
+                    }
+                for name, allowed in expected.items():
+                    self.assertIs(seen[name], allowed, name)
+
+    def test_null_comparison_on_either_side(self):
+        self._activate()
+        passing = {'ada': True, 'ben': False, 'cy': False, 'dee': True, 'eve': True}
+        cases = (
+            (
+                'eq-none-right',
+                lambda user: user.via_nick == None,  # noqa: E711
+                {'ada': None, 'ben': 'ben', 'dee': None, 'eve': None},
+                {},
+                passing,
+            ),
+            (
+                'eq-none-left',
+                lambda user: None == user.via_nick,  # noqa: E711
+                {'ada': None, 'ben': 'ben', 'dee': None, 'eve': None},
+                {},
+                passing,
+            ),
+            (
+                'ne-none-right',
+                lambda user: user.via_nick != None,  # noqa: E711
+                {'ada': 'ada', 'ben': None, 'dee': 'dee', 'eve': 'eve'},
+                {},
+                passing,
+            ),
+            (
+                'ne-none-left',
+                lambda user: None != user.via_nick,  # noqa: E711
+                {'ada': 'ada', 'ben': None, 'dee': 'dee', 'eve': 'eve'},
+                {},
+                passing,
+            ),
+            (
+                'eq-bool-none',
+                lambda user: user.via_reset == None,  # noqa: E711
+                {},
+                {'ada': None, 'ben': True, 'dee': None, 'eve': None},
+                passing,
+            ),
+            (
+                'ne-bool-none',
+                lambda user: user.via_reset != None,  # noqa: E711
+                {},
+                {'ada': True, 'ben': None, 'dee': True, 'eve': True},
+                passing,
+            ),
+            (
+                'eq-null-field',
+                lambda user: user.via_nick == 'keep',
+                {'ada': 'keep', 'ben': None, 'dee': 'keep', 'eve': 'keep'},
+                {},
+                passing,
+            ),
+            (
+                'ne-null-field',
+                lambda user: user.via_nick != 'stop',
+                {'ada': 'keep', 'ben': None, 'dee': 'keep', 'eve': 'stop'},
+                {},
+                {'ada': True, 'ben': True, 'cy': True, 'dee': True, 'eve': False},
+            ),
+            (
+                'eq-two-fields',
+                lambda user: user.via_nick == user.via_other,
+                {'ada': 'ada', 'ben': None, 'dee': 'dee', 'eve': 'eve'},
+                {},
+                passing,
+            ),
+            (
+                'ne-two-fields',
+                lambda user: user.via_nick != user.via_other,
+                {'ada': 'ada', 'ben': 'ben', 'dee': None, 'eve': 'eve'},
+                {},
+                {'ada': True, 'ben': False, 'cy': False, 'dee': False, 'eve': False},
+            ),
+        )
+        for label, predicate, nicks, flags, expected in cases:
+            with self.subTest(label):
+                for name, value in nicks.items():
+                    person = self.people[name]
+                    person.via_nick = value
+                    person.via_other = value if label != 'ne-two-fields' else (
+                        'other' if name == 'ada' else value
+                    )
+                    if label == 'eq-two-fields' and name == 'ben':
+                        person.via_other = 'ben'
+                    person.save(update_fields=['via_nick', 'via_other'])
+                self.people['cy'].via_nick = 'cy'
+                self.people['cy'].via_other = 'cy'
+                self.people['cy'].save(update_fields=['via_nick', 'via_other'])
+                for name, value in flags.items():
+                    person = self.people[name]
+                    person.via_reset = value
+                    person.save(update_fields=['via_reset'])
+                handle = compiler(path='tests.core.via-hop.%s' % label)
+                handle.set_user_condition('nick', predicate)
+                handle.register(
+                    trust=self.Seat,
+                    user='holder',
+                    group='auth_group',
+                    content='task',
+                    via=('holder__via_manager', 8),
+                )
+                with _listed(handle):
+                    seen = {
+                        name: user.has_perm(self.code, self.task)
+                        for name, user in self.people.items()
+                    }
+                for name, allowed in expected.items():
+                    self.assertIs(seen[name], allowed, name)
+        with self.assertRaises(PermissionConditionError) as raised:
+            compiler(path='tests.core.via-hop.ordered').set_user_condition(
+                'nick', lambda user: user.via_nick < 'm',
+            )
+        self.assertIn('Ordered comparison', str(raised.exception))
+
+
+def _request(user):
+    request = HttpRequest()
+    request.user = user
+    request.META['SERVER_NAME'] = 'testserver'
+    request.META['SERVER_PORT'] = '80'
+    return request
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class ViaPermissionTerminalTest(TransactionTestCase):
+    """The hop reads the permission terminal that register() stored."""
+
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+        _attach_manager(self, User)
+        _add_user_column(
+            self, Permission, 'via_code',
+            models.CharField(
+                max_length=40, unique=True, null=True, db_column='via_code_col',
+            ),
+        )
+        _add_user_column(
+            self, Permission, 'via_label',
+            models.CharField(max_length=40, null=True, db_column='via_label_col'),
+        )
+        self.User = User
+        self.ada = User.objects.create_user('term-ada', password='x')
+        self.ben = User.objects.create_user('term-ben', password='x')
+        self.ben.via_manager = self.ada
+        self.ben.save()
+
+        class TaskQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Task(PermittedUsersMixin, models.Model):
+            name = models.CharField(max_length=20)
+            objects = models.Manager.from_queryset(TaskQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_term_task'
+
+        class Renamed(models.Model):
+            holder = models.ForeignKey(User, on_delete=models.CASCADE, related_name='+')
+            permit = models.ForeignKey(Permission, on_delete=models.CASCADE, related_name='+')
+            task = models.ForeignKey(Task, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_term_renamed'
+
+        class Collected(models.Model):
+            holder = models.ForeignKey(User, on_delete=models.CASCADE, related_name='+')
+            permits = models.ManyToManyField(Permission, related_name='+')
+            task = models.ForeignKey(Task, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_term_collected'
+
+        class Targeted(models.Model):
+            holder = models.ForeignKey(User, on_delete=models.CASCADE, related_name='+')
+            permit = models.ForeignKey(
+                Permission, to_field='via_code', db_column='permit_code',
+                on_delete=models.CASCADE, related_name='+',
+            )
+            task = models.ForeignKey(Task, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_term_targeted'
+
+        class Stored(models.Model):
+            holder = models.ForeignKey(User, on_delete=models.CASCADE, related_name='+')
+            permit = models.ForeignKey(
+                Permission, db_column='grant_permit',
+                on_delete=models.CASCADE, related_name='+',
+            )
+            task = models.ForeignKey(Task, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_term_stored'
+
+        class Desk(models.Model):
+            user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='+')
+            permit = models.ForeignKey(Permission, on_delete=models.CASCADE, related_name='+')
+            task = models.ForeignKey(Task, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_term_desk'
+
+        class Bridge(models.Model):
+            task = models.ForeignKey(Task, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(User, on_delete=models.CASCADE, related_name='+')
+            sponsor = models.ForeignKey(User, on_delete=models.CASCADE, related_name='+')
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_term_bridge'
+
+        _bind_m2m(Collected, 'permits', Permission)
+        self.Task = Task
+        self.models = (Task, Renamed, Collected, Targeted, Stored, Desk, Bridge)
+        cm = _tables(*self.models)
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        self.change = _permission(Task, 'term-ada')
+        self.change.via_code = 'term-code'
+        self.change.via_label = 'term-ada'
+        self.change.save(update_fields=['via_code', 'via_label'])
+        self.code = 'trusts_tests.term-ada'
+        self.task = Task.objects.create(name='task')
+        self.rows = {
+            'renamed': Renamed.objects.create(
+                holder=self.ada, permit=self.change, task=self.task,
+            ),
+            'collected': Collected.objects.create(holder=self.ada, task=self.task),
+            'to_field': Targeted.objects.create(
+                holder=self.ada, permit=self.change, task=self.task,
+            ),
+            'db_column': Stored.objects.create(
+                holder=self.ada, permit=self.change, task=self.task,
+            ),
+        }
+        self.rows['collected'].permits.add(self.change)
+        self.same = lambda user, permission, content: (
+            user.username == permission.codename
+        )
+
+    def _open(self, name, model, permission):
+        handle = compiler(path='tests.core.via-term.%s' % name)
+        handle.add_named_filter(self.Task, 'kept', self.same)
+        handle.register(
+            trust=model,
+            user='holder',
+            permission=permission,
+            content='task',
+            via=('holder__via_manager', 8),
+        )
+        return handle
+
+    def _sees(self, handle, user):
+        code = 'trusts_tests.%s' % self.change.codename
+        with _listed(handle):
+            has = user.has_perm('%s:kept' % code, self.task)
+            permitted = self.task.name in set(
+                self.Task.objects.permitted(
+                    code, user, conditions=('kept',),
+                ).values_list('name', flat=True)
+            )
+        self.assertEqual(has, permitted)
+        return has
+
+    def test_each_terminal_shape(self):
+        shapes = (
+            ('renamed', self.models[1], 'permit'),
+            ('collected', self.models[2], 'permits'),
+            ('to_field', self.models[3], 'permit'),
+            ('db_column', self.models[4], 'permit'),
+        )
+        for name, model, permission in shapes:
+            with self.subTest(shape=name, label='grant'):
+                handle = self._open(name, model, permission)
+                self.change.codename = 'term-ada'
+                self.change.save(update_fields=['codename'])
+                self.assertIs(self._sees(handle, self.ada), True)
+                self.assertIs(self._sees(handle, self.ben), False)
+            with self.subTest(shape=name, label='middle'):
+                self.change.codename = 'term-ben'
+                self.change.save(update_fields=['codename'])
+                self.assertIs(self._sees(handle, self.ada), False)
+                self.assertIs(self._sees(handle, self.ben), False)
+
+    def test_rejected_terminals(self):
+        handle = compiler(path='tests.core.via-term.unequal')
+        handle.add_named_filter(
+            self.Task, 'kept',
+            lambda user, permission, content: user.username != permission.codename,
+        )
+        with self.assertRaises(TrustsConfigurationError) as raised:
+            handle.register(
+                trust=self.models[2],
+                user='holder',
+                permission='permits',
+                content='task',
+                via=('holder__via_manager', 8),
+            )
+        self.assertIn('cannot be written', str(raised.exception))
+        delegated = compiler(path='tests.core.via-term.delegated')
+        delegated.add_named_filter(self.Task, 'kept', self.same)
+        delegated.register(
+            trust=self.models[5],
+            user='user',
+            permission='permit',
+            content='task',
+        )
+        with self.assertRaises(TrustsConfigurationError) as raised:
+            delegated.register(
+                trust=self.models[6],
+                delegate='delegate',
+                sponsor='sponsor',
+                content='task',
+                via=('delegate__via_manager', 8),
+            )
+        self.assertIn('cannot be written', str(raised.exception))
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class ViaForeignKeyTargetTest(TransactionTestCase):
+    """Walk, reset, and membership joins use ``to_field`` and ``db_column``."""
+
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+
+        class Team(models.Model):
+            code = models.CharField(max_length=20, unique=True, db_column='team_code')
+            parent = models.ForeignKey(
+                'self', to_field='code', db_column='parent_code',
+                null=True, related_name='children', on_delete=models.CASCADE,
+            )
+            captain = models.ForeignKey(
+                User, to_field='username', db_column='captain_name',
+                null=True, related_name='+', on_delete=models.CASCADE,
+            )
+            reset_inheritance = models.BooleanField(null=True, db_column='cut_here')
+            auth_group = models.ForeignKey(Group, on_delete=models.CASCADE, related_name='+')
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_fk_team'
+
+        class Membership(models.Model):
+            team = models.ForeignKey(
+                Team, to_field='code', db_column='member_team',
+                on_delete=models.CASCADE,
+            )
+            person = models.ForeignKey(
+                User, to_field='username', db_column='person_name',
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_fk_member'
+
+        Team.add_to_class(
+            'members',
+            models.ManyToManyField(User, through=Membership, related_name='+'),
+        )
+
+        class JobQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Job(PermittedUsersMixin, models.Model):
+            name = models.CharField(max_length=20)
+            team = models.ForeignKey(
+                Team, to_field='code', db_column='job_team',
+                related_name='jobs', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(JobQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_fk_job'
+
+        class Grant(models.Model):
+            team = models.ForeignKey(
+                Team, to_field='code', db_column='grant_team',
+                on_delete=models.CASCADE,
+            )
+            auth_group = models.ForeignKey(Group, on_delete=models.CASCADE, related_name='+')
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_fk_grant'
+
+        class Link(models.Model):
+            src = models.ForeignKey(
+                Team, to_field='code', db_column='src_code',
+                related_name='out_links', on_delete=models.CASCADE,
+            )
+            dst = models.ForeignKey(
+                Team, to_field='code', db_column='dst_code',
+                related_name='in_links', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_fk_link'
+
+        class Mark(models.Model):
+            slug = models.CharField(max_length=20, unique=True, db_column='mark_slug')
+            reset_inheritance = models.BooleanField(null=True, db_column='mark_cut')
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_fk_mark'
+
+        class TeamMark(models.Model):
+            team = models.ForeignKey(
+                Team, to_field='code', db_column='mark_team',
+                on_delete=models.CASCADE,
+            )
+            mark = models.ForeignKey(
+                Mark, to_field='slug', db_column='mark_ref',
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_fk_team_mark'
+
+        Team.add_to_class(
+            'marks',
+            models.ManyToManyField(Mark, through=TeamMark, related_name='+'),
+        )
+        _bind_m2m(Team, 'members', User)
+        _bind_m2m(Team, 'marks', Mark)
+
+        class Flag(models.Model):
+            team = models.ForeignKey(
+                Team, to_field='code', db_column='flag_team',
+                related_name='flags', on_delete=models.CASCADE,
+            )
+            reset_inheritance = models.BooleanField(null=True, db_column='flag_cut')
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_fk_flag'
+
+        self.User, self.Team, self.Job = User, Team, Job
+        self.Grant, self.Link, self.Mark, self.Flag = Grant, Link, Mark, Flag
+        cm = _tables(Team, Membership, Job, Grant, Link, Mark, TeamMark, Flag)
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        self.change = _permission(Job, 'change_fkjob')
+        self.code = 'trusts_tests.change_fkjob'
+        self.people = {}
+        for name in ('ada', 'ben', 'cy'):
+            self.people[name] = User.objects.create_user(
+                'fk-%s' % name, password='x',
+            )
+        root = self._team('root', None)
+        mid = self._team('mid', root)
+        leaf = self._team('leaf', mid)
+        self.teams = {'root': root, 'mid': mid, 'leaf': leaf}
+        for person, code in (('ada', 'root'), ('ben', 'mid'), ('cy', 'leaf')):
+            team = self.teams[code]
+            team.members.add(self.people[person])
+            team.captain = self.people[person]
+            team.save(update_fields=['captain'])
+        Link.objects.create(src=root, dst=mid)
+        Link.objects.create(src=mid, dst=leaf)
+        self.jobs = {
+            name: Job.objects.create(name=name, team=team)
+            for name, team in self.teams.items()
+        }
+
+    def _team(self, code, parent):
+        group = Group.objects.create(name='via-fk-%s' % code)
+        group.permissions.add(self.change)
+        return self.Team.objects.create(
+            code=code, parent=parent, auth_group=group,
+        )
+
+    def _sees(self, handle, user, job):
+        with _listed(handle):
+            return user.has_perm(self.code, job)
+
+    def _open(self, name, via, user='team__members'):
+        handle = compiler(path='tests.core.via-fk.%s' % name)
+        handle.register(
+            trust=self.Grant,
+            user=user,
+            group='auth_group',
+            content='team__jobs',
+            via=via,
+        )
+        return handle
+
+    def test_edge_and_membership_targets(self):
+        grant = self.Grant.objects.create(
+            team=self.teams['root'], auth_group=self.teams['root'].auth_group,
+        )
+        shapes = (
+            ('down', ('team__parent', 8), 'root'),
+            ('link', ('team__in_links__src', 8), 'root'),
+        )
+        for name, via, anchor in shapes:
+            handle = self._open(name, via)
+            job = self.jobs[anchor]
+            with self.subTest(shape=name):
+                for person in ('ada', 'ben', 'cy'):
+                    self.assertIs(
+                        self._sees(handle, self.people[person], job), True, person,
+                    )
+        grant.team = self.teams['leaf']
+        grant.auth_group = self.teams['leaf'].auth_group
+        grant.save(update_fields=['team', 'auth_group'])
+        upward = self._open('up', ('team__children', 8))
+        with self.subTest(shape='up'):
+            for person in ('ada', 'ben', 'cy'):
+                self.assertIs(
+                    self._sees(upward, self.people[person], self.jobs['leaf']),
+                    True, person,
+                )
+
+    def test_along_matches_the_grant_column(self):
+        self.Grant.objects.create(
+            team=self.teams['root'], auth_group=self.teams['root'].auth_group,
+        )
+        handle = compiler(path='tests.core.via-fk.along')
+        handle.register(
+            trust=self.Grant,
+            user='team__members',
+            group='auth_group',
+            content='team__jobs',
+            along=('team__parent', 8),
+        )
+        for name in ('root', 'mid', 'leaf'):
+            self.assertIs(
+                self._sees(handle, self.people['ada'], self.jobs[name]),
+                True, name,
+            )
+        self.assertIs(
+            self._sees(handle, self.people['ben'], self.jobs['leaf']), False,
+        )
+    def test_user_walk_identity_is_the_to_field(self):
+        User = self.User
+        _add_user_column(
+            self, User, 'lead',
+            models.ForeignKey(
+                'self', to_field='username', db_column='lead_name',
+                null=True, related_name='led', on_delete=models.DO_NOTHING,
+                db_constraint=False, db_index=False,
+            ),
+        )
+        ada, ben, cy = (self.people[name] for name in ('ada', 'ben', 'cy'))
+        ben.lead = ada
+        ben.save(update_fields=['lead'])
+        cy.lead = ben
+        cy.save(update_fields=['lead'])
+
+        class Seat(models.Model):
+            holder = models.ForeignKey(
+                User, to_field='username', db_column='holder_name',
+                on_delete=models.CASCADE, related_name='+',
+            )
+            auth_group = models.ForeignKey(
+                Group, on_delete=models.CASCADE, related_name='+',
+            )
+            job = models.ForeignKey(self.Job, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_fk_seat'
+
+        cm = _tables(Seat)
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        Seat.objects.create(
+            holder=ada, auth_group=self.teams['root'].auth_group,
+            job=self.jobs['root'],
+        )
+        handle = compiler(path='tests.core.via-fk.user')
+        handle.register(
+            trust=Seat,
+            user='holder',
+            group='auth_group',
+            content='job',
+            via=('holder__lead', 8),
+        )
+        for name in ('ada', 'ben', 'cy'):
+            self.assertIs(
+                self._sees(handle, self.people[name], self.jobs['root']),
+                True, name,
+            )
+
+    def test_reset_targets(self):
+        self.Grant.objects.create(
+            team=self.teams['root'], auth_group=self.teams['root'].auth_group,
+        )
+        mark = self.Mark.objects.create(slug='stop', reset_inheritance=True)
+        self.teams['mid'].marks.add(mark)
+        self.Flag.objects.create(team=self.teams['mid'], reset_inheritance=True)
+        self.teams['mid'].reset_inheritance = True
+        self.teams['mid'].save(update_fields=['reset_inheritance'])
+        cases = (
+            ('node', ('team__parent', 8, 'reset_inheritance')),
+            ('m2m', ('team__parent', 8, 'marks__reset_inheritance')),
+            ('reverse', ('team__parent', 8, 'flags__reset_inheritance')),
+        )
+        for name, via in cases:
+            handle = self._open(name, via)
+            job = self.jobs['root']
+            with self.subTest(reset=name):
+                self.assertIs(self._sees(handle, self.people['ada'], job), True)
+                self.assertIs(self._sees(handle, self.people['ben'], job), False)
+                self.assertIs(self._sees(handle, self.people['cy'], job), False)
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class ViaInquiryParityTest(TransactionTestCase):
+    """The six inquiries agree on an ordinary group registration."""
+
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+        _attach_manager(self, User)
+
+        class Folder(models.Model):
+            name = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_parity_folder'
+
+        class TaskQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Task(PermittedUsersMixin, models.Model):
+            name = models.CharField(max_length=20)
+            folder = models.ForeignKey(
+                Folder, related_name='tasks', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(TaskQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_parity_task'
+
+        class Seat(models.Model):
+            holder = models.ForeignKey(User, on_delete=models.CASCADE, related_name='+')
+            auth_group = models.ForeignKey(Group, on_delete=models.CASCADE, related_name='+')
+            folder = models.ForeignKey(Folder, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_parity_seat'
+
+        self.User, self.Folder, self.Task, self.Seat = User, Folder, Task, Seat
+        cm = _tables(Folder, Task, Seat)
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        self.change = _permission(Task, 'change_paritytask')
+        self.code = 'trusts_tests.change_paritytask'
+        self.folder = Folder.objects.create(name='folder')
+        self.task = Task.objects.create(name='task', folder=self.folder)
+        self.people = {}
+        for name in ('ada', 'ben', 'cy', 'dee'):
+            self.people[name] = User.objects.create_user(
+                'parity-%s' % name, password='x',
+            )
+        ada, ben, cy, dee = (
+            self.people[name] for name in ('ada', 'ben', 'cy', 'dee')
+        )
+        ben.via_manager = ada
+        ben.is_active = False
+        ben.save()
+        cy.via_manager = ben
+        cy.save()
+        dee.via_manager = ada
+        dee.save()
+        group = Group.objects.create(name='via-parity')
+        group.permissions.add(self.change)
+        Seat.objects.create(holder=ada, auth_group=group, folder=self.folder)
+        self.handle = compiler(path='tests.core.via-parity')
+        self.handle.register(
+            trust=Seat,
+            user='holder',
+            group='auth_group',
+            content='folder__tasks',
+            via=('holder__via_manager', 8),
+        )
+
+    def _answers(self, user):
+        catalog = built_catalog(self.handle)
+        task = self.task
+        with _listed(self.handle):
+            permitted = task.name in set(
+                self.Task.objects.permitted(
+                    self.code, user,
+                ).values_list('name', flat=True)
+            )
+            has = user.has_perm(self.code, task)
+            reached = task.get_permitted_users(self.change).filter(
+                pk=user.pk,
+            ).exists()
+
+            @authorization_required(self.Task, self.code)
+            def view(request, pk):
+                return 'ok'
+
+            try:
+                view(_request(user), pk=task.pk)
+                guarded = True
+            except PermissionDenied:
+                guarded = False
+        common = catalog.permissions_for(user, task)
+        if common == ():
+            listed = False
+        else:
+            listed = self.change.pk in set(common.values_list('pk', flat=True))
+        folders = self.folder.pk in set(
+            scoped_permitted_content(
+                self.Folder.objects.all(), user, self.change,
+                content=self.Task, registry=catalog,
+            ).values_list('pk', flat=True)
+        )
+        return {
+            'permitted': permitted,
+            'has_perm': has,
+            'get_permitted_users': reached,
+            'filter_by_permitted_content': folders,
+            'common_permissions': listed,
+            'authorization_required': guarded,
+        }
+
+    def test_six_inquiries_agree(self):
+        expected = {'ada': True, 'ben': False, 'cy': False, 'dee': True}
+        for name, allowed in expected.items():
+            with self.subTest(user=name):
+                answers = self._answers(self.people[name])
+                self.assertEqual(set(answers.values()), {allowed}, answers)
+

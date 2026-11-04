@@ -134,7 +134,7 @@ class ResetAt:
     through_table: str | None = None
     through_node: str | None = None
     far_table: str | None = None
-    far_pk: str | None = None
+    far_column: str | None = None
     far_fk: str | None = None
     node_column: str | None = None
 

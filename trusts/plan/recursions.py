@@ -15,6 +15,7 @@ from trusts.plan.walk import (
     _content_walk_seed,
     _grant_walk_attname,
     _inverse_neighbor_sql,
+    _quoted_column,
     _render_keyed_reach_sql,
     _render_reach_sql,
     _require_along_renderer,
@@ -54,7 +55,8 @@ class _IdentInReach(Expression):
     def as_sql(self, compiler, connection):
         qn = connection.ops.quote_name
         alias = compiler.query.get_initial_alias()
-        sql = '%s.%s IN (%s)' % (qn(alias), qn(self.attname), self.w_sql)
+        column = _quoted_column(compiler.query.model, self.attname, qn)
+        sql = '%s.%s IN (%s)' % (qn(alias), column, self.w_sql)
         return sql, tuple(self.w_params)
 
 
@@ -354,7 +356,8 @@ class _AnchorInInverseReach(Expression):
         qn = connection.ops.quote_name
         alias = compiler.query.get_initial_alias()
         attname = _grant_walk_attname(self.record)
-        sql = '%s.%s IN (%s)' % (qn(alias), qn(attname), w_sql)
+        column = _quoted_column(compiler.query.model, attname, qn)
+        sql = '%s.%s IN (%s)' % (qn(alias), column, w_sql)
         return sql, tuple(w_params)
 
 

@@ -69,6 +69,38 @@ class _Unbound(object):
         self.lookup = lookup
 
 
+def _permission_attr(perm, path):
+    """One attribute of the permission this inquiry asked for.
+
+    A string permission supplies ``app_label`` and ``codename``. A saved
+    permission row supplies any concrete attribute. Longer paths stay
+    rejected.
+    """
+    if not path:
+        return perm
+    if len(path) != 1:
+        raise PermissionConditionError(
+            'Permission references cannot traverse attributes in V1.'
+        )
+    attr = path[0]
+    if isinstance(perm, Model):
+        try:
+            return getattr(perm, attr)
+        except AttributeError as exc:
+            raise PermissionConditionError(
+                'Permission references cannot traverse attributes in V1.'
+            ) from exc
+    if isinstance(perm, str) and perm.count('.') == 1:
+        app_label, codename = perm.split('.', 1)
+        if attr == 'app_label':
+            return app_label
+        if attr == 'codename':
+            return codename
+    raise PermissionConditionError(
+        'Permission references cannot traverse attributes in V1.'
+    )
+
+
 def _classify(node, model, user, perm, user_model):
     if _node(node, 'const'):
         return _Bound(node.value)
@@ -80,11 +112,7 @@ def _classify(node, model, user, perm, user_model):
                 return _Bound(user)
             return _Bound(_walk_model_path(user, user_model, node.path))
         if node.root == 'permission':
-            if node.path:
-                raise PermissionConditionError(
-                    'Permission references cannot traverse attributes in V1.'
-                )
-            return _Bound(perm)
+            return _Bound(_permission_attr(perm, node.path))
     raise PermissionConditionError(
         'Cannot compile permission condition node %r.' % (node,)
     )
@@ -200,11 +228,7 @@ def _bound_value(node, user, perm, user_model):
                 return user
             return _walk_model_path(user, user_model, node.path)
         if node.root == 'permission':
-            if node.path:
-                raise PermissionConditionError(
-                    'Permission references cannot traverse attributes in V1.'
-                )
-            return perm
+            return _permission_attr(perm, node.path)
     raise PermissionConditionError(
         'Cannot compile permission condition node %r.' % (node,)
     )

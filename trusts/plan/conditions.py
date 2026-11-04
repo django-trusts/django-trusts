@@ -566,7 +566,7 @@ def _validate_node(node, model, user_model):
                     user_model, node.path, ref_kind='principal',
                 )
         elif node.root == 'permission':
-            if node.path:
+            if len(node.path) > 1:
                 raise PermissionConditionError(
                     'Permission references cannot traverse attributes in V1.'
                 )

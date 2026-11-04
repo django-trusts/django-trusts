@@ -1,7 +1,7 @@
 """One ``Q`` per record so a repeated many-to-many hop stays one join."""
 
 from django.contrib.auth.models import Permission
-from django.db.models import F, Model, Q
+from django.db.models import F, Model, Q, Subquery
 
 from trusts.errors import PermissionConditionError
 from trusts.plan.grammar import Tree, unsupported
@@ -181,6 +181,22 @@ class _PredicateCompiler(object):
         })
 
 
+def _stored_permission(record, value):
+    """Value stored in the permission terminal.
+
+    A direct foreign key with ``to_field`` stores that column, not the
+    primary key. A pk subquery still identifies the permission row; the
+    comparison has to read the terminal's target from it.
+    """
+    model = getattr(record, 'permission_model', None)
+    target = getattr(record, 'permission_target', None)
+    if model is None or not target or target == model._meta.pk.attname:
+        return value
+    if isinstance(value, Subquery):
+        return Subquery(model._default_manager.filter(pk=value).values(target)[:1])
+    return value
+
+
 def _permission_content_type_filters(record, content_identity):
     """Lookup kwargs that pin the permission row to one content type.
 
@@ -210,6 +226,8 @@ def _record_predicate(record, correlation=None, *, content_identity=None,
     """
     filters = {}
     for role, value in bindings.items():
+        if role == 'permission':
+            value = _stored_permission(record, value)
         filters[getattr(record, _BINDING_FIELDS[role])] = bind_terminal(
             value, role,
         )
