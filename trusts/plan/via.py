@@ -25,6 +25,7 @@ from trusts.plan.rewrites import CallInput
 from trusts.plan.standards import (
     builtin_user_conditions,
     compile_user_rules,
+    principal_identity_lookups,
     rule_applies,
 )
 from trusts.plan.walk import (
@@ -260,26 +261,12 @@ def _reached_sponsor_q(delegation, ordinary):
         model, ordinary.user_field, conditions, role='sponsor',
         values=skipped, scope=ordinary.root,
     )
-    identity = _identity_lookups(model, ordinary.user_field)
+    identity = principal_identity_lookups(
+        model, ordinary.user_field, strict=False,
+    )
     if identity:
         rules = rules & Q(**identity)
     return rules
-
-
-def _identity_lookups(model, path):
-    lookups = {}
-    for name, expected in (('is_anonymous', False), ('is_authenticated', True)):
-        try:
-            field = model._meta.get_field(name)
-        except Exception:
-            continue
-        if (
-            not getattr(field, 'concrete', False)
-            or field.get_internal_type() != 'BooleanField'
-        ):
-            continue
-        lookups['%s__%s' % (path, name)] = expected
-    return lookups
 
 
 def _capture(record):

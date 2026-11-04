@@ -8,12 +8,11 @@ and sponsor SQL.
 
 __all__ = []
 
-from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Q
 
 from trusts.plan.predicates import compile_predicate
-from trusts.errors import TrustsConfigurationError
 from trusts.plan.relations import bind_checked_user
+from trusts.plan.standards import principal_identity_lookups
 from trusts.plan.via import selects_reached_users
 
 
@@ -56,21 +55,7 @@ def _principal_eligibility_q(model, path, rules, values):
     """
     if rules is None:
         return None
-    lookups = {}
-    for name, expected in (('is_anonymous', False), ('is_authenticated', True)):
-        try:
-            field = model._meta.get_field(name)
-        except FieldDoesNotExist:
-            continue
-        if (
-            not getattr(field, 'concrete', False)
-            or field.get_internal_type() != 'BooleanField'
-        ):
-            raise TrustsConfigurationError(
-                '%s.%s must be a concrete BooleanField for delegated '
-                'principal eligibility.' % (model._meta.label, name)
-            )
-        lookups['%s__%s' % (path, name)] = expected
+    lookups = principal_identity_lookups(model, path, strict=True)
     identity = Q(**lookups) if lookups else Q()
     return bind_checked_user(
         model, identity, rules=rules, values=values,
