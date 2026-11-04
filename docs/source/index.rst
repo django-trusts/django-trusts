@@ -762,8 +762,13 @@ includes the starting row. The bound is the number of steps past that
 row, an integer from 1 to 64. The steps from a walked row to the user
 may end at a many-to-many membership.
 
-A group points at its parent, and ``subgroups`` is the reverse of that
-link. Members of a parent group are reached from a grant on a subgroup:
+``via=("group__parent", 8)`` is the ``along=("parent", 8)`` walk. A grant
+on ``org`` reaches members of ``org`` and of the groups under it,
+``backend`` and ``api``. ``via=("group__subgroups", 8)`` is the reverse
+of that link, the ``along=("children", 8)`` walk. A grant on ``backend``
+reaches members of ``backend`` and of ``org``. Members of a parent group
+inherit into its subgroups, so the registration below uses that reverse
+walk:
 
 .. code-block:: python
 
@@ -798,13 +803,10 @@ link. Members of a parent group are reached from a grant on a subgroup:
    )
 
 ``org`` is the parent of ``backend``, and ``backend`` is the parent of
-``api``. Alice is a member of ``org``. The grant's group is ``backend``.
-Alice has the permission on projects in ``backend`` and in ``api``. Bob,
-a member of ``backend``, does too. That user walk reaches members of
-``backend`` and of ``org``. With the bound at 1, a member of ``org``'s
-parent is out of reach. ``via=("group__parent", 8)`` walks
-toward subgroups: a grant on ``org`` reaches members of ``org`` and of
-the groups nested under it.
+``api``. Alice is a member of ``org`` only. The grant's group is
+``backend``. She has the permission on the projects in ``backend`` and
+``api``. Bob, a member of ``backend``, does too. With the bound at 1, a
+member of the group above ``org`` is out of reach.
 
 ``along=`` and ``via=`` on the same registration are two walks. The user
 must be reached by ``via=`` and the object must be reached by ``along=``.
