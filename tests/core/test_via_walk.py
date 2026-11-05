@@ -2389,12 +2389,12 @@ class ViaHopFilterTest(TransactionTestCase):
         self.assertIn('Ordered comparison', str(raised.exception))
 
     def test_hop_matches_permitted_on_null_bool_negation_and_compare(self):
-        """The walked user and a direct ``.permitted()`` stay pinned.
+        """The walked user and a direct ``.permitted()`` agree.
 
         Each case is the grant holder, so the hop seed and the queryset
-        condition read the same row. A single expected value means both
-        answers. A pair is (queryset, hop). They differ for ``!=`` on a
-        NULL boolean: the queryset keeps that row and the hop does not.
+        condition read the same row. One expected value is both answers.
+        ``!= True`` and ``!= False`` on a NULL boolean keep the row, the
+        same as ``.permitted()``. A ``!= None`` guard drops that row.
         """
         self._activate()
         ada = self.people['ada']
@@ -2434,9 +2434,33 @@ class ViaHopFilterTest(TransactionTestCase):
             ('bool-ne-true', lambda user: user.via_reset != True,  # noqa: E712
              dict(via_nick='ada', via_other='ada', via_reset=False), True),
             ('ne-bool-null', lambda user: user.via_reset != True,  # noqa: E712
-             dict(via_nick=None, via_other=None, via_reset=None), (True, False)),
+             dict(via_nick=None, via_other=None, via_reset=None), True),
+            ('ne-bool-null-false', lambda user: user.via_reset != False,  # noqa: E712
+             dict(via_nick=None, via_other=None, via_reset=None), True),
+            ('bool-ne-false', lambda user: user.via_reset != False,  # noqa: E712
+             dict(via_nick='ada', via_other='ada', via_reset=True), True),
+            ('ne-bool-false-held', lambda user: user.via_reset != False,  # noqa: E712
+             dict(via_nick='ada', via_other='ada', via_reset=False), False),
             ('ne-bool-held', lambda user: user.via_reset != True,  # noqa: E712
              dict(via_nick='ada', via_other='ada', via_reset=True), False),
+            ('guard-null-ne-true',
+             lambda user: (user.via_reset != None) & (user.via_reset != True),  # noqa: E711, E712
+             dict(via_nick=None, via_other=None, via_reset=None), False),
+            ('guard-null-ne-false',
+             lambda user: (user.via_reset != None) & (user.via_reset != False),  # noqa: E711, E712
+             dict(via_nick=None, via_other=None, via_reset=None), False),
+            ('guard-false-ne-true',
+             lambda user: (user.via_reset != None) & (user.via_reset != True),  # noqa: E711, E712
+             dict(via_nick='ada', via_other='ada', via_reset=False), True),
+            ('guard-true-ne-false',
+             lambda user: (user.via_reset != None) & (user.via_reset != False),  # noqa: E711, E712
+             dict(via_nick='ada', via_other='ada', via_reset=True), True),
+            ('guard-true-ne-true',
+             lambda user: (user.via_reset != None) & (user.via_reset != True),  # noqa: E711, E712
+             dict(via_nick='ada', via_other='ada', via_reset=True), False),
+            ('guard-false-ne-false',
+             lambda user: (user.via_reset != None) & (user.via_reset != False),  # noqa: E711, E712
+             dict(via_nick='ada', via_other='ada', via_reset=False), False),
             ('not-bool', lambda user: ~user.via_reset,
              dict(via_nick='ada', via_other='ada', via_reset=True), False),
             ('not-bool-false', lambda user: ~user.via_reset,
@@ -2470,15 +2494,11 @@ class ViaHopFilterTest(TransactionTestCase):
                     trust=self.Seat, user='holder', group='auth_group',
                     content='task', via=('holder__via_manager', 8),
                 )
-                if isinstance(expected, tuple):
-                    direct_expected, walk_expected = expected
-                else:
-                    direct_expected = walk_expected = expected
                 direct_has, direct_permitted = self._holder_answer(direct, ada)
                 walk_has, walk_permitted = self._holder_answer(walked, ada)
                 self.assertEqual(
                     (direct_has, direct_permitted, walk_has, walk_permitted),
-                    (direct_expected, direct_expected, walk_expected, walk_expected),
+                    (expected, expected, expected, expected),
                 )
 
     def test_contains_object_and_permission_on_the_hop(self):

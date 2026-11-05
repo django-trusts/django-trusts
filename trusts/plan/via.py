@@ -545,18 +545,6 @@ def _compare_sql(node, user_model, content_model, content, carriers, name, qn,
         left, right = right, left
     if not _mentions(node, 'user') and not force:
         return None
-    if (
-        getattr(left, 'kind', None) == 'field'
-        and left.root == 'user'
-        and getattr(right, 'kind', None) == 'const'
-        and isinstance(right.value, bool)
-    ):
-        field = _local_field(user_model, left.path, name)
-        if field.get_internal_type() != 'BooleanField':
-            raise _cannot(name)
-        positive = right.value if node.kind == 'eq' else (not right.value)
-        word = 'IS TRUE' if positive else 'IS FALSE'
-        return '{alias}.%s %s' % (qn(field.column), word)
     permission_node = None
     user_node = None
     if _is_permission_field(right):
