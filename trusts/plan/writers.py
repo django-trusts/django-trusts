@@ -7,14 +7,23 @@ NULL rules for values already loaded while compiling.
 """
 
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import F, Model, Q
+from django.db.models import DateTimeField, F, Model, Q, Value
+from django.db.models.functions import Cast, Coalesce, Lower, Now
+from django.db.models.lookups import (
+    Exact,
+    GreaterThan,
+    GreaterThanOrEqual,
+    LessThan,
+    LessThanOrEqual,
+)
 
 from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
     ModelIdentity,
+    coalesce_output_field,
     resolve_field_path,
 )
-from trusts.plan.grammar import Tree
+from trusts.plan.grammar import Tree, needs_expression
 
 
 def contains_q(lookup, member):
@@ -283,6 +292,95 @@ def _compile_contains(node, model, user, perm, user_model):
     return Q(pk__in=())
 
 
+_FUNCTIONS = {'now': Now, 'lower': Lower, 'coalesce': Coalesce}
+_COMPARISON_LOOKUPS = {
+    'eq': Exact,
+    'lt': LessThan,
+    'le': LessThanOrEqual,
+    'gt': GreaterThan,
+    'ge': GreaterThanOrEqual,
+}
+
+
+def comparison_q(kind, lhs, rhs):
+    """One comparison. NULL does not match, including inequality."""
+    if kind == 'ne':
+        return comparison_q('lt', lhs, rhs) | comparison_q(
+            'gt', lhs.copy(), rhs.copy(),
+        )
+    # Lookup.output_field is a BooleanField, so the lookup is already
+    # conditional. Django 6 exposes that as a read-only property.
+    return Q(_COMPARISON_LOOKUPS[kind](lhs, rhs))
+
+
+class _DateTimeArgument(Cast):
+    """A datetime constant inside a call.
+
+    MySQL types a placeholder as text. ``COALESCE`` of a ``DATETIME(6)``
+    column and that text returns text, so ``...00.000000`` is greater than
+    ``...00``. The cast keeps the argument a datetime. Other backends
+    already compare the parameter as a datetime.
+    """
+
+    def __init__(self, expression):
+        super().__init__(expression, DateTimeField())
+
+    def as_sql(self, compiler, connection, **extra_context):
+        return compiler.compile(self.source_expressions[0])
+
+    def as_sqlite(self, compiler, connection, **extra_context):
+        return compiler.compile(self.source_expressions[0])
+
+    def as_postgresql(self, compiler, connection, **extra_context):
+        return compiler.compile(self.source_expressions[0])
+
+    def as_mysql(self, compiler, connection, **extra_context):
+        return Cast.as_sql(self, compiler, connection, **extra_context)
+
+
+def sql_expression(node, field, model=None, user_model=None, *, inside=False):
+    """One comparison operand as Django's own function call or value.
+
+    ``field`` builds the leaf for a ``field`` node. A ``Coalesce`` whose
+    arguments include a column uses that column's field as ``output_field``
+    so a ``Value()`` cannot disagree with it at query time.
+    """
+    if node.kind == 'const':
+        expr = Value(member_pk(node.value))
+        if inside and isinstance(expr.output_field, DateTimeField):
+            expr = _DateTimeArgument(expr)
+        return expr
+    if node.kind == 'call':
+        expr = _FUNCTIONS[node.value](*(
+            sql_expression(arg, field, model, user_model, inside=True)
+            for arg in node.item
+        ))
+        if node.value == 'coalesce' and model is not None:
+            output = coalesce_output_field(node, model, user_model)
+            if output is not None:
+                expr.output_field = output
+        return expr
+    return field(node)
+
+
+def expression_q(node, field, right_field=None, *, model=None, user_model=None):
+    """The ``Q`` for one ordered or function comparison."""
+    return comparison_q(
+        node.kind,
+        sql_expression(node.left, field, model, user_model),
+        sql_expression(node.right, right_field or field, model, user_model),
+    )
+
+
+def _compile_sql_comparison(node, model, user, perm, user_model):
+    def field(leaf):
+        if leaf.root == 'object':
+            return F('__'.join(leaf.path))
+        return Value(member_pk(_bound_value(leaf, user, perm, user_model)))
+
+    return expression_q(node, field, model=model, user_model=user_model)
+
+
 def compile_to_q(node, model, user, perm, user_model=None):
     """Compile an expression tree to a Django ``Q`` for ``model`` rows."""
     if _node(node, 'and'):
@@ -293,6 +391,8 @@ def compile_to_q(node, model, user, perm, user_model=None):
         return compile_to_q(node.left, model, user, perm, user_model) | compile_to_q(
             node.right, model, user, perm, user_model
         )
+    if needs_expression(node):
+        return _compile_sql_comparison(node, model, user, perm, user_model)
     if _node(node, 'eq', 'ne'):
         return _compile_comparison(node, model, user, perm, user_model)
     if _node(node, 'contains'):

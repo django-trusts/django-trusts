@@ -1,9 +1,10 @@
 """One condition grammar for register, named filters, and user rules.
 
 The builder is not policy. Each entry point lowers the tree into the
-nodes it stores. Those nodes hold field paths and normalized constants,
-not Django expressions or application callbacks. A later function or
-ordered comparison is another kind on this tree.
+nodes it stores. Those nodes hold field paths, normalized constants, and function
+calls, not Django expressions or application callbacks. Ordered
+comparisons are ``lt``, ``le``, ``gt``, and ``ge``. A function call is
+``call``.
 
 Roots are named roles (``row``, ``inquiry``, ``user``, ``object``,
 ``permission``), so a later user-side walk can name a root without a
@@ -16,12 +17,17 @@ from trusts.plan.hops import path_text
 _KIND_LABELS = {
     'eq': "'=='",
     'ne': "'!='",
+    'lt': 'Ordered comparison',
+    'le': 'Ordered comparison',
+    'gt': 'Ordered comparison',
+    'ge': 'Ordered comparison',
     'and': "'&'",
     'or': "'|'",
     'not': "'~'",
     'contains': '.contains()',
     'bare': 'A bare boolean field',
     'const': 'A constant',
+    'call': 'An SQL function',
 }
 
 _RETURN_HINT = (
@@ -29,9 +35,11 @@ _RETURN_HINT = (
     "with '&' and '|'."
 )
 
+ORDERED_KINDS = frozenset(('lt', 'le', 'gt', 'ge'))
+
 _PREDICATE_KINDS = frozenset((
     'eq', 'ne', 'and', 'or', 'not', 'contains', 'bare',
-))
+)) | ORDERED_KINDS
 
 _OP_LABELS = {
     '__call__': 'A function or method call',
@@ -200,6 +208,15 @@ class Tree(object):
         return 'Tree(%s)' % self.kind
 
 
+def _comparison(kind):
+    def compare(self, other):
+        return Tree(
+            kind, left=self._field(), right=_operand(other, self._token),
+        )
+
+    return compare
+
+
 class Symbol(object):
     """One symbolic root or a field path off it. Not stored.
 
@@ -237,15 +254,12 @@ class Symbol(object):
             raise _root_rejection()
         return Tree('contains', left=self._field(), right=right)
 
-    def __eq__(self, other):
-        return Tree(
-            'eq', left=self._field(), right=_operand(other, self._token),
-        )
-
-    def __ne__(self, other):
-        return Tree(
-            'ne', left=self._field(), right=_operand(other, self._token),
-        )
+    __eq__ = _comparison('eq')
+    __ne__ = _comparison('ne')
+    __lt__ = _comparison('lt')
+    __le__ = _comparison('le')
+    __gt__ = _comparison('gt')
+    __ge__ = _comparison('ge')
 
     def __and__(self, other):
         return _join('and', self, other)
@@ -309,6 +323,11 @@ def _join(kind, left, right):
 
 
 def _require_predicate(result):
+    if type(result) is bool:
+        raise PermissionConditionError(
+            'A comparison returned a Python bool. Import Now, Lower, and '
+            'Coalesce from trusts.functions.'
+        )
     if isinstance(result, Symbol):
         if not result._path:
             raise _root_rejection()
@@ -342,9 +361,37 @@ def symbol_path(symbol):
     return symbol._path
 
 
+def symbol_root(symbol):
+    """Root name recorded on a ``Symbol``. Slots stay private."""
+    return symbol._root
+
+
 def symbol_token(symbol):
     """Builder token recorded on a ``Symbol``. Slots stay private."""
     return symbol._token
+
+
+def walk(node):
+    """Every ``Tree`` in ``node``, operands and call arguments included."""
+    if isinstance(node, tuple):
+        for item in node:
+            yield from walk(item)
+    elif isinstance(node, Tree):
+        yield node
+        for child in (node.left, node.right, node.item):
+            yield from walk(child)
+
+
+def contains_call(node):
+    """True when ``node`` or one of its operands is a function call."""
+    return any(item.kind == 'call' for item in walk(node))
+
+
+def needs_expression(node):
+    """True for a comparison that compiles as one SQL expression."""
+    return node.kind in ORDERED_KINDS or (
+        node.kind in ('eq', 'ne') and contains_call(node)
+    )
 
 
 def is_inquiry(node):
@@ -357,27 +404,40 @@ def is_predicate(node):
     return isinstance(node, Tree) and node.kind in _PREDICATE_KINDS
 
 
-def invoke(fn, roots):
-    """Call ``fn`` once with one symbol per root name. Return a predicate."""
+def invoke(fn, roots, prepare=None):
+    """Call ``fn`` once with one symbol per root name. Return a predicate.
+
+    ``prepare(tree, token)`` runs after the predicate check, while the
+    builder token still identifies every symbol from this call.
+    """
     token = object()
     symbols = tuple(Symbol(root, token=token) for root in roots)
     try:
         result = fn(*symbols)
     except TrustsConfigurationError:
         raise
+    except (TypeError, ValueError) as exc:
+        raise PermissionConditionError(
+            'Condition builder failed: %s. Import Now, Lower, and Coalesce '
+            'from trusts.functions.' % exc
+        ) from exc
     except Exception as exc:
         raise PermissionConditionError(
             'Condition builder failed: %s' % exc
         ) from exc
-    return _require_predicate(result)
+    result = _require_predicate(result)
+    if prepare is None:
+        return result
+    return prepare(result, token)
 
 
 for _name in _OP_LABELS:
-    # Symbol keeps its own ``in`` message, which names ``.contains``.
-    if _name != '__contains__':
+    # Symbol keeps what it defines: ordering and its ``in`` message.
+    # ``__hash__`` stays ``None`` because ``__eq__`` is defined.
+    if _name not in Symbol.__dict__:
         setattr(Symbol, _name, _unsupported(_name))
     # Stored nodes are data, not callbacks, so Tree has no ``__call__``.
     # ``t.team()`` is rejected on Symbol. Calling a finished tree is a
-    # plain TypeError.
+    # plain TypeError. Ordering on a stored node stays rejected.
     if _name != '__call__':
         setattr(Tree, _name, _unsupported(_name))

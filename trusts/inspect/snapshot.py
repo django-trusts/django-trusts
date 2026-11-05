@@ -808,6 +808,11 @@ def _permission_token(target):
     return '$permission.%s' % name
 
 
+_COMPARISON_SIGNS = {
+    'ne': '!=', 'lt': '<', 'le': '<=', 'gt': '>', 'ge': '>=',
+}
+
+
 class _PolicyConditionText(object):
     """Render one stored predicate as a policy-lock condition line.
 
@@ -828,8 +833,8 @@ class _PolicyConditionText(object):
                 return self._join(node, node.kind)
             if node.kind == 'eq':
                 return self._eq(node)
-            if node.kind == 'ne':
-                return self._pair(node, '!=')
+            if node.kind in _COMPARISON_SIGNS:
+                return self._pair(node, _COMPARISON_SIGNS[node.kind])
             if node.kind == 'contains':
                 return self._contains(node)
             if node.kind == 'not':
@@ -896,7 +901,16 @@ def _condition_path(operand):
 def _operand_text(operand):
     if operand.kind == 'field':
         return _condition_path(operand)
+    if operand.kind == 'call':
+        return _call_text(operand)
     return _constant_text(operand.value)
+
+
+def _call_text(node):
+    return '%s(%s)' % (
+        node.value.capitalize(),
+        ', '.join(_operand_text(arg) for arg in node.item),
+    )
 
 
 def _constant_text(value):

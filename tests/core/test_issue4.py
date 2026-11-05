@@ -57,14 +57,12 @@ class ConditionGrammarTest(SimpleTestCase):
             )
         self.assertIn('chained', str(ctx.exception))
 
-    def test_ordering_is_not_a_predicate(self):
-        with self.assertRaises(PermissionConditionError) as ctx:
-            compiler().add_named_filter(
-                object,
-                'range',
-                lambda u, p, o: o.amount < 100,
-            )
-        self.assertIn('Ordered comparison', str(ctx.exception))
+    def test_ordering_is_a_predicate(self):
+        compiler().add_named_filter(
+            object,
+            'range',
+            lambda u, p, o: o.amount < 100,
+        )
         with self.assertRaises(TypeError):
             compiler().add_named_filter(object, 'range', 1)
 

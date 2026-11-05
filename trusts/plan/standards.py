@@ -18,11 +18,11 @@ from django.db.models import BooleanField, F, Q
 from django.db.models.expressions import RawSQL
 
 from trusts.plan.conditions import (
+    capture_expression,
     require_boolean_field,
-    normalize_expression,
     validate_expression,
 )
-from trusts.plan.grammar import Tree, invoke, unsupported
+from trusts.plan.grammar import ORDERED_KINDS, Tree, contains_call, unsupported
 from trusts.plan.writers import (
     boolean_q,
     negate_q,
@@ -144,7 +144,7 @@ def walk_user_lambda(expr):
             'User condition expression must be a callable or None, not %r.'
             % (expr,)
         )
-    return normalize_expression(invoke(expr, ('user',)))
+    return capture_expression(expr, ('user',))
 
 
 def _require_user_boolean(model, node, name):
@@ -176,7 +176,11 @@ def validate_user_rule(model, expr, name):
     if expr.kind == 'bare':
         _require_user_boolean(model, expr.item, name)
         return
+    if expr.kind in ORDERED_KINDS:
+        raise unsupported('Ordered comparison', 'a user condition')
     if expr.kind in ('eq', 'ne', 'contains'):
+        if contains_call(expr):
+            raise unsupported('An SQL function', 'a user condition')
         validate_expression(expr, model, model)
         return
     raise unsupported(expr.kind, 'a user condition')
