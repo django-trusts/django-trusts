@@ -39,8 +39,10 @@ from trusts.plan.via import (
     bind_grant_qs,
     delegate_q,
     delegate_user_q,
+    prefix_occurrence,
     sponsor_constraint,
     via_scope,
+    via_side,
 )
 from trusts.plan.relations import (
     _bound_permission_identity,
@@ -58,13 +60,6 @@ def _as_q(predicate):
     return Q(predicate)
 
 
-def _and_predicate(left, right):
-    """AND two grant predicates. ``None`` on the left stays inapplicable."""
-    if left is None:
-        return None
-    return _as_q(left) & _as_q(right)
-
-
 def _content_scope_lookup(record, prefix_lookup, target_attname):
     """Content-model lookup equal to the outer scope row's identity."""
     return content_scope_lookup(
@@ -73,14 +68,6 @@ def _content_scope_lookup(record, prefix_lookup, target_attname):
         prefix_lookup.split('__'),
         target_attname,
     )
-
-
-def _content_under_outer(record, lookup, target_attname, overlay):
-    """Filtered content rows that sit on this outer prefix row."""
-    correlation = _content_scope_lookup(record, lookup, target_attname)
-    return Exists(record.content_model._default_manager.filter(overlay).filter(
-        **{correlation: OuterRef(target_attname)},
-    ))
 
 
 def _this_grant_seed(record):
@@ -94,13 +81,6 @@ def _this_grant_seed(record):
     query = seed.query.clone()
     query.subquery = True
     return query
-
-
-def _grant_reaches_filtered_content(record, overlay):
-    """This grant row authorizes a content row that passes ``overlay``."""
-    return Exists(record.content_model._default_manager.filter(overlay).filter(
-        Q(GrantReach(record, seed_query=_this_grant_seed(record))),
-    ))
 
 
 def _outer_column(name, depth):
@@ -176,18 +156,27 @@ def _stored_prefix_column(model, lookup):
 
 
 def _same_sheet_in_both_walks(delegation, sponsor_records, permission,
-                              content_identity, prefix_model, lookup, overlay):
+                              content_identity, prefix_model, lookup, overlay,
+                              row_via=None):
     """One filtered sheet is in the delegation walk and the sponsor walk.
 
     Two separate ``EXISTS`` checks can match different sheets and list
     the prefix. The sheet query holds both walks, so one row has to
     satisfy the filter and both reaches. Each walk seed is correlated
-    outside its recursive member.
+    outside its recursive member. ``row_via`` is the delegate hop for
+    this same sheet. The sheet query sits inside the delegation, so
+    that row is two levels out.
     """
     sheet = delegation.content_model._default_manager.filter(overlay)
     sheet = sheet.filter(Q(GrantReach(
         delegation, seed_query=_this_grant_seed(delegation),
     )))
+    if row_via is not None:
+        sheet = sheet.filter(Exists(
+            delegation.root._default_manager.filter(
+                pk=OuterRef(OuterRef('pk')),
+            ).filter(row_via),
+        ))
     sponsor_parts = []
     for ordinary in sponsor_records:
         if not _sponsor_record_matches(ordinary, delegation):
@@ -375,46 +364,117 @@ def _apply_content_overlay(predicate, record, lookup, target_attname, position,
         return predicate
     if position == 'before' and getattr(record, 'along', None) is not None:
         return predicate
-    return _and_predicate(
-        predicate,
-        _content_under_outer(
-            record, lookup, target_attname, content_overlay,
-        ),
+    return _one_content_row(
+        record, lookup, target_attname, content_overlay, predicate,
     )
+
+
+def _one_content_row(record, lookup, target_attname, overlay, proof):
+    """One protected row under this prefix satisfies ``overlay`` and ``proof``.
+
+    The hop's outer query is that row, so a value from one row cannot
+    pair with a grant or overlay witness from another. The correlation
+    is this prefix hop, including when the same model occurs earlier
+    on the content path.
+    """
+    correlation = _content_scope_lookup(record, lookup, target_attname)
+    rows = record.content_model._default_manager.filter(overlay).filter(
+        **{correlation: OuterRef(target_attname)},
+    )
+    if proof is not None:
+        rows = rows.filter(proof)
+    return Exists(rows)
+
+
+def _ancestor_same_row(record, lookup, target_attname, user, permission,
+                       content_identity, overlay):
+    """One content row is reached by a grant on this ancestor that matches it.
+
+    The along walk selects the row. The hop is compiled against that
+    same row: the grant query sits inside the content query, and the
+    stored prefix is one level further out.
+    """
+    grants = bind_grant_qs(
+        record,
+        user=user,
+        permission=permission,
+        correlation=Q(**{lookup: OuterRef(OuterRef(target_attname))}),
+        content_identity=content_identity,
+    )
+    rows = record.content_model._default_manager.filter(overlay).filter(
+        Q(GrantReach(
+            record,
+            seed_query=_walk_seed_from_rows(record.along, grants),
+        )),
+    )
+    return Exists(rows)
+
+
+def _proof_on_content_row(record, lookup, target_attname, user, permission,
+                          content_identity, position):
+    """Grant or forward-walk proof whose parent row is one content row."""
+    if position in ('exact', 'before'):
+        return Exists(bind_grant_qs(
+            record,
+            user=user,
+            permission=permission,
+            correlation=Q(**{lookup: OuterRef(OuterRef(target_attname))}),
+            content_identity=content_identity,
+        ))
+    suffix = None
+    if position == 'after':
+        suffix = _prefix_partial_suffix(record, lookup)
+    return _PrefixInForwardWalk(
+        record, user, permission, target_attname,
+        content_identity=content_identity,
+        suffix_lookup=suffix,
+        on_content=True,
+    )
+
+
+def _prefix_scope(record, lookup, target_attname):
+    """Occurrence of ``lookup`` while this prefix predicate is built."""
+    path = tuple(lookup.split('__')) if lookup else ()
+    current = record.root
+    related = current
+    for name in path:
+        field = current._meta.get_field(name)
+        related, _attname = resolved_hop(
+            field, 'content', record.content_path,
+        )
+        current = related
+    return prefix_occurrence(path, target_attname, related)
 
 
 def _ordinary_prefix_predicate(record, lookup, target_attname, user, permission,
                               content_identity, content_overlay=None):
     """One ordinary permitted-content predicate, including an ``along=`` walk."""
     position = _prefix_walk_position(record, lookup)
-    if position in ('exact', 'before'):
-        grant_q = None
-        if (
-            content_overlay is not None
-            and position == 'before'
-            and record.along is not None
-        ):
-            grant_q = _grant_reaches_filtered_content(
-                record, content_overlay,
+    if content_overlay is not None:
+        if position == 'before' and record.along is not None:
+            return _ancestor_same_row(
+                record, lookup, target_attname, user, permission,
+                content_identity, content_overlay,
             )
-        predicate = _exact_prefix_exists(
-            record, lookup, target_attname, user, permission,
-            content_identity, grant_q=grant_q,
+        return _one_content_row(
+            record, lookup, target_attname, content_overlay,
+            _proof_on_content_row(
+                record, lookup, target_attname, user, permission,
+                content_identity, position,
+            ),
         )
-        return _apply_content_overlay(
-            predicate, record, lookup, target_attname, position,
-            content_overlay,
+    if position in ('exact', 'before'):
+        return _exact_prefix_exists(
+            record, lookup, target_attname, user, permission,
+            content_identity,
         )
     suffix = None
     if position == 'after':
         suffix = _prefix_partial_suffix(record, lookup)
-    predicate = _PrefixInForwardWalk(
+    return _PrefixInForwardWalk(
         record, user, permission, target_attname,
         content_identity=content_identity,
         suffix_lookup=suffix,
-    )
-    return _apply_content_overlay(
-        predicate, record, lookup, target_attname, position, content_overlay,
     )
 
 
@@ -530,10 +590,16 @@ def _prefix_sponsor_q(record, sponsor_records, permission, content_identity,
 
 
 def _delegation_prefix_reach_q(record, user, lookup, target_attname, candidate,
-                              position):
-    """Delegation row reaches this prefix."""
+                              position, *, nested=False):
+    """Delegation row reaches this prefix.
+
+    ``nested`` places this row inside the content query, so the prefix
+    column is one level further out than the delegation's own parent.
+    """
     if record.along is None or position == 'before':
-        return Q(**{lookup: OuterRef(target_attname)})
+        return Q(**{
+            lookup: _outer_column(target_attname, 2 if nested else 1),
+        })
     return Q(_KeyedReach(
         record.along,
         _delegation_walk_seed(
@@ -547,17 +613,29 @@ def _delegation_prefix_reach_q(record, user, lookup, target_attname, candidate,
 def _delegation_prefix_exists(record, sponsor_records, user, permission,
                              content_identity, prefix_model, lookup,
                              target_attname, candidate, position,
-                             skipped=(), content_overlay=None):
+                             skipped=(), content_overlay=None, nested=False):
     """``EXISTS`` delegation row correlated to ``candidate``."""
+    # Sponsor ``via=`` on an ancestor prefix stays on this delegation
+    # row. That hop can still read a different content row than the
+    # overlay. Its carrier and the ordinary grant's user column are
+    # compiled by one query, so it is not moved onto the sheet here.
     sponsor_q = _prefix_sponsor_q(
         record, sponsor_records, permission, content_identity, prefix_model,
         candidate, lookup,
     )
 
+    on_sheet = (
+        content_overlay is not None
+        and position == 'before'
+        and record.along is not None
+        and via_side(record) == 'delegate'
+    )
+
     def bound():
-        combined = delegate_q(record, user)
+        combined = Q() if on_sheet else delegate_q(record, user)
         combined &= _delegation_prefix_reach_q(
             record, user, lookup, target_attname, candidate, position,
+            nested=nested,
         )
         return combined
 
@@ -574,6 +652,7 @@ def _delegation_prefix_exists(record, sponsor_records, user, permission,
         combined &= _same_sheet_in_both_walks(
             record, sponsor_records, permission, content_identity,
             prefix_model, lookup, content_overlay,
+            row_via=delegate_q(record, user) if on_sheet else None,
         )
     return Exists(record.root._default_manager.filter(combined))
 
@@ -599,17 +678,28 @@ def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
             _reject_unsupported_delegated_suffix(record.along)
         for lookup, target_attname in lookups:
             position = _prefix_walk_position(record, lookup)
-            candidate = OuterRef(target_attname)
-            found = _delegation_prefix_exists(
-                record, sponsor_records, user, permission, content_identity,
-                prefix_model, lookup, target_attname, candidate, position,
-                skipped=skipped, content_overlay=content_overlay,
+            nested = content_overlay is not None and not (
+                position == 'before' and record.along is not None
             )
-            if found is not None:
-                parts.append(_apply_content_overlay(
-                    found, record, lookup, target_attname, position,
-                    content_overlay,
+            candidate = _outer_column(target_attname, 2 if nested else 1)
+            with _prefix_scope(record, lookup, target_attname):
+                found = _delegation_prefix_exists(
+                    record, sponsor_records, user, permission,
+                    content_identity, prefix_model, lookup, target_attname,
+                    candidate, position, skipped=skipped,
+                    content_overlay=content_overlay, nested=nested,
+                )
+            if found is None:
+                continue
+            if nested:
+                parts.append(_one_content_row(
+                    record, lookup, target_attname, content_overlay, found,
                 ))
+                continue
+            parts.append(_apply_content_overlay(
+                found, record, lookup, target_attname, position,
+                content_overlay,
+            ))
     return parts
 
 
@@ -645,10 +735,11 @@ def _permitted_content_body(scope_model, user, permission, *, content, catalog,
         for lookup, target_attname in _scope_prefix_lookups(
             record, scope_model,
         ):
-            plan_parts.append(_ordinary_prefix_predicate(
-                record, lookup, target_attname, user, permission,
-                content_identity, content_overlay=content_overlay,
-            ))
+            with _prefix_scope(record, lookup, target_attname):
+                plan_parts.append(_ordinary_prefix_predicate(
+                    record, lookup, target_attname, user, permission,
+                    content_identity, content_overlay=content_overlay,
+                ))
     if plan.delegations:
         plan_parts.extend(_delegated_prefix_predicates(
             tuple(plan.delegations),

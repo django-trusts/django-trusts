@@ -4397,3 +4397,540 @@ class CandidateContentIdentityTest(TransactionTestCase):
                     self.assertIs(answers['get_all_permissions'], True)
                     self.assertIs(answers['get_group_permissions'], False)
 
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class SameCandidateRowTest(TransactionTestCase):
+    """One protected row has to satisfy the hop and the overlay together.
+
+    A prefix with two rows must be listed when only the later row
+    qualifies. A hop value from one row must not combine with an
+    overlay from the other. ``get_all_permissions`` and
+    ``get_group_permissions`` do not take the named filter, so they
+    are recorded separately and are not the expected value of the
+    filtered inquiries.
+    """
+
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+        _attach_manager(self, User)
+        self.User = User
+
+        class Desk(models.Model):
+            closed = models.BooleanField(default=False)
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_same_desk'
+
+        class SheetQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Sheet(PermittedUsersMixin, models.Model):
+            region = models.CharField(max_length=20)
+            mark = models.CharField(max_length=20)
+            desk = models.ForeignKey(
+                Desk, related_name='sheets', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(SheetQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_same_sheet'
+
+        class Grant(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            desk = models.ForeignKey(Desk, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_same_grant'
+
+        class Handoff(models.Model):
+            desk = models.ForeignKey(Desk, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(
+                User, related_name='+', on_delete=models.CASCADE,
+            )
+            sponsor = models.ForeignKey(
+                User, related_name='+', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_same_handoff'
+
+        self.Desk, self.Sheet = Desk, Sheet
+        self.Grant, self.Handoff = Grant, Handoff
+        cm = _tables(Desk, Sheet, Grant, Handoff)
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        _add_user_column(
+            self, User, 'zone', models.CharField(max_length=20, null=True),
+        )
+        self.change = _permission(Sheet, 'change_samesheet')
+        self.code = 'trusts_tests.change_samesheet'
+        self.ada = User.objects.create_user('same-ada', password='x')
+        self.bea = User.objects.create_user('same-bea', password='x')
+        self.ada.zone = 'east'
+        self.bea.zone = 'east'
+        self.ada.via_manager = self.bea
+        self.ada.save()
+        self.bea.save()
+
+    def _predicate(self):
+        return lambda user, permission, content: (
+            (user.zone == content.region) & (content.mark == 'yes')
+        )
+
+    def _register(self, name, *, along=None, delegate=False, via=None):
+        handle = compiler(path='tests.core.via-same-%s' % name)
+        handle.add_named_filter(self.Sheet, 'kept', self._predicate())
+        grant = dict(
+            trust=self.Grant, user='user', permission='permission',
+            content='desk__sheets',
+        )
+        if along is not None:
+            grant['along'] = along
+        if via is not None and not delegate:
+            grant['via'] = via
+        handle.register(**grant)
+        if delegate:
+            hand = dict(
+                trust=self.Handoff, delegate='delegate', sponsor='sponsor',
+                content='desk__sheets',
+            )
+            if along is not None:
+                hand['along'] = along
+            if via is not None:
+                hand['via'] = via
+            handle.register(**hand)
+        return handle
+
+    def _answers(self, handle, user, sheet):
+        filtered = '%s:kept' % self.code
+        with _listed(handle):
+            has = user.has_perm(filtered, sheet)
+            permitted = set(self.Sheet.objects.permitted(
+                self.code, user, conditions=('kept',),
+            ).values_list('pk', flat=True))
+            reached = set(sheet.get_permitted_users(filtered).values_list(
+                'pk', flat=True,
+            ))
+            listed = set(filter_by_permitted_content(
+                self.Desk.objects.all(), user, self.change,
+                content=self.Sheet, conditions=('kept',),
+            ).values_list('pk', flat=True))
+
+            @authorization_required(self.Sheet, self.code, ('kept',))
+            def view(request, pk):
+                return 'ok'
+
+            try:
+                view(_request(user), pk=sheet.pk)
+                guarded = True
+            except PermissionDenied:
+                guarded = False
+            complete = self.code in user.get_all_permissions(sheet)
+            grouped = self.code in user.get_group_permissions(sheet)
+        return {
+            'has_perm': has,
+            'permitted': sheet.pk in permitted,
+            'get_permitted_users': user.pk in reached,
+            'authorization_required': guarded,
+            'listed': listed,
+            'get_all_permissions': complete,
+            'get_group_permissions': grouped,
+        }
+
+    def _expect_row(self, handle, user, sheet, allowed, listed):
+        answers = self._answers(handle, user, sheet)
+        filtered = {
+            key: answers[key]
+            for key in (
+                'has_perm', 'permitted', 'get_permitted_users',
+                'authorization_required',
+            )
+        }
+        self.assertEqual(set(filtered.values()), {allowed}, answers)
+        self.assertEqual(answers['listed'], listed, answers)
+        # Unfiltered inquiries. Not an oracle for the named filter.
+        self.assertIs(answers['get_all_permissions'], True, answers)
+        self.assertIs(answers['get_group_permissions'], False, answers)
+
+    def test_two_rows_and_split_witness_agree(self):
+        parent = self.Desk.objects.create()
+        child = self.Desk.objects.create(parent=parent)
+        modes = (
+            ('exact', {'via': ('user__via_manager', 1)}, self.ada, self.ada, child, child),
+            ('along', {'along': ('desk__parent', 1), 'via': ('user__via_manager', 1)}, self.ada, self.ada, parent, child),
+            ('delegate', {'delegate': True, 'via': ('delegate__via_manager', 1)}, self.bea, self.ada, child, child),
+            ('sponsor', {'delegate': True, 'via': ('sponsor__via_manager', 1)}, self.bea, self.bea, child, child),
+        )
+        for name, options, actor, holder, anchor, listed_desk in modes:
+            with self.subTest(name=name, case='positive'):
+                self.Sheet.objects.all().delete()
+                self.Grant.objects.all().delete()
+                self.Handoff.objects.all().delete()
+                missed = self.Sheet.objects.create(
+                    pk=1, region='west', mark='yes', desk=listed_desk,
+                )
+                kept = self.Sheet.objects.create(
+                    pk=2, region='east', mark='yes', desk=listed_desk,
+                )
+                self.Grant.objects.create(
+                    user=holder, desk=anchor, permission=self.change,
+                )
+                if options.get('delegate'):
+                    self.Handoff.objects.create(
+                        desk=anchor, delegate=self.bea, sponsor=self.ada,
+                    )
+                handle = self._register(name + '-yes', **options)
+                self._expect_row(handle, actor, missed, False, {listed_desk.pk})
+                self._expect_row(handle, actor, kept, True, {listed_desk.pk})
+            with self.subTest(name=name, case='split'):
+                self.Sheet.objects.all().delete()
+                self.Grant.objects.all().delete()
+                self.Handoff.objects.all().delete()
+                hop_only = self.Sheet.objects.create(
+                    pk=1, region='east', mark='no', desk=listed_desk,
+                )
+                overlay_only = self.Sheet.objects.create(
+                    pk=2, region='west', mark='yes', desk=listed_desk,
+                )
+                self.Grant.objects.create(
+                    user=holder, desk=anchor, permission=self.change,
+                )
+                if options.get('delegate'):
+                    self.Handoff.objects.create(
+                        desk=anchor, delegate=self.bea, sponsor=self.ada,
+                    )
+                handle = self._register(name + '-split', **options)
+                self._expect_row(handle, actor, hop_only, False, set())
+                self._expect_row(handle, actor, overlay_only, False, set())
+
+    def test_ancestor_walk_uses_the_qualifying_sheet(self):
+        User = self.User
+
+        class Office(models.Model):
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_same_office'
+
+        class Cabinet(models.Model):
+            office = models.ForeignKey(
+                Office, related_name='cabinets', on_delete=models.CASCADE,
+            )
+            parent = models.ForeignKey(
+                'self', null=True, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_same_cabinet'
+
+        class PageQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Page(PermittedUsersMixin, models.Model):
+            region = models.CharField(max_length=20)
+            mark = models.CharField(max_length=20)
+            cabinet = models.ForeignKey(
+                Cabinet, related_name='pages', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(PageQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_same_page'
+
+        class OfficeGrant(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            office = models.ForeignKey(Office, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_same_office_grant'
+
+        class PageHandoff(models.Model):
+            office = models.ForeignKey(Office, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(
+                User, related_name='+', on_delete=models.CASCADE,
+            )
+            sponsor = models.ForeignKey(
+                User, related_name='+', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_same_office_handoff'
+
+        with _tables(Office, Cabinet, Page, OfficeGrant, PageHandoff):
+            change = _permission(Page, 'change_samepage')
+            code = 'trusts_tests.change_samepage'
+            office = Office.objects.create()
+            root = Cabinet.objects.create(office=office)
+            child = Cabinet.objects.create(office=office, parent=root)
+            missed = Page.objects.create(
+                pk=1, region='west', mark='yes', cabinet=child,
+            )
+            kept = Page.objects.create(
+                pk=2, region='east', mark='yes', cabinet=child,
+            )
+            OfficeGrant.objects.create(
+                user=self.ada, office=office, permission=change,
+            )
+            def expect_ancestor(handle, user, page, allowed, offices):
+                filtered = '%s:kept' % code
+                with _listed(handle):
+                    has = user.has_perm(filtered, page)
+                    permitted = page.pk in set(Page.objects.permitted(
+                        code, user, conditions=('kept',),
+                    ).values_list('pk', flat=True))
+                    reached = user.pk in set(
+                        page.get_permitted_users(filtered).values_list(
+                            'pk', flat=True,
+                        ),
+                    )
+                    listed = set(filter_by_permitted_content(
+                        Office.objects.all(), user, change,
+                        content=Page, conditions=('kept',),
+                    ).values_list('pk', flat=True))
+
+                    @authorization_required(Page, code, ('kept',))
+                    def view(request, pk):
+                        return 'ok'
+
+                    try:
+                        view(_request(user), pk=page.pk)
+                        guarded = True
+                    except PermissionDenied:
+                        guarded = False
+                    complete = code in user.get_all_permissions(page)
+                    grouped = code in user.get_group_permissions(page)
+                self.assertEqual(
+                    {
+                        'has_perm': has,
+                        'permitted': permitted,
+                        'get_permitted_users': reached,
+                        'authorization_required': guarded,
+                    },
+                    {
+                        'has_perm': allowed,
+                        'permitted': allowed,
+                        'get_permitted_users': allowed,
+                        'authorization_required': allowed,
+                    },
+                )
+                self.assertEqual(listed, offices)
+                # No ``group=`` on the registration.
+                self.assertIs(grouped, False)
+                return complete
+
+            handle = compiler(path='tests.core.via-same-ancestor')
+            handle.add_named_filter(Page, 'kept', self._predicate())
+            handle.register(
+                trust=OfficeGrant, user='user', permission='permission',
+                content='office__cabinets__pages',
+                along=('office__cabinets__parent', 1),
+                via=('user__via_manager', 1),
+            )
+            # Unfiltered: the grant walks to both pages. Not an oracle.
+            self.assertIs(
+                expect_ancestor(handle, self.ada, missed, False, {office.pk}),
+                True,
+            )
+            self.assertIs(
+                expect_ancestor(handle, self.ada, kept, True, {office.pk}),
+                True,
+            )
+            PageHandoff.objects.create(
+                office=office, delegate=self.bea, sponsor=self.ada,
+            )
+            delegated = compiler(path='tests.core.via-same-ancestor-delegate')
+            delegated.add_named_filter(Page, 'kept', self._predicate())
+            delegated.register(
+                trust=OfficeGrant, user='user', permission='permission',
+                content='office__cabinets__pages',
+                along=('office__cabinets__parent', 1),
+            )
+            delegated.register(
+                trust=PageHandoff, delegate='delegate', sponsor='sponsor',
+                content='office__cabinets__pages',
+                along=('office__cabinets__parent', 1),
+                via=('delegate__via_manager', 1),
+            )
+            self.assertIs(
+                expect_ancestor(
+                    delegated, self.bea, missed, False, {office.pk},
+                ),
+                True,
+            )
+            self.assertIs(
+                expect_ancestor(delegated, self.bea, kept, True, {office.pk}),
+                True,
+            )
+            missed.region = 'east'
+            missed.mark = 'no'
+            missed.save(update_fields=['region', 'mark'])
+            kept.region = 'west'
+            kept.mark = 'yes'
+            kept.save(update_fields=['region', 'mark'])
+            self.assertIs(
+                expect_ancestor(handle, self.ada, missed, False, set()), True,
+            )
+            self.assertIs(
+                expect_ancestor(handle, self.ada, kept, False, set()), True,
+            )
+            self.assertIs(
+                expect_ancestor(delegated, self.bea, missed, False, set()),
+                True,
+            )
+            self.assertIs(
+                expect_ancestor(delegated, self.bea, kept, False, set()),
+                True,
+            )
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class PrefixOccurrenceTest(TransactionTestCase):
+    """The later copy of a model uses that hop's own candidate.
+
+    ``node`` and ``node__children`` are both ``Node``. A doc on the
+    child is not a doc on that child's child.
+    """
+
+    def test_later_occurrence_does_not_read_the_earlier_candidate(self):
+        User = get_user_model()
+        _attach_manager(self, User)
+
+        class Node(models.Model):
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_occur_node'
+
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+
+        class DocQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Doc(PermittedUsersMixin, models.Model):
+            zone = models.CharField(max_length=20)
+            node = models.ForeignKey(
+                Node, related_name='docs', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(DocQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_occur_doc'
+
+        class Seat(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            node = models.ForeignKey(Node, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_occur_seat'
+
+        _add_user_column(
+            self, User, 'zone', models.CharField(max_length=20, null=True),
+        )
+        with _tables(Node, Doc, Seat):
+            change = _permission(Doc, 'change_occurdoc')
+            code = 'trusts_tests.change_occurdoc'
+            ada = User.objects.create_user('occur-ada', password='x')
+            ada.zone = 'west'
+            ada.save()
+            root = Node.objects.create()
+            east_child = Node.objects.create(parent=root)
+            west_child = Node.objects.create(parent=root)
+            grand = Node.objects.create(parent=east_child)
+            east_doc = Doc.objects.create(zone='east', node=east_child)
+            west_doc = Doc.objects.create(zone='west', node=west_child)
+            grand_doc = Doc.objects.create(zone='west', node=grand)
+            Seat.objects.create(user=ada, node=root, permission=change)
+            handle = compiler(path='tests.core.via-occur-later')
+            handle.add_named_filter(
+                Doc, 'kept',
+                lambda user, permission, content: user.zone == content.zone,
+            )
+            handle.register(
+                trust=Seat, user='user', permission='permission',
+                content='node__children__docs',
+                via=('user__via_manager', 1),
+            )
+            # ``node`` sees docs on children of the seat. ``node__children``
+            # sees docs on that child. The grandchild doc is a different
+            # candidate and must not qualify the east child.
+            with _listed(handle):
+                has_west = ada.has_perm('%s:kept' % code, west_doc)
+                has_east = ada.has_perm('%s:kept' % code, east_doc)
+                has_grand = ada.has_perm('%s:kept' % code, grand_doc)
+                permitted = set(Doc.objects.permitted(
+                    code, ada, conditions=('kept',),
+                ).values_list('pk', flat=True))
+                reached = set(west_doc.get_permitted_users(
+                    '%s:kept' % code,
+                ).values_list('pk', flat=True))
+                east_reached = set(east_doc.get_permitted_users(
+                    '%s:kept' % code,
+                ).values_list('pk', flat=True))
+                listed = set(filter_by_permitted_content(
+                    Node.objects.all(), ada, change,
+                    content=Doc, conditions=('kept',),
+                ).values_list('pk', flat=True))
+
+                @authorization_required(Doc, code, ('kept',))
+                def view(request, pk):
+                    return 'ok'
+
+                try:
+                    view(_request(ada), pk=west_doc.pk)
+                    guarded = True
+                except PermissionDenied:
+                    guarded = False
+                unfiltered_west = code in ada.get_all_permissions(west_doc)
+                unfiltered_east = code in ada.get_all_permissions(east_doc)
+                unfiltered_grand = code in ada.get_all_permissions(grand_doc)
+                grouped = code in ada.get_group_permissions(west_doc)
+            self.assertIs(has_west, True)
+            self.assertIs(has_east, False)
+            self.assertIs(has_grand, False)
+            self.assertEqual(permitted, {west_doc.pk})
+            self.assertEqual(reached, {ada.pk})
+            self.assertEqual(east_reached, set())
+            self.assertEqual(listed, {root.pk, west_child.pk})
+            self.assertNotIn(east_child.pk, listed)
+            self.assertNotIn(grand.pk, listed)
+            self.assertIs(guarded, True)
+            # Named filters are not applied. The east doc is on the
+            # content path, so the codename is present while the
+            # filtered inquiries are false. The grandchild is not on
+            # the path.
+            self.assertIs(unfiltered_west, True)
+            self.assertIs(unfiltered_east, True)
+            self.assertIs(unfiltered_grand, False)
+            self.assertIs(grouped, False)
+

@@ -44,6 +44,7 @@ from trusts.plan.walk import (
 _inquiry = ContextVar('trusts_via_inquiry', default=None)
 _reuse = ContextVar('trusts_via_reuse', default=None)
 _hop_record = ContextVar('trusts_via_hop_record', default=None)
+_active_prefix = ContextVar('trusts_via_active_prefix', default=None)
 _UNSET = object()
 
 
@@ -69,6 +70,22 @@ def via_scope(catalog=None, skipped=None, filters=_UNSET, content=_UNSET):
         yield
     finally:
         _inquiry.reset(token)
+
+
+@contextmanager
+def prefix_occurrence(prefix, attname, model):
+    """Bind carriers to this content-path hop, not the first of its model.
+
+    A permitted-content prefix can name the same model twice. The hop
+    compiled for the later occurrence must use that occurrence.
+    """
+    token = _active_prefix.set((
+        tuple(prefix), attname, model._meta.concrete_model,
+    ))
+    try:
+        yield
+    finally:
+        _active_prefix.reset(token)
 
 
 class _HopWalk(object):
@@ -662,19 +679,27 @@ def _add_carrier(carriers, expr):
     return len(carriers) - 1
 
 
-def _candidate_lookup(record, outer_model):
+def _candidate_lookup(record, outer_model, occurrence=None):
     """Content-row lookup and the outer attname it matches.
 
     The query outside the grant is the candidate content row, so the
-    match is that row's primary key. A permitted-content prefix is an
-    ancestor of that row: the match walks back along ``content_path``
-    to the prefix, the same correlation the prefix overlay uses.
+    match is that row's primary key. A permitted-content prefix is one
+    hop on ``content_path``: the match walks back from the protected
+    object to that hop. ``occurrence`` is that hop when the same model
+    appears more than once; the first hop of the model is not a
+    substitute for a later one.
     """
     outer = outer_model._meta.concrete_model
     content = record.content_model._meta.concrete_model
     if outer is content:
         return 'pk', outer._meta.pk.attname
     path = tuple(record.content_path)
+    if occurrence is not None:
+        prefix, attname, model = occurrence
+        if model is outer:
+            return content_scope_lookup(
+                record.root, path, tuple(prefix), attname,
+            ), attname
     current = record.root
     chosen = None
     for index, name in enumerate(path):
@@ -707,6 +732,7 @@ class _CandidateContent(Expression):
         self.model = model
         self.path = tuple(path)
         self.record = record
+        self.occurrence = _active_prefix.get()
 
     def resolve_expression(self, query, *args, **kwargs):
         root = self.record.root._meta.concrete_model
@@ -714,19 +740,14 @@ class _CandidateContent(Expression):
             return self.copy()
         outer = query.model._meta.concrete_model
         content = self.record.content_model._meta.concrete_model
-        if outer is content and len(self.path) == 1:
-            field = self.model._meta.get_field(self.path[0])
-            if getattr(field, 'concrete', False):
-                # The outer row is the candidate. Its stored column,
-                # including to_field, is the value. Bind it here so a
-                # query further out does not take the reference.
-                ref = OuterRef(field.attname).resolve_expression(
-                    query, *args, **kwargs,
-                )
-                if hasattr(ref, 'resolve_expression'):
-                    ref = ref.resolve_expression(query, *args, **kwargs)
-                return ref
-        lookup, attname = _candidate_lookup(self.record, query.model)
+        if outer is content:
+            # This query is the one candidate row. Read the path from
+            # its own joins. A same-model subquery would reuse that
+            # row's alias and compare the row to itself.
+            return query.resolve_ref('__'.join(self.path))
+        lookup, attname = _candidate_lookup(
+            self.record, query.model, self.occurrence,
+        )
         rows = self.model._default_manager.filter(**{
             lookup: OuterRef(attname),
         }).values('__'.join(self.path))[:1]

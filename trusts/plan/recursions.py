@@ -379,7 +379,7 @@ class _PrefixInForwardWalk(Expression):
     subquery = True
 
     def __init__(self, record, user, permission, attname, *,
-                 content_identity=None, suffix_lookup=None):
+                 content_identity=None, suffix_lookup=None, on_content=False):
         super().__init__(output_field=BooleanField())
         walk = record.along
         self.along_bound = walk.bound
@@ -395,13 +395,16 @@ class _PrefixInForwardWalk(Expression):
         self.record = record
         self.lhs = None
         self.suffix_query = None
+        # On the content row the prefix column is one query further out.
+        identity = OuterRef(attname) if on_content else None
         if suffix_lookup:
+            ref = OuterRef(identity) if identity is not None else OuterRef(attname)
             self.suffix_query = walk.walk_model._default_manager.filter(
-                **{suffix_lookup: OuterRef(attname)},
+                **{suffix_lookup: ref},
             ).query.clone()
             self.suffix_query.subquery = True
         else:
-            self.lhs = F(attname)
+            self.lhs = identity if identity is not None else F(attname)
 
     def copy(self):
         clone = super().copy()
