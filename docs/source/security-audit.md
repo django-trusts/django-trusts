@@ -429,7 +429,9 @@ bounded reachability. Audit:
 - termination in the presence of cycles;
 - the resolved identity at every hop;
 - the supported database renderer; and
-- agreement among object, queryset, enumeration, and users-from-content projections.
+- agreement among object, queryset, enumeration, and users-from-content
+  projections, as stated in the setup guide's
+  [inquiry agreement](index.rst#inquiry-agreement).
 
 The inquiry for users from content derives walk-site identities from the bound content and
 traverses the inverse graph without the outer candidate user. Eligible grants
@@ -447,6 +449,88 @@ support matrix.
 
 For time-dependent conditions, audit the
 [setup guide's clock and queryset-cache boundaries](index.rst#supported-lambda-expressions).
+
+### Nested users
+
+`via=` replaces equality at one user, delegate, or sponsor walk-site with
+bounded reachability. The [setup guide](index.rst#nested-users) shows the
+group walk, the bound, and the reset field. Audit the same points as a
+content walk: direction, bound, cycles, identity, renderer, and agreement
+across inquiries.
+
+The walk is one `WITH RECURSIVE` statement, shared by SQLite, PostgreSQL,
+and MySQL 8.4: `UNION ALL`, a depth column capped at the bound, and one
+join to the next row. The recursive member may test that row with a
+comparison, or with `EXISTS` or `NOT EXISTS` against another table. That
+subquery names the current row. It does not name the recursive result, and
+it does not read the outer query. A user condition or named filter that
+cannot be written that way is rejected at `register()` before SQL.
+PostgreSQL appends the same `CYCLE` clause a content walk uses. The bound
+stops a cycle. The users reached are the users reached with the repeated
+link removed. SQLite and MySQL may revisit a row inside the bound; the
+final set has each user once. MariaDB and other engines are rejected
+before this SQL, as they are for `along=`.
+
+User conditions, and a named filter that reads the user, are checked for
+each user reached, including the user on the grant. On a walked user, a
+failing condition stops that path. On a group or a link, the condition
+selects the users reached from that row, and the next group is still
+visited. A filter that reads the protected object constrains that object.
+On a user-row walk its value is carried into the recursive member, which
+stays free of the outer query. `along=` decides which content is reachable;
+its condition stays off intermediate content nodes.
+`skip_<name>` removes that condition for every user the walk reaches. A
+condition with `on="sponsor"` applies to each sponsor user the walk
+reaches. A condition with `on="user"` applies to the checked user and to
+users reached on the delegate side. The relationship `condition=` stays on
+the grant row.
+
+Inquiry agreement for this walk is the setup guide's
+[inquiry agreement](index.rst#inquiry-agreement). The inquiry for users
+from content seeds the walk from grants on that content. An object check
+can walk the inverse from the candidate user. Either form must return the
+same users. If the walk cannot be rendered, the inquiry raises before SQL
+rather than returning a broader set. The policy output does the same.
+
+`via=` on an ordinary registration walks the `user=` path. On a delegated
+registration it walks `delegate=` or `sponsor=`, the path that shares the
+prefix. A path that shares a prefix with both, or with neither, is
+rejected. A delegate walk reaches the users who may act. A sponsor walk
+reaches the users whose ordinary grants authorize the row, and the
+ordinary-grant union is unchanged. The delegation's content walk and each
+sponsor grant's content walk must still reach the object. A delegation
+cannot sponsor another delegation. `via=` does not read another backend's
+tables. The sponsor union remains the one delegation already runs.
+
+`register()` rejects:
+
+- a value that is not a `(path, bound)` pair or a `(path, bound, field)` triple;
+- a bound that is not an integer from 1 to 64;
+- a path that does not share a walk-site prefix with `user=`, or, on a
+  delegation, with exactly one of `delegate=` and `sponsor=`;
+- an edge other than a foreign key back to the same model, the reverse of
+  that foreign key, or a link row that leaves the model and returns to it,
+  including a foreign key to another model, a many-to-many edge, a generic
+  relation, or mixed identity columns;
+- an identity that is not one integer, text, or UUID column;
+- a step from the walked model toward the user that `user=` would reject.
+  A terminal many-to-many membership is accepted, as it is on `user=`;
+- a reset field `along=` would reject: a reverse one-to-one, a forward
+  foreign key or forward one-to-one, a generic relation, more than one
+  relation, a non-boolean field, a missing field, a third element that is
+  not a field path, and a field on a multi-table parent.
+
+The activity check is still the `is_active` user condition. It applies to
+each user this walk would grant and to each sponsor user it reaches. It
+is not applied to a group or a link. A grant from another backend is
+unchanged.
+
+The policy output records `via` with the path, the resolved shape, and the
+bound. The depth cap is `$via_bound=<n>`. A reset path is `via.reset`.
+The identifier gains `__via_{path}_{shape}_{bound}` after any `along`
+suffix. `along=` and `via=` on one registration each contribute their
+suffix. Applications using development lockfiles regenerate them when
+this registration is added.
 
 ## Fail-closed principle
 
