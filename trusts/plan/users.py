@@ -9,7 +9,7 @@ __all__ = []
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import Permission
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Exists, F, Model, OuterRef, Q
+from django.db.models import Exists, F, Model, OuterRef, Q, Value
 
 from trusts.plan.conditions import (
     condition_model_key,
@@ -19,6 +19,7 @@ from trusts.plan.conditions import (
 from trusts.plan.writers import (
     boolean_holds,
     boolean_q,
+    expression_q,
     negate_q,
     column_q,
     columns_q,
@@ -30,7 +31,7 @@ from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.utils import parse_perm_code
 from trusts.plan.contents import _as_q
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
-from trusts.plan.grammar import Tree
+from trusts.plan.grammar import Tree, needs_expression, walk
 
 
 def _reverse_checked(plan, exists, user_model, permission, content, values,
@@ -141,6 +142,8 @@ def _condition_outcome(expr, content, singular, user_model):
             _condition_outcome(expr.left, content, singular, user_model),
             _condition_outcome(expr.right, content, singular, user_model),
         )
+    if isinstance(expr, Tree) and needs_expression(expr):
+        return _expression_outcome(expr, content, singular, user_model)
     if isinstance(expr, Tree) and expr.kind in ('eq', 'ne'):
         return _comparison_outcome(
             expr, content, singular, user_model,
@@ -248,6 +251,51 @@ def _side_value(node, content, singular, user_model):
     return value
 
 
+def _expression_outcome(expr, content, singular, user_model):
+    """Ordered comparison or function, in SQL. NULL does not grant."""
+    places = (_expression_place(expr.left), _expression_place(expr.right))
+    if 'mixed' in places:
+        raise TrustsConfigurationError(
+            'Reverse permission inquiry cannot compile permission condition %r.'
+            % (expr,)
+        )
+
+    def field(place):
+        def leaf(node):
+            return _reverse_field(node, place, content, singular, user_model)
+        return leaf
+
+    if 'object' not in places:
+        return expression_q(
+            expr, field('user'),
+            model=content.__class__, user_model=user_model,
+        )
+    # A user column outside the saved-row subquery is an outer reference.
+    left, right = (
+        field('object' if place == 'object' else 'outer') for place in places
+    )
+    return _exists_q(content, expression_q(
+        expr, left, right, model=content.__class__, user_model=user_model,
+    ))
+
+
+def _expression_place(node):
+    roots = {leaf.root for leaf in walk(node) if leaf.kind == 'field'}
+    roots.discard('permission')
+    if len(roots) > 1:
+        return 'mixed'
+    return roots.pop() if roots else 'either'
+
+
+def _reverse_field(node, place, content, singular, user_model):
+    if node.root == 'permission':
+        return Value(singular)
+    if node.root == 'user':
+        lookup = _user_lookup(user_model, node.path)
+        return OuterRef(lookup) if place == 'outer' else F(lookup)
+    return F(_object_lookup(content, node.path))
+
+
 def _comparison_outcome(expr, content, singular, user_model, *, equal):
     left = _condition_side(expr.left, content, singular, user_model)
     right = _condition_side(expr.right, content, singular, user_model)
@@ -270,11 +318,23 @@ def _condition_side(node, content, singular, user_model):
     if _is_field(node, 'object'):
         return ('object', _object_lookup(content, node.path))
     if _is_field(node, 'permission'):
-        if node.path:
-            raise TrustsConfigurationError(
-                'Permission references cannot traverse attributes.'
-            )
-        return ('value', singular)
+        if not node.path:
+            return ('value', singular)
+        if (
+            node.path == ('codename',)
+            and isinstance(singular, str)
+            and '.' in singular
+        ):
+            return ('const', singular.split('.', 1)[1])
+        if (
+            node.path == ('app_label',)
+            and isinstance(singular, str)
+            and '.' in singular
+        ):
+            return ('const', singular.split('.', 1)[0])
+        raise TrustsConfigurationError(
+            'Permission references cannot traverse attributes.'
+        )
     if _is_field(node, 'user'):
         return ('user', _user_lookup(user_model, node.path))
     raise TrustsConfigurationError(

@@ -32,16 +32,18 @@ def built_registries(items):
 
 
 def scoped_permitted_content(queryset, user, permission, *, content,
-                             registry, **skip_flags):
+                             registry, conditions=(), **skip_flags):
     """Prefix filter for one explicit registry in a unit test.
 
     The public filter ORs listed backends and takes no registry
     argument. This helper is the direct registry question.
+    ``conditions`` is the named-filter tuple the public filter takes.
     """
     if registry.family != 'relationship':
         return queryset.none()
     return registry.filter_by_permitted_content(
-        queryset, user, permission, content=content, **skip_flags,
+        queryset, user, permission, content=content,
+        conditions=conditions, **skip_flags,
     )
 
 

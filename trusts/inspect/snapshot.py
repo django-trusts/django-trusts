@@ -464,6 +464,9 @@ class _PolicyVisitor(object):
                 along = getattr(record, 'along', None)
                 if along is not None:
                     row['along'] = _along_mapping(along)
+                via = getattr(record, 'via', None)
+                if via is not None:
+                    row['via'] = _along_mapping(via)
                 if multi:
                     row['or_group'] = True
                 delegated_rows.append(row)
@@ -481,6 +484,9 @@ class _PolicyVisitor(object):
             along = getattr(record, 'along', None)
             if along is not None:
                 row['along'] = _along_mapping(along)
+            via = getattr(record, 'via', None)
+            if via is not None:
+                row['via'] = _along_mapping(via)
             condition = _render_condition(
                 record.condition,
                 permission_token=_permission_token(
@@ -611,6 +617,8 @@ _CONST_SOURCE = {
     'active': 'user.is_active',
     'along bound': '$along_bound',
     'along match': '$along_match',
+    'via bound': '$via_bound',
+    'via match': '$via_match',
 }
 
 
@@ -800,6 +808,11 @@ def _permission_token(target):
     return '$permission.%s' % name
 
 
+_COMPARISON_SIGNS = {
+    'ne': '!=', 'lt': '<', 'le': '<=', 'gt': '>', 'ge': '>=',
+}
+
+
 class _PolicyConditionText(object):
     """Render one stored predicate as a policy-lock condition line.
 
@@ -820,8 +833,8 @@ class _PolicyConditionText(object):
                 return self._join(node, node.kind)
             if node.kind == 'eq':
                 return self._eq(node)
-            if node.kind == 'ne':
-                return self._pair(node, '!=')
+            if node.kind in _COMPARISON_SIGNS:
+                return self._pair(node, _COMPARISON_SIGNS[node.kind])
             if node.kind == 'contains':
                 return self._contains(node)
             if node.kind == 'not':
@@ -888,7 +901,16 @@ def _condition_path(operand):
 def _operand_text(operand):
     if operand.kind == 'field':
         return _condition_path(operand)
+    if operand.kind == 'call':
+        return _call_text(operand)
     return _constant_text(operand.value)
+
+
+def _call_text(node):
+    return '%s(%s)' % (
+        node.value.capitalize(),
+        ', '.join(_operand_text(arg) for arg in node.item),
+    )
 
 
 def _constant_text(value):
@@ -959,6 +981,16 @@ def _base_id(record):
             getattr(along, 'bound', None),
         )
         reset = getattr(along, 'reset', None)
+        if reset is not None:
+            label += '__reset_%s' % reset.path
+    via = getattr(record, 'via', None)
+    if via is not None:
+        label += '__via_%s_%s_%s' % (
+            '__'.join(via.path),
+            getattr(via, 'shape', None),
+            getattr(via, 'bound', None),
+        )
+        reset = getattr(via, 'reset', None)
         if reset is not None:
             label += '__reset_%s' % reset.path
     return label.replace('.', '__')
@@ -1343,6 +1375,11 @@ def _symbol_for_new_param(node, query=None):
         return _with_hint(
             {'const': _json_const(column.value)}, column.label,
         )
+    via_bound = getattr(node, 'via_bound', None)
+    if via_bound is not None:
+        return _with_hint(
+            {'const': _json_const(via_bound)}, 'via bound',
+        )
     along_bound = getattr(node, 'along_bound', None)
     if along_bound is not None:
         return _with_hint(
@@ -1435,6 +1472,8 @@ def _value_hint(node, query):
 def _const_hint(node, value):
     """Readable label for one constant lookup placeholder."""
     lhs = getattr(node, 'lhs', None)
+    if getattr(lhs, 'via_bound', None) is not None and value is True:
+        return 'via match'
     if getattr(lhs, 'along_bound', None) is not None and value is True:
         return 'along match'
     name = _lookup_field_name(node)

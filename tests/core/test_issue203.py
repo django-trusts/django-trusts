@@ -170,7 +170,7 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
         self._cannot_authorize(*(code for code, _builder, _needle in cases))
 
     def test_unsupported_relationship_paths_reject_at_register_with_zero_sql(self):
-        cases = (('m2m_tags', lambda u, p, o: o.tags != None, 'tags'), ('rev_o2m', lambda u, p, o: o.grants != None, 'grants'), ('m2m_groups', lambda u, p, o: u.groups != None, 'groups'), ('perm_hop', lambda u, p, o: p.codename == 'change_note', 'Permission references'), ('title_hop', lambda u, p, o: o.title.foo == 'x', 'Cannot traverse'))
+        cases = (('m2m_tags', lambda u, p, o: o.tags != None, 'tags'), ('rev_o2m', lambda u, p, o: o.grants != None, 'grants'), ('m2m_groups', lambda u, p, o: u.groups != None, 'groups'), ('perm_hop', lambda u, p, o: p.content_type.app_label == 'x', 'Permission references'), ('title_hop', lambda u, p, o: o.title.foo == 'x', 'Cannot traverse'))
         for code, builder, needle in cases:
             self._reject(code, builder, needle)
         self._cannot_authorize(*(code for code, _builder, _needle in cases))

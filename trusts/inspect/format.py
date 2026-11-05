@@ -16,10 +16,12 @@ from trusts.errors import TrustsConfigurationError
 # Unquoted words the compilers and ``along=`` SQL emit. Any other bare
 # word is rejected. Quoted identifiers are a separate token class.
 _KEYWORDS = frozenset((
-    'ALL', 'AND', 'AS', 'ASC', 'BY', 'CROSS', 'CYCLE', 'DESC', 'DISTINCT',
+    'ALL', 'AND', 'AS', 'ASC', 'BY', 'COALESCE', 'CROSS', 'CURRENT_TIMESTAMP',
+    'CYCLE', 'DESC', 'DISTINCT',
     'EXISTS', 'FALSE', 'FROM', 'FULL', 'GROUP', 'HAVING', 'IN', 'INNER', 'IS',
-    'JOIN', 'LEFT', 'LIMIT', 'NATURAL', 'NOT', 'NULL', 'OFFSET', 'ON', 'OR',
-    'ORDER', 'OUTER', 'RECURSIVE', 'RIGHT', 'SELECT', 'SET', 'TRUE', 'UNION',
+    'JOIN', 'LEFT', 'LIMIT', 'LOWER', 'NATURAL', 'NOT', 'NULL', 'OFFSET', 'ON',
+    'OR', 'ORDER', 'OUTER', 'RECURSIVE', 'RIGHT', 'SELECT', 'SET',
+    'STATEMENT_TIMESTAMP', 'STRFTIME', 'TRUE', 'UNION',
     'USING', 'WHERE', 'WITH',
 ))
 # Clause and boolean keywords that start a new line. ``AND`` and ``OR``
