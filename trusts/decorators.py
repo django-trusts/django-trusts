@@ -19,7 +19,7 @@ from trusts.utils import guard_conditions, guard_permission_string
 
 
 def filter_by_permitted_content(queryset, user, permission, *, content,
-                                backend=None, **skip_flags):
+                                conditions=(), backend=None, **skip_flags):
     """Filter scope-model rows that appear as a proper prefix of ``content``.
 
     Fail closed unless ``queryset.model`` is a proper prefix node of some
@@ -44,7 +44,12 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
     trees). A terminal-only path has no proper prefix, so the same-model
     queryset still returns ``none()``. A catalog that did not register
     the model, or a scope model not on the path, returns ``none()``.
-    ``permission`` must be a model instance. Construction of a
+    ``permission`` must be a model instance. ``conditions`` is the same
+    exact tuple of named-filter names ``PermittedQuerySet.permitted``
+    takes. A selected filter is compiled into the same SQL: a filter
+    that reads the user is applied at every ``via=`` hop, and a filter
+    that reads the protected object constrains that object. A missing
+    name, or a malformed tuple, returns ``none()``. Construction of a
     fail-closed result issues zero SQL; SQL runs only when a compiled
     predicate is evaluated. Each listed backend is asked separately and
     the querysets are combined. ``backend`` selects one dotted path.
@@ -53,10 +58,17 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
     if not isinstance(queryset, QuerySet):
         model = content if isinstance(content, type) else content.__class__
         return model._default_manager.none()
+    try:
+        conditions = guard_conditions(
+            conditions, api='filter_by_permitted_content',
+        )
+    except (TypeError, TrustsConfigurationError):
+        return queryset.none()
     parts = [
         part for item in trusts_backends(backend)
         if not (part := item.filter_by_permitted_content(
-            queryset, user, permission, content=content, **skip_flags,
+            queryset, user, permission, content=content,
+            conditions=conditions, **skip_flags,
         )).query.is_empty()
     ]
     if not parts:

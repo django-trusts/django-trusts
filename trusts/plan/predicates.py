@@ -1,13 +1,14 @@
 """One ``Q`` per record so a repeated many-to-many hop stays one join."""
 
 from django.contrib.auth.models import Permission
-from django.db.models import F, Model, Q
+from django.db.models import F, Model, Q, Subquery
 
 from trusts.errors import PermissionConditionError
-from trusts.plan.grammar import Tree, unsupported
+from trusts.plan.grammar import Tree, needs_expression, unsupported
 from trusts.plan.hops import lookup_text, require_instance
 from trusts.plan.writers import (
     boolean_q,
+    expression_q,
     negate_q,
     column_q,
     columns_q,
@@ -102,6 +103,11 @@ class _PredicateCompiler(object):
             return self.compile(node.left) | self.compile(node.right)
         if node.kind == 'not':
             return negate_q(self.record.root, self.compile(node.item))
+        if needs_expression(node):
+            return expression_q(
+                node, self._row_field,
+                model=self.record.root, user_model=self.record.root,
+            )
         if node.kind == 'eq':
             return self._eq(node)
         if node.kind == 'ne':
@@ -111,6 +117,11 @@ class _PredicateCompiler(object):
         if node.kind == 'bare':
             return boolean_q(lookup_text(node.item.path))
         raise unsupported(node.kind, 'a relation condition')
+
+    def _row_field(self, node):
+        if node.root == 'row' and node.path:
+            return F(lookup_text(node.path))
+        raise unsupported('This condition', 'a relation condition')
 
     def _eq(self, node):
         partner = node.inquiry_partner()
@@ -181,6 +192,22 @@ class _PredicateCompiler(object):
         })
 
 
+def _stored_permission(record, value):
+    """Value stored in the permission terminal.
+
+    A direct foreign key with ``to_field`` stores that column, not the
+    primary key. A pk subquery still identifies the permission row; the
+    comparison has to read the terminal's target from it.
+    """
+    model = getattr(record, 'permission_model', None)
+    target = getattr(record, 'permission_target', None)
+    if model is None or not target or target == model._meta.pk.attname:
+        return value
+    if isinstance(value, Subquery):
+        return Subquery(model._default_manager.filter(pk=value).values(target)[:1])
+    return value
+
+
 def _permission_content_type_filters(record, content_identity):
     """Lookup kwargs that pin the permission row to one content type.
 
@@ -210,6 +237,8 @@ def _record_predicate(record, correlation=None, *, content_identity=None,
     """
     filters = {}
     for role, value in bindings.items():
+        if role == 'permission':
+            value = _stored_permission(record, value)
         filters[getattr(record, _BINDING_FIELDS[role])] = bind_terminal(
             value, role,
         )

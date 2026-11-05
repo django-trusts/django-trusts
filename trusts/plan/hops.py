@@ -11,6 +11,7 @@ __all__ = [
     'path_text',
     'concrete_model',
     'content_model',
+    'content_scope_lookup',
     'require_instance',
     'resolved_hop',
 ]
@@ -103,3 +104,52 @@ def resolved_hop(field, role, path):
             % (role, path_text(path))
         )
     return related._meta.concrete_model, attname
+
+
+def content_scope_lookup(root, path, prefix, target_attname):
+    """Lookup on the content model equal to this prefix row.
+
+    ``prefix`` is the content-path hop names up to the scope row.
+    The lookup walks back from the protected object. A forward hop
+    uses the reverse accessor. A reverse hop uses the foreign key
+    that points at the scope row.
+    """
+    path = tuple(path)
+    prefix = tuple(prefix)
+    suffix = path[len(prefix):]
+    current = root
+    for name in prefix:
+        field = current._meta.get_field(name)
+        current, _attname = resolved_hop(field, 'content', path)
+    steps = []
+    for name in suffix:
+        field = current._meta.get_field(name)
+        if getattr(field, 'many_to_many', False):
+            raise TrustsConfigurationError(
+                'filter_by_permitted_content cannot apply a content '
+                'filter through many-to-many hop %r.' % name
+            )
+        steps.append(field)
+        current, _attname = resolved_hop(field, 'content', path)
+    parts = []
+    for index, field in enumerate(reversed(steps)):
+        last = index == len(steps) - 1
+        reverse = (
+            getattr(field, 'auto_created', False)
+            and not getattr(field, 'concrete', False)
+        )
+        if reverse:
+            stored = field.field
+            parts.append(stored.attname if last else stored.name)
+            continue
+        if not getattr(field, 'concrete', False) or not field.is_relation:
+            raise TrustsConfigurationError(
+                'filter_by_permitted_content cannot apply a content '
+                'filter through %r.' % lookup_text(prefix)
+            )
+        accessor = field.remote_field.get_accessor_name()
+        if last:
+            parts.append('%s__%s' % (accessor, target_attname))
+        else:
+            parts.append(accessor)
+    return '__'.join(parts)

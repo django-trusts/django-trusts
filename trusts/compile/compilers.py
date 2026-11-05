@@ -36,11 +36,12 @@ from trusts.compile.graph import (
 from trusts.plan.grammar import (
     Symbol,
     Tree,
-    invoke,
     is_predicate,
+    needs_expression,
     symbol_path,
     symbol_token,
     unsupported,
+    walk,
 )
 from trusts.compile.resolution import (
     _SUFFIX_KINDS,
@@ -49,6 +50,7 @@ from trusts.compile.resolution import (
     _require_one_permission_source,
     _resolve_forward_singles,
     _resolve_group_path,
+    _resolve_m2m_terminal,
     _resolve_path,
     _resolve_permission_in_path,
     _resolve_permission_path,
@@ -58,11 +60,11 @@ from trusts.errors import PermissionConditionError, TrustsConfigurationError
 T = TypeVar('T', bound=Model)
 from trusts.compile.catalogs import Catalog, Question
 from trusts.plan.conditions import (
+    capture_expression,
     check_comparison_types,
     check_const_member,
     condition_model_key,
     condition_model_label,
-    normalize_expression,
     parse_named_filter,
     validate_expression,
     require_boolean_field,
@@ -80,6 +82,7 @@ from trusts.plan.standards import (
     rule_applies,
     validate_user_rule_name,
 )
+from trusts.plan.via import assert_hop_rules, assert_via_filters
 
 
 _REGISTER_NAME = re.compile(r'[A-Za-z_]+')
@@ -157,6 +160,7 @@ RegisteredRelation = _frozen('RegisteredRelation', (
     ('permission_target', str, _NO_DEFAULT),
     ('condition', object | None, None),
     ('along', AlongWalk | None, None),
+    ('via', AlongWalk | None, None),
     ('via_group', bool, False),
     ('group_path', tuple, ()),
     ('group_model', type | None, None),
@@ -191,6 +195,7 @@ RegisteredDelegation = _frozen('RegisteredDelegation', (
     ('condition_permission_model', type | None, None),
     ('condition_permission_target', str | None, None),
     ('along', AlongWalk | None, None),
+    ('via', AlongWalk | None, None),
     ('sponsor_rules', object | None, field(
         default=None, compare=False, repr=False,
     )),
@@ -216,6 +221,7 @@ PublicRegistration = _frozen('PublicRegistration', (
     ('sponsor', object | None, None),
     ('condition', object | None, None),
     ('along', object | None, None),
+    ('via', object | None, None),
     ('name', str | None, None),
     ('description', str | None, None),
 ), (
@@ -532,6 +538,10 @@ class Compiler(object):
                 % (code, condition_model_label(model))
             )
         tree = parse_named_filter(predicate, model, code, self.user_model)
+        prospective = dict(self._named_filters)
+        prospective[key] = (model, tree)
+        for record in (*self._order, *self._delegation_order):
+            assert_via_filters(record, prospective)
         self._named_filters[key] = (model, tree)
         return tree
 
@@ -630,7 +640,7 @@ class Compiler(object):
 
     @staticmethod
     def build_delegation(*, content, delegate, sponsor, condition=None,
-                         along=None, name=None, description=None):
+                         along=None, via=None, name=None, description=None):
         """Build one ``RegisteredDelegation`` without storing it.
 
         Pure shape-building half of ``register_delegation``: same ref,
@@ -686,6 +696,10 @@ class Compiler(object):
             along_walk = _build_along_walk(
                 root, content_path, content_model, along,
             )
+        via_walk = _build_via_walk(root, via, (
+            ('delegate', delegate_path, delegate_model),
+            ('sponsor', sponsor_path, sponsor_model),
+        ))
         _require_register_labels(name, description)
         return RegisteredDelegation(
             root=root,
@@ -705,12 +719,13 @@ class Compiler(object):
             condition_permission_model=condition_permission_model,
             condition_permission_target=condition_permission_target,
             along=along_walk,
+            via=via_walk,
             name=name,
             description=description,
         )
 
     def register_delegation(self, *, content, delegate, sponsor, condition=None,
-                            along=None, name=None, description=None):
+                            along=None, via=None, name=None, description=None):
         """Register one non-granting delegation relationship.
 
         The three paths share one root. Delegate and sponsor are
@@ -723,7 +738,7 @@ class Compiler(object):
         self._open('register_delegation')
         record = self.build_delegation(
             content=content, delegate=delegate, sponsor=sponsor,
-            condition=condition, along=along, name=name,
+            condition=condition, along=along, via=via, name=name,
             description=description,
         )
         root = record.root
@@ -753,6 +768,7 @@ class Compiler(object):
             sponsor_model=record.sponsor_model,
             conditions=conditions, override=override,
         )
+        _reject_via_hops(record, conditions, self._named_filters)
         sponsor_model = record.sponsor_model._meta.concrete_model
         record = replace(record, sponsor_rules=compile_user_rules(
             sponsor_model, record.sponsor_field,
@@ -770,7 +786,7 @@ class Compiler(object):
 
     @staticmethod
     def build_relation(*, content, user, permission=None, group=None,
-                       condition=None, along=None, name=None,
+                       condition=None, along=None, via=None, name=None,
                        description=None):
         """Build one ``RegisteredRelation`` without storing it.
 
@@ -834,6 +850,9 @@ class Compiler(object):
             along_walk = _build_along_walk(
                 root, content_path, content_model, along,
             )
+        via_walk = _build_via_walk(root, via, (
+            ('user', user_path, user_model),
+        ))
 
         _require_register_labels(name, description)
         return RegisteredRelation(
@@ -852,6 +871,7 @@ class Compiler(object):
             permission_target=permission_target,
             condition=condition,
             along=along_walk,
+            via=via_walk,
             via_group=via_group,
             group_path=group_path,
             group_model=group_model,
@@ -862,7 +882,8 @@ class Compiler(object):
         )
 
     def register_relation(self, *, content, user, permission=None, group=None,
-                 condition=None, along=None, name=None, description=None):
+                 condition=None, along=None, via=None, name=None,
+                 description=None):
         """Register one permission-bearing relation from root-relative refs.
 
         ``permission`` and ``group`` are mutually exclusive. ``permission``
@@ -895,7 +916,7 @@ class Compiler(object):
         self._open('register')
         record = self.build_relation(
             content=content, user=user, permission=permission, group=group,
-            condition=condition, along=along, name=name,
+            condition=condition, along=along, via=via, name=name,
             description=description,
         )
         root = record.root
@@ -930,6 +951,7 @@ class Compiler(object):
             user_model=record.user_model, sponsor_model=None,
             conditions=conditions, override=override,
         )
+        _reject_via_hops(record, conditions, self._named_filters)
         existing_rows = self._by_root.get(root)
         if existing_rows:
             existing_rows.append(record)
@@ -941,7 +963,7 @@ class Compiler(object):
     @staticmethod
     def build_public_registration(
         *, trust, user=None, permission=None, content, group=None,
-        delegate=None, sponsor=None, condition=None, along=None,
+        delegate=None, sponsor=None, condition=None, along=None, via=None,
         name=None, description=None,
     ):
         """Build a normalized ``PublicRegistration`` without storing it.
@@ -1008,6 +1030,7 @@ class Compiler(object):
                     trust, condition,
                 ),
                 along=_bind_public_along(trust, along),
+                via=_bind_public_walk(trust, via, 'via'),
                 name=name,
                 description=description,
             )
@@ -1030,6 +1053,7 @@ class Compiler(object):
                 group=_public_ref(trust, group_text, 'group'),
                 condition=_normalize_public_condition(trust, condition),
                 along=_bind_public_along(trust, along),
+                via=_bind_public_walk(trust, via, 'via'),
                 name=name,
                 description=description,
             )
@@ -1043,6 +1067,7 @@ class Compiler(object):
             permission=_public_ref(trust, permission_path, 'permission'),
             condition=_normalize_public_condition(trust, condition),
             along=_bind_public_along(trust, along),
+            via=_bind_public_walk(trust, via, 'via'),
             name=name,
             description=description,
         )
@@ -1060,13 +1085,14 @@ class Compiler(object):
             Callable[[T], object] | Callable[[T, object], object] | None
         ) = None,
         along=None,
+        via=None,
         name: str | None = None,
         description: str | None = None,
     ) -> RegisteredRelation | RegisteredDelegation:
         shape = self.build_public_registration(
             trust=trust, user=user, permission=permission, content=content,
             group=group, delegate=delegate, sponsor=sponsor,
-            condition=condition, along=along, name=name,
+            condition=condition, along=along, via=via, name=name,
             description=description,
         )
         if shape.delegate is not None:
@@ -1076,6 +1102,7 @@ class Compiler(object):
                 sponsor=shape.sponsor,
                 condition=shape.condition,
                 along=shape.along,
+                via=shape.via,
                 name=shape.name,
                 description=shape.description,
             )
@@ -1086,6 +1113,7 @@ class Compiler(object):
                 group=shape.group,
                 condition=shape.condition,
                 along=shape.along,
+                via=shape.via,
                 name=shape.name,
                 description=shape.description,
             )
@@ -1095,6 +1123,7 @@ class Compiler(object):
             permission=shape.permission,
             condition=shape.condition,
             along=shape.along,
+            via=shape.via,
             name=shape.name,
             description=shape.description,
         )
@@ -1280,6 +1309,9 @@ def _validate_relation_node(node, root, permission_model, *,
             root, node.item.path, 'condition', where='a relation condition',
         )
         return
+    if needs_expression(node):
+        _validate_expression_comparison(node, root)
+        return
     if node.kind in ('eq', 'ne'):
         _validate_row_comparison(
             node, root, delegated=delegated, matches=matches,
@@ -1294,6 +1326,13 @@ def _validate_relation_node(node, root, permission_model, *,
         )
         return
     raise unsupported(node.kind, where)
+
+
+def _validate_expression_comparison(node, root):
+    for leaf in walk((node.left, node.right)):
+        if leaf.kind == 'field':
+            _require_row_field(leaf)
+    check_comparison_types(node, root, root)
 
 
 def _validate_row_comparison(node, root, *, delegated, matches):
@@ -1419,13 +1458,13 @@ def _target_field(field, role, path):
                 break
     return related, target
 
-def _ident_family(field):
+def _ident_family(field, role='Along'):
     kind = field.get_internal_type()
     family = _IDENTITY_FAMILIES.get(kind)
     if family is None:
         raise TrustsConfigurationError(
-            'Along identity field %s (%s) is not a V1 integer, text, or UUID '
-            'identity.' % (field.attname, kind)
+            '%s identity field %s (%s) is not a V1 integer, text, or UUID '
+            'identity.' % (role, field.attname, kind)
         )
     return family
 
@@ -1439,7 +1478,7 @@ def _concrete_fk(field):
         return fk
     return field
 
-def _resolve_along_edge(walk_model, edge_path):
+def _resolve_along_edge(walk_model, edge_path, role='along'):
     """Return S/C/E metadata for hops from ``walk_model`` along ``edge_path``."""
     n = len(edge_path)
     if n == 1:
@@ -1447,15 +1486,16 @@ def _resolve_along_edge(walk_model, edge_path):
             field = walk_model._meta.get_field(edge_path[0])
         except FieldDoesNotExist:
             raise TrustsConfigurationError(
-                'along path %r refers to missing field %r on %s.'
-                % (path_text(edge_path), edge_path[0], walk_model._meta.label)
+                '%s path %r refers to missing field %r on %s.'
+                % (role, path_text(edge_path), edge_path[0], walk_model._meta.label)
             )
         kind = _classify_field(field)
-        related, target = _target_field(field, 'along', edge_path)
+        related, target = _target_field(field, role, edge_path)
         if related is not walk_model:
             raise TrustsConfigurationError(
-                'along edge %r must terminate on walk-site model %s, not %s.'
+                '%s edge %r must terminate on walk-site model %s, not %s.'
                 % (
+                    role,
                     path_text(edge_path),
                     walk_model._meta.label,
                     related._meta.label,
@@ -1469,11 +1509,12 @@ def _resolve_along_edge(walk_model, edge_path):
             # the forward FK metadata; the reverse hop still proves the
             # edge is a self-relation on the walk-site.
             fk = _concrete_fk(field)
-            dest, edge_target = _target_field(fk, 'along', edge_path)
+            dest, edge_target = _target_field(fk, role, edge_path)
             if dest is not walk_model:
                 raise TrustsConfigurationError(
-                    'along edge %r must terminate on walk-site model %s, not %s.'
+                    '%s edge %r must terminate on walk-site model %s, not %s.'
                     % (
+                        role,
                         path_text(edge_path),
                         walk_model._meta.label,
                         dest._meta.label,
@@ -1481,45 +1522,47 @@ def _resolve_along_edge(walk_model, edge_path):
                 )
             return 'C', fk.attname, None, None, None, edge_target
         raise TrustsConfigurationError(
-            'along edge %r is not a supported S/C/E hop.'
-            % (path_text(edge_path),)
+            '%s edge %r is not a supported S/C/E hop.'
+            % (role, path_text(edge_path))
         )
     if n == 2:
         try:
             reverse = walk_model._meta.get_field(edge_path[0])
         except FieldDoesNotExist:
             raise TrustsConfigurationError(
-                'along path %r refers to missing field %r on %s.'
-                % (path_text(edge_path), edge_path[0], walk_model._meta.label)
+                '%s path %r refers to missing field %r on %s.'
+                % (role, path_text(edge_path), edge_path[0], walk_model._meta.label)
             )
         if _classify_field(reverse) != 'reverse_o2m':
             raise TrustsConfigurationError(
-                'along edge %r is not a supported S/C/E hop.'
-                % (path_text(edge_path),)
+                '%s edge %r is not a supported S/C/E hop.'
+                % (role, path_text(edge_path))
             )
         edge_model, _edge_pk = _target_field(
-            reverse, 'along', edge_path[:1],
+            reverse, role, edge_path[:1],
         )
         try:
             forward = edge_model._meta.get_field(edge_path[1])
         except FieldDoesNotExist:
             raise TrustsConfigurationError(
-                'along path %r refers to missing field %r on %s.'
+                '%s path %r refers to missing field %r on %s.'
                 % (
+                    role,
                     path_text(edge_path), edge_path[1],
                     edge_model._meta.label,
                 )
             )
         if _classify_field(forward) != 'single':
             raise TrustsConfigurationError(
-                'along edge %r is not a supported S/C/E hop.'
-                % (path_text(edge_path),)
+                '%s edge %r is not a supported S/C/E hop.'
+                % (role, path_text(edge_path))
             )
-        dest, parent_target = _target_field(forward, 'along', edge_path)
+        dest, parent_target = _target_field(forward, role, edge_path)
         if dest is not walk_model:
             raise TrustsConfigurationError(
-                'along edge %r must terminate on walk-site model %s, not %s.'
+                '%s edge %r must terminate on walk-site model %s, not %s.'
                 % (
+                    role,
                     path_text(edge_path),
                     walk_model._meta.label,
                     dest._meta.label,
@@ -1527,12 +1570,13 @@ def _resolve_along_edge(walk_model, edge_path):
             )
         child_fk = _concrete_fk(reverse)
         _child_related, child_target = _target_field(
-            child_fk, 'along', edge_path[:1],
+            child_fk, role, edge_path[:1],
         )
         if child_target.attname != parent_target.attname:
             raise TrustsConfigurationError(
-                'along edge %r mixes identity fields %r and %r.'
+                '%s edge %r mixes identity fields %r and %r.'
                 % (
+                    role,
                     path_text(edge_path),
                     child_target.attname,
                     parent_target.attname,
@@ -1547,18 +1591,23 @@ def _resolve_along_edge(walk_model, edge_path):
             parent_target,
         )
     raise TrustsConfigurationError(
-        'along edge %r is not a supported S/C/E hop.'
-        % (path_text(edge_path),)
+        '%s edge %r is not a supported S/C/E hop.'
+        % (role, path_text(edge_path))
     )
 
-def _re_resolve_suffix(walk_model, suffix_path, content_model):
+def _re_resolve_suffix(walk_model, suffix_path, content_model, *,
+                       role='along', anchor_role='content',
+                       terminal_membership=False):
     """Confirm stored suffix names compile from the walk-site model."""
     if not suffix_path:
         if walk_model is not content_model:
             raise TrustsConfigurationError(
-                'along suffix path is empty but the content terminal %s '
+                '%s suffix path is empty but the %s terminal %s '
                 'is not the walk-site %s.'
-                % (content_model._meta.label, walk_model._meta.label)
+                % (
+                    role, anchor_role, content_model._meta.label,
+                    walk_model._meta.label,
+                )
             )
         return
     current = walk_model
@@ -1567,22 +1616,30 @@ def _re_resolve_suffix(walk_model, suffix_path, content_model):
             field = current._meta.get_field(name)
         except FieldDoesNotExist:
             raise TrustsConfigurationError(
-                'along suffix path %r cannot be resolved from %s; '
+                '%s suffix path %r cannot be resolved from %s; '
                 'missing field %r.'
-                % (path_text(suffix_path), walk_model._meta.label, name)
+                % (role, path_text(suffix_path), walk_model._meta.label, name)
             )
         kind = _classify_field(field)
+        last = index == len(suffix_path) - 1
+        if terminal_membership and last and kind == 'm2m':
+            related, _attname = _resolve_m2m_terminal(
+                field, role, suffix_path,
+            )
+            current = related
+            continue
         if kind not in _SUFFIX_KINDS:
             raise TrustsConfigurationError(
-                'along suffix path %r uses unsupported field %r on %s.'
-                % (path_text(suffix_path), name, current._meta.label)
+                '%s suffix path %r uses unsupported field %r on %s.'
+                % (role, path_text(suffix_path), name, current._meta.label)
             )
-        related, _attname = resolved_hop(field, 'along suffix', suffix_path)
+        related, _attname = resolved_hop(field, '%s suffix' % role, suffix_path)
         current = related
     if current is not content_model:
         raise TrustsConfigurationError(
-            'along suffix path %r from %s terminates on %s, not %s.'
+            '%s suffix path %r from %s terminates on %s, not %s.'
             % (
+                role,
                 path_text(suffix_path),
                 walk_model._meta.label,
                 current._meta.label,
@@ -1607,14 +1664,14 @@ def _suffix_rewrite_attname(walk_model, suffix_path, content_model, walk_ident):
         return None
     return fk.name
 
-def _boolean_column(model, name, text):
+def _boolean_column(model, name, text, role='along'):
     """Concrete boolean column stored on ``model``'s own table."""
     try:
         field = model._meta.get_field(name)
     except FieldDoesNotExist:
         raise TrustsConfigurationError(
-            'along reset %r refers to missing field %r on %s.'
-            % (text, name, model._meta.label)
+            '%s reset %r refers to missing field %r on %s.'
+            % (role, text, name, model._meta.label)
         )
     internal = field.get_internal_type()
     if (
@@ -1623,26 +1680,26 @@ def _boolean_column(model, name, text):
         or internal != 'BooleanField'
     ):
         raise TrustsConfigurationError(
-            'along reset %r must be a concrete BooleanField on %s, '
-            'not %s.' % (text, model._meta.label, internal)
+            '%s reset %r must be a concrete BooleanField on %s, '
+            'not %s.' % (role, text, model._meta.label, internal)
         )
     if field.model._meta.db_table != model._meta.db_table:
         raise TrustsConfigurationError(
-            'along reset %r is stored on %s, not on %s. '
+            '%s reset %r is stored on %s, not on %s. '
             'register() rejects a parent-table join.'
-            % (text, field.model._meta.label, model._meta.label)
+            % (role, text, field.model._meta.label, model._meta.label)
         )
     return field.column
 
 
-def _reset_any_fk(rel, name, text):
+def _reset_any_fk(rel, name, text, role='along'):
     """Stop when any row on the reverse side of ``rel`` is true."""
     fk = rel.field
     host = fk.model
     return ResetAt(
         path=text,
         kind='any',
-        column=_boolean_column(host, name, text),
+        column=_boolean_column(host, name, text, role),
         through_table=host._meta.db_table,
         through_node=fk.column,
         node_column=fk.target_field.column,
@@ -1660,7 +1717,7 @@ def _through_fk(through, column):
     return None
 
 
-def _reset_any_m2m(walk_model, field, name, text):
+def _reset_any_m2m(walk_model, field, name, text, role='along'):
     """Stop when any row across ``field`` carries a true boolean."""
     forward = field if isinstance(field, ManyToManyField) else field.field
     through = forward.remote_field.through
@@ -1676,13 +1733,13 @@ def _reset_any_m2m(walk_model, field, name, text):
     far_field = _through_fk(through, far_fk)
     if source_fk is None or far_field is None:
         raise TrustsConfigurationError(
-            'along reset %r cannot be read from %s.'
-            % (text, walk_model._meta.label)
+            '%s reset %r cannot be read from %s.'
+            % (role, text, walk_model._meta.label)
         )
     return ResetAt(
         path=text,
         kind='any',
-        column=_boolean_column(far, name, text),
+        column=_boolean_column(far, name, text, role),
         through_table=through._meta.db_table,
         through_node=node_column,
         far_table=far._meta.db_table,
@@ -1700,7 +1757,7 @@ _RESET_RELATION = {
 }
 
 
-def _resolve_reset(walk_model, shape, edge_path, edge_model, reset):
+def _resolve_reset(walk_model, shape, edge_path, edge_model, reset, role='along'):
     """Resolve the third ``along`` element, or ``None`` when it is absent.
 
     One segment is a column on the walked model. Two segments name the
@@ -1717,19 +1774,19 @@ def _resolve_reset(walk_model, shape, edge_path, edge_model, reset):
         or reset.endswith('__')
     ):
         raise TrustsConfigurationError(
-            'along reset must be a field path, not %r.' % (reset,)
+            '%s reset must be a field path, not %r.' % (role, reset)
         )
     parts = reset.split('__')
     if len(parts) == 1:
         return ResetAt(
             path=reset,
             kind='node',
-            column=_boolean_column(walk_model, parts[0], reset),
+            column=_boolean_column(walk_model, parts[0], reset, role),
         )
     if len(parts) != 2 or not all(parts):
         raise TrustsConfigurationError(
-            'along reset %r must name a field on the walked model '
-            'or one relation from it.' % (reset,)
+            '%s reset %r must name a field on the walked model '
+            'or one relation from it.' % (role, reset)
         )
     relation, name = parts
     edge_name = edge_path[0] if edge_path else None
@@ -1737,34 +1794,36 @@ def _resolve_reset(walk_model, shape, edge_path, edge_model, reset):
         return ResetAt(
             path=reset,
             kind='edge',
-            column=_boolean_column(edge_model, name, reset),
+            column=_boolean_column(edge_model, name, reset, role),
         )
     try:
         field = walk_model._meta.get_field(relation)
     except FieldDoesNotExist:
         raise TrustsConfigurationError(
-            'along reset %r refers to missing field %r on %s.'
-            % (reset, relation, walk_model._meta.label)
+            '%s reset %r refers to missing field %r on %s.'
+            % (role, reset, relation, walk_model._meta.label)
         )
     kind = _classify_field(field)
     if kind == 'm2m':
-        return _reset_any_m2m(walk_model, field, name, reset)
+        return _reset_any_m2m(walk_model, field, name, reset, role)
     if kind == 'reverse_o2m':
-        return _reset_any_fk(field, name, reset)
+        return _reset_any_fk(field, name, reset, role)
     label = _RESET_RELATION.get(kind, 'relation %s' % kind)
     raise TrustsConfigurationError(
-        'along reset %r is not the link this walk traverses and '
+        '%s reset %r is not the link this walk traverses and '
         'is not a many-to-many from %s. register() rejects %s.'
-        % (reset, walk_model._meta.label, label)
+        % (role, reset, walk_model._meta.label, label)
     )
 
 
-def _build_along_walk(root, content_path, content_model, along):
-    along_ref = _require_ref(along.ref, 'along')
+def _build_along_walk(root, content_path, content_model, along, *,
+                      role='along', anchor_role='content',
+                      terminal_membership=False):
+    along_ref = _require_ref(along.ref, role)
     if along_ref._root is not root:
         raise TrustsConfigurationError(
-            'along ref must share the registration root %s; got %s.'
-            % (root._meta.label, along_ref._root._meta.label)
+            '%s ref must share the registration root %s; got %s.'
+            % (role, root._meta.label, along_ref._root._meta.label)
         )
     bound = along.bound
     if (
@@ -1772,52 +1831,59 @@ def _build_along_walk(root, content_path, content_model, along):
         or bound < _ALONG_BOUND_MIN or bound > _ALONG_BOUND_MAX
     ):
         raise TrustsConfigurationError(
-            'Along bound must be an integer in %s..%s.'
-            % (_ALONG_BOUND_MIN, _ALONG_BOUND_MAX)
+            '%s bound must be an integer in %s..%s.'
+            % (role.capitalize(), _ALONG_BOUND_MIN, _ALONG_BOUND_MAX)
         )
     walk_path = _common_prefix(tuple(along_ref._path), tuple(content_path))
     edge_path = tuple(along_ref._path[len(walk_path):])
     suffix_path = tuple(content_path[len(walk_path):])
     if not walk_path:
         raise TrustsConfigurationError(
-            'along ref %r and content path %r do not share a walk-site prefix.'
-            % (path_text(along_ref._path), path_text(content_path))
+            '%s ref %r and %s path %r do not share a walk-site prefix.'
+            % (
+                role, path_text(along_ref._path), anchor_role,
+                path_text(content_path),
+            )
         )
     if not edge_path:
         raise TrustsConfigurationError(
-            'along ref %r has no edge hop beyond the walk-site.'
-            % (path_text(along_ref._path),)
+            '%s ref %r has no edge hop beyond the walk-site.'
+            % (role, path_text(along_ref._path))
         )
     _walk_path, walk_model, walk_field, walk_ident = _resolve_path(
-        root, walk_path, 'along', trailing_reverse=True,
+        root, walk_path, role, trailing_reverse=True,
     )
     last_walk_name = walk_path[-1]
     current = root
     for name in walk_path[:-1]:
         field = current._meta.get_field(name)
-        current, _att = resolved_hop(field, 'along', walk_path)
+        current, _att = resolved_hop(field, role, walk_path)
     grant_hop = current._meta.get_field(last_walk_name)
-    _grant_related, grant_target = _target_field(grant_hop, 'along', walk_path)
+    _grant_related, grant_target = _target_field(grant_hop, role, walk_path)
     (
         shape, parent_attname, edge_model, edge_parent_attname,
         edge_child_attname, edge_target,
-    ) = _resolve_along_edge(walk_model, edge_path)
+    ) = _resolve_along_edge(walk_model, edge_path, role)
     ident_fields = (grant_target, edge_target)
     attnames = {field.attname for field in ident_fields}
     if attnames != {walk_ident}:
         raise TrustsConfigurationError(
-            'along identity fields must match across the grant walk hop '
+            '%s identity fields must match across the grant walk hop '
             'and both edge ends; got %s.'
-            % ', '.join(sorted(field.attname for field in ident_fields))
+            % (role, ', '.join(sorted(field.attname for field in ident_fields)))
         )
-    families = {_ident_family(field) for field in ident_fields}
+    families = {_ident_family(field, role.capitalize()) for field in ident_fields}
     if len(families) != 1:
         raise TrustsConfigurationError(
-            'along identity fields mix identity families %s.'
-            % ', '.join(sorted(families))
+            '%s identity fields mix identity families %s.'
+            % (role, ', '.join(sorted(families)))
         )
     ident_family = families.pop()
-    _re_resolve_suffix(walk_model, suffix_path, content_model)
+    _re_resolve_suffix(
+        walk_model, suffix_path, content_model,
+        role=role, anchor_role=anchor_role,
+        terminal_membership=terminal_membership,
+    )
     rewrite_attname = _suffix_rewrite_attname(
         walk_model, suffix_path, content_model, walk_ident,
     )
@@ -1843,7 +1909,29 @@ def _build_along_walk(root, content_path, content_model, along):
             edge_path,
             edge_model,
             getattr(along, 'reset', None),
+            role,
         ),
+    )
+
+
+def _build_via_walk(root, via, anchors):
+    """One user walk. Exactly one anchor shares its walk-site prefix."""
+    if via is None:
+        return None
+    matched = []
+    for anchor_role, path, model in anchors:
+        if _common_prefix(tuple(via.ref._path), tuple(path)):
+            matched.append((anchor_role, path, model))
+    if len(matched) != 1:
+        names = ', '.join(anchor_role for anchor_role, _path, _model in anchors)
+        raise TrustsConfigurationError(
+            'via ref %r must share a walk-site prefix with exactly one '
+            'of %s.' % (path_text(via.ref._path), names)
+        )
+    anchor_role, path, model = matched[0]
+    return _build_along_walk(
+        root, path, model, via,
+        role='via', anchor_role=anchor_role, terminal_membership=True,
     )
 
 def _same_terminal_bindings(existing, record):
@@ -1859,6 +1947,7 @@ def _same_terminal_bindings(existing, record):
         and existing.permission_model is record.permission_model
         and existing.permission_target == record.permission_target
         and existing.along == record.along
+        and existing.via == record.via
         and existing.via_group == record.via_group
         and existing.group_path == record.group_path
     )
@@ -1970,7 +2059,7 @@ def _normalize_public_condition(trust, condition):
     if _prepare_condition_builder(condition) is None:
         return None
     _require_condition_arity(condition)
-    return normalize_expression(invoke(condition, ('row',)))
+    return capture_expression(condition, ('row',))
 
 
 def _normalize_delegated_condition(trust, condition):
@@ -1981,7 +2070,7 @@ def _normalize_delegated_condition(trust, condition):
         roots = ('row', 'inquiry')
     else:
         roots = ('row',)
-    return normalize_expression(invoke(condition, roots))
+    return capture_expression(condition, roots)
 
 def _normalize_public_role(trust, value, role, *, token):
     """Normalize a public string or path builder to a Django ``__`` path."""
@@ -2061,35 +2150,45 @@ def _public_ref(root, value, role, *, allow_empty=False):
         value, role, allow_empty=allow_empty,
     ))
 
-def _bind_public_along(root, along):
+def _bind_public_walk(root, value, role):
     """Normalize ``(path, bound)`` or ``(path, bound, field)`` to ``Along``."""
-    if along is None:
+    if value is None:
         return None
-    if isinstance(along, Along):
+    if isinstance(value, Along):
         raise TypeError(
-            'along must be a (path, bound) pair or a '
-            '(path, bound, field) triple, not an Along instance.'
+            '%s must be a (path, bound) pair or a '
+            '(path, bound, field) triple, not an Along instance.' % (role,)
         )
-    if isinstance(along, Ref):
+    if isinstance(value, Ref):
         raise TypeError(
-            'along must be a (path, bound) pair or a '
-            '(path, bound, field) triple, not a Ref.'
+            '%s must be a (path, bound) pair or a '
+            '(path, bound, field) triple, not a Ref.' % (role,)
         )
-    if not isinstance(along, tuple) or len(along) not in (2, 3):
+    if not isinstance(value, tuple) or len(value) not in (2, 3):
         raise TrustsConfigurationError(
-            'along must be a (path, bound) pair or a '
-            '(path, bound, field) triple, not %r.' % (along,)
+            '%s must be a (path, bound) pair or a '
+            '(path, bound, field) triple, not %r.' % (role, value)
         )
-    if len(along) == 2:
-        path, bound = along
+    if len(value) == 2:
+        path, bound = value
         reset = None
     else:
-        path, bound, reset = along
+        path, bound, reset = value
         if not isinstance(reset, str) or not reset:
             raise TrustsConfigurationError(
-                'along reset must be a field path, not %r.' % (reset,)
+                '%s reset must be a field path, not %r.' % (role, reset)
             )
-    return Along(_public_ref(root, path, 'along'), bound, reset)
+    return Along(_public_ref(root, path, role), bound, reset)
+
+
+def _bind_public_along(root, along):
+    return _bind_public_walk(root, along, 'along')
+
+
+def _reject_via_hops(record, conditions, named_filters):
+    """Reject a user walk SQL cannot express, before the record is stored."""
+    assert_hop_rules(record, conditions)
+    assert_via_filters(record, named_filters)
 
 
 class RegistrationListener(object):

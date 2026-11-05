@@ -47,6 +47,7 @@ class Registry(Protocol):
             Callable[[T], object] | Callable[[T, object], object] | None
         ) = None,
         along=None,
+        via=None,
         name: str | None = None,
         description: str | None = None,
     ):
@@ -60,6 +61,7 @@ class Registry(Protocol):
             'sponsor': sponsor,
             'condition': condition,
             'along': along,
+            'via': via,
             'name': name,
             'description': description,
         })
@@ -272,17 +274,19 @@ class TrustModelBackendMixin(object):
             skip_flags=skip_flags, user_model=get_user_model())
 
     def filter_by_permitted_content(self, queryset, user, permission, *,
-                                    content, **skip_flags):
+                                    content, conditions=(), **skip_flags):
         """Scope rows this backend permits as a prefix of ``content``.
 
         No applicable plan, or a user or permission that is not a saved
         model instance, returns an empty queryset and does not raise.
+        ``conditions`` is the named-filter tuple ``permitted`` takes.
         """
         catalog = self._catalog()
         if catalog is None:
             return queryset.none()
         return catalog.filter_by_permitted_content(
-            queryset, user, permission, content=content, **skip_flags,
+            queryset, user, permission, content=content,
+            conditions=conditions, **skip_flags,
         )
 
     def policy_document(self, *, alias=None):
