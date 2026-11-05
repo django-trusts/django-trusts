@@ -848,6 +848,10 @@ def _permission_predicate(path, op, user_sql, carriers, name, qn):
             return value
         if user_sql is None:
             raise _cannot(name)
+        if op == '<>':
+            # Same Kleene test as ``NOT (=)``. The policy formatter
+            # accepts ``=`` and ``NOT``, not ``<>``.
+            return '(NOT (%s = %s))' % (user_sql, value)
         return '%s %s %s' % (user_sql, op, value)
     if op == '<>':
         raise _cannot(name)

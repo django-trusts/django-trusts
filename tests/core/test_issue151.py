@@ -498,11 +498,12 @@ class SavedInstanceConditionTest(TransactionTestCase):
                         dormant, '%s:blank' % PERM_151, blank,
                         skip_is_active=True,
                     ))
-                with CaptureQueriesContext(connection) as folded:
+                # ``is_staff`` is SQL, so a non-staff user is one query.
+                # The old Python fold answered before the database.
+                with self.assertNumQueries(1):
                     self.assertFalse(checker.has_perm(
                         bob, '%s:staff_blank' % PERM_151, blank,
                     ))
-                self.assertEqual(len(folded), 0)
                 with self.assertNumQueries(1):
                     self.assertTrue(checker.has_perm(
                         alice, '%s:staff_blank' % PERM_151, blank,

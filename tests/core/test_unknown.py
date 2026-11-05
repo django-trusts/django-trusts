@@ -11,7 +11,7 @@ from contextlib import contextmanager
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
-from django.contrib.auth.models import Permission
+from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied
 from django.db import connection, models
@@ -21,10 +21,15 @@ from django.test.utils import isolate_apps
 
 from tests.support import compiler, published_class_catalog
 from trusts.backends import TrustModelBackendMixin
-from trusts.decorators import authorization_required
-from trusts.errors import PermissionConditionError
+from trusts.decorators import authorization_required, filter_by_permitted_content
+from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.functions import Exists
-from trusts.models import PermittedQuerySet, PermittedUsersMixin
+from trusts.models import (
+    AuthorizedQuerySet,
+    PermittedQuerySet,
+    PermittedQuerySetMixin,
+    PermittedUsersMixin,
+)
 from trusts.plan.grammar import Tree
 from trusts.plan.trivalent import (
     Operand,
@@ -390,3 +395,469 @@ class UnknownEntryTests(TransactionTestCase):
                 )
                 with self.assertRaises(PermissionDenied):
                     roomless(request, pk=stored.pk)
+
+
+class _ParityBackend(TrustModelBackendMixin, ModelBackend):
+    pass
+
+
+def _add_column(test, model, name, field):
+    model.add_to_class(name, field)
+    stored = model._meta.get_field(name)
+    with connection.schema_editor() as editor:
+        editor.add_field(model, stored)
+
+    def detach():
+        column = stored.column
+        with connection.cursor() as cursor:
+            present = {
+                item.name
+                for item in connection.introspection.get_table_description(
+                    cursor, model._meta.db_table,
+                )
+            }
+            if column in present:
+                cursor.execute(
+                    'ALTER TABLE %s DROP COLUMN %s' % (
+                        connection.ops.quote_name(model._meta.db_table),
+                        connection.ops.quote_name(column),
+                    )
+                )
+        meta = model._meta
+        if stored in meta.local_fields:
+            meta.local_fields.remove(stored)
+        meta._expire_cache()
+        if hasattr(model, stored.name):
+            delattr(model, stored.name)
+
+    test.addCleanup(detach)
+    return stored
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class EntryPointParityTests(TransactionTestCase):
+    """Every public check answers one three-valued question.
+
+    The via seed and the next walked user use one hop predicate. A
+    named filter that mixes a scalar comparison with ``.contains()``
+    uses that same predicate. A delegated inquiry comparison keeps the
+    old bind and still agrees at the grant.
+    """
+
+    def test_via_seed_child_and_mixed_contains_agree(self):
+        User = get_user_model()
+        _add_column(
+            self, User, 'via_manager',
+            models.ForeignKey(
+                'self', null=True, related_name='parity_reports',
+                on_delete=models.DO_NOTHING, db_constraint=False,
+                db_index=False,
+            ),
+        )
+        _add_column(
+            self, User, 'parity_nick',
+            models.CharField(max_length=20, null=True),
+        )
+        _add_column(
+            self, User, 'parity_flag',
+            models.BooleanField(null=True),
+        )
+
+        class Room(models.Model):
+            name = models.CharField(max_length=20, null=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'parity_room'
+
+        _add_column(
+            self, User, 'parity_room',
+            models.ForeignKey(
+                Room, null=True, db_constraint=False,
+                on_delete=models.DO_NOTHING, related_name='+',
+                db_index=False,
+            ),
+        )
+
+        class Folder(models.Model):
+            name = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'parity_folder'
+
+        class TaskQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Task(PermittedUsersMixin, models.Model):
+            name = models.CharField(max_length=20)
+            folder = models.ForeignKey(
+                Folder, related_name='tasks', on_delete=models.CASCADE,
+            )
+            label = models.CharField(max_length=20, null=True)
+            flag = models.BooleanField(null=True)
+            room = models.ForeignKey(
+                Room, null=True, db_constraint=False,
+                on_delete=models.DO_NOTHING, related_name='tasks',
+            )
+            objects = models.Manager.from_queryset(TaskQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'parity_task'
+
+        class Seat(models.Model):
+            holder = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            auth_group = models.ForeignKey(
+                Group, on_delete=models.CASCADE, related_name='+',
+            )
+            folder = models.ForeignKey(Folder, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'parity_seat'
+
+        with _tables(Room, Folder, Task, Seat):
+            kept = Room.objects.create(name='kept')
+            blank = Room.objects.create(name=None)
+            ada = User.objects.create_user('parity-ada', password='x')
+            ben = User.objects.create_user('parity-ben', password='x')
+            ben.via_manager = ada
+            ben.save()
+            folder = Folder.objects.create(name='folder')
+            task = Task.objects.create(name='task', folder=folder, label='yes')
+            change = Permission.objects.create(
+                content_type=ContentType.objects.get_for_model(Task),
+                codename='change_paritytask',
+                name='Can change parity task',
+            )
+            group = Group.objects.create(name='parity')
+            group.permissions.add(change)
+            Seat.objects.create(holder=ada, auth_group=group, folder=folder)
+            code = 'trusts_tests.change_paritytask'
+            passing = dict(
+                parity_nick='kept', parity_flag=False, parity_room=kept,
+            )
+
+            def paint(person, values):
+                dangling = 'parity_room_id' in values
+                for name, value in values.items():
+                    if name == 'parity_room_id':
+                        continue
+                    setattr(person, name, value)
+                if dangling:
+                    person.parity_room = None
+                person.save()
+                if dangling:
+                    User.objects.filter(pk=person.pk).update(
+                        parity_room_id=values['parity_room_id'],
+                    )
+
+            user_cases = (
+                ('eq-known', lambda user: user.parity_nick == 'kept',
+                 passing, dict(parity_nick='kept'), True, True),
+                ('eq-null-child', lambda user: user.parity_nick == 'kept',
+                 passing, dict(parity_nick=None), True, False),
+                ('ne-null-child', lambda user: user.parity_nick != 'stop',
+                 passing, dict(parity_nick=None), True, False),
+                ('eq-none-both', lambda user: user.parity_nick == None,  # noqa: E711
+                 dict(parity_nick=None), dict(parity_nick=None), True, True),
+                ('ne-none-child', lambda user: user.parity_nick != None,  # noqa: E711
+                 passing, dict(parity_nick=None), True, False),
+                ('not-null-child', lambda user: ~user.parity_flag,
+                 passing, dict(parity_flag=None), True, False),
+                ('exists-dangling-child', lambda user: Exists(user.parity_room),
+                 passing, dict(parity_room_id=DANGLING_ID), True, False),
+                ('exists-missing-child', lambda user: Exists(user.parity_room),
+                 passing, dict(parity_room=None), True, False),
+                ('eq-none-dangling', lambda user: user.parity_room.name == None,  # noqa: E711
+                 dict(parity_room=blank), dict(parity_room_id=DANGLING_ID),
+                 True, False),
+                ('eq-none-missing', lambda user: user.parity_room.name == None,  # noqa: E711
+                 dict(parity_room=blank), dict(parity_room=None), True, False),
+                ('or-true-branch', lambda user: (
+                    (user.parity_nick == 'nope') | (user.parity_flag == False)  # noqa: E712
+                 ), passing, dict(parity_nick=None, parity_flag=False),
+                 True, True),
+                ('or-unknown', lambda user: (
+                    (user.parity_nick == 'kept') | (user.parity_flag == True)  # noqa: E712
+                 ), passing, dict(parity_nick=None, parity_flag=None),
+                 True, False),
+                ('and-unknown', lambda user: (
+                    (user.parity_nick != None) & (user.parity_flag == False)  # noqa: E711, E712
+                 ), passing, dict(parity_nick=None, parity_flag=False),
+                 True, False),
+                ('or-contains', lambda user: (
+                    (user.parity_nick == 'kept') | user.groups.contains(group)
+                 ), passing, dict(parity_nick=None), True, True),
+                ('and-contains', lambda user: (
+                    (user.parity_nick != None) & user.groups.contains(group)  # noqa: E711
+                 ), passing, dict(parity_nick=None), True, False),
+            )
+            ada.groups.add(group)
+            ben.groups.add(group)
+            for label, predicate, ada_values, ben_values, ada_ok, ben_ok in user_cases:
+                paint(ada, passing)
+                paint(ben, passing)
+                paint(ada, ada_values)
+                paint(ben, ben_values)
+                handle = compiler(path='tests.core.parity-user-%s' % label)
+                handle.set_user_condition('called', predicate)
+                handle.register(
+                    trust=Seat, user='holder', group='auth_group',
+                    content='folder__tasks', via=('holder__via_manager', 8),
+                )
+                with self.subTest(label=label, who='ada'):
+                    self._agree(handle, ada, task, folder, change, code, ada_ok)
+                with self.subTest(label=label, who='ben'):
+                    self._agree(handle, ben, task, folder, change, code, ben_ok)
+
+            task.room = None
+            task.flag = None
+            task.label = 'yes'
+            task.save()
+            object_cases = (
+                ('obj-eq-none-missing', lambda u, p, o: o.room.name == None,  # noqa: E711
+                 dict(room=None, label='yes', flag=False), False),
+                ('obj-eq-none-stored', lambda u, p, o: o.room.name == None,  # noqa: E711
+                 dict(room=blank, label='yes', flag=False), True),
+                ('obj-eq-none-dangling', lambda u, p, o: o.room.name == None,  # noqa: E711
+                 dict(room_id=DANGLING_ID, label='yes', flag=False), False),
+                ('obj-exists-dangling', lambda u, p, o: Exists(o.room),
+                 dict(room_id=DANGLING_ID, label='yes', flag=False), False),
+                ('obj-not-exists-dangling', lambda u, p, o: ~Exists(o.room),
+                 dict(room_id=DANGLING_ID, label='yes', flag=False), True),
+                ('obj-ne-null', lambda u, p, o: o.label != 'yes',
+                 dict(room=kept, label=None, flag=False), False),
+                ('obj-or-contains', lambda u, p, o: (
+                    (o.flag != True) | u.groups.contains(group)  # noqa: E712
+                 ), dict(room=kept, label='yes', flag=None), True),
+                ('obj-and-contains', lambda u, p, o: (
+                    (o.flag != None) & u.groups.contains(group)  # noqa: E711
+                 ), dict(room=kept, label='yes', flag=None), False),
+            )
+            paint(ada, passing)
+            paint(ben, passing)
+            for label, predicate, task_values, allowed in object_cases:
+                dangling = 'room_id' in task_values
+                for name, value in task_values.items():
+                    if name == 'room_id':
+                        continue
+                    setattr(task, name, value)
+                if dangling:
+                    task.room = None
+                task.save()
+                if dangling:
+                    Task.objects.filter(pk=task.pk).update(
+                        room_id=task_values['room_id'],
+                    )
+                # An OR that mentions the user forces both sides into
+                # the hop, and the object comparison cannot be written
+                # there. An AND keeps the object side on the content
+                # overlay and puts only the user side in the hop.
+                rejected = label == 'obj-or-contains'
+                handle = compiler(path='tests.core.parity-obj-%s' % label)
+                handle.set_user_condition(
+                    'open', lambda user: user.username != 'nobody',
+                )
+                handle.add_named_filter(Task, 'kept', predicate)
+                handle.register(
+                    trust=Seat, user='holder', group='auth_group',
+                    content='folder__tasks',
+                    **({} if rejected else {
+                        'via': ('holder__via_manager', 8),
+                    }),
+                )
+                people = (ada,) if rejected else (ada, ben)
+                for person in people:
+                    with self.subTest(label=label, who=person.username):
+                        self._agree(
+                            handle, person, task, folder, change, code,
+                            allowed, conditions=('kept',),
+                        )
+                if rejected:
+                    refused = compiler(
+                        path='tests.core.parity-via-%s' % label,
+                    )
+                    refused.set_user_condition(
+                        'open', lambda user: user.username != 'nobody',
+                    )
+                    refused.add_named_filter(Task, 'kept', predicate)
+                    with self.subTest(label=label, who='via-rejected'):
+                        with self.assertRaises(TrustsConfigurationError):
+                            refused.register(
+                                trust=Seat, user='holder',
+                                group='auth_group',
+                                content='folder__tasks',
+                                via=('holder__via_manager', 8),
+                            )
+
+    def test_inquiry_null_and_contains_agree(self):
+        User = get_user_model()
+
+        class Folder(models.Model):
+            name = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'parity_inq_folder'
+
+        class TaskQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Task(PermittedUsersMixin, models.Model):
+            name = models.CharField(max_length=20)
+            folder = models.ForeignKey(
+                Folder, related_name='tasks', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(TaskQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'parity_inq_task'
+
+        class Seat(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, related_name='+',
+            )
+            folder = models.ForeignKey(Folder, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'parity_inq_seat'
+
+        class Bridge(models.Model):
+            folder = models.ForeignKey(Folder, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            sponsor = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            perm = models.ForeignKey(
+                Permission, null=True, db_constraint=False,
+                on_delete=models.DO_NOTHING, related_name='+',
+            )
+            caps = models.ManyToManyField(Permission, related_name='+')
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'parity_inq_bridge'
+
+        caps = Bridge._meta.get_field('caps')
+        if not hasattr(caps, 'm2m_field_name'):
+            caps.contribute_to_related_class(Permission, caps.remote_field)
+        with _tables(Folder, Task, Seat, Bridge):
+            folder = Folder.objects.create(name='folder')
+            task = Task.objects.create(name='task', folder=folder)
+            change = Permission.objects.create(
+                content_type=ContentType.objects.get_for_model(Task),
+                codename='change_parityinq',
+                name='Can change parity inquiry',
+            )
+            other = Permission.objects.create(
+                content_type=ContentType.objects.get_for_model(Task),
+                codename='view_parityinq',
+                name='Can view parity inquiry',
+            )
+            ada = User.objects.create_user('inq-ada', password='x')
+            bob = User.objects.create_user('inq-bob', password='x')
+            Seat.objects.create(user=ada, permission=change, folder=folder)
+            bridge = Bridge.objects.create(
+                folder=folder, delegate=bob, sponsor=ada, perm=None,
+            )
+            code = 'trusts_tests.change_parityinq'
+            cases = (
+                ('ne-null', lambda row, permission: row.perm != permission,
+                 None, False, False),
+                ('ne-same', lambda row, permission: row.perm != permission,
+                 change, False, False),
+                ('ne-other', lambda row, permission: row.perm != permission,
+                 other, False, True),
+                ('eq-none', lambda row, permission: row.perm == None,  # noqa: E711
+                 None, False, True),
+                ('eq-none-set', lambda row, permission: row.perm == None,  # noqa: E711
+                 change, False, False),
+                ('eq-none-dangling', lambda row, permission: row.perm == None,  # noqa: E711
+                 DANGLING_ID, True, False),
+                ('or-contains-null', lambda row, permission: (
+                    (row.perm != permission) | row.caps.contains(permission)
+                 ), None, True, True),
+                ('or-contains-empty', lambda row, permission: (
+                    (row.perm != permission) | row.caps.contains(permission)
+                 ), None, False, False),
+                ('and-contains-null', lambda row, permission: (
+                    (row.perm != None) & row.caps.contains(permission)  # noqa: E711
+                 ), None, True, False),
+            )
+            for label, predicate, perm_value, member, allowed in cases:
+                if perm_value == DANGLING_ID:
+                    bridge.perm_id = DANGLING_ID
+                    bridge.perm = None
+                    bridge.save()
+                    Bridge.objects.filter(pk=bridge.pk).update(perm_id=DANGLING_ID)
+                else:
+                    bridge.perm = perm_value
+                    bridge.save()
+                bridge.caps.clear()
+                if member:
+                    bridge.caps.add(change)
+                handle = compiler(path='tests.core.parity-inq-%s' % label)
+                handle.register(
+                    trust=Seat, user='user', permission='permission',
+                    content='folder__tasks',
+                )
+                handle.register(
+                    trust=Bridge, delegate='delegate', sponsor='sponsor',
+                    content='folder__tasks', condition=predicate,
+                )
+                with self.subTest(label=label):
+                    self._agree(
+                        handle, bob, task, folder, change, code, allowed,
+                    )
+                    self._agree(
+                        handle, ada, task, folder, change, code, True,
+                    )
+
+    def _agree(self, handle, user, task, folder, change, code, allowed,
+               conditions=()):
+        filtered = '%s:%s' % (code, conditions[0]) if conditions else code
+        with published_class_catalog(
+            _ParityBackend, handle,
+        ), override_settings(
+            AUTHENTICATION_BACKENDS=('tests.core.test_unknown._ParityBackend',),
+        ):
+            has = user.has_perm(filtered, task)
+            permitted = task.pk in set(task.__class__.objects.permitted(
+                code, user, conditions=conditions,
+            ).values_list('pk', flat=True))
+            reached = task.get_permitted_users(filtered).filter(
+                pk=user.pk,
+            ).exists()
+            folders = folder.pk in set(filter_by_permitted_content(
+                folder.__class__.objects.all(), user, change,
+                content=task.__class__, conditions=conditions,
+            ).values_list('pk', flat=True))
+
+            @authorization_required(
+                task.__class__, code, conditions=conditions,
+            )
+            def guarded(request, pk):
+                return HttpResponse('ok')
+
+            request = RequestFactory().get('/')
+            request.user = user
+            try:
+                guarded(request, pk=task.pk)
+                decorated = True
+            except PermissionDenied:
+                decorated = False
+        self.assertEqual(
+            (has, permitted, reached, folders, decorated),
+            (allowed, allowed, allowed, allowed, allowed),
+        )

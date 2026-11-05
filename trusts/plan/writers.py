@@ -8,7 +8,7 @@ unknown. ``.contains()`` keeps the membership join it already had.
 """
 
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import DateTimeField, F, Model, Q, Value
+from django.db.models import DateTimeField, Exists, F, Model, Q, Value
 from django.db.models.functions import Cast, Coalesce, Lower, Now
 from django.db.models.lookups import (
     Exact,
@@ -161,11 +161,12 @@ def columns_q(a, b, equal):
 
 
 def column_q(lookup, value, equal, *, field):
-    """One column against a loaded value, under the NULL rule.
+    """One column against a loaded value.
 
     ``field`` is true when ``value`` came from another field: NULL on
     either side then does not match. Against a constant, ``== None`` is
-    ``IS NULL`` and ``!= 5`` matches a NULL column, as in Python.
+    ``IS NULL``. The ``field`` false inequality still matches a NULL
+    column. Scalar entry points do not use that form.
     """
     value = member_pk(value)
     if value is None and field:
@@ -227,12 +228,6 @@ def member_pk(value):
     return value
 
 
-def _collection_contains(manager, pk):
-    if manager is None or pk is None:
-        return False
-    return manager.filter(pk=pk).exists()
-
-
 def _bound_value(node, user, perm, user_model):
     """User, permission, or constant value. Object fields stay in the queryset."""
     if _node(node, 'const'):
@@ -287,11 +282,14 @@ def _compile_contains(node, model, user, perm, user_model):
             return Q(pk__in=())
         member = '__'.join(right.path)
         return Q(**{'%s__in' % member: manager.values('pk')})
-    if _collection_contains(
-        manager, member_pk(_bound_value(right, user, perm, user_model)),
-    ):
-        return Q()
-    return Q(pk__in=())
+    # A known member used to become an empty ``Q()``. Django drops that
+    # child of ``|``, so a true membership disappeared beside an unknown
+    # comparison and the forward check disagreed with the reverse one.
+    # ``EXISTS`` is still one matching member, and it survives ``|`` / ``&``.
+    value = member_pk(_bound_value(right, user, perm, user_model))
+    if manager is None or value is None:
+        return Q(pk__in=())
+    return Q(Exists(manager.filter(pk=value)))
 
 
 _FUNCTIONS = {'now': Now, 'lower': Lower, 'coalesce': Coalesce}
