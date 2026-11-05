@@ -372,6 +372,10 @@ sponsor grant's ``along=`` walk or direct match must reach the object.
 A delegate cannot sponsor a further delegation.
 
 
+For the framework-independent investigation and alternatives, see the
+`delegation reference article
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/dev/permission-delegation.rst>`_.
+
 Configure Django
 ----------------
 
