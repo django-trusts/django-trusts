@@ -751,6 +751,24 @@ authorization-policy output. See the `bounded-reach security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
 for the recursive-query and database boundaries.
 
+An optional third element sets an inheritance reset:
+``along=("parent", 8, "reset_inheritance")``. Only a true flag cuts
+incoming inheritance; false, ``NULL``, and no related reset row do not.
+
+The path must name a concrete ``BooleanField``:
+
+- On the walked model’s own table: cuts every incoming path at that node.
+- On a link the walk traverses, e.g. ``parent_links__reset_inheritance``:
+  cuts only that link.
+- Through a many-to-many or reverse foreign key from the node, e.g.
+  ``flags__reset_inheritance`` or ``policies__reset_inheritance``:
+  any true flag cuts incoming paths at the node.
+
+For A → B → C with B reset, A’s grant stops before B. B’s own grant
+still applies at B and can reach C. Other valid grants are unaffected.
+Each content, delegation, or sponsor walk uses its own reset path.
+``register()`` rejects unsupported paths.
+
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
 
