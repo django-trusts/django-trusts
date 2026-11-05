@@ -12,6 +12,7 @@ from django.db.models.expressions import Expression
 from trusts.plan.predicates import bind_record_qs
 from trusts.plan.walk import (
     _content_walk_seed,
+    _column_or_attname,
     _grant_walk_attname,
     _inverse_neighbor_sql,
     _render_keyed_reach_sql,
@@ -53,7 +54,8 @@ class _IdentInReach(Expression):
     def as_sql(self, compiler, connection):
         qn = connection.ops.quote_name
         alias = compiler.query.get_initial_alias()
-        sql = '%s.%s IN (%s)' % (qn(alias), qn(self.attname), self.w_sql)
+        column = _column_or_attname(compiler.query.model, self.attname)
+        sql = '%s.%s IN (%s)' % (qn(alias), qn(column), self.w_sql)
         return sql, tuple(self.w_params)
 
 
@@ -318,8 +320,10 @@ class _AnchorInInverseReach(Expression):
             return sql, tuple(lhs_params) + tuple(w_params)
         qn = connection.ops.quote_name
         alias = compiler.query.get_initial_alias()
-        attname = _grant_walk_attname(self.record)
-        sql = '%s.%s IN (%s)' % (qn(alias), qn(attname), w_sql)
+        column = _column_or_attname(
+            compiler.query.model, _grant_walk_attname(self.record),
+        )
+        sql = '%s.%s IN (%s)' % (qn(alias), qn(column), w_sql)
         return sql, tuple(w_params)
 
 
