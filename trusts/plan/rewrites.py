@@ -571,8 +571,13 @@ class _Walk(object):
             ):
                 # Every walk's match flag is the same True. One column,
                 # referenced from each comparison.
+                match = (
+                    'via match'
+                    if getattr(node.lhs, 'via_bound', None) is not None
+                    else 'along match'
+                )
                 self.hits.append(_Hit(
-                    True, 'const', 'along match', BooleanField(),
+                    True, 'const', match, BooleanField(),
                     lambda ref, lookup=node: setattr(lookup, 'rhs', ref),
                 ))
                 return
@@ -660,15 +665,18 @@ class _Walk(object):
         if id(node) in self.seen_along:
             return
         self.seen_along.add(id(node))
-        bound = int(node.along_bound)
-        self.hits.append(_Hit(bound, 'const', 'along bound', _INTEGER, apply))
+        label, bound = _bound_label(node)
+        self.hits.append(_Hit(bound, 'const', label, _INTEGER, apply))
         self._visit_sources(node)
 
     def _visit_sources(self, node):
         if not hasattr(node, 'get_source_expressions'):
             return
-        for source in node.get_source_expressions():
-            self.visit(source)
+        for index, source in enumerate(list(node.get_source_expressions() or ())):
+            if _is_along(source):
+                self._note_along(source, _source_apply(node, index, source))
+            else:
+                self.visit(source)
 
 
 class _Hit(object):
@@ -722,6 +730,14 @@ def _child_apply(parent, index, child):
 def _lhs_apply(lookup, child):
     def apply(ref, lookup=lookup, child=child):
         lookup.lhs = _AlongOnce(child, ref)
+    return apply
+
+
+def _source_apply(node, index, child):
+    def apply(ref, node=node, index=index, child=child):
+        sources = list(node.get_source_expressions())
+        sources[index] = _AlongOnce(child, ref)
+        node.set_source_expressions(sources)
     return apply
 
 
@@ -926,8 +942,18 @@ def _plain_value(value):
     return value
 
 
+def _bound_label(node):
+    via_bound = getattr(node, 'via_bound', None)
+    if via_bound is not None:
+        return 'via bound', int(via_bound)
+    along_bound = getattr(node, 'along_bound', None)
+    if along_bound is not None:
+        return 'along bound', int(along_bound)
+    return None
+
+
 def _is_along(node):
-    return getattr(node, 'along_bound', None) is not None
+    return _bound_label(node) is not None
 
 
 def _unresolved_pair(child):
@@ -960,10 +986,12 @@ def _column_base(kind, label):
             'content type app': 'app_label',
             'content type model': 'model',
             'along bound': 'along_bound',
+            'via bound': 'via_bound',
             'content pk': 'content_pk',
             'exists marker': 'exists_marker',
             'active': 'is_active',
             'along match': 'along_match',
+            'via match': 'via_match',
         }.get(label, (label or 'value').replace(' ', '_'))
     cleaned = []
     for char in base:

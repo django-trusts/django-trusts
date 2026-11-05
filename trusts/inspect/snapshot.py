@@ -463,11 +463,10 @@ class _PolicyVisitor(object):
                     row['condition'] = condition
                 along = getattr(record, 'along', None)
                 if along is not None:
-                    row['along'] = {
-                        'path': '__'.join(along.path),
-                        'shape': along.shape,
-                        'bound': along.bound,
-                    }
+                    row['along'] = _along_mapping(along)
+                via = getattr(record, 'via', None)
+                if via is not None:
+                    row['via'] = _along_mapping(via)
                 if multi:
                     row['or_group'] = True
                 delegated_rows.append(row)
@@ -484,11 +483,10 @@ class _PolicyVisitor(object):
             row['content'] = _relation(record, 'content')
             along = getattr(record, 'along', None)
             if along is not None:
-                row['along'] = {
-                    'path': '__'.join(along.path),
-                    'shape': along.shape,
-                    'bound': along.bound,
-                }
+                row['along'] = _along_mapping(along)
+            via = getattr(record, 'via', None)
+            if via is not None:
+                row['via'] = _along_mapping(via)
             condition = _render_condition(
                 record.condition,
                 permission_token=_permission_token(
@@ -619,6 +617,8 @@ _CONST_SOURCE = {
     'active': 'user.is_active',
     'along bound': '$along_bound',
     'along match': '$along_match',
+    'via bound': '$via_bound',
+    'via match': '$via_match',
 }
 
 
@@ -936,6 +936,19 @@ def _dotless_id(*parts):
     return '__'.join(parts).replace('.', '__')
 
 
+def _along_mapping(along):
+    """Policy output for one walk, including its configured reset field."""
+    mapping = {
+        'path': '__'.join(along.path),
+        'shape': along.shape,
+        'bound': along.bound,
+    }
+    reset = getattr(along, 'reset', None)
+    if reset is not None:
+        mapping['reset'] = reset.path
+    return mapping
+
+
 def _base_id(record):
     """Stable leg id. The root qname's dots become ``__``.
 
@@ -953,6 +966,19 @@ def _base_id(record):
             getattr(along, 'shape', None),
             getattr(along, 'bound', None),
         )
+        reset = getattr(along, 'reset', None)
+        if reset is not None:
+            label += '__reset_%s' % reset.path
+    via = getattr(record, 'via', None)
+    if via is not None:
+        label += '__via_%s_%s_%s' % (
+            '__'.join(via.path),
+            getattr(via, 'shape', None),
+            getattr(via, 'bound', None),
+        )
+        reset = getattr(via, 'reset', None)
+        if reset is not None:
+            label += '__reset_%s' % reset.path
     return label.replace('.', '__')
 
 
@@ -1335,6 +1361,11 @@ def _symbol_for_new_param(node, query=None):
         return _with_hint(
             {'const': _json_const(column.value)}, column.label,
         )
+    via_bound = getattr(node, 'via_bound', None)
+    if via_bound is not None:
+        return _with_hint(
+            {'const': _json_const(via_bound)}, 'via bound',
+        )
     along_bound = getattr(node, 'along_bound', None)
     if along_bound is not None:
         return _with_hint(
@@ -1427,6 +1458,8 @@ def _value_hint(node, query):
 def _const_hint(node, value):
     """Readable label for one constant lookup placeholder."""
     lhs = getattr(node, 'lhs', None)
+    if getattr(lhs, 'via_bound', None) is not None and value is True:
+        return 'via match'
     if getattr(lhs, 'along_bound', None) is not None and value is True:
         return 'along match'
     name = _lookup_field_name(node)
