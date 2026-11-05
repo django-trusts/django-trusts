@@ -1,0 +1,991 @@
+{
+  "cases": {
+    "bare-banned": {
+      "kind": "ran",
+      "subjects": {
+        "banned": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "open_false": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "open_true": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "bare-clear": {
+      "kind": "ran",
+      "subjects": {
+        "banned": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "open_false": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "open_true": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "hop-ne": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nounit": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nullreg": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "withunit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "hop-none": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nounit": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nullreg": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "withunit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "leaf-ne-field": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "nullreg": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "west": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "withunit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "leaf-ne-lit": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nullreg": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "west": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "withunit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "leaf-ne-rev": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "nullreg": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "west": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "withunit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "leaf-none": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nounit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "nullreg": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "withunit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "mixed": {
+      "kind": "ran",
+      "subjects": {
+        "banned": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "open_false": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "open_true": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        }
+      }
+    },
+    "mixed-clear": {
+      "kind": "ran",
+      "subjects": {
+        "banned": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "open_false": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "open_true": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        }
+      }
+    },
+    "not-banned": {
+      "kind": "ran",
+      "subjects": {
+        "banned": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "open_false": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "open_true": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        }
+      }
+    },
+    "not-clear": {
+      "kind": "ran",
+      "subjects": {
+        "banned": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "open_false": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "open_true": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        }
+      }
+    },
+    "notnot-banned": {
+      "kind": "ran",
+      "subjects": {
+        "banned": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "open_false": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "open_true": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "notnot-clear": {
+      "kind": "ran",
+      "subjects": {
+        "banned": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "open_false": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "open_true": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "or-false-right": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "nullreg": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "or-path-left": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nullreg": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "west": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        }
+      }
+    },
+    "or-path-right": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nullreg": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "west": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        }
+      }
+    },
+    "plaque-leaf-ne": {
+      "kind": "ran",
+      "subjects": {
+        "eastlabel": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "noplaque": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nulllabel": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        }
+      }
+    },
+    "plaque-leaf-none": {
+      "kind": "ran",
+      "subjects": {
+        "eastlabel": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "noplaque": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nulllabel": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        }
+      }
+    },
+    "plaque-none": {
+      "kind": "ran",
+      "subjects": {
+        "eastlabel": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "noplaque": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nulllabel": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "rel-none": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nounit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "nullreg": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "withunit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "unit-none": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nounit": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nullreg": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "withunit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "via/bare-banned": {
+      "kind": "ran",
+      "subjects": {
+        "banned": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "open_false": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "open_true": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "via/bare-clear": {
+      "kind": "ran",
+      "subjects": {
+        "banned": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "open_false": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "open_true": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "via/hop-ne": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nounit": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nullreg": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "withunit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "via/hop-none": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nounit": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nullreg": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "withunit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "via/leaf-ne-field": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "nullreg": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "west": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "withunit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "via/leaf-ne-lit": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nullreg": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "west": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "withunit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "via/leaf-ne-rev": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "nullreg": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "west": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "withunit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "via/leaf-none": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nounit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "nullreg": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "withunit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "via/mixed": {
+      "kind": "ran",
+      "subjects": {
+        "banned": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "open_false": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "open_true": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        }
+      }
+    },
+    "via/mixed-clear": {
+      "kind": "ran",
+      "subjects": {
+        "banned": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "open_false": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "open_true": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        }
+      }
+    },
+    "via/not-banned": {
+      "kind": "ran",
+      "subjects": {
+        "banned": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "open_false": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "open_true": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        }
+      }
+    },
+    "via/not-clear": {
+      "kind": "ran",
+      "subjects": {
+        "banned": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "open_false": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "open_true": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        }
+      }
+    },
+    "via/notnot-banned": {
+      "kind": "ran",
+      "subjects": {
+        "banned": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "open_false": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "open_true": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "via/notnot-clear": {
+      "kind": "ran",
+      "subjects": {
+        "banned": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "open_false": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "open_true": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "via/or-false-right": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "nullreg": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "via/or-path-left": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nullreg": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "west": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        }
+      }
+    },
+    "via/or-path-right": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nullreg": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "west": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        }
+      }
+    },
+    "via/plaque-leaf-ne": {
+      "error": "TrustsConfigurationError: via user condition 'probe' cannot be written in the recursive member.",
+      "kind": "unsupported"
+    },
+    "via/plaque-leaf-none": {
+      "error": "TrustsConfigurationError: via user condition 'probe' cannot be written in the recursive member.",
+      "kind": "unsupported"
+    },
+    "via/plaque-none": {
+      "error": "TrustsConfigurationError: via user condition 'probe' cannot be written in the recursive member.",
+      "kind": "unsupported"
+    },
+    "via/rel-none": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nounit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "nullreg": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        },
+        "withunit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    },
+    "via/unit-none": {
+      "kind": "ran",
+      "subjects": {
+        "absent": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nounit": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "nullreg": {
+          "get_permitted_users": "hold",
+          "has_perm": "hold",
+          "permitted": "hold"
+        },
+        "withunit": {
+          "get_permitted_users": "fail",
+          "has_perm": "fail",
+          "permitted": "fail"
+        }
+      }
+    }
+  },
+  "note": "Answers from SQLite at the production revision above. vendor_cases replaces a whole case key when PostgreSQL or MySQL differs. sqlite_shapes are permitted() SQL flags from that SQLite run and are not compared.",
+  "production": "186e632b0284f453eb7b6f49aabf2bf5c31bed67",
+  "sqlite_shapes": {
+    "hop-ne": {
+      "coalesce": false,
+      "inner": true,
+      "is_not_null": true,
+      "is_not_true": false,
+      "is_null": true,
+      "is_true": false,
+      "left": true,
+      "not_exists": false
+    },
+    "hop-none": {
+      "coalesce": false,
+      "inner": true,
+      "is_not_null": false,
+      "is_not_true": false,
+      "is_null": true,
+      "is_true": false,
+      "left": true,
+      "not_exists": false
+    },
+    "leaf-none": {
+      "coalesce": false,
+      "inner": true,
+      "is_not_null": false,
+      "is_not_true": false,
+      "is_null": true,
+      "is_true": false,
+      "left": true,
+      "not_exists": false
+    },
+    "or-path-left": {
+      "coalesce": false,
+      "inner": true,
+      "is_not_null": false,
+      "is_not_true": false,
+      "is_null": false,
+      "is_true": false,
+      "left": true,
+      "not_exists": false
+    },
+    "or-path-right": {
+      "coalesce": false,
+      "inner": true,
+      "is_not_null": false,
+      "is_not_true": false,
+      "is_null": false,
+      "is_true": false,
+      "left": true,
+      "not_exists": false
+    },
+    "plaque-none": {
+      "coalesce": false,
+      "inner": true,
+      "is_not_null": false,
+      "is_not_true": false,
+      "is_null": true,
+      "is_true": false,
+      "left": true,
+      "not_exists": false
+    },
+    "rel-none": {
+      "coalesce": false,
+      "inner": true,
+      "is_not_null": false,
+      "is_not_true": false,
+      "is_null": true,
+      "is_true": false,
+      "left": false,
+      "not_exists": false
+    },
+    "unit-none": {
+      "coalesce": false,
+      "inner": true,
+      "is_not_null": false,
+      "is_not_true": false,
+      "is_null": true,
+      "is_true": false,
+      "left": true,
+      "not_exists": false
+    }
+  },
+  "vendor_cases": {}
+}

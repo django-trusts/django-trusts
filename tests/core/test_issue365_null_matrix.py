@@ -57,6 +57,7 @@ from trusts.plan.grammar import invoke
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
 _EXPECTED = os.path.join(_HERE, 'issue365_expected.json')
+_GAP_EXPECTED = os.path.join(_HERE, 'issue365_gap_expected.json')
 _REGISTER_ERRORS = (
     TrustsConfigurationError, PermissionConditionError, TypeError, ValueError,
 )
@@ -278,6 +279,30 @@ def _unsupported(error):
     return {'kind': 'unsupported', 'error': error}
 
 
+def _publish_reverse(test, model):
+    """Show a reverse one-to-one to the user model's field resolver.
+
+    ``isolate_apps`` registers the new model on a temporary registry.
+    The installed user was built on the process registry, and
+    ``get_field`` only sees reverse relations from that registry.
+    Publishing the model there is test setup. Cleanup removes it.
+    """
+    registry = get_user_model()._meta.apps
+    registry.register_model(model._meta.app_label, model)
+    registry.clear_cache()
+
+    def detach():
+        bucket = registry.all_models.get(model._meta.app_label)
+        if bucket is not None:
+            bucket.pop(model._meta.model_name, None)
+        registry.clear_cache()
+        user_model = get_user_model()
+        if 'probe_plaque' in user_model.__dict__:
+            del user_model.__dict__['probe_plaque']
+
+    test.addCleanup(detach)
+
+
 def _try_invoke(fn, roots):
     try:
         invoke(fn, roots)
@@ -300,7 +325,14 @@ class NullSemanticsProbe(TransactionTestCase):
             self.fail('pinned matrix missing; wrote %s' % tmp)
         with open(_EXPECTED, encoding='utf-8') as handle:
             expected = json.load(handle)
-        self.assertEqual(payload['revision'], expected['revision'])
+        # The pin names the production revision the answers were measured
+        # against. Later test commits sit on that tree; HEAD is not the pin.
+        self.assertEqual(expected['revision'], _PRODUCTION)
+        diff = subprocess.check_output(
+            ['git', 'diff', '--stat', _PRODUCTION, '--', 'trusts'],
+            cwd=_ROOT, text=True,
+        )
+        self.assertEqual(diff, '')
         self.assertEqual(payload['owners'], expected['owners'])
         want = dict(expected['cases'])
         want.update(expected.get('vendor_cases', {}).get(connection.vendor, {}))
@@ -1347,3 +1379,327 @@ class NullSemanticsProbe(TransactionTestCase):
                 continue
             found[name] = _unsupported(_try_invoke(fn, roots))
         return found
+
+
+_PRODUCTION = '186e632b0284f453eb7b6f49aabf2bf5c31bed67'
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class GapProbeTest(TransactionTestCase):
+    """Measurements the #366 pin did not already record.
+
+    Production code is unchanged. ``dept == None`` is the relation.
+    ``dept.region == None`` is the leaf. A later hop is ``dept.unit.code``.
+    ``code`` is not null. ``probe_plaque`` is a reverse one-to-one made
+    visible on the installed user for this test only.
+    """
+
+    def test_gap_measurements(self):
+        world = self._world()
+        found = {}
+        shapes = {}
+        queries = (
+            ('rel-none', lambda user: user.probe_dept == None,  # noqa: E711
+             ('absent', 'nullreg', 'nounit', 'withunit')),
+            ('leaf-none', lambda user: user.probe_dept.region == None,  # noqa: E711
+             ('absent', 'nullreg', 'nounit', 'withunit')),
+            ('unit-none', lambda user: user.probe_dept.unit == None,  # noqa: E711
+             ('absent', 'nullreg', 'nounit', 'withunit')),
+            ('hop-none', lambda user: user.probe_dept.unit.code == None,  # noqa: E711
+             ('absent', 'nullreg', 'nounit', 'withunit')),
+            ('hop-ne', lambda user: user.probe_dept.unit.code != 'east',
+             ('absent', 'nullreg', 'nounit', 'withunit')),
+            ('leaf-ne-lit', lambda user: user.probe_dept.region != 'east',
+             ('absent', 'nullreg', 'west', 'withunit')),
+            ('leaf-ne-field',
+             lambda user: user.probe_dept.region != user.probe_east,
+             ('absent', 'nullreg', 'west', 'withunit')),
+            ('leaf-ne-rev',
+             lambda user: user.probe_east != user.probe_dept.region,
+             ('absent', 'nullreg', 'west', 'withunit')),
+            ('or-path-right',
+             lambda user: (
+                 (user.probe_dept.region == user.probe_east)
+                 | (user.probe_east == 'east')
+             ),
+             ('absent', 'nullreg', 'west')),
+            ('or-path-left',
+             lambda user: (
+                 (user.probe_east == 'east')
+                 | (user.probe_dept.region == user.probe_east)
+             ),
+             ('absent', 'nullreg', 'west')),
+            ('or-false-right',
+             lambda user: (
+                 (user.probe_dept.region == user.probe_east)
+                 | (user.probe_east == 'nope')
+             ),
+             ('absent', 'nullreg')),
+            ('bare-banned', lambda user: user.is_banned,
+             ('open_true', 'open_false', 'banned')),
+            ('not-banned', lambda user: ~user.is_banned,
+             ('open_true', 'open_false', 'banned')),
+            ('notnot-banned', lambda user: ~~user.is_banned,
+             ('open_true', 'open_false', 'banned')),
+            ('bare-clear', lambda user: user.is_not_banned,
+             ('open_true', 'open_false', 'banned')),
+            ('not-clear', lambda user: ~user.is_not_banned,
+             ('open_true', 'open_false', 'banned')),
+            ('notnot-clear', lambda user: ~~user.is_not_banned,
+             ('open_true', 'open_false', 'banned')),
+            ('mixed', lambda user: ~(user.is_banned & user.gate),
+             ('open_true', 'open_false', 'banned')),
+            ('mixed-clear', lambda user: ~(user.is_not_banned & user.gate),
+             ('open_true', 'open_false', 'banned')),
+            ('plaque-none', lambda user: user.probe_plaque == None,  # noqa: E711
+             ('noplaque', 'nulllabel', 'eastlabel')),
+            ('plaque-leaf-none',
+             lambda user: user.probe_plaque.label == None,  # noqa: E711
+             ('noplaque', 'nulllabel', 'eastlabel')),
+            ('plaque-leaf-ne',
+             lambda user: user.probe_plaque.label != 'east',
+             ('noplaque', 'nulllabel', 'eastlabel')),
+        )
+        capture = {
+            'rel-none', 'leaf-none', 'unit-none', 'hop-none', 'hop-ne',
+            'or-path-right', 'or-path-left', 'plaque-none',
+        }
+        for name, expr, labels in queries:
+            for via in (False, True):
+                key = ('via/' + name) if via else name
+                case, shape = self._run(
+                    world, key, expr, labels, via=via,
+                    capture=name in capture and not via,
+                )
+                found[key] = case
+                if shape:
+                    shapes[key] = shape
+        with open(_GAP_EXPECTED, encoding='utf-8') as handle:
+            expected = json.load(handle)
+        self.assertEqual(expected.get('production'), _PRODUCTION)
+        want = dict(expected['cases'])
+        want.update(expected.get('vendor_cases', {}).get(connection.vendor, {}))
+        if found != want:
+            with open('/tmp/issue365_gap_found.json', 'w', encoding='utf-8') as handle:
+                json.dump(
+                    {'vendor': connection.vendor, 'cases': found, 'shapes': shapes},
+                    handle, indent=2, sort_keys=True,
+                )
+        self.assertEqual(found, want)
+        diff = subprocess.check_output(
+            ['git', 'diff', '--stat', _PRODUCTION, '--', 'trusts'],
+            cwd=_ROOT, text=True,
+        )
+        self.assertEqual(diff, '')
+
+    def _world(self):
+        from django.db import models
+
+        User = get_user_model()
+
+        class Unit(models.Model):
+            code = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'p365g_unit'
+
+        class Dept(models.Model):
+            region = models.CharField(max_length=20, null=True)
+            unit = models.ForeignKey(
+                Unit, null=True, related_name='depts', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'p365g_dept'
+
+        class SheetQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Sheet(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=20)
+            objects = models.Manager.from_queryset(SheetQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'p365g_sheet'
+
+        class Grant(models.Model):
+            user = models.ForeignKey(User, related_name='+', on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, related_name='+', on_delete=models.CASCADE,
+            )
+            sheet = models.ForeignKey(Sheet, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'p365g_grant'
+
+        class Plaque(models.Model):
+            user = models.OneToOneField(
+                User, related_name='probe_plaque', on_delete=models.CASCADE,
+            )
+            label = models.CharField(max_length=20, null=True)
+
+            class Meta:
+                # Installed on the SQLite settings and on along_db_settings.
+                # trusts_tests is not installed on the latter, so a reverse
+                # relation registered only there is invisible to User.
+                app_label = 'trusts_kernel_host'
+                db_table = 'p365g_plaque'
+
+        _publish_reverse(self, Plaque)
+        cm = _tables(Unit, Dept, Sheet, Grant, Plaque)
+        cm.__enter__()
+        self.addCleanup(lambda: cm.__exit__(None, None, None))
+        for name, field in (
+            ('probe_east', models.CharField(max_length=20, null=True)),
+            ('probe_dept', models.ForeignKey(
+                Dept, null=True, blank=True, related_name='+',
+                on_delete=models.DO_NOTHING, db_constraint=False, db_index=False,
+            )),
+            ('probe_manager', models.ForeignKey(
+                'self', null=True, blank=True, related_name='gap_reports',
+                on_delete=models.DO_NOTHING, db_constraint=False, db_index=False,
+            )),
+            ('is_banned', models.BooleanField(null=True)),
+            ('is_not_banned', models.BooleanField(null=True)),
+            ('gate', models.BooleanField(null=True)),
+        ):
+            _add_column(self, User, name, field)
+
+        held = Unit.objects.create(code='east')
+        other = Unit.objects.create(code='west')
+        null_region = Dept.objects.create(region=None, unit=None)
+        east_nounit = Dept.objects.create(region='east', unit=None)
+        east_unit = Dept.objects.create(region='east', unit=held)
+        west = Dept.objects.create(region='west', unit=other)
+        perm = _permission(Sheet, 'change_probe365_gap')
+        code = 'trusts_tests.change_probe365_gap'
+        sheet = Sheet.objects.create(title='gap')
+        people = {}
+
+        def person(label, dept, banned=None, clear=None, gate=True):
+            user = User.objects.create_user('p365g-%s' % label, password='x')
+            user.probe_label = label
+            user.probe_east = 'east'
+            user.probe_dept = dept
+            user.is_banned = banned
+            user.is_not_banned = clear
+            user.gate = gate
+            user.save()
+            Grant.objects.create(user=user, permission=perm, sheet=sheet)
+            people[label] = user
+            return user
+
+        person('absent', None)
+        person('nullreg', null_region)
+        person('nounit', east_nounit)
+        person('withunit', east_unit)
+        person('west', west)
+        person('open_false', None, gate=False)
+        person('banned', None, banned=True, clear=False, gate=True)
+        person('noplaque', None)
+        nulllabel = person('nulllabel', None)
+        eastlabel = person('eastlabel', None)
+        # open_true is "absent": both flags NULL, gate true.
+        people['open_true'] = people['absent']
+        Plaque.objects.create(user=nulllabel, label=None)
+        Plaque.objects.create(user=eastlabel, label='east')
+        return {
+            'User': User,
+            'Sheet': Sheet,
+            'Grant': Grant,
+            'people': people,
+            'perm': perm,
+            'code': code,
+            'sheet': sheet,
+            'production': '186e632b0284f453eb7b6f49aabf2bf5c31bed67',
+        }
+
+    def _run(self, world, name, expr, labels, *, via, capture):
+        handle = compiler(path='tests.core.issue365.gap.%s' % name.replace('/', '-'))
+        try:
+            handle.set_user_condition('probe', expr)
+            kwargs = {}
+            if via:
+                kwargs['via'] = ('user__probe_manager', 4)
+            handle.register(
+                trust=world['Grant'], user='user', permission='permission',
+                content='sheet', **kwargs,
+            )
+        except _REGISTER_ERRORS as exc:
+            return _unsupported(_one_line(exc)), None
+        users = []
+        seen = set()
+        for label in labels:
+            user = world['people'][label]
+            if user.pk in seen:
+                continue
+            seen.add(user.pk)
+            users.append(user)
+        return self._tri(world, handle, users, labels, capture=capture)
+
+    def _tri(self, world, handle, users, labels, *, capture):
+        code = world['code']
+        perm = world['perm']
+        sheet = world['sheet']
+        subjects = {}
+        shape = None
+        with _listed(handle):
+            try:
+                reached = set(
+                    sheet.get_permitted_users(perm).values_list('pk', flat=True)
+                )
+                reverse_error = None
+            except _QUERY_ERRORS as exc:
+                reached = set()
+                reverse_error = 'error:%s' % type(exc).__name__
+            for label in labels:
+                user = world['people'][label]
+                if capture and label == labels[0]:
+                    with CaptureQueriesContext(connection) as captured:
+                        try:
+                            permitted_ids = set(
+                                world['Sheet'].objects.permitted(
+                                    code, user,
+                                ).values_list('pk', flat=True)
+                            )
+                            permitted_error = None
+                        except _QUERY_ERRORS as exc:
+                            permitted_ids = set()
+                            permitted_error = 'error:%s' % type(exc).__name__
+                    shape = _shape(
+                        [item['sql'] for item in captured.captured_queries]
+                    )
+                    shape.pop('sql', None)
+                else:
+                    try:
+                        permitted_ids = set(
+                            world['Sheet'].objects.permitted(
+                                code, user,
+                            ).values_list('pk', flat=True)
+                        )
+                        permitted_error = None
+                    except _QUERY_ERRORS as exc:
+                        permitted_ids = set()
+                        permitted_error = 'error:%s' % type(exc).__name__
+                try:
+                    has = _yn(user.has_perm(code, sheet))
+                except _QUERY_ERRORS as exc:
+                    has = 'error:%s' % type(exc).__name__
+                if reverse_error:
+                    reverse = reverse_error
+                else:
+                    reverse = _yn(user.pk in reached)
+                if permitted_error:
+                    permitted = permitted_error
+                else:
+                    permitted = _yn(sheet.pk in permitted_ids)
+                subjects[label] = {
+                    'has_perm': has,
+                    'permitted': permitted,
+                    'get_permitted_users': reverse,
+                }
+        return {'kind': 'ran', 'subjects': subjects}, shape
