@@ -751,48 +751,23 @@ authorization-policy output. See the `bounded-reach security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
 for the recursive-query and database boundaries.
 
-The third element names a Boolean field path, not a condition or
-callable. Only a true flag cuts incoming inheritance. False and
-``NULL`` do not cut it; if the reset path checks related rows, no
-matching row also leaves inheritance in place.
-``register()`` rejects any other shape: a reverse one-to-one, a
-forward foreign key or forward one-to-one, a generic relation, more
-than one relation, a non-boolean field, a missing field, a third
-element that is not a field path, an ``along`` value that is not a
-pair or a triple, and a field on a multi-table parent.
+An optional third element sets an inheritance reset:
+``along=("parent", 8, "reset_inheritance")``. Only a true flag cuts
+incoming inheritance; false, ``NULL``, and no related reset row do not.
 
-``along=("parent", 8, "reset_inheritance")`` reads a concrete
-``BooleanField`` on that model's own table. In the registered
-direction A → B → C, with the field true on B, a grant on A applies
-to A but not to B or C. B is a later object in the registered
-direction, and the grant from A is cut there. A grant on B applies
-to B and can continue to C. Every path into B is cut.
-``along=("trust__trust", 8, "reset_inheritance")`` reads that same
-kind of field on the trust model.
+The path must name a concrete ``BooleanField``:
 
-``along=("parent_links__parent", 8, "parent_links__reset_inheritance")``
-reads a concrete ``BooleanField`` on the link row the walk already
-traverses. A true value cuts that one link. With A and D both linked
-to B, a grant on A does not reach B on a true A → B link. A grant on
-D still reaches B on the other link.
+- On the walked model’s own table: cuts every incoming path at that node.
+- On a link the walk traverses, e.g. ``parent_links__reset_inheritance``:
+  cuts only that link.
+- Through a many-to-many or reverse foreign key from the node, e.g.
+  ``flags__reset_inheritance`` or ``policies__reset_inheritance``:
+  any true flag cuts incoming paths at the node.
 
-``along=("parent", 8, "flags__reset_inheritance")`` reads a concrete
-``BooleanField`` through another many-to-many from the node. The node
-is a stop when any of those rows is true. A grant on that node still
-applies there and can continue.
-
-``along=("parent", 8, "policies__reset_inheritance")`` reads a concrete
-``BooleanField`` through a reverse one-to-many. ``Policy.node`` is a
-foreign key to the node. The node is a stop when any of those rows
-is true. A grant on that node still applies there and can continue.
-
-Forward and reverse inquiries agree, including ``has_perm()``,
-``.permitted()``, and ``get_permitted_users()``. A reverse inquiry
-runs from the object. A content walk, a delegation walk, and a sponsor
-walk each apply the reset path configured for that walk.
-``along=("parent", 8)`` names no field. Another grant that reaches the
-object still allows it. The policy output records the configured
-reset path.
+For A → B → C with B reset, A’s grant stops before B. B’s own grant
+still applies at B and can reach C. Other valid grants are unaffected.
+Each content, delegation, or sponsor walk uses its own reset path.
+``register()`` rejects unsupported paths.
 
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~

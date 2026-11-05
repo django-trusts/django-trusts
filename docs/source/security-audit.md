@@ -442,41 +442,12 @@ The policy output does the same for that statement, so output that would omit
 or simplify the query for users from content is not emitted. Audit the declared
 walk, bound, generated recursive SQL, and returned-user parity together.
 
-The third element of `along` names a Boolean field path, not a condition
-or callable. Only a true flag cuts incoming inheritance. False, `NULL`,
-and no matching related reset row leave inheritance in place. This is a
-fixed walk boundary, separate from evaluation of a grant condition.
-Four placements are accepted:
-
-- a concrete `BooleanField` on the walked model's own table
-  (`reset_inheritance`), which makes that node a stop and cuts every
-  path into it;
-- a concrete `BooleanField` on the link row this walk already traverses
-  (`parent_links__reset_inheritance`), which cuts that link and leaves
-  the node's other parents;
-- a concrete `BooleanField` reached through another many-to-many from
-  the node (`flags__reset_inheritance`), which makes the node a stop
-  when any linked row is true;
-- a concrete `BooleanField` reached through a reverse one-to-many from
-  the node (`policies__reset_inheritance`, where the related row's
-  foreign key points at the node), which makes the node a stop when
-  any related row is true.
-
-`register()` rejects any other shape: a reverse one-to-one, a forward
-foreign key or forward one-to-one, a generic relation, more than one
-relation, a non-boolean field, a missing field, a third element that
-is not a field path, an `along` value that is not a pair or a triple,
-and a field on a multi-table parent.
-
-An incoming earlier grant is cut at a stop node, or at a true link when
-the field is on that link. A grant that starts on a node still applies
-there and can continue. A forward inquiry and a reverse inquiry agree,
-including `has_perm()`, `.permitted()`, and `get_permitted_users()`. A
-content walk, a delegation walk, and a sponsor walk each apply the reset
-path configured for that walk. A cycle does not carry an earlier grant
-through a stop node or across a true link. An independent grant that
-reaches the object is combined with OR. The policy output records the
-configured reset path.
+For an `along=` reset, verify that only a true flag cuts incoming
+inheritance. A node reset cuts every incoming path; a link reset cuts
+only that link. A grant originating at a reset node can still propagate.
+Check forward and reverse inquiries, including each delegation and sponsor
+walk, for agreement. Neither a cycle nor a missing reset row should change
+the configured boundary; an independent valid grant can still apply.
 
 Current CI exercises Along only for the database combinations listed in the
 support matrix.
