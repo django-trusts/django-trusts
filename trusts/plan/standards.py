@@ -66,6 +66,33 @@ def builtin_user_conditions(model):
     return ()
 
 
+def principal_identity_lookups(model, path, *, strict):
+    """``is_anonymous`` and ``is_authenticated`` lookups along ``path``.
+
+    A missing field is skipped. ``strict`` is the delegation principal:
+    a field that exists and is not a concrete boolean raises. The sponsor
+    walk passes ``strict=False`` and skips that field.
+    """
+    lookups = {}
+    for name, expected in (('is_anonymous', False), ('is_authenticated', True)):
+        try:
+            field = model._meta.get_field(name)
+        except FieldDoesNotExist:
+            continue
+        if (
+            not getattr(field, 'concrete', False)
+            or field.get_internal_type() != 'BooleanField'
+        ):
+            if not strict:
+                continue
+            raise TrustsConfigurationError(
+                '%s.%s must be a concrete BooleanField for delegated '
+                'principal eligibility.' % (model._meta.label, name)
+            )
+        lookups['%s__%s' % (path, name)] = expected
+    return lookups
+
+
 def rule_applies(on, role):
     return on == '*' or on == role
 

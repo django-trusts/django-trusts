@@ -41,7 +41,7 @@ def assert_register_signature(register) -> None:
     param_names = [name for name in signature.parameters if name != 'self']
     expected_params = [
         'trust', 'user', 'permission', 'content', 'group',
-        'delegate', 'sponsor', 'condition', 'along',
+        'delegate', 'sponsor', 'condition', 'along', 'via',
         'name', 'description',
     ]
     if param_names != expected_params:
