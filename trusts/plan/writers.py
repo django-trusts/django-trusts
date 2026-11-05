@@ -2,8 +2,9 @@
 
 ``trusts.plan.conditions`` parses and checks a builder. ``compile_to_q``
 turns that tree into a Django ``Q``. It does not register a filter and
-it does not look one up. ``values_match`` and ``boolean_holds`` are the
-NULL rules for values already loaded while compiling.
+it does not look one up. Scalar comparisons, boolean fields, ``Exists``,
+and ``~`` lower through ``trusts.plan.trivalent``. A missing row is
+unknown. ``.contains()`` keeps the membership join it already had.
 """
 
 from django.core.exceptions import ObjectDoesNotExist
@@ -23,7 +24,8 @@ from trusts.plan.conditions import (
     coalesce_output_field,
     resolve_field_path,
 )
-from trusts.plan.grammar import Tree, needs_expression
+from trusts.plan.grammar import Tree
+from trusts.plan.trivalent import grant_q, has_contains
 
 
 def contains_q(lookup, member):
@@ -381,30 +383,36 @@ def _compile_sql_comparison(node, model, user, perm, user_model):
     return expression_q(node, field, model=model, user_model=user_model)
 
 
+def _filter_bindings(model, user, perm, user_model):
+    bindings = {'object': ('alias', model, ())}
+    if user is not None and getattr(user, 'pk', None) is not None:
+        host = user_model or user.__class__
+        bindings['user'] = ('pk', host, user.pk)
+    bindings['permission'] = ('permission', perm)
+    return bindings
+
+
 def compile_to_q(node, model, user, perm, user_model=None):
-    """Compile an expression tree to a Django ``Q`` for ``model`` rows."""
+    """Compile an expression tree to a Django ``Q`` for ``model`` rows.
+
+    Scalar predicates are one three-valued expression. ``.contains()``
+    stays a membership lookup and is combined only at ``&`` / ``|``.
+    """
+    bindings = _filter_bindings(model, user, perm, user_model)
+    if not has_contains(node):
+        return grant_q(node, bindings)
     if _node(node, 'and'):
-        return compile_to_q(node.left, model, user, perm, user_model) & compile_to_q(
-            node.right, model, user, perm, user_model
-        )
+        return compile_to_q(
+            node.left, model, user, perm, user_model,
+        ) & compile_to_q(node.right, model, user, perm, user_model)
     if _node(node, 'or'):
-        return compile_to_q(node.left, model, user, perm, user_model) | compile_to_q(
-            node.right, model, user, perm, user_model
-        )
-    if needs_expression(node):
-        return _compile_sql_comparison(node, model, user, perm, user_model)
-    if _node(node, 'eq', 'ne'):
-        return _compile_comparison(node, model, user, perm, user_model)
+        return compile_to_q(
+            node.left, model, user, perm, user_model,
+        ) | compile_to_q(node.right, model, user, perm, user_model)
     if _node(node, 'contains'):
         return _compile_contains(node, model, user, perm, user_model)
-    if _node(node, 'bare'):
-        return _compile_bare(node, model, user, perm, user_model)
-    if _node(node, 'not'):
-        return negate_q(model, compile_to_q(
-            node.item, model, user, perm, user_model,
-        ))
     raise PermissionConditionError(
         'Permission condition did not produce a comparison, '
-        '.contains(), or boolean field.'
+        'Exists(), .contains(), or boolean field.'
     )
 

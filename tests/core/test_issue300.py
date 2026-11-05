@@ -71,8 +71,10 @@ class Issue300LockfileTest(SimpleTestCase):
             self.assertIn('$content.model="document"', row['params'])
         users = content['get_permitted_users']
         self.assertEqual(users['params'].count('user.is_active=True'), 1)
-        self.assertIn('"is_active" = ("trusts_bind"."is_active")', users['sql'])
-        self.assertNotIn('"is_active" = %s', users['sql'])
+        # The eligibility comparison is the three-valued expression, so the
+        # True stays a WHERE placeholder instead of a bind-row column.
+        self.assertIn('"is_active" = %s', users['sql'])
+        self.assertNotIn('"is_active" = ("trusts_bind"."is_active")', users['sql'])
         self.assertNotIn('skip_is_active', users['sql'])
 
     def test_flag_off_records_the_plain_queryset(self):
@@ -255,9 +257,7 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
                     self.skipTest('%s driver is not installed' % engine)
                 sql, params = query.get_compiler(connection=connection).as_sql()
                 quote = connection.ops.quote_name('is_active')
-                self.assertIn('%s = (' % quote, sql)
-                self.assertIn('trusts_bind', sql)
-                self.assertNotIn('%s = %%s' % quote, sql)
+                self.assertIn('%s = %%s' % quote, sql)
                 self.assertNotIn('%s = true' % quote, sql.lower())
                 self.assertNotIn('%s = 1' % quote, sql)
                 self.assertEqual(list(params).count(True), 1)

@@ -4,7 +4,8 @@ from django.contrib.auth.models import Permission
 from django.db.models import F, Model, Q, Subquery
 
 from trusts.errors import PermissionConditionError
-from trusts.plan.grammar import Tree, needs_expression, unsupported
+from trusts.plan.grammar import Tree, needs_expression, unsupported, walk
+from trusts.plan.trivalent import grant_q
 from trusts.plan.hops import lookup_text, require_instance
 from trusts.plan.writers import (
     boolean_q,
@@ -92,11 +93,25 @@ class _PredicateCompiler(object):
         self.record = record
         self.permission = permission
 
+    def _scalar(self, node):
+        for item in walk(node):
+            if item.kind == 'contains':
+                return False
+            if item.kind in ('eq', 'ne', 'contains') and (
+                item.inquiry_partner() is not None
+            ):
+                return False
+        return True
+
     def compile(self, node):
         if node is None:
             return None
         if not isinstance(node, Tree):
             raise unsupported('This condition', 'a relation condition')
+        if self._scalar(node):
+            return grant_q(node, {
+                'row': ('alias', self.record.root, ()),
+            })
         if node.kind == 'and':
             return self.compile(node.left) & self.compile(node.right)
         if node.kind == 'or':

@@ -68,6 +68,7 @@ from trusts.plan.conditions import (
     parse_named_filter,
     validate_expression,
     require_boolean_field,
+    resolve_field_path,
 )
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan, bind_checked_user
 from trusts.plan.standards import (
@@ -1308,6 +1309,10 @@ def _validate_relation_node(node, root, permission_model, *,
         require_boolean_field(
             root, node.item.path, 'condition', where='a relation condition',
         )
+        return
+    if node.kind == 'exists':
+        _require_row_field(node.item)
+        resolve_field_path(root, node.item.path, ref_kind='condition')
         return
     if needs_expression(node):
         _validate_expression_comparison(node, root)

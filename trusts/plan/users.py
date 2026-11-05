@@ -32,6 +32,7 @@ from trusts.utils import parse_perm_code
 from trusts.plan.contents import _as_q
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
 from trusts.plan.grammar import Tree, needs_expression, walk
+from trusts.plan.trivalent import grant_q, has_contains
 
 
 def _reverse_checked(plan, exists, user_model, permission, content, values,
@@ -131,7 +132,19 @@ def _named_filter_q(named_filters, content, code, singular, user_model):
     return _condition_outcome(expr, content, singular, user_model)
 
 
+def _reverse_bindings(content, singular, user_model):
+    return {
+        'user': ('alias', user_model, ()),
+        'object': ('pk', content.__class__, content.pk),
+        'permission': ('permission', singular),
+    }
+
+
 def _condition_outcome(expr, content, singular, user_model):
+    if isinstance(expr, Tree) and not has_contains(expr):
+        return grant_q(
+            expr, _reverse_bindings(content, singular, user_model),
+        )
     if isinstance(expr, Tree) and expr.kind == 'and':
         return _combine_and(
             _condition_outcome(expr.left, content, singular, user_model),

@@ -16,12 +16,19 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import BooleanField, Model, OuterRef, Q, Subquery
 from django.db.models.expressions import Expression
 
-from trusts.errors import TrustsConfigurationError
+from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.conditions import condition_model_key
 from trusts.plan.grammar import Tree
 from trusts.plan.hops import content_scope_lookup, resolved_hop
 from trusts.plan.predicates import bind_record_qs, bind_terminal
 from trusts.plan.rewrites import CallInput
+from trusts.plan.trivalent import (
+    Operand,
+    compare,
+    exists_operand,
+    field_operand,
+    split_value_path,
+)
 from trusts.plan.writers import member_pk
 from trusts.plan.standards import (
     builtin_user_conditions,
@@ -386,7 +393,7 @@ def _mentions(node, root):
         return node.root == root
     if node.kind in ('and', 'or', 'eq', 'ne', 'contains'):
         return _mentions(node.left, root) or _mentions(node.right, root)
-    if node.kind in ('not', 'bare'):
+    if node.kind in ('not', 'bare', 'exists'):
         return _mentions(node.item, root)
     return False
 
@@ -447,6 +454,18 @@ def _walk_node(node, user_model, content_model, content, carriers, name, qn,
         return _compare_sql(
             node, user_model, content_model, content, carriers, name, qn, force,
         )
+    if node.kind == 'exists':
+        if not force and not _mentions(node, 'user'):
+            return None
+        field = node.item
+        if getattr(field, 'kind', None) != 'field' or field.root != 'user':
+            raise _cannot(name)
+        try:
+            return exists_operand(
+                user_model, field.path, ('alias', '{alias}'), qn,
+            ).reached_sql
+        except PermissionConditionError as exc:
+            raise _cannot(name) from exc
     if node.kind == 'contains':
         return _contains_sql(
             node, user_model, content_model, content, carriers, name, qn, force,
@@ -495,7 +514,10 @@ def _user_expr(model, path, name, qn):
             raise _cannot(name) from exc
         if not (
             getattr(field, 'concrete', False)
-            and getattr(field, 'many_to_one', False)
+            and (
+                getattr(field, 'many_to_one', False)
+                or getattr(field, 'one_to_one', False)
+            )
         ):
             raise _cannot(name)
         dest = 'hopu%s' % (index + 1)
@@ -534,17 +556,22 @@ def _user_expr(model, path, name, qn):
 def _field_sql(node, user_model, content_model, content, carriers, name, qn,
                force):
     if node.root == 'user':
-        field = _local_field(user_model, node.path, name)
-        if field.get_internal_type() != 'BooleanField':
+        try:
+            _hops, leaf = split_value_path(user_model, node.path)
+        except PermissionConditionError as exc:
+            raise _cannot(name) from exc
+        if leaf.get_internal_type() != 'BooleanField':
             raise _cannot(name)
-        return '{alias}.%s IS TRUE' % qn(field.column)
+        return field_operand(
+            user_model, node.path, ('alias', '{alias}'), qn,
+        ).value_sql
     if node.root == 'object':
         if not force and not _mentions(node, 'user'):
             return None
         index = _add_carrier(carriers, _object_value(
             content_model, content, node.path, name,
         ))
-        return '{c%s} IS TRUE' % index
+        return '{c%s}' % index
     if node.root == 'permission':
         return _permission_predicate(
             node.path, 'IS TRUE', None, carriers, name, qn,
@@ -579,21 +606,29 @@ def _compare_sql(node, user_model, content_model, content, carriers, name, qn,
         )
     if getattr(left, 'kind', None) != 'field' or left.root != 'user':
         raise _cannot(name)
-    user_sql, user_field = _user_expr(user_model, left.path, name, qn)
-    if getattr(right, 'kind', None) == 'const' and _const_value(right) is None:
-        word = 'IS NULL' if node.kind == 'eq' else 'IS NOT NULL'
-        return '%s %s' % (user_sql, word)
-    other_sql = _other_operand(
-        right, user_model, content_model, content, carriers, name, qn,
-        field=user_field,
-    )
-    if node.kind == 'eq':
-        return '%s = %s' % (user_sql, other_sql)
-    if node.kind != 'ne':
+    if node.kind not in ('eq', 'ne'):
         raise _cannot(name)
-    if getattr(right, 'kind', None) == 'const':
-        return '(%s IS NULL OR %s <> %s)' % (user_sql, user_sql, other_sql)
-    return '%s <> %s' % (user_sql, other_sql)
+    try:
+        user_operand = field_operand(
+            user_model, left.path, ('alias', '{alias}'), qn,
+        )
+    except PermissionConditionError as exc:
+        raise _cannot(name) from exc
+    other = _via_other_operand(
+        right, user_model, content_model, content, carriers, name, qn,
+    )
+    return compare(node.kind, user_operand, other).sql
+
+
+def _via_other_operand(node, user_model, content_model, content, carriers, name,
+                       qn):
+    """The non-user side of a hop comparison. A constant ``None`` stays literal."""
+    if getattr(node, 'kind', None) == 'const' and _const_value(node) is None:
+        return Operand('(1=0)', (), '(1=1)', (), True)
+    sql = _other_operand(
+        node, user_model, content_model, content, carriers, name, qn,
+    )
+    return Operand(sql, (), '(1=1)', (), False)
 
 
 def _user_operand(node, user_model, content_model, content, carriers, name, qn):
@@ -808,7 +843,9 @@ def _permission_predicate(path, op, user_sql, carriers, name, qn):
         index = _add_carrier(carriers, _PermissionColumn(record, path[0]))
         value = '{c%s}' % index
         if op == 'IS TRUE':
-            return '%s IS TRUE' % value
+            # The column itself. NULL stays unknown; IS TRUE would make
+            # NOT of that unknown into true.
+            return value
         if user_sql is None:
             raise _cannot(name)
         return '%s %s %s' % (user_sql, op, value)

@@ -69,7 +69,7 @@ from django.http import HttpRequest
 from django.utils.functional import Promise, SimpleLazyObject
 
 from trusts.errors import PermissionConditionError
-from trusts.functions import Coalesce, Lower, Now
+from trusts.functions import Coalesce, Exists, Lower, Now
 from trusts.plan.grammar import (
     ORDERED_KINDS,
     Symbol,
@@ -216,7 +216,7 @@ def normalize_constant(value):
     return value
 
 
-_FUNCTIONS = (Now, Lower, Coalesce)
+_FUNCTIONS = (Now, Lower, Coalesce, Exists)
 
 
 def capture_expression(builder, roots):
@@ -238,7 +238,7 @@ def normalize_expression(node, token=None):
         if left is node.left and right is node.right:
             return node
         return Tree(node.kind, left=left, right=right)
-    if _node(node, 'not', 'bare'):
+    if _node(node, 'not', 'bare', 'exists'):
         item = normalize_expression(node.item, token)
         if item is node.item:
             return node
@@ -276,8 +276,8 @@ def _lower_value(value, token, *, inside=False):
     if hasattr(value, 'resolve_expression'):
         raise PermissionConditionError(
             'A %s constant is not supported in a named filter. '
-            'SQL functions in a condition must be Now, Lower, and Coalesce '
-            'from trusts.functions.' % type(value).__name__
+            'SQL functions in a condition must be Now, Lower, Coalesce, '
+            'and Exists from trusts.functions.' % type(value).__name__
         )
     return Tree('const', value=normalize_constant(value))
 
@@ -727,7 +727,7 @@ def validate_expression(node, model, user_model=None):
     if not is_predicate(node):
         raise PermissionConditionError(
             'Permission condition did not produce a comparison, '
-            '.contains(), or boolean field.'
+            'Exists(), .contains(), or boolean field.'
         )
     _validate_node(node, model, user_model)
 
@@ -748,7 +748,7 @@ def _validate_node(node, model, user_model):
     if _node(node, 'bare'):
         _validate_bare(node, model, user_model)
         return
-    if _node(node, 'not'):
+    if _node(node, 'not', 'exists'):
         _validate_node(node.item, model, user_model)
         return
     if _node(node, 'const'):

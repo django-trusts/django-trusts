@@ -2331,7 +2331,9 @@ class ViaHopFilterTest(TransactionTestCase):
                 lambda user: user.via_nick != 'stop',
                 {'ada': 'keep', 'ben': None, 'dee': 'keep', 'eve': 'stop'},
                 {},
-                {'ada': True, 'ben': True, 'cy': True, 'dee': True, 'eve': False},
+                # ben's NULL comparison is unknown and does not grant, so
+                # the walk stops before cy. cy's own nick would match.
+                {'ada': True, 'ben': False, 'cy': False, 'dee': True, 'eve': False},
             ),
             (
                 'eq-two-fields',
@@ -2393,8 +2395,10 @@ class ViaHopFilterTest(TransactionTestCase):
 
         Each case is the grant holder, so the hop seed and the queryset
         condition read the same row. One expected value is both answers.
-        ``!= True`` and ``!= False`` on a NULL boolean keep the row, the
-        same as ``.permitted()``. A ``!= None`` guard drops that row.
+        A NULL column compared with ``!=`` is unknown, so it does not
+        grant, on the walked hop and on ``.permitted()``. ``!= None`` is
+        the negation of ``== None``: unknown when the value is missing,
+        true only for a reached non-NULL column.
         """
         self._activate()
         ada = self.people['ada']
@@ -2410,7 +2414,7 @@ class ViaHopFilterTest(TransactionTestCase):
             ('null-eq-const', lambda user: user.via_nick == 'ada',
              dict(via_nick=None, via_other=None, via_reset=None), False),
             ('null-ne-const', lambda user: user.via_nick != 'ada',
-             dict(via_nick=None, via_other=None, via_reset=None), True),
+             dict(via_nick=None, via_other=None, via_reset=None), False),
             ('eq-const', lambda user: user.via_nick == 'ada',
              dict(via_nick='ada', via_other='ada', via_reset=True), True),
             ('ne-const', lambda user: user.via_nick != 'ada',
@@ -2434,9 +2438,9 @@ class ViaHopFilterTest(TransactionTestCase):
             ('bool-ne-true', lambda user: user.via_reset != True,  # noqa: E712
              dict(via_nick='ada', via_other='ada', via_reset=False), True),
             ('ne-bool-null', lambda user: user.via_reset != True,  # noqa: E712
-             dict(via_nick=None, via_other=None, via_reset=None), True),
+             dict(via_nick=None, via_other=None, via_reset=None), False),
             ('ne-bool-null-false', lambda user: user.via_reset != False,  # noqa: E712
-             dict(via_nick=None, via_other=None, via_reset=None), True),
+             dict(via_nick=None, via_other=None, via_reset=None), False),
             ('bool-ne-false', lambda user: user.via_reset != False,  # noqa: E712
              dict(via_nick='ada', via_other='ada', via_reset=True), True),
             ('ne-bool-false-held', lambda user: user.via_reset != False,  # noqa: E712
@@ -2466,7 +2470,7 @@ class ViaHopFilterTest(TransactionTestCase):
             ('not-bool-false', lambda user: ~user.via_reset,
              dict(via_nick='ada', via_other='ada', via_reset=False), True),
             ('not-bool-null', lambda user: ~user.via_reset,
-             dict(via_nick=None, via_other=None, via_reset=None), True),
+             dict(via_nick=None, via_other=None, via_reset=None), False),
             ('or-null', lambda user: (user.via_nick == None) | (user.via_reset == True),  # noqa: E711, E712
              dict(via_nick=None, via_other=None, via_reset=None), True),
             ('or-miss', lambda user: (user.via_nick == None) | (user.via_reset == True),  # noqa: E711, E712

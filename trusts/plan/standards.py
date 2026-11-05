@@ -23,11 +23,8 @@ from trusts.plan.conditions import (
     validate_expression,
 )
 from trusts.plan.grammar import ORDERED_KINDS, Tree, contains_call, unsupported
+from trusts.plan.trivalent import grant_q, has_contains
 from trusts.plan.writers import (
-    boolean_q,
-    negate_q,
-    column_q,
-    columns_q,
     contains_q,
     member_pk,
 )
@@ -176,6 +173,9 @@ def validate_user_rule(model, expr, name):
     if expr.kind == 'bare':
         _require_user_boolean(model, expr.item, name)
         return
+    if expr.kind == 'exists':
+        validate_expression(expr, model, model)
+        return
     if expr.kind in ORDERED_KINDS:
         raise unsupported('Ordered comparison', 'a user condition')
     if expr.kind in ('eq', 'ne', 'contains'):
@@ -202,7 +202,14 @@ def _prefixed(path, field_path):
     return name
 
 
+def _user_bindings(path, scope):
+    prefix = tuple(part for part in (path or '').split('__') if part)
+    return {'user': ('alias', scope, prefix)}
+
+
 def _compile(path, expr, scope):
+    if not has_contains(expr):
+        return grant_q(expr, _user_bindings(path, scope))
     if expr.kind == 'and':
         return (
             _compile(path, expr.left, scope)
@@ -213,36 +220,9 @@ def _compile(path, expr, scope):
             _compile(path, expr.left, scope)
             | _compile(path, expr.right, scope)
         )
-    if expr.kind == 'not':
-        return negate_q(scope, _compile(path, expr.item, scope))
-    if expr.kind == 'bare':
-        return _compile(path, expr.item, scope)
-    if expr.kind == 'field':
-        return boolean_q(_prefixed(path, expr.path))
-    if expr.kind in ('eq', 'ne'):
-        return _compile_user_comparison(path, expr)
     if expr.kind == 'contains':
         return _compile_user_contains(path, expr)
     raise unsupported(expr.kind, 'a user condition')
-
-
-def _compile_user_comparison(path, node):
-    equal = node.kind == 'eq'
-    left = node.left
-    right = node.right
-    if left.kind == 'field' and right.kind == 'field':
-        return columns_q(
-            _prefixed(path, left.path),
-            _prefixed(path, right.path),
-            equal,
-        )
-    if left.kind == 'field':
-        return column_q(
-            _prefixed(path, left.path), right.value, equal, field=False,
-        )
-    return column_q(
-        _prefixed(path, right.path), left.value, equal, field=False,
-    )
 
 
 def _compile_user_contains(path, node):

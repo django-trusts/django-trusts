@@ -21,12 +21,12 @@ backends:
               shape: "S"
               bound: 2
         permitted:
-          params: ["$user.id", "user.is_active=True", "$along_bound=2", "$content.app_label=\"documents\"", "$content.model=\"folder\"", "$along_match=True", "skip_is_active=False", "$permission.codename"]
+          params: ["$user.id", "$along_bound=2", "$content.app_label=\"documents\"", "$content.model=\"folder\"", "$along_match=True", "skip_is_active=False", "user.is_active=True", "$permission.codename"]
           sql: |-
             SELECT DISTINCT "documents_folder"."id", "documents_folder"."parent_id"
             FROM "documents_folder"
             CROSS JOIN (
-              SELECT %s AS "user_id", %s AS "is_active", %s AS "along_bound", %s AS "app_label", %s AS "model", %s AS "along_match"
+              SELECT %s AS "user_id", %s AS "along_bound", %s AS "app_label", %s AS "model", %s AS "along_match"
             ) "trusts_bind"
             WHERE (
               EXISTS (
@@ -34,7 +34,7 @@ backends:
                 FROM "auth_user" "U0"
                 WHERE ("U0"."id" = ("trusts_bind"."user_id")
                     AND ((%s)
-                      OR "U0"."is_active" = ("trusts_bind"."is_active")
+                      OR ("U0"."is_active" = %s)
                   )
                 )
                 LIMIT 1
@@ -77,12 +77,12 @@ backends:
               ) = ("trusts_bind"."along_match")
             )
         has_perm:
-          params: ["$user.id", "$content.id", "user.is_active=True", "$along_bound=2", "$content.app_label=\"documents\"", "$content.model=\"folder\"", "$along_match=True", "skip_is_active=False", "$permission.codename"]
+          params: ["$user.id", "$content.id", "$along_bound=2", "$content.app_label=\"documents\"", "$content.model=\"folder\"", "$along_match=True", "skip_is_active=False", "user.is_active=True", "$permission.codename"]
           sql: |-
             SELECT 1 AS "a"
             FROM "documents_folder"
             CROSS JOIN (
-              SELECT %s AS "user_id", %s AS "content_pk", %s AS "is_active", %s AS "along_bound", %s AS "app_label", %s AS "model", %s AS "along_match"
+              SELECT %s AS "user_id", %s AS "content_pk", %s AS "along_bound", %s AS "app_label", %s AS "model", %s AS "along_match"
             ) "trusts_bind"
             WHERE ("documents_folder"."id" = ("trusts_bind"."content_pk")
               AND EXISTS (
@@ -90,7 +90,7 @@ backends:
                 FROM "auth_user" "U0"
                 WHERE ("U0"."id" = ("trusts_bind"."user_id")
                     AND ((%s)
-                      OR "U0"."is_active" = ("trusts_bind"."is_active")
+                      OR ("U0"."is_active" = %s)
                   )
                 )
                 LIMIT 1
@@ -134,12 +134,12 @@ backends:
             )
             LIMIT 1
         get_all_permissions:
-          params: ["$user.id", "$content.id", "user.is_active=True", "$along_bound=2", "$content.app_label=\"documents\"", "$content.model=\"folder\"", "$along_match=True", "skip_is_active=False"]
+          params: ["$user.id", "$content.id", "$along_bound=2", "$content.app_label=\"documents\"", "$content.model=\"folder\"", "$along_match=True", "skip_is_active=False", "user.is_active=True"]
           sql: |-
             SELECT DISTINCT "auth_permission"."id", "auth_permission"."name", "auth_permission"."content_type_id", "auth_permission"."codename", "django_content_type"."app_label", "django_content_type"."model"
             FROM "auth_permission"
             CROSS JOIN (
-              SELECT %s AS "user_id", %s AS "content_pk", %s AS "is_active", %s AS "along_bound", %s AS "app_label", %s AS "model", %s AS "along_match"
+              SELECT %s AS "user_id", %s AS "content_pk", %s AS "along_bound", %s AS "app_label", %s AS "model", %s AS "along_match"
             ) "trusts_bind"
             INNER JOIN "django_content_type" ON ("auth_permission"."content_type_id" = "django_content_type"."id")
             WHERE (
@@ -158,7 +158,7 @@ backends:
                         FROM "auth_user" "U0"
                         WHERE ("U0"."id" = ("trusts_bind"."user_id")
                             AND ((%s)
-                              OR "U0"."is_active" = ("trusts_bind"."is_active")
+                              OR ("U0"."is_active" = %s)
                           )
                         )
                         LIMIT 1
@@ -194,15 +194,15 @@ backends:
                 ) ) )
             ORDER BY "django_content_type"."app_label" ASC, "django_content_type"."model" ASC, "auth_permission"."codename" ASC
         get_permitted_users:
-          params: ["$content.id", "user.is_active=True", "$along_bound=2", "$content.app_label=\"documents\"", "$content.model=\"folder\"", "$along_match=True", "skip_is_active=False", "$permission.codename", "$along_match=True"]
+          params: ["$content.id", "$along_bound=2", "$content.app_label=\"documents\"", "$content.model=\"folder\"", "$along_match=True", "skip_is_active=False", "user.is_active=True", "$permission.codename", "$along_match=True"]
           sql: |-
             SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined"
             FROM "auth_user"
             CROSS JOIN (
-              SELECT %s AS "content_id", %s AS "is_active", %s AS "along_bound", %s AS "app_label", %s AS "model", %s AS "along_match"
+              SELECT %s AS "content_id", %s AS "along_bound", %s AS "app_label", %s AS "model", %s AS "along_match"
             ) "trusts_bind"
             WHERE (((%s)
-                  OR "auth_user"."is_active" = ("trusts_bind"."is_active")
+                  OR ("auth_user"."is_active" = %s)
               )
               AND EXISTS (
                 SELECT 1 AS "a"
