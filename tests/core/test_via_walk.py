@@ -4137,3 +4137,263 @@ class SavedObjectPathTest(TransactionTestCase):
                 self.assertEqual(reached, users)
                 self.assertEqual(listed, desks)
 
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class CandidateContentIdentityTest(TransactionTestCase):
+    """A longer via content path reads the candidate content row.
+
+    Grant and content primary keys do not match, and a decoy content
+    row uses the first grant's primary key. Two grants reach one sheet.
+    Forward and inverse inquiries agree. ``get_all_permissions`` follows
+    the unfiltered grant. ``get_group_permissions`` does not apply: the
+    registration has no group terminal.
+    """
+
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+        _attach_manager(self, User)
+        self.User = User
+
+        class Dept(models.Model):
+            region = models.CharField(max_length=20)
+            rank = models.IntegerField()
+            flag = models.BooleanField()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_id_dept'
+
+        class Unit(models.Model):
+            code = models.CharField(max_length=20, unique=True)
+            region = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_id_unit'
+
+        class Cabinet(models.Model):
+            name = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_id_cabinet'
+
+        class SheetQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Sheet(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=20)
+            cabinet = models.ForeignKey(
+                Cabinet, related_name='sheets', on_delete=models.CASCADE,
+            )
+            dept = models.ForeignKey(Dept, on_delete=models.CASCADE)
+            unit = models.ForeignKey(
+                Unit, to_field='code', db_column='unit_code',
+                on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(SheetQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_id_sheet'
+
+        class Plaque(models.Model):
+            sheet = models.OneToOneField(
+                Sheet, related_name='plaque', on_delete=models.CASCADE,
+            )
+            label = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_id_plaque'
+
+        class Grant(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            cabinet = models.ForeignKey(Cabinet, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_id_grant'
+
+        self.Sheet, self.Cabinet, self.Grant = Sheet, Cabinet, Grant
+        cm = _tables(Dept, Unit, Cabinet, Sheet, Plaque, Grant)
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        _add_user_column(
+            self, User, 'home',
+            models.ForeignKey(
+                Dept, null=True, on_delete=models.DO_NOTHING,
+                related_name='+', db_constraint=False, db_index=False,
+            ),
+        )
+        _add_user_column(
+            self, User, 'unit',
+            models.ForeignKey(
+                Unit, to_field='code', db_column='unit_code', null=True,
+                on_delete=models.DO_NOTHING, related_name='+',
+                db_constraint=False, db_index=False,
+            ),
+        )
+        _add_user_column(
+            self, User, 'nick',
+            models.CharField(max_length=20, null=True),
+        )
+        _add_user_column(
+            self, User, 'rank',
+            models.IntegerField(null=True),
+        )
+        _add_user_column(
+            self, User, 'flag',
+            models.BooleanField(null=True),
+        )
+        east = Dept.objects.create(region='east', rank=7, flag=True)
+        west = Dept.objects.create(region='west', rank=1, flag=False)
+        east_unit = Unit.objects.create(code='E', region='east')
+        west_unit = Unit.objects.create(code='W', region='west')
+        self.assertNotEqual(east_unit.pk, east_unit.code)
+        decoy_box = Cabinet.objects.create(pk=1, name='decoy')
+        self.kept_box = Cabinet.objects.create(pk=7, name='kept')
+        decoy = Sheet.objects.create(
+            pk=1, title='decoy', cabinet=decoy_box, dept=west, unit=west_unit,
+        )
+        self.sheet = Sheet.objects.create(
+            pk=40, title='kept', cabinet=self.kept_box, dept=east,
+            unit=east_unit,
+        )
+        Plaque.objects.create(sheet=decoy, label='decoy')
+        Plaque.objects.create(sheet=self.sheet, label='kept')
+        self.change = _permission(Sheet, 'change_idsheet')
+        self.code = 'trusts_tests.change_idsheet'
+        self.ada = User.objects.create_user('id-ada', password='x')
+        self.bea = User.objects.create_user('id-bea', password='x')
+        self.cy = User.objects.create_user('id-cy', password='x')
+        for user, dept, unit, nick, rank, flag in (
+            (self.ada, east, east_unit, 'kept', 7, True),
+            (self.bea, east, east_unit, 'kept', 7, True),
+            (self.cy, west, west_unit, 'no', 1, False),
+        ):
+            user.home = dept
+            user.unit = unit
+            user.nick = nick
+            user.rank = rank
+            user.flag = flag
+            user.save()
+        self.ada_grant = Grant.objects.create(
+            pk=1, user=self.ada, cabinet=self.kept_box, permission=self.change,
+        )
+        self.bea_grant = Grant.objects.create(
+            pk=2, user=self.bea, cabinet=self.kept_box, permission=self.change,
+        )
+        Grant.objects.create(
+            pk=3, user=self.cy, cabinet=self.kept_box, permission=self.change,
+        )
+        self.assertEqual(self.ada_grant.pk, decoy.pk)
+        self.assertNotEqual(self.sheet.pk, self.ada_grant.pk)
+        self.assertNotEqual(self.sheet.pk, self.bea_grant.pk)
+        self.assertNotEqual(self.sheet.pk, self.kept_box.pk)
+
+    def _register(self, name, predicate):
+        handle = compiler(path='tests.core.via-id-%s' % name)
+        handle.add_named_filter(self.Sheet, 'kept', predicate)
+        handle.register(
+            trust=self.Grant,
+            user='user',
+            permission='permission',
+            content='cabinet__sheets',
+            via=('user__via_manager', 4),
+        )
+        return handle
+
+    def _answers(self, handle, user):
+        code = '%s:kept' % self.code
+        sheet = self.sheet
+        with _listed(handle):
+            has = user.has_perm(code, sheet)
+            permitted = sheet.pk in set(
+                self.Sheet.objects.permitted(
+                    self.code, user, conditions=('kept',),
+                ).values_list('pk', flat=True)
+            )
+            reached = set(sheet.get_permitted_users(code).values_list(
+                'pk', flat=True,
+            ))
+            listed = self.kept_box.pk in set(
+                filter_by_permitted_content(
+                    self.Cabinet.objects.all(), user, self.change,
+                    content=self.Sheet, conditions=('kept',),
+                ).values_list('pk', flat=True)
+            )
+
+            @authorization_required(self.Sheet, self.code, ('kept',))
+            def view(request, pk):
+                return 'ok'
+
+            try:
+                view(_request(user), pk=sheet.pk)
+                guarded = True
+            except PermissionDenied:
+                guarded = False
+            complete = self.code in user.get_all_permissions(sheet)
+            grouped = self.code in user.get_group_permissions(sheet)
+        return {
+            'has_perm': has,
+            'permitted': permitted,
+            'get_permitted_users': user.pk in reached,
+            'filter_by_permitted_content': listed,
+            'authorization_required': guarded,
+            'reached': reached,
+            'get_all_permissions': complete,
+            'get_group_permissions': grouped,
+        }
+
+    def test_candidate_content_id_agrees_across_inquiries(self):
+        cases = (
+            ('char', lambda user, permission, content: (
+                user.home.region == content.dept.region
+            )),
+            ('bool', lambda user, permission, content: (
+                user.flag == content.dept.flag
+            )),
+            ('int', lambda user, permission, content: (
+                user.rank == content.dept.rank
+            )),
+            ('to-field', lambda user, permission, content: (
+                user.unit.region == content.unit.region
+            )),
+            ('reverse-o2o', lambda user, permission, content: (
+                user.nick == content.plaque.label
+            )),
+            ('length-1', lambda user, permission, content: (
+                user.nick == content.title
+            )),
+        )
+        for name, predicate in cases:
+            handle = self._register(name, predicate)
+            for user, expected in (
+                (self.ada, True), (self.bea, True), (self.cy, False),
+            ):
+                with self.subTest(name=name, user=user.username):
+                    answers = self._answers(handle, user)
+                    filtered = {
+                        key: answers[key]
+                        for key in (
+                            'has_perm',
+                            'permitted',
+                            'get_permitted_users',
+                            'filter_by_permitted_content',
+                            'authorization_required',
+                        )
+                    }
+                    self.assertEqual(set(filtered.values()), {expected}, answers)
+                    self.assertEqual(
+                        answers['reached'], {self.ada.pk, self.bea.pk},
+                    )
+                    self.assertIs(answers['get_all_permissions'], True)
+                    self.assertIs(answers['get_group_permissions'], False)
+

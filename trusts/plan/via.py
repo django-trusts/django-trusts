@@ -19,6 +19,7 @@ from django.db.models.expressions import Expression
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.conditions import condition_model_key
 from trusts.plan.grammar import Tree
+from trusts.plan.hops import content_scope_lookup, resolved_hop
 from trusts.plan.predicates import bind_record_qs, bind_terminal
 from trusts.plan.rewrites import CallInput
 from trusts.plan.writers import member_pk
@@ -661,24 +662,93 @@ def _add_carrier(carriers, expr):
     return len(carriers) - 1
 
 
+def _candidate_lookup(record, outer_model):
+    """Content-row lookup and the outer attname it matches.
+
+    The query outside the grant is the candidate content row, so the
+    match is that row's primary key. A permitted-content prefix is an
+    ancestor of that row: the match walks back along ``content_path``
+    to the prefix, the same correlation the prefix overlay uses.
+    """
+    outer = outer_model._meta.concrete_model
+    content = record.content_model._meta.concrete_model
+    if outer is content:
+        return 'pk', outer._meta.pk.attname
+    path = tuple(record.content_path)
+    current = record.root
+    chosen = None
+    for index, name in enumerate(path):
+        field = current._meta.get_field(name)
+        related, attname = resolved_hop(field, 'content', path)
+        if related is outer and index != len(path) - 1:
+            chosen = (path[:index + 1], attname)
+            break
+        current = related
+    if chosen is None:
+        return 'pk', outer._meta.pk.attname
+    prefix, attname = chosen
+    return content_scope_lookup(
+        record.root, path, prefix, attname,
+    ), attname
+
+
+class _CandidateContent(Expression):
+    """Scalar content path for the candidate content row.
+
+    The carrier is compiled inside the grant query. Resolving there
+    stays pending, because that row is the grant and not the content.
+    The next query out is the candidate: its own primary key, or the
+    content row that sits on a permitted-content prefix. A saved
+    content object never reaches this expression.
+    """
+
+    def __init__(self, model, path, record):
+        super().__init__()
+        self.model = model
+        self.path = tuple(path)
+        self.record = record
+
+    def resolve_expression(self, query, *args, **kwargs):
+        root = self.record.root._meta.concrete_model
+        if query.model._meta.concrete_model is root:
+            return self.copy()
+        outer = query.model._meta.concrete_model
+        content = self.record.content_model._meta.concrete_model
+        if outer is content and len(self.path) == 1:
+            field = self.model._meta.get_field(self.path[0])
+            if getattr(field, 'concrete', False):
+                # The outer row is the candidate. Its stored column,
+                # including to_field, is the value. Bind it here so a
+                # query further out does not take the reference.
+                ref = OuterRef(field.attname).resolve_expression(
+                    query, *args, **kwargs,
+                )
+                if hasattr(ref, 'resolve_expression'):
+                    ref = ref.resolve_expression(query, *args, **kwargs)
+                return ref
+        lookup, attname = _candidate_lookup(self.record, query.model)
+        rows = self.model._default_manager.filter(**{
+            lookup: OuterRef(attname),
+        }).values('__'.join(self.path))[:1]
+        return Subquery(rows).resolve_expression(query, *args, **kwargs)
+
+
 def _object_value(model, content, path, name):
     if not path:
         raise _cannot(name)
     if content is not None:
+        # Inverse inquiry: ``content`` is the candidate row. Read that
+        # object. Do not build a subquery off the grant or the user.
         value = _read_instance(content, path, name)
         hint = 'content.%s' % path[-1]
         return _HopValue(value, hint)
     if len(path) == 1:
         try:
-            field = model._meta.get_field(path[0])
+            model._meta.get_field(path[0])
         except Exception as exc:
             raise _cannot(name) from exc
-        if getattr(field, 'concrete', False):
-            return OuterRef(field.attname)
-    lookup = '__'.join(path)
-    return Subquery(
-        model._default_manager.filter(pk=OuterRef('pk')).values(lookup)[:1]
-    )
+    record = _hop_record.get()
+    return _CandidateContent(model, path, record)
 
 
 def _is_permission_field(node):

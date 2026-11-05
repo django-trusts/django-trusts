@@ -13,7 +13,12 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Exists, F, Model, OuterRef, Q, Subquery
 
 from trusts.plan.rewrites import bind_once
-from trusts.plan.hops import lookup_text, path_text, resolved_hop
+from trusts.plan.hops import (
+    content_scope_lookup,
+    lookup_text,
+    path_text,
+    resolved_hop,
+)
 from trusts.plan.predicates import bind_record_qs, bind_terminal
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.delegations import (
@@ -60,55 +65,14 @@ def _and_predicate(left, right):
     return _as_q(left) & _as_q(right)
 
 
-def _is_reverse_relation(field):
-    return bool(
-        getattr(field, 'auto_created', False)
-        and not getattr(field, 'concrete', False)
-    )
-
-
 def _content_scope_lookup(record, prefix_lookup, target_attname):
-    """Content-model lookup equal to the outer scope row's identity.
-
-    The lookup walks back from the protected object to this prefix.
-    A forward hop uses the reverse accessor. A reverse hop uses the
-    foreign key that points at the scope row.
-    """
-    names = tuple(prefix_lookup.split('__'))
-    path = tuple(record.content_path)
-    suffix = path[len(names):]
-    current = record.root
-    for name in names:
-        field = current._meta.get_field(name)
-        current, _attname = resolved_hop(field, 'content', path)
-    steps = []
-    for name in suffix:
-        field = current._meta.get_field(name)
-        if getattr(field, 'many_to_many', False):
-            raise TrustsConfigurationError(
-                'filter_by_permitted_content cannot apply a content '
-                'filter through many-to-many hop %r.' % name
-            )
-        steps.append(field)
-        current, _attname = resolved_hop(field, 'content', path)
-    parts = []
-    for index, field in enumerate(reversed(steps)):
-        last = index == len(steps) - 1
-        if _is_reverse_relation(field):
-            fk = field.field
-            parts.append(fk.attname if last else fk.name)
-            continue
-        if not getattr(field, 'concrete', False) or not field.is_relation:
-            raise TrustsConfigurationError(
-                'filter_by_permitted_content cannot apply a content '
-                'filter through %r.' % prefix_lookup
-            )
-        accessor = field.remote_field.get_accessor_name()
-        if last:
-            parts.append('%s__%s' % (accessor, target_attname))
-        else:
-            parts.append(accessor)
-    return '__'.join(parts)
+    """Content-model lookup equal to the outer scope row's identity."""
+    return content_scope_lookup(
+        record.root,
+        record.content_path,
+        prefix_lookup.split('__'),
+        target_attname,
+    )
 
 
 def _content_under_outer(record, lookup, target_attname, overlay):
