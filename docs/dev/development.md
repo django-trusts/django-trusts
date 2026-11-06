@@ -93,6 +93,12 @@ fail-closed development surface. It requires no consumer migration entry, but
 applications using development lockfiles must deliberately regenerate and
 review them.
 
+## Open design notes
+
+[Instance-side user-rule evaluation](check-instance.md) records the unresolved
+`check_instance=True` trade-off from #313. It is not implemented and does not
+describe a public argument.
+
 ## Change sizing and surface discovery
 
 Design tasks must estimate the complete implementation and review surface before
