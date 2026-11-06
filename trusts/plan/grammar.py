@@ -16,6 +16,13 @@ import copy
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.hops import path_text
 
+# Public spelling of the reachability function. The class in
+# ``trusts.functions`` uses this same word. A later rename changes
+# ``EXISTS_NAME`` and that class together; ``EXISTS_KIND`` stays the
+# stored node kind.
+EXISTS_KIND = 'exists'
+EXISTS_NAME = 'Exists'
+
 _KIND_LABELS = {
     'eq': "'=='",
     'ne': "'!='",
@@ -30,18 +37,18 @@ _KIND_LABELS = {
     'bare': 'A bare boolean field',
     'const': 'A constant',
     'call': 'An SQL function',
-    'exists': 'Exists()',
+    EXISTS_KIND: '%s()' % EXISTS_NAME,
 }
 
 _RETURN_HINT = (
-    'Return a comparison, Exists(), .contains(), a boolean field, or a '
+    'Return a comparison, %s(), .contains(), a boolean field, or a '
     "combination with '&' and '|'."
-)
+) % EXISTS_NAME
 
 ORDERED_KINDS = frozenset(('lt', 'le', 'gt', 'ge'))
 
 _PREDICATE_KINDS = frozenset((
-    'eq', 'ne', 'and', 'or', 'not', 'contains', 'bare', 'exists',
+    'eq', 'ne', 'and', 'or', 'not', 'contains', 'bare', EXISTS_KIND,
 )) | ORDERED_KINDS
 
 _OP_LABELS = {
@@ -191,7 +198,7 @@ class Tree(object):
             return Tree('not', item=self)
         raise unsupported(
             "'~' on a comparison",
-            hint='Negate a boolean field or Exists().',
+            hint='Negate a boolean field or %s().' % EXISTS_NAME,
         )
 
     def __eq__(self, other):
@@ -343,7 +350,7 @@ def _require_predicate(result):
     if type(result) is bool:
         raise PermissionConditionError(
             'A comparison returned a Python bool. Import Now, Lower, '
-            'Coalesce, and Exists from trusts.functions.'
+            'Coalesce, and %s from trusts.functions.' % EXISTS_NAME
         )
     if isinstance(result, Symbol):
         if not result._path:
@@ -365,7 +372,7 @@ def _negatable(node):
     A comparison, ``.contains()``, or ``|`` is outside that shape, including
     one nested inside ``&`` or ``|``.
     """
-    if node.kind in ('bare', 'exists'):
+    if node.kind in ('bare', EXISTS_KIND):
         return True
     if node.kind == 'not':
         return _negatable(node.item)
@@ -437,7 +444,7 @@ def invoke(fn, roots, prepare=None):
     except (TypeError, ValueError) as exc:
         raise PermissionConditionError(
             'Condition builder failed: %s. Import Now, Lower, Coalesce, '
-            'and Exists from trusts.functions.' % exc
+            'and %s from trusts.functions.' % (exc, EXISTS_NAME)
         ) from exc
     except Exception as exc:
         raise PermissionConditionError(

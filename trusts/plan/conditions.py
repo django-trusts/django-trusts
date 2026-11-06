@@ -71,6 +71,8 @@ from django.utils.functional import Promise, SimpleLazyObject
 from trusts.errors import PermissionConditionError
 from trusts.functions import Coalesce, Exists, Lower, Now
 from trusts.plan.grammar import (
+    EXISTS_KIND,
+    EXISTS_NAME,
     ORDERED_KINDS,
     Symbol,
     Tree,
@@ -238,7 +240,7 @@ def normalize_expression(node, token=None):
         if left is node.left and right is node.right:
             return node
         return Tree(node.kind, left=left, right=right)
-    if _node(node, 'not', 'bare', 'exists'):
+    if _node(node, 'not', 'bare', EXISTS_KIND):
         item = normalize_expression(node.item, token)
         if item is node.item:
             return node
@@ -277,7 +279,9 @@ def _lower_value(value, token, *, inside=False):
         raise PermissionConditionError(
             'A %s constant is not supported in a named filter. '
             'SQL functions in a condition must be Now, Lower, Coalesce, '
-            'and Exists from trusts.functions.' % type(value).__name__
+            'and %s from trusts.functions.' % (
+                type(value).__name__, EXISTS_NAME,
+            )
         )
     return Tree('const', value=normalize_constant(value))
 
@@ -719,6 +723,46 @@ def _validate_bare(node, model, user_model):
     require_boolean_field(host, item.path, ref, where='a named filter')
 
 
+def require_lowerable_operand(node, model, user_model, *, exists):
+    """Reject a field that ``register()`` would accept and SQL cannot lower.
+
+    Comparisons need a stored column or a forward foreign key. ``Exists``
+    stops on that same column, and may also follow a terminal reverse
+    one-to-one. A permission field has no joined row, so ``Exists`` on it
+    is rejected here. The lowering raises stay for a tree that skips
+    registration.
+    """
+    if not _node(node, 'field'):
+        if exists:
+            raise PermissionConditionError(
+                '%s() needs a field path.' % EXISTS_NAME
+            )
+        return
+    if node.root == 'permission':
+        if exists:
+            raise PermissionConditionError(
+                '%s() does not apply to a permission field.' % EXISTS_NAME
+            )
+        return
+    if node.root == 'object':
+        host = model
+    elif node.root == 'user':
+        if user_model is None or not node.path:
+            return
+        host = user_model
+    elif node.root == 'row':
+        host = model
+    else:
+        return
+    if not node.path:
+        return
+    from trusts.plan.trivalent import relation_hops, split_value_path
+    if exists:
+        relation_hops(host, node.path)
+    else:
+        split_value_path(host, node.path)
+
+
 def validate_expression(node, model, user_model=None):
     """Resolve paths and require comparable operand types on ``Eq`` / ``Ne``.
 
@@ -731,7 +775,7 @@ def validate_expression(node, model, user_model=None):
     if not is_predicate(node):
         raise PermissionConditionError(
             'Permission condition did not produce a comparison, '
-            'Exists(), .contains(), or boolean field.'
+            '%s(), .contains(), or boolean field.' % EXISTS_NAME
         )
     _validate_node(node, model, user_model)
 
@@ -744,6 +788,8 @@ def _validate_node(node, model, user_model):
     if _node(node, 'eq', 'ne', *ORDERED_KINDS):
         _validate_node(node.left, model, user_model)
         _validate_node(node.right, model, user_model)
+        require_lowerable_operand(node.left, model, user_model, exists=False)
+        require_lowerable_operand(node.right, model, user_model, exists=False)
         check_comparison_types(node, model, user_model)
         return
     if _node(node, 'contains'):
@@ -752,14 +798,23 @@ def _validate_node(node, model, user_model):
     if _node(node, 'bare'):
         _validate_bare(node, model, user_model)
         return
-    if _node(node, 'not', 'exists'):
+    if _node(node, 'not', EXISTS_KIND):
         _validate_node(node.item, model, user_model)
+        if node.kind == EXISTS_KIND:
+            require_lowerable_operand(
+                node.item, model, user_model, exists=True,
+            )
         return
     if _node(node, 'const'):
         return
     if _node(node, 'call'):
         for arg in node.item:
             _validate_node(arg, model, user_model)
+        for leaf in walk(node):
+            if leaf.kind == 'field':
+                require_lowerable_operand(
+                    leaf, model, user_model, exists=False,
+                )
         _reject_split_function(node)
         return
     if _node(node, 'field'):

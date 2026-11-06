@@ -1,11 +1,13 @@
 """Unknown stays unknown until the grant.
 
-``Exists(path)`` is true only when the row that owns the field was
-joined, including when that column is NULL, and false for a missing or
-dangling foreign key. ``== None`` is true only for a stored NULL on a
-reached row. ``!= None`` is that test negated. A NULL operand under an
-ordinary comparison does not grant. Collection membership is the join
-it already was: one member is enough, and an empty collection is not.
+``Exists(path)`` is true when the row that owns the terminal field was
+reached. A terminal foreign key is a column on that row, so ``Exists``
+is true even when the key is NULL or dangling. ``Exists(room.name)``
+is false when the room row cannot be joined. ``== None`` is true only
+for a stored NULL on a reached row. ``!= None`` is that test negated,
+and unknown stays unknown under negation. Collection membership is the
+join it already was: one member is enough, and an empty collection is
+not.
 """
 from contextlib import contextmanager
 
@@ -18,13 +20,14 @@ from django.db import connection, models
 from django.db.models import Value
 from django.http import HttpResponse
 from django.test import RequestFactory, TransactionTestCase, override_settings
-from django.test.utils import isolate_apps
+from django.test.utils import CaptureQueriesContext, isolate_apps
 
 from tests.support import compiler, published_class_catalog
 from trusts.backends import TrustModelBackendMixin
 from trusts.decorators import authorization_required, filter_by_permitted_content
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.functions import Coalesce, Exists, Lower
+from trusts.plan.grammar import EXISTS_NAME
 from trusts.models import (
     AuthorizedQuerySet,
     PermittedQuerySet,
@@ -150,6 +153,7 @@ class UnknownLoweringTests(TransactionTestCase):
     """The expression module and the grant boundary agree on one connection."""
 
     def test_reached_null_missing_and_dangling(self):
+        self.assertEqual(Exists.__name__, EXISTS_NAME)
         Room, _Tag, Desk, _Note, _Grant = _models()
         with _tables(Room, _Tag, Desk):
             blank = Room.objects.create(name=None)
@@ -195,9 +199,27 @@ class UnknownLoweringTests(TransactionTestCase):
             expect(_cmp('ne', ('room', 'name'), None), 'named', 'differ')
             expect(_cmp('eq', ('room', 'name'), 'kept'), 'named')
             expect(_cmp('ne', ('room', 'name'), 'kept'), 'differ')
-            expect(_exists(('room',)), 'stored', 'named', 'differ')
+            # The desk row is reached, so Exists(room) is true even when
+            # the room key is NULL or dangling. Exists(room.name) is the
+            # room row. ~Exists(room) matches none of these desks.
+            expect(
+                _exists(('room',)),
+                'stored', 'named', 'differ', 'missing', 'dangling',
+            )
             expect(_exists(('room', 'name')), 'stored', 'named', 'differ')
-            expect(Tree('not', item=_exists(('room',))), 'missing', 'dangling')
+            expect(Tree('not', item=_exists(('room',))))
+            expect(
+                Tree('not', item=_exists(('room', 'name'))),
+                'missing', 'dangling',
+            )
+            expect(
+                Tree('not', item=_cmp('eq', ('room', 'name'), None)),
+                'named', 'differ',
+            )
+            expect(
+                Tree('not', item=_cmp('ne', ('room', 'name'), None)),
+                'stored',
+            )
             expect(_cmp('eq', ('room',), None), 'missing')
             expect(_cmp('eq', ('label',), None), 'stored')
             expect(_cmp('ne', ('label',), 'yes'), 'differ')
@@ -244,7 +266,16 @@ class UnknownLoweringTests(TransactionTestCase):
             present = exists_operand(
                 Desk, ('room',), ('alias', quoted('d')), quoted,
             )
-            self.assertIn('EXISTS', present.reached_sql)
+            # The desk alias already is the owning row. The room key is
+            # not joined, so a NULL room.desk-style key cannot turn this
+            # false.
+            self.assertNotIn('unk_room', present.reached_sql)
+            self.assertIn('1=1', present.reached_sql)
+            followed = exists_operand(
+                Desk, ('room', 'name'), ('alias', quoted('d')), quoted,
+            )
+            self.assertIn('EXISTS', followed.reached_sql)
+            self.assertIn('unk_room', followed.reached_sql)
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -261,7 +292,8 @@ class UnknownEntryTests(TransactionTestCase):
             'ne_name': lambda u, p, o: o.room.name != 'kept',
             'exists_room': lambda u, p, o: Exists(o.room),
             'exists_name': lambda u, p, o: Exists(o.room.name),
-            'no_room': lambda u, p, o: ~Exists(o.room),
+            'no_room': lambda u, p, o: ~Exists(o.room.name),
+            'not_exists_room': lambda u, p, o: ~Exists(o.room),
             'fk_null': lambda u, p, o: o.room == None,  # noqa: E711
             'label_null': lambda u, p, o: o.label == None,  # noqa: E711
             'flag_off': lambda u, p, o: ~o.flag,
@@ -347,9 +379,12 @@ class UnknownEntryTests(TransactionTestCase):
                 'ne_none_name': {named.pk, differ.pk},
                 'eq_name': {named.pk},
                 'ne_name': {differ.pk},
-                'exists_room': {stored.pk, named.pk, differ.pk},
+                'exists_room': {
+                    stored.pk, named.pk, differ.pk, missing.pk, dangling.pk,
+                },
                 'exists_name': {stored.pk, named.pk, differ.pk},
                 'no_room': {missing.pk, dangling.pk},
+                'not_exists_room': set(),
                 'fk_null': {missing.pk},
                 'label_null': {stored.pk},
                 'flag_off': {named.pk, missing.pk},
@@ -400,6 +435,123 @@ class UnknownEntryTests(TransactionTestCase):
                 with self.assertRaises(PermissionDenied):
                     roomless(request, pk=stored.pk)
 
+    def test_exists_is_true_when_room_desk_is_null(self):
+        """Once the room row is reached, Exists(desk) is true even when room.desk is null."""
+        User = get_user_model()
+
+        class Desk(models.Model):
+            label = models.CharField(max_length=20, null=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'unk_owned_desk'
+
+        class Room(PermittedUsersMixin, models.Model):
+            objects = models.Manager.from_queryset(PermittedQuerySet)()
+            desk = models.ForeignKey(
+                Desk, null=True, db_constraint=False,
+                on_delete=models.DO_NOTHING, related_name='rooms',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'unk_owned_room'
+
+        class RoomGrant(models.Model):
+            room = models.ForeignKey(Room, on_delete=models.CASCADE)
+            holder = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'unk_owned_grant'
+
+        _add_column(
+            self, User, 'via_manager',
+            models.ForeignKey(
+                'self', null=True, related_name='owned_reports',
+                on_delete=models.DO_NOTHING, db_constraint=False,
+                db_index=False,
+            ),
+        )
+        factory = compiler(path='tests.core.test_unknown.room-desk')
+        factory.add_named_filter(
+            Room, 'has_desk', lambda u, p, o: Exists(o.desk),
+        )
+        factory.add_named_filter(
+            Room, 'no_desk', lambda u, p, o: ~Exists(o.desk),
+        )
+        factory.add_named_filter(
+            Room, 'desk_label', lambda u, p, o: Exists(o.desk.label),
+        )
+        factory.add_named_filter(
+            Room, 'label_null', lambda u, p, o: o.desk.label == None,  # noqa: E711
+        )
+        factory.set_user_condition(
+            'open', lambda user: user.username != 'nobody',
+        )
+        factory.register(
+            trust=RoomGrant, user='holder', permission='permission',
+            content='room', via=('holder__via_manager', 8),
+        )
+        code = 'trusts_tests.change_unkownedroom'
+        with _tables(Desk, Room, RoomGrant):
+            owned = Desk.objects.create(label='kept')
+            blank = Desk.objects.create(label=None)
+            ada = User.objects.create_user('owned-ada', password='x')
+            ben = User.objects.create_user('owned-ben', password='x')
+            ben.via_manager = ada
+            ben.save()
+            null_room = Room.objects.create(desk=None)
+            dangling_room = Room.objects.create(desk=None)
+            Room.objects.filter(pk=dangling_room.pk).update(
+                desk_id=DANGLING_ID,
+            )
+            linked = Room.objects.create(desk=owned)
+            stored_null = Room.objects.create(desk=blank)
+            change = Permission.objects.create(
+                content_type=ContentType.objects.get_for_model(Room),
+                codename='change_unkownedroom',
+                name='Can change owned room',
+            )
+            for room in (null_room, dangling_room, linked, stored_null):
+                RoomGrant.objects.create(
+                    room=room, holder=ada, permission=change,
+                )
+            self.assertIsNone(null_room.desk_id)
+            questions = (
+                ('has_desk', {null_room.pk, dangling_room.pk, linked.pk, stored_null.pk}),
+                ('no_desk', set()),
+                ('desk_label', {linked.pk, stored_null.pk}),
+                ('label_null', {stored_null.pk}),
+            )
+            with published_class_catalog(
+                _DeskBackend, factory,
+            ), override_settings(AUTHENTICATION_BACKENDS=(BACKEND,)):
+                for name, wanted in questions:
+                    for person in (ada, ben):
+                        with self.subTest(name=name, who=person.username):
+                            listed = set(Room.objects.permitted(
+                                code, person, conditions=(name,),
+                            ).values_list('pk', flat=True))
+                            self.assertEqual(listed, wanted)
+                            for room in (null_room, dangling_room, linked, stored_null):
+                                self.assertIs(
+                                    person.has_perm('%s:%s' % (code, name), room),
+                                    room.pk in wanted,
+                                )
+                    for room in (null_room, dangling_room, linked, stored_null):
+                        with self.subTest(name=name, room=room.pk):
+                            found = set(room.get_permitted_users(
+                                '%s:%s' % (code, name),
+                            ).values_list('pk', flat=True))
+                            holders = {ada.pk, ben.pk} if room.pk in wanted else set()
+                            self.assertEqual(found, holders)
+
     def test_reachable_shapes_the_suite_had_not_executed(self):
         """Public shapes that the rest of the suite never built.
 
@@ -445,13 +597,44 @@ class UnknownEntryTests(TransactionTestCase):
             Desk, 'lower_room',
             lambda u, p, o: Lower(o.label) == o.room.name,
         )
-        factory.add_named_filter(
-            Desk, 'card_null', lambda u, p, o: o.card == None,  # noqa: E711
-        )
+        with self.assertRaises(PermissionConditionError) as raised:
+            factory.add_named_filter(
+                Desk, 'card_null', lambda u, p, o: o.card == None,  # noqa: E711
+            )
+        self.assertIn('Cannot push condition path', str(raised.exception))
+        with self.assertRaises(PermissionConditionError) as raised:
+            factory.add_named_filter(
+                Desk, 'card_ne_none',
+                lambda u, p, o: o.card != None,  # noqa: E711
+            )
+        self.assertIn('Cannot push condition path', str(raised.exception))
+        with self.assertRaises(PermissionConditionError) as raised:
+            factory.add_named_filter(
+                Desk, 'lower_card', lambda u, p, o: Lower(o.card) == 'x',
+            )
+        self.assertIn('Cannot push condition path', str(raised.exception))
         with self.assertRaises(PermissionConditionError):
             factory.add_named_filter(
                 Desk, 'bad_exists', lambda u, p, o: Exists(o),
             )
+
+        class Stub(models.Model):
+            grant = models.OneToOneField(
+                DeskGrant, related_name='stub', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'unk_stub'
+
+        refused = compiler(path='tests.core.test_unknown.relation-reject')
+        with self.assertRaises(PermissionConditionError) as raised:
+            refused.register(
+                trust=DeskGrant, user='user', permission='permission',
+                content='desk',
+                condition=lambda row: row.stub == None,  # noqa: E711
+            )
+        self.assertIn('Cannot push condition path', str(raised.exception))
         relation = compiler(path='tests.core.test_unknown.relation')
         relation.register(
             trust=DeskGrant, user='user', permission='permission',
@@ -496,19 +679,17 @@ class UnknownEntryTests(TransactionTestCase):
                         PERM, alice, conditions=(code,),
                     ).values_list('pk', flat=True))
                     self.assertEqual(listed, wanted, code)
-                with self.assertRaises(PermissionConditionError) as raised:
-                    alice.has_perm('%s:card_null' % PERM, matched)
-                self.assertIn('Cannot push condition path', str(raised.exception))
 
     def test_unsaved_user_permission_row_and_identity(self):
         """Shapes the public checkers reach and the suite had not run.
 
         An unsaved user has no primary key, so the condition is compiled
         without a user binding. An object comparison still runs. A user
-        field cannot. ``Exists`` on a permission attribute and a string
-        permission's ``name`` fail closed at SQL time. A permission row
-        is the pk for a bare ``p``, and a real column for ``p.codename``.
-        Two function grants compare and hash by that tree.
+        field cannot. ``Exists`` on a permission attribute is rejected
+        at registration. A string permission's ``name`` still fails when
+        the inquiry passes a codename. A permission row is the pk for a
+        bare ``p``, and a real column for ``p.codename``. Two function
+        grants compare and hash by that tree.
         """
         User = get_user_model()
         Room, _Tag, Desk, Note, DeskGrant = _models()
@@ -526,8 +707,20 @@ class UnknownEntryTests(TransactionTestCase):
         user_active = factory.add_named_filter(
             Note, 'user_active', lambda u, p, o: u.is_active,
         )
-        factory.add_named_filter(
-            Note, 'perm_exists', lambda u, p, o: Exists(p.codename),
+        with self.assertRaises(PermissionConditionError) as raised:
+            factory.add_named_filter(
+                Note, 'perm_exists', lambda u, p, o: Exists(p.codename),
+            )
+        self.assertIn(
+            'does not apply to a permission field', str(raised.exception),
+        )
+        with self.assertRaises(PermissionConditionError) as raised:
+            factory.add_named_filter(
+                Note, 'perm_exists_label',
+                lambda u, p, o: Exists(p.app_label),
+            )
+        self.assertIn(
+            'does not apply to a permission field', str(raised.exception),
         )
         factory.add_named_filter(
             Note, 'same_perm', lambda u, p, o: p == p,
@@ -624,20 +817,6 @@ class UnknownEntryTests(TransactionTestCase):
                 self.assertIn(
                     "Cannot lower field rooted at 'user'", str(raised.exception),
                 )
-                with self.assertRaises(PermissionConditionError) as raised:
-                    alice.has_perm('%s:perm_exists' % PERM, upper_note)
-                self.assertIn(
-                    "Cannot lower field rooted at 'permission'",
-                    str(raised.exception),
-                )
-                with self.assertRaises(PermissionConditionError) as raised:
-                    list(Note.objects.permitted(
-                        PERM, alice, conditions=('perm_exists',),
-                    ))
-                self.assertIn(
-                    "Cannot lower field rooted at 'permission'",
-                    str(raised.exception),
-                )
                 granted_desks = {upper.pk, lower_only.pk}
 
                 def desks(code):
@@ -732,8 +911,19 @@ class EntryPointParityTests(TransactionTestCase):
             models.BooleanField(null=True),
         )
 
+        class Unit(models.Model):
+            code = models.CharField(max_length=20, null=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'parity_unit'
+
         class Room(models.Model):
             name = models.CharField(max_length=20, null=True)
+            unit = models.ForeignKey(
+                Unit, null=True, db_constraint=False,
+                on_delete=models.DO_NOTHING, related_name='rooms',
+            )
 
             class Meta:
                 app_label = 'trusts_tests'
@@ -788,9 +978,14 @@ class EntryPointParityTests(TransactionTestCase):
                 app_label = 'trusts_tests'
                 db_table = 'parity_seat'
 
-        with _tables(Room, Folder, Task, Seat):
-            kept = Room.objects.create(name='kept')
-            blank = Room.objects.create(name=None)
+        with _tables(Unit, Room, Folder, Task, Seat):
+            open_unit = Unit.objects.create(code=None)
+            kept = Room.objects.create(name='kept', unit=None)
+            blank = Room.objects.create(name=None, unit=open_unit)
+            dangling_unit = Room.objects.create(name='kept', unit=None)
+            Room.objects.filter(pk=dangling_unit.pk).update(
+                unit_id=DANGLING_ID,
+            )
             ada = User.objects.create_user('parity-ada', password='x')
             ben = User.objects.create_user('parity-ben', password='x')
             ben.via_manager = ada
@@ -837,10 +1032,34 @@ class EntryPointParityTests(TransactionTestCase):
                  passing, dict(parity_nick=None), True, False),
                 ('not-null-child', lambda user: ~user.parity_flag,
                  passing, dict(parity_flag=None), True, False),
+                # The walked user is the owning row. Exists(parity_room) stays
+                # true when that user's room key is NULL or dangling.
                 ('exists-dangling-child', lambda user: Exists(user.parity_room),
-                 passing, dict(parity_room_id=DANGLING_ID), True, False),
+                 passing, dict(parity_room_id=DANGLING_ID), True, True),
                 ('exists-missing-child', lambda user: Exists(user.parity_room),
+                 passing, dict(parity_room=None), True, True),
+                ('exists-name-missing-child',
+                 lambda user: Exists(user.parity_room.name),
                  passing, dict(parity_room=None), True, False),
+                ('exists-name-dangling-child',
+                 lambda user: Exists(user.parity_room.name),
+                 passing, dict(parity_room_id=DANGLING_ID), True, False),
+                ('not-exists-room-child',
+                 lambda user: ~Exists(user.parity_room),
+                 passing, dict(parity_room=None), False, False),
+                ('exists-unit-null-key',
+                 lambda user: Exists(user.parity_room.unit),
+                 passing, dict(parity_room=None), True, False),
+                ('exists-unit-dangling-key',
+                 lambda user: Exists(user.parity_room.unit),
+                 dict(parity_room=dangling_unit),
+                 dict(parity_room_id=DANGLING_ID), True, False),
+                ('exists-unit-code-null-key',
+                 lambda user: Exists(user.parity_room.unit.code),
+                 dict(parity_room=blank), dict(parity_room=kept), True, False),
+                ('eq-none-unit-code',
+                 lambda user: user.parity_room.unit.code == None,  # noqa: E711
+                 dict(parity_room=blank), dict(parity_room=kept), True, False),
                 ('eq-none-dangling', lambda user: user.parity_room.name == None,  # noqa: E711
                  dict(parity_room=blank), dict(parity_room_id=DANGLING_ID),
                  True, False),
@@ -894,10 +1113,43 @@ class EntryPointParityTests(TransactionTestCase):
                  dict(room=blank, label='yes', flag=False), True),
                 ('obj-eq-none-dangling', lambda u, p, o: o.room.name == None,  # noqa: E711
                  dict(room_id=DANGLING_ID, label='yes', flag=False), False),
+                ('obj-exists-null', lambda u, p, o: Exists(o.room),
+                 dict(room=None, label='yes', flag=False), True),
                 ('obj-exists-dangling', lambda u, p, o: Exists(o.room),
-                 dict(room_id=DANGLING_ID, label='yes', flag=False), False),
-                ('obj-not-exists-dangling', lambda u, p, o: ~Exists(o.room),
                  dict(room_id=DANGLING_ID, label='yes', flag=False), True),
+                ('obj-not-exists-dangling', lambda u, p, o: ~Exists(o.room),
+                 dict(room_id=DANGLING_ID, label='yes', flag=False), False),
+                ('obj-exists-name-null', lambda u, p, o: Exists(o.room.name),
+                 dict(room=None, label='yes', flag=False), False),
+                ('obj-exists-name-dangling', lambda u, p, o: Exists(o.room.name),
+                 dict(room_id=DANGLING_ID, label='yes', flag=False), False),
+                ('obj-exists-unit-null-key',
+                 lambda u, p, o: Exists(o.room.unit),
+                 dict(room=kept, label='yes', flag=False), True),
+                ('obj-exists-unit-missing-room',
+                 lambda u, p, o: Exists(o.room.unit),
+                 dict(room=None, label='yes', flag=False), False),
+                ('obj-exists-unit-dangling-room',
+                 lambda u, p, o: Exists(o.room.unit),
+                 dict(room_id=DANGLING_ID, label='yes', flag=False), False),
+                ('obj-exists-unit-dangling-key',
+                 lambda u, p, o: Exists(o.room.unit),
+                 dict(room=dangling_unit, label='yes', flag=False), True),
+                ('obj-exists-unit-code-dangling-key',
+                 lambda u, p, o: Exists(o.room.unit.code),
+                 dict(room=dangling_unit, label='yes', flag=False), False),
+                ('obj-exists-unit-code-null-key',
+                 lambda u, p, o: Exists(o.room.unit.code),
+                 dict(room=kept, label='yes', flag=False), False),
+                ('obj-eq-none-unit-code',
+                 lambda u, p, o: o.room.unit.code == None,  # noqa: E711
+                 dict(room=blank, label='yes', flag=False), True),
+                ('obj-eq-none-unit-code-missing',
+                 lambda u, p, o: o.room.unit.code == None,  # noqa: E711
+                 dict(room=kept, label='yes', flag=False), False),
+                ('obj-ne-none-unit-code-missing',
+                 lambda u, p, o: o.room.unit.code != None,  # noqa: E711
+                 dict(room=None, label='yes', flag=False), False),
                 ('obj-ne-null', lambda u, p, o: o.label != 'yes',
                  dict(room=kept, label=None, flag=False), False),
                 ('obj-or-contains', lambda u, p, o: (
@@ -1134,3 +1386,151 @@ class EntryPointParityTests(TransactionTestCase):
             (has, permitted, reached, folders, decorated),
             (allowed, allowed, allowed, allowed, allowed),
         )
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class SheetAliasTests(TransactionTestCase):
+    """Sponsor checks read the ownership row the sheet already joined."""
+
+    def test_inner_join_is_the_only_ownership_read(self):
+        self._run(False)
+
+    def test_left_join_is_the_only_ownership_read(self):
+        self._run(True)
+
+    def _run(self, null):
+        User = get_user_model()
+
+        class Organization(models.Model):
+            name = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'shape_org'
+
+        class Ownership(models.Model):
+            organization = models.ForeignKey(
+                Organization, on_delete=models.CASCADE, related_name='+',
+            )
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'shape_ownership'
+
+        class Repository(models.Model):
+            organization = models.ForeignKey(
+                Organization, on_delete=models.CASCADE, related_name='+',
+            )
+            name = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'shape_repo'
+
+        class Delegation(models.Model):
+            repository = models.ForeignKey(
+                Repository, on_delete=models.CASCADE,
+            )
+            sponsor_ownership = models.ForeignKey(
+                Ownership, on_delete=models.CASCADE, related_name='+',
+                null=null,
+            )
+            delegate = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'shape_delegation'
+
+        class Grant(models.Model):
+            repository = models.ForeignKey(
+                Repository, on_delete=models.CASCADE,
+            )
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'shape_grant'
+
+        created = (Organization, Ownership, Repository, Delegation, Grant)
+        with connection.schema_editor() as editor:
+            for model in created:
+                editor.create_model(model)
+        try:
+            handle = compiler(path='tests.core.shape-alias-%s' % null)
+            handle.register(
+                trust=Grant, user='user', permission='permission',
+                content='repository',
+            )
+            handle.register(
+                trust=Delegation,
+                delegate='delegate',
+                sponsor='sponsor_ownership__user',
+                content='repository',
+                condition=lambda row: (
+                    row.sponsor_ownership.organization
+                    == row.repository.organization
+                ),
+            )
+            org = Organization.objects.create(name='org')
+            other = Organization.objects.create(name='other')
+            repo = Repository.objects.create(organization=org, name='repo')
+            ada = User.objects.create_user('shape-ada', password='x')
+            ben = User.objects.create_user('shape-ben', password='x')
+            cy = User.objects.create_user('shape-cy', password='x')
+            own = Ownership.objects.create(organization=org, user=ada)
+            mismatch = Ownership.objects.create(organization=other, user=ada)
+            change = Permission.objects.create(
+                content_type=ContentType.objects.get_for_model(Repository),
+                codename='change_shaperepo',
+                name='Can change shape repo',
+            )
+            Grant.objects.create(repository=repo, user=ada, permission=change)
+            Delegation.objects.create(
+                repository=repo, sponsor_ownership=own, delegate=ben,
+            )
+            Delegation.objects.create(
+                repository=repo, sponsor_ownership=mismatch, delegate=cy,
+            )
+            catalog = handle.compile()
+            code = 'trusts_tests.change_shaperepo'
+            self.assertIs(catalog.has_perm(ben, code, repo), True)
+            self.assertIs(catalog.has_perm(cy, code, repo), False)
+            if null:
+                dee = User.objects.create_user('shape-dee', password='x')
+                Delegation.objects.create(
+                    repository=repo, sponsor_ownership=None, delegate=dee,
+                )
+                self.assertIs(catalog.has_perm(dee, code, repo), False)
+            ada.is_active = False
+            ada.save(update_fields=['is_active'])
+            try:
+                self.assertIs(catalog.has_perm(ben, code, repo), False)
+            finally:
+                ada.is_active = True
+                ada.save(update_fields=['is_active'])
+            self.assertIs(catalog.has_perm(ben, code, repo), True)
+            with CaptureQueriesContext(connection) as ctx:
+                catalog.has_perm(ben, code, repo)
+            matched = [
+                item['sql'] for item in ctx.captured_queries
+                if 'shape_ownership' in item['sql']
+            ]
+            self.assertEqual(len(matched), 1)
+            sql = matched[0]
+            self.assertEqual(sql.count('shape_ownership'), 1)
+            self.assertNotIn('FROM "shape_ownership"', sql)
+            self.assertNotIn('FROM `shape_ownership`', sql)
+        finally:
+            with connection.schema_editor() as editor:
+                for model in reversed(created):
+                    editor.delete_model(model)

@@ -24,7 +24,7 @@ from django.db.models.lookups import Lookup
 
 from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import ModelIdentity
-from trusts.plan.grammar import walk
+from trusts.plan.grammar import EXISTS_KIND, EXISTS_NAME, walk
 
 
 class _Marked(object):
@@ -252,7 +252,7 @@ def lower(node, scope):
                     _Marked(prepared, const_hint=operand.export_hint or 'literal'),
                 ),
             )
-    if kind == 'exists':
+    if kind == EXISTS_KIND:
         operand = scope.exists_operand(node.item)
         return Expr('(%s)' % operand.reached_sql, operand.reached_params)
     if kind == 'ne' or kind in _COMPARE:
@@ -361,7 +361,13 @@ def split_value_path(model, path):
 
 
 def relation_hops(model, path):
-    """Joins that reach the row ``Exists(path)`` asks about."""
+    """Joins that reach the row that owns the terminal field.
+
+    A terminal forward foreign key is a column on the current row.
+    ``Exists(room)`` is true once that row is reached, whatever the key
+    holds, including NULL and a dangling id. A terminal reverse
+    one-to-one has no source column, so that hop is the related row.
+    """
     hops = []
     current = model
     for index, name in enumerate(path):
@@ -372,11 +378,11 @@ def relation_hops(model, path):
                 'Cannot push condition path %r down to SQL.' % (name,)
             ) from exc
         last = index == len(path) - 1
+        if last and (_forward_fk(field) or _value_column(field)):
+            return hops
         if _forward_fk(field):
             hops.append(('fk', field))
             current = field.remote_field.model
-            if last:
-                return hops
             continue
         if _reverse_one_to_one(field):
             hops.append(('rev', field))
@@ -384,8 +390,6 @@ def relation_hops(model, path):
             if last:
                 return hops
             continue
-        if last and _value_column(field):
-            return hops
         _reject_path(field, name)
     return hops
 
@@ -409,14 +413,112 @@ def _related(kind, field):
     return field.related_model
 
 
-def correlated(model, hops, leaf_column, source, qn, *, exists):
+def _same_join_field(join_field, field):
+    if join_field is field:
+        return True
+    return (
+        getattr(join_field, 'model', None) is getattr(field, 'model', None)
+        and getattr(join_field, 'column', None) == getattr(field, 'column', None)
+        and getattr(join_field, 'name', None) == getattr(field, 'name', None)
+    )
+
+
+def _plain_join(query, parent, kind, field):
+    """The one plain join of ``field`` from ``parent``, or None.
+
+    A filtered relation is a different row. Two plain joins of the same
+    field are ambiguous, so neither is reused.
+    """
+    if query is None or not parent:
+        return None
+    target = field if kind == 'fk' else getattr(field, 'field', None)
+    if target is None:
+        return None
+    alias_map = getattr(query, 'alias_map', None)
+    if not isinstance(alias_map, dict):
+        return None
+    found = None
+    for alias, join in alias_map.items():
+        if getattr(join, 'parent_alias', None) != parent:
+            continue
+        if getattr(join, 'filtered_relation', None) is not None:
+            continue
+        if not _same_join_field(getattr(join, 'join_field', None), target):
+            continue
+        if found is not None:
+            return None
+        found = (alias, join)
+    return found
+
+
+def _referenced_prefix(query, raw_alias, hops):
+    """Referenced joins already on ``query`` for a prefix of ``hops``.
+
+    ``alias_map`` also holds joins Django will trim because nothing in
+    the query cites them. Only a join with a positive refcount is in
+    the final FROM clause. Reading an unreferenced alias names a table
+    the query then drops. The returned prefix is the longest run of
+    cited joins. An inner join has already dropped a missing row. A
+    left join keeps the outer row, so its primary key says whether the
+    hop was reached.
+    """
+    alias = raw_alias
+    nullable = False
+    taken = 0
+    last_model = None
+    refs = getattr(query, 'alias_refcount', None)
+    if not isinstance(refs, dict):
+        return None
+    for kind, field in hops:
+        found = _plain_join(query, alias, kind, field)
+        if found is None:
+            break
+        next_alias, join = found
+        if refs.get(next_alias, 0) <= 0:
+            break
+        alias = next_alias
+        taken += 1
+        last_model = _related(kind, field)
+        if (
+            getattr(join, 'join_type', None) != 'INNER JOIN'
+            or getattr(join, 'nullable', False)
+        ):
+            nullable = True
+    if taken == 0:
+        return None
+    return alias, nullable, taken, last_model
+
+
+def correlated(model, hops, leaf_column, source, qn, *, exists,
+               query=None, raw_alias=None):
     """Scalar value or ``EXISTS`` from ``source``.
 
     ``source`` is ``('alias', sql)`` or ``('pk', pk, model)``. A join that
-    misses, including a dangling foreign key, yields no row.
+    misses, including a dangling foreign key, yields no row. When the
+    query already cites a prefix of ``hops``, that alias is the same row
+    and any later hops are a subquery from it.
     """
     if source[0] == 'alias':
-        prev = source[1]
+        reused = None
+        if hops and query is not None and raw_alias:
+            reused = _referenced_prefix(query, raw_alias, hops)
+        if reused is not None:
+            alias, nullable, taken, last_model = reused
+            quoted = qn(alias)
+            rest = hops[taken:]
+            if not rest:
+                if exists:
+                    if nullable:
+                        column = qn(last_model._meta.pk.column)
+                        return '%s.%s IS NOT NULL' % (quoted, column), ()
+                    return '(1=1)', ()
+                return '%s.%s' % (quoted, qn(leaf_column)), ()
+            prev = quoted
+        else:
+            prev = source[1]
+            rest = hops
+        if reused is not None:
+            hops = rest
         parts = []
         where = None
         for index, (kind, field) in enumerate(hops):
@@ -467,7 +569,7 @@ def correlated(model, hops, leaf_column, source, qn, *, exists):
     return '(%s)' % body, (pk,)
 
 
-def field_operand(model, path, source, qn):
+def field_operand(model, path, source, qn, query=None, raw_alias=None):
     """Value of ``path`` and whether its owning row was joined."""
     if not path:
         if source[0] == 'alias':
@@ -484,19 +586,22 @@ def field_operand(model, path, source, qn):
     hops, leaf = split_value_path(model, path)
     value_sql, value_params = correlated(
         model, hops, leaf.column, source, qn, exists=False,
+        query=query, raw_alias=raw_alias,
     )
     reached_sql, reached_params = correlated(
         model, hops, leaf.column, source, qn, exists=True,
+        query=query, raw_alias=raw_alias,
     )
     return Operand(
         value_sql, value_params, reached_sql, reached_params, False, leaf,
     )
 
 
-def exists_operand(model, path, source, qn):
+def exists_operand(model, path, source, qn, query=None, raw_alias=None):
     hops = relation_hops(model, path)
     reached_sql, reached_params = correlated(
         model, hops, None, source, qn, exists=True,
+        query=query, raw_alias=raw_alias,
     )
     return Operand('(1=0)', (), reached_sql, reached_params, False)
 
@@ -504,11 +609,14 @@ def exists_operand(model, path, source, qn):
 class Scope(object):
     """How a root becomes a row. Bindings name alias, pk, or permission."""
 
-    def __init__(self, bindings, qn, connection, alias_sql):
+    def __init__(self, bindings, qn, connection, alias_sql,
+                 query=None, raw_alias=None):
         self.bindings = bindings
         self.qn = qn
         self.connection = connection
         self.alias_sql = alias_sql
+        self.query = query
+        self.raw_alias = raw_alias
 
     def operand(self, node):
         if node.kind == 'const':
@@ -524,11 +632,13 @@ class Scope(object):
     def exists_operand(self, node):
         if node.kind != 'field':
             raise PermissionConditionError(
-                'Exists() needs a field path.'
+                '%s() needs a field path.' % EXISTS_NAME
             )
         model, source = self._source(node)
         path = self._path(node)
-        operand = exists_operand(model, path, source, self.qn)
+        operand = exists_operand(
+            model, path, source, self.qn, self.query, self.raw_alias,
+        )
         operand.export_hint = self._export_hint(node)
         return self._mark_binds(operand, node)
 
@@ -536,7 +646,10 @@ class Scope(object):
         if node.root == 'permission':
             return self._permission(node)
         model, source = self._source(node)
-        operand = field_operand(model, self._path(node), source, self.qn)
+        operand = field_operand(
+            model, self._path(node), source, self.qn,
+            self.query, self.raw_alias,
+        )
         operand.export_hint = self._export_hint(node)
         return self._mark_binds(operand, node)
 
@@ -780,9 +893,11 @@ class GrantPredicate(Expression):
 
     def as_sql(self, compiler, connection):
         qn = connection.ops.quote_name
-        alias = qn(compiler.query.get_initial_alias())
+        raw = compiler.query.get_initial_alias()
+        alias = qn(raw)
         expr = lower(self.node, Scope(
             self.bindings, qn, connection, alias,
+            query=compiler.query, raw_alias=raw,
         ))
         if _exporting():
             return expr.sql, tuple(_export_param(param) for param in expr.params)

@@ -15,7 +15,7 @@ from trusts.plan.conditions import (
     ModelIdentity,
     resolve_field_path,
 )
-from trusts.plan.grammar import Tree
+from trusts.plan.grammar import EXISTS_NAME, Tree
 from trusts.plan.trivalent import grant_q, has_contains
 
 
@@ -197,6 +197,6 @@ def compile_to_q(node, model, user, perm, user_model=None):
         return _compile_contains(node, model, user, perm, user_model)
     raise PermissionConditionError(
         'Permission condition did not produce a comparison, '
-        'Exists(), .contains(), or boolean field.'
+        '%s(), .contains(), or boolean field.' % EXISTS_NAME
     )
 

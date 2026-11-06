@@ -9,7 +9,7 @@ stored nodes, and the compiler emits SQL.
 
 from django.db.models import functions
 
-from trusts.plan.grammar import Tree, unsupported
+from trusts.plan.grammar import EXISTS_KIND, EXISTS_NAME, Tree, unsupported
 
 
 def _comparison(kind):
@@ -53,10 +53,17 @@ class Coalesce(ComparableMixin, functions.Coalesce):
 class Exists(object):
     """Whether the row that owns a field was joined.
 
-    ``Exists(dept.unit)`` is true when ``dept`` was joined and false when
-    it was not, including a dangling foreign key. ``unit`` may be NULL.
-    The result is true or false, never unknown. ``~Exists(path)`` is the
-    no-row test.
+    ``Exists(dept.unit)`` is true when ``dept`` was joined, even when
+    ``unit`` is NULL, and false when ``dept`` was not joined. The same
+    rule makes ``Exists(room.desk)`` true when the room row was reached
+    even if ``room.desk`` is NULL. A dangling key is still that column's
+    value: ``Exists`` does not follow it.
+    ``Exists(dept.unit.code)`` is false when the unit row cannot be
+    joined. The result is true or false, never unknown.
+    ``~Exists(path)`` is the no-row test.
+
+    The public name is ``EXISTS_NAME``. A later rename changes that
+    constant and this class together.
     """
 
     def __new__(cls, arg):
@@ -69,11 +76,11 @@ class Exists(object):
         )
         if not isinstance(arg, Symbol) or not symbol_path(arg):
             raise unsupported(
-                'Exists() on a value that is not a field path',
-                hint='Name a field, for example Exists(o.dept.unit).',
+                '%s() on a value that is not a field path' % EXISTS_NAME,
+                hint='Name a field, for example %s(o.dept.unit).' % EXISTS_NAME,
             )
         return Tree(
-            'exists',
+            EXISTS_KIND,
             item=Tree(
                 'field', root=symbol_root(arg), path=symbol_path(arg),
             ),

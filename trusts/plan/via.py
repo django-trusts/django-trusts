@@ -18,7 +18,7 @@ from django.db.models.expressions import Expression
 
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.conditions import condition_model_key
-from trusts.plan.grammar import Tree
+from trusts.plan.grammar import EXISTS_KIND, Tree
 from trusts.plan.hops import content_scope_lookup, resolved_hop
 from trusts.plan.predicates import bind_record_qs, bind_terminal
 from trusts.plan.rewrites import CallInput
@@ -393,7 +393,7 @@ def _mentions(node, root):
         return node.root == root
     if node.kind in ('and', 'or', 'eq', 'ne', 'contains'):
         return _mentions(node.left, root) or _mentions(node.right, root)
-    if node.kind in ('not', 'bare', 'exists'):
+    if node.kind in ('not', 'bare', EXISTS_KIND):
         return _mentions(node.item, root)
     return False
 
@@ -454,7 +454,7 @@ def _walk_node(node, user_model, content_model, content, carriers, name, qn,
         return _compare_sql(
             node, user_model, content_model, content, carriers, name, qn, force,
         )
-    if node.kind == 'exists':
+    if node.kind == EXISTS_KIND:
         if not force and not _mentions(node, 'user'):
             return None
         field = node.item
