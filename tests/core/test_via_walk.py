@@ -6,7 +6,6 @@ The walk includes the starting row. The bound is steps past it.
 and the walk continues. Reset reuses the ``along=`` stop.
 """
 from contextlib import contextmanager
-from unittest import expectedFailure
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
@@ -5440,14 +5439,13 @@ def _to_many_answers(ordinary_along):
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ToManyPrefixSliceTest(TransactionTestCase):
-    """A prefix lookup that crosses a reverse foreign key is one row.
+    """A prefix that crosses a reverse foreign key keeps every row.
 
     ``register()`` accepts ``office__cabinets__drawer__pages``: a
     forward hop, a reverse one-to-many, then a forward hop and a
     reverse suffix. Listing the drawer is an ancestor of the page
-    walk, so the sheet witness reads that prefix with ``values()[:1]``.
-    The high page is the only one the condition keeps. Its drawer is
-    the prefix that listing has to return. The decoy reuses the grant
+    walk. The high page is the only one the condition keeps, so its
+    drawer is the prefix listing returns. The decoy reuses the grant
     primary key.
     """
 
@@ -5458,30 +5456,27 @@ class ToManyPrefixSliceTest(TransactionTestCase):
             models.CharField(max_length=20, null=True),
         )
 
-    @expectedFailure
-    def test_handoff_prefix_slice_omits_the_permitted_drawer(self):
-        """``_sponsor_rows_for_handoff`` slices a to-many prefix.
+    def test_handoff_prefix_keeps_every_related_drawer(self):
+        """``_sponsor_rows_for_handoff`` matches every related prefix.
 
-        The ordinary grant walks too, so the sheet uses the handoff
-        subquery at ``trusts/plan/contents.py`` and not the second
-        slice on the sheet. ``has_perm``, ``.permitted()``,
-        ``get_permitted_users`` and ``authorization_required`` allow
-        the high page. The drawer listing does not keep that page's
-        drawer.
+        The ordinary grant walks too, so the sheet uses that handoff
+        match and not the second comparison on the page. ``has_perm``,
+        ``.permitted()``, ``get_permitted_users`` and
+        ``authorization_required`` allow the high page, and the drawer
+        listing is that page's drawer.
         """
         report = _to_many_answers(True)
         expected = _same_row_kept()
         self.assertEqual(report['answers'], expected['answers'])
         self.assertEqual(report['listed'], expected['listed'])
 
-    @expectedFailure
-    def test_sheet_prefix_slice_omits_the_permitted_drawer(self):
-        """``_same_sheet_in_both_walks`` slices a to-many prefix.
+    def test_sheet_prefix_keeps_every_related_drawer(self):
+        """``_same_sheet_in_both_walks`` matches every related prefix.
 
-        The ordinary grant does not walk, so the sheet adds the
-        second ``values()[:1]`` at ``trusts/plan/contents.py``.
-        The page entry points allow the high page. The drawer
-        listing does not keep that page's drawer.
+        The ordinary grant does not walk, so the sheet also requires
+        the protected page's prefix to be one of the handoff's rows.
+        The page entry points allow the high page, and the drawer
+        listing is that page's drawer.
         """
         report = _to_many_answers(False)
         expected = _same_row_kept()

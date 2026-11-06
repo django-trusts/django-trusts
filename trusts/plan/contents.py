@@ -10,7 +10,7 @@ from functools import reduce
 from operator import or_
 
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Exists, F, Model, OuterRef, Q, Subquery
+from django.db.models import Exists, F, Model, OuterRef, Q
 
 from trusts.plan.rewrites import bind_once
 from trusts.plan.hops import (
@@ -110,8 +110,8 @@ def _sponsor_rows_for_handoff(delegation, ordinary, permission,
     on another copy of the prefix does not authorize this sheet.
     ``depth`` is 2 when these rows are the seed of a walk expression
     on the sheet query, and 1 when they are a direct subquery of it.
-    A single stored foreign key compares columns. A longer lookup reads
-    the handoff's prefix through a subquery nested one level deeper.
+    A single stored foreign key compares columns. A longer lookup
+    matches every related prefix row, not one arbitrary row.
     ``user_q`` replaces sponsor equality. A sponsor ``via=`` hop is that
     predicate, so the hop and the grant row are one filter.
     """
@@ -122,14 +122,13 @@ def _sponsor_rows_for_handoff(delegation, ordinary, permission,
             grant_column: _outer_column(handoff_column, depth),
         })
     else:
-        prefix_on_handoff = Subquery(
-            delegation.root._default_manager.filter(
-                pk=_outer_column('pk', depth + 1),
-            ).values(lookup)[:1]
-        )
-        correlation = Q(**{_root_relative_column(
-            ordinary.root, ordinary_lookup,
-        ): prefix_on_handoff})
+        # ``__in`` keeps every related row. A sliced exact lookup would
+        # keep one arbitrary row when the path crosses a to-many.
+        correlation = Q(**{
+            '%s__in' % ordinary_lookup: _prefix_values(
+                delegation.root, lookup, _outer_column('pk', depth + 1),
+            ),
+        })
     bindings = {
         'permission': permission,
         'content_identity': content_identity,
@@ -158,9 +157,33 @@ def _stored_prefix_column(model, lookup):
     return field.attname
 
 
+def _lookup_crosses_to_many(model, lookup):
+    """True when ``lookup`` traverses a reverse foreign key or M2M."""
+    current = model
+    for name in str(lookup).split('__'):
+        try:
+            field = current._meta.get_field(name)
+        except FieldDoesNotExist:
+            return False
+        if getattr(field, 'many_to_many', False) or getattr(
+            field, 'one_to_many', False,
+        ):
+            return True
+        related = getattr(field, 'related_model', None)
+        if related is None:
+            return False
+        current = related
+    return False
+
+
+def _prefix_values(model, lookup, pk_ref):
+    """Every prefix identity on the row ``pk_ref`` names."""
+    return model._default_manager.filter(pk=pk_ref).values(lookup)
+
+
 def _same_sheet_in_both_walks(delegation, sponsor_records, permission,
-                              content_identity, prefix_model, lookup, overlay,
-                              delegate):
+                              content_identity, prefix_model, lookup,
+                              target_attname, overlay, delegate):
     """One protected row is in the delegation walk and the sponsor walk.
 
     The prefix is not that row. ``delegate`` is this delegation's user
@@ -180,6 +203,15 @@ def _same_sheet_in_both_walks(delegation, sponsor_records, permission,
             pk=OuterRef(OuterRef('pk')),
         ).filter(delegate),
     ))
+    # A to-many prefix is many rows. The protected row is the one whose
+    # own prefix is the row being listed, so the hop and the grant cannot
+    # pair a different copy.
+    if _lookup_crosses_to_many(delegation.root, lookup):
+        sheet = sheet.filter(**{
+            _content_scope_lookup(
+                delegation, lookup, target_attname,
+            ): _outer_column(target_attname, 2),
+        })
     sponsor_parts = []
     for ordinary in sponsor_records:
         if not _sponsor_record_matches(ordinary, delegation):
@@ -206,14 +238,12 @@ def _same_sheet_in_both_walks(delegation, sponsor_records, permission,
             correlation = _content_scope_lookup(
                 ordinary, ordinary_lookup, ordinary_attname,
             )
-            prefix_on_handoff = Subquery(
-                delegation.root._default_manager.filter(
-                    pk=OuterRef('pk'),
-                ).values(lookup)[:1]
-            )
-            sponsor_parts.append(
-                Q(**{correlation: prefix_on_handoff}) & Exists(rows)
-            )
+            on_sheet = Q(**{
+                '%s__in' % correlation: _prefix_values(
+                    delegation.root, lookup, _outer_column('pk', 2),
+                ),
+            })
+            sponsor_parts.append(on_sheet & Exists(rows))
     if not sponsor_parts:
         return Exists(sheet.none())
     reached = (
@@ -619,7 +649,7 @@ def _delegation_prefix_exists(record, sponsor_records, user, permission,
     if on_ancestor:
         sponsor_q = _same_sheet_in_both_walks(
             record, sponsor_records, permission, content_identity,
-            prefix_model, lookup, content_overlay,
+            prefix_model, lookup, target_attname, content_overlay,
             delegate_q(record, user),
         )
     else:
