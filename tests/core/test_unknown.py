@@ -15,6 +15,7 @@ from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied
 from django.db import connection, models
+from django.db.models import Value
 from django.http import HttpResponse
 from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
@@ -23,7 +24,7 @@ from tests.support import compiler, published_class_catalog
 from trusts.backends import TrustModelBackendMixin
 from trusts.decorators import authorization_required, filter_by_permitted_content
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
-from trusts.functions import Exists, Lower
+from trusts.functions import Coalesce, Exists, Lower
 from trusts.models import (
     AuthorizedQuerySet,
     PermittedQuerySet,
@@ -32,6 +33,7 @@ from trusts.models import (
 )
 from trusts.plan.grammar import Tree
 from trusts.plan.trivalent import (
+    GrantPredicate,
     Operand,
     _unwrap,
     compare,
@@ -41,6 +43,7 @@ from trusts.plan.trivalent import (
     lower,
     Scope,
 )
+from trusts.plan.writers import _filter_bindings, compile_to_q
 
 PERM = 'trusts_tests.change_unkdesk'
 BACKEND = 'tests.core.test_unknown._DeskBackend'
@@ -95,7 +98,8 @@ def _models():
             app_label = 'trusts_tests'
             db_table = 'unk_desk'
 
-    class Note(models.Model):
+    class Note(PermittedUsersMixin, models.Model):
+        objects = models.Manager.from_queryset(PermittedQuerySet)()
         desk = models.ForeignKey(
             Desk, on_delete=models.CASCADE, related_name='notes',
         )
@@ -495,6 +499,171 @@ class UnknownEntryTests(TransactionTestCase):
                 with self.assertRaises(PermissionConditionError) as raised:
                     alice.has_perm('%s:card_null' % PERM, matched)
                 self.assertIn('Cannot push condition path', str(raised.exception))
+
+    def test_unsaved_user_permission_row_and_identity(self):
+        """Shapes the public checkers reach and the suite had not run.
+
+        An unsaved user has no primary key, so the condition is compiled
+        without a user binding. An object comparison still runs. A user
+        field cannot. ``Exists`` on a permission attribute and a string
+        permission's ``name`` fail closed at SQL time. A permission row
+        is the pk for a bare ``p``, and a real column for ``p.codename``.
+        Two function grants compare and hash by that tree.
+        """
+        User = get_user_model()
+        Room, _Tag, Desk, Note, DeskGrant = _models()
+        factory = compiler(path='tests.core.test_unknown.row')
+        lowered = factory.add_named_filter(
+            Note, 'lower_kept', lambda u, p, o: Lower(o.body) == 'row-kept',
+        )
+        coalesced = factory.add_named_filter(
+            Note, 'coal_kept',
+            lambda u, p, o: Coalesce(o.body, Value('fallback')) == 'fallback',
+        )
+        label_kept = factory.add_named_filter(
+            Note, 'label_kept', lambda u, p, o: o.body == 'row-kept',
+        )
+        user_active = factory.add_named_filter(
+            Note, 'user_active', lambda u, p, o: u.is_active,
+        )
+        factory.add_named_filter(
+            Note, 'perm_exists', lambda u, p, o: Exists(p.codename),
+        )
+        factory.add_named_filter(
+            Note, 'same_perm', lambda u, p, o: p == p,
+        )
+        factory.add_named_filter(
+            Note, 'by_code', lambda u, p, o: p.codename == 'change_unkdesk',
+        )
+        factory.add_named_filter(
+            Note, 'by_missing', lambda u, p, o: p.codename == 'missing',
+        )
+        factory.add_named_filter(
+            Note, 'by_name',
+            lambda u, p, o: p.name == 'Can change unk desk',
+        )
+        factory.register(
+            trust=DeskGrant, user='user', permission='permission',
+            content='desk__notes',
+        )
+        with _tables(Room, _Tag, Desk, Note, DeskGrant):
+            upper = Desk.objects.create(label='Kept')
+            lower_only = Desk.objects.create(label='kept')
+            Desk.objects.create(label='no')
+            ungranted = Desk.objects.create(label='Kept')
+            upper_note = Note.objects.create(desk=upper, body='row-kept')
+            lower_note = Note.objects.create(desk=lower_only, body='row-other')
+            blank_note = Note.objects.create(desk=upper, body=None)
+            Note.objects.create(desk=ungranted, body='row-kept')
+            change = Permission.objects.create(
+                content_type=ContentType.objects.get_for_model(Note),
+                codename='change_unkdesk',
+                name='Can change unk desk',
+            )
+            alice = User.objects.create_user('alice-row', password='x')
+            unsaved = User(username='ghost-row')
+            for row in (upper, lower_only):
+                DeskGrant.objects.create(
+                    desk=row, user=alice, permission=change,
+                )
+            self.assertIsNone(unsaved.pk)
+            skipped = _filter_bindings(Note, unsaved, PERM, User)
+            self.assertNotIn('user', skipped)
+            row_bindings = _filter_bindings(Note, alice, change, User)
+            string_bindings = _filter_bindings(Note, alice, PERM, User)
+            same = GrantPredicate(coalesced, row_bindings)
+            copy = GrantPredicate(coalesced, row_bindings)
+            other = GrantPredicate(lowered, row_bindings)
+            self.assertEqual(same, copy)
+            self.assertEqual(hash(same), hash(copy))
+            self.assertEqual(len({same, copy}), 1)
+            self.assertNotEqual(same, other)
+            self.assertEqual(len({same, other}), 2)
+            self.assertNotEqual(same, GrantPredicate(coalesced, string_bindings))
+            self.assertIs(same.__eq__(object()), NotImplemented)
+            self.assertIs(same == object(), False)
+            with published_class_catalog(
+                _DeskBackend, factory,
+            ), override_settings(AUTHENTICATION_BACKENDS=(BACKEND,)):
+                listed = set(Note.objects.permitted(
+                    PERM, alice, conditions=('lower_kept',),
+                ).values_list('pk', flat=True))
+                coal = set(Note.objects.permitted(
+                    PERM, alice, conditions=('coal_kept',),
+                ).values_list('pk', flat=True))
+                self.assertEqual(listed, {upper_note.pk})
+                self.assertNotIn(lower_note.pk, listed)
+                self.assertEqual(coal, {blank_note.pk})
+                self.assertEqual(
+                    set((
+                        Note.objects.permitted(
+                            PERM, alice, conditions=('lower_kept',),
+                        ) | Note.objects.permitted(
+                            PERM, alice, conditions=('coal_kept',),
+                        )
+                    ).values_list('pk', flat=True)),
+                    {upper_note.pk, blank_note.pk},
+                )
+                # The grant lookup rejects an unsaved user before SQL.
+                # The condition was already compiled without a user binding.
+                with self.assertRaises(ValueError) as raised:
+                    unsaved.has_perm('%s:label_kept' % PERM, upper_note)
+                self.assertIn('must be saved', str(raised.exception))
+                with self.assertRaises(ValueError) as raised:
+                    list(Note.objects.permitted(
+                        PERM, unsaved, conditions=('label_kept',),
+                    ))
+                self.assertIn('must be saved', str(raised.exception))
+                self.assertEqual(set(Note.objects.filter(compile_to_q(
+                    label_kept, Note, unsaved, PERM, User,
+                )).values_list('pk', flat=True)), {upper_note.pk, ungranted.notes.get().pk})
+                with self.assertRaises(PermissionConditionError) as raised:
+                    list(Note.objects.filter(compile_to_q(
+                        user_active, Note, unsaved, PERM, User,
+                    )))
+                self.assertIn(
+                    "Cannot lower field rooted at 'user'", str(raised.exception),
+                )
+                with self.assertRaises(PermissionConditionError) as raised:
+                    alice.has_perm('%s:perm_exists' % PERM, upper_note)
+                self.assertIn(
+                    "Cannot lower field rooted at 'permission'",
+                    str(raised.exception),
+                )
+                with self.assertRaises(PermissionConditionError) as raised:
+                    list(Note.objects.permitted(
+                        PERM, alice, conditions=('perm_exists',),
+                    ))
+                self.assertIn(
+                    "Cannot lower field rooted at 'permission'",
+                    str(raised.exception),
+                )
+                granted_desks = {upper.pk, lower_only.pk}
+
+                def desks(code):
+                    return set(filter_by_permitted_content(
+                        Desk.objects.all(), alice, change, content=Note,
+                        conditions=(code,),
+                    ).values_list('pk', flat=True))
+
+                self.assertEqual(desks('same_perm'), granted_desks)
+                self.assertEqual(desks('by_code'), granted_desks)
+                self.assertEqual(desks('by_name'), granted_desks)
+                self.assertEqual(desks('by_missing'), set())
+                with self.assertRaises(PermissionConditionError) as raised:
+                    alice.has_perm('%s:by_name' % PERM, upper_note)
+                self.assertIn(
+                    'Permission references cannot traverse attributes in V1',
+                    str(raised.exception),
+                )
+                with self.assertRaises(PermissionConditionError) as raised:
+                    list(Note.objects.permitted(
+                        PERM, alice, conditions=('by_name',),
+                    ))
+                self.assertIn(
+                    'Permission references cannot traverse attributes in V1',
+                    str(raised.exception),
+                )
 
 
 class _ParityBackend(TrustModelBackendMixin, ModelBackend):

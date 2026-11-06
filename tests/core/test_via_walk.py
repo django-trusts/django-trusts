@@ -2764,6 +2764,56 @@ class ViaPermissionTerminalTest(TransactionTestCase):
             )
         self.assertIn('cannot be written', str(raised.exception))
 
+    def test_object_boolean_in_a_user_or_is_carried(self):
+        """A bare object boolean inside a user OR is that row's value.
+
+        The hop carries the saved flag. True makes the OR true for every
+        walked user. False leaves only the username match. NULL stays
+        unknown, including under NOT, so it does not grant.
+        """
+        _add_user_column(
+            self, self.Task, 'flag', models.BooleanField(null=True),
+        )
+
+        def open_handle(name, predicate):
+            handle = compiler(path='tests.core.via-term.%s' % name)
+            handle.add_named_filter(self.Task, 'kept', predicate)
+            handle.register(
+                trust=self.models[1],
+                user='holder',
+                permission='permit',
+                content='task',
+                via=('holder__via_manager', 8),
+            )
+            return handle
+
+        carried = open_handle(
+            'object-flag',
+            lambda user, permission, content: (
+                content.flag | (user.username == 'term-ada')
+            ),
+        )
+        negated = open_handle(
+            'object-flag-not',
+            lambda user, permission, content: (
+                (~content.flag) | (user.username == 'no-such-user')
+            ),
+        )
+        cases = (
+            (True, True, True, False, False),
+            (False, True, False, True, True),
+            (None, True, False, False, False),
+        )
+        for flag, ada_or, ben_or, ada_not, ben_not in cases:
+            self.task.flag = flag
+            self.task.save(update_fields=['flag'])
+            with self.subTest(flag=flag, shape='or'):
+                self.assertIs(self._sees(carried, self.ada), ada_or)
+                self.assertIs(self._sees(carried, self.ben), ben_or)
+            with self.subTest(flag=flag, shape='not'):
+                self.assertIs(self._sees(negated, self.ada), ada_not)
+                self.assertIs(self._sees(negated, self.ben), ben_not)
+
     def test_scalar_permission_inequality_is_not_equal(self):
         handle = compiler(path='tests.core.via-term.unequal-scalar')
         handle.add_named_filter(
