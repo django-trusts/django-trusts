@@ -6,6 +6,7 @@ The walk includes the starting row. The bound is steps past it.
 and the walk continues. Reset reuses the ``along=`` stop.
 """
 from contextlib import contextmanager
+from unittest import expectedFailure
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
@@ -5283,4 +5284,225 @@ class SponsorAncestorRowTest(TransactionTestCase):
                             'authorization_required': allowed,
                         }, label)
                     self.assertEqual(listed, {parent.pk})
+
+
+def _to_many_answers(ordinary_along):
+    """Two drawers under one office, and what each entry point answers.
+
+    The grant and the handoff store the office. Each drawer hangs off
+    its own cabinet. The low page fails the content condition. The
+    high page satisfies it. Neither real primary key matches the
+    grant. A decoy page reuses the grant primary key, sits on the low
+    drawer, and fails the condition.
+    """
+    User = get_user_model()
+
+    class Office(models.Model):
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'slice_office'
+
+    class Drawer(models.Model):
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'slice_drawer'
+
+    class Cabinet(models.Model):
+        office = models.ForeignKey(
+            Office, related_name='cabinets', on_delete=models.CASCADE,
+        )
+        drawer = models.ForeignKey(
+            Drawer, related_name='cabinets', on_delete=models.CASCADE,
+        )
+
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'slice_cabinet'
+
+    class PageQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+        pass
+
+    class Page(PermittedUsersMixin, models.Model):
+        region = models.CharField(max_length=20)
+        mark = models.CharField(max_length=20)
+        drawer = models.ForeignKey(
+            Drawer, related_name='pages', on_delete=models.CASCADE,
+        )
+        parent = models.ForeignKey(
+            'self', null=True, related_name='children',
+            on_delete=models.CASCADE,
+        )
+        objects = models.Manager.from_queryset(PageQuerySet)()
+
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'slice_page'
+
+    class OfficeGrant(models.Model):
+        user = models.ForeignKey(
+            User, on_delete=models.CASCADE, related_name='+',
+        )
+        office = models.ForeignKey(Office, on_delete=models.CASCADE)
+        permission = models.ForeignKey(
+            Permission, on_delete=models.CASCADE, related_name='+',
+        )
+
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'slice_grant'
+
+    class PageHandoff(models.Model):
+        office = models.ForeignKey(Office, on_delete=models.CASCADE)
+        delegate = models.ForeignKey(
+            User, related_name='+', on_delete=models.CASCADE,
+        )
+        sponsor = models.ForeignKey(
+            User, related_name='+', on_delete=models.CASCADE,
+        )
+
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'slice_handoff'
+
+    content = 'office__cabinets__drawer__pages'
+    along = ('office__cabinets__drawer__pages__parent', 1)
+    with _tables(Office, Drawer, Cabinet, Page, OfficeGrant, PageHandoff):
+        change = _permission(Page, 'change_slicepage')
+        code = 'trusts_tests.change_slicepage'
+        suffix = 'along' if ordinary_along else 'exact'
+        ada = User.objects.create_user('slice-ada-%s' % suffix, password='x')
+        bea = User.objects.create_user('slice-bea-%s' % suffix, password='x')
+        ada.zone = 'east'
+        bea.zone = 'east'
+        ada.save()
+        bea.save()
+        office = Office.objects.create(pk=50)
+        low = Drawer.objects.create(pk=1)
+        high = Drawer.objects.create(pk=2)
+        Cabinet.objects.create(pk=3, office=office, drawer=low)
+        Cabinet.objects.create(pk=4, office=office, drawer=high)
+        pages = {
+            'low': Page.objects.create(
+                pk=11, region='east', mark='no', drawer=low,
+            ),
+            'high': Page.objects.create(
+                pk=22, region='east', mark='yes', drawer=high,
+            ),
+            'decoy': Page.objects.create(
+                pk=100, region='west', mark='yes', drawer=low,
+            ),
+        }
+        OfficeGrant.objects.create(
+            pk=100, user=ada, office=office, permission=change,
+        )
+        PageHandoff.objects.create(
+            pk=80, office=office, delegate=bea, sponsor=ada,
+        )
+        handle = compiler(path='tests.core.slice-%s' % (
+            'along' if ordinary_along else 'exact',
+        ))
+        handle.add_named_filter(
+            Page, 'kept',
+            lambda user, permission, content: (
+                (user.zone == content.region) & (content.mark == 'yes')
+            ),
+        )
+        grant = dict(
+            trust=OfficeGrant, user='user', permission='permission',
+            content=content,
+        )
+        if ordinary_along:
+            grant['along'] = along
+        handle.register(**grant)
+        handle.register(
+            trust=PageHandoff, delegate='delegate', sponsor='sponsor',
+            content=content, along=along,
+        )
+        report = {
+            'grant': 100,
+            'decoy_pk': pages['decoy'].pk,
+            'drawers': {low.pk, high.pk},
+            'page_drawers': {
+                label: page.drawer_id for label, page in pages.items()
+            },
+            'answers': {},
+        }
+        listed = None
+        for label, page in pages.items():
+            got, listed = _row_inquiries(
+                handle, bea, page, code=code, change=change,
+                content_model=Page, prefixes=Drawer.objects.all(),
+            )
+            report['answers'][label] = got
+        report['listed'] = listed
+        return report
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class ToManyPrefixSliceTest(TransactionTestCase):
+    """A prefix lookup that crosses a reverse foreign key is one row.
+
+    ``register()`` accepts ``office__cabinets__drawer__pages``: a
+    forward hop, a reverse one-to-many, then a forward hop and a
+    reverse suffix. Listing the drawer is an ancestor of the page
+    walk, so the sheet witness reads that prefix with ``values()[:1]``.
+    The high page is the only one the condition keeps. Its drawer is
+    the prefix that listing has to return. The decoy reuses the grant
+    primary key.
+    """
+
+    def setUp(self):
+        super().setUp()
+        _add_user_column(
+            self, get_user_model(), 'zone',
+            models.CharField(max_length=20, null=True),
+        )
+
+    @expectedFailure
+    def test_handoff_prefix_slice_omits_the_permitted_drawer(self):
+        """``_sponsor_rows_for_handoff`` slices a to-many prefix.
+
+        The ordinary grant walks too, so the sheet uses the handoff
+        subquery at ``trusts/plan/contents.py`` and not the second
+        slice on the sheet. ``has_perm``, ``.permitted()``,
+        ``get_permitted_users`` and ``authorization_required`` allow
+        the high page. The drawer listing does not keep that page's
+        drawer.
+        """
+        report = _to_many_answers(True)
+        expected = _same_row_kept()
+        self.assertEqual(report['answers'], expected['answers'])
+        self.assertEqual(report['listed'], expected['listed'])
+
+    @expectedFailure
+    def test_sheet_prefix_slice_omits_the_permitted_drawer(self):
+        """``_same_sheet_in_both_walks`` slices a to-many prefix.
+
+        The ordinary grant does not walk, so the sheet adds the
+        second ``values()[:1]`` at ``trusts/plan/contents.py``.
+        The page entry points allow the high page. The drawer
+        listing does not keep that page's drawer.
+        """
+        report = _to_many_answers(False)
+        expected = _same_row_kept()
+        self.assertEqual(report['answers'], expected['answers'])
+        self.assertEqual(report['listed'], expected['listed'])
+
+
+def _same_row_kept():
+    allowed = {
+        'has_perm': True,
+        'permitted': True,
+        'get_permitted_users': True,
+        'authorization_required': True,
+    }
+    denied = {key: False for key in allowed}
+    return {
+        'grant': 100,
+        'decoy_pk': 100,
+        'drawers': {1, 2},
+        'page_drawers': {'low': 1, 'high': 2, 'decoy': 1},
+        'answers': {'low': denied, 'high': allowed, 'decoy': denied},
+        'listed': {2},
+    }
 
