@@ -75,7 +75,6 @@ class Expr(object):
 
 _COMPARE = {
     'eq': '=',
-    'ne': '<>',
     'lt': '<',
     'le': '<=',
     'gt': '>',
@@ -204,17 +203,17 @@ def compare(kind, left, right, connection=None):
             return eq
         # Derived: unreachable stays Unknown, a reached value is true.
         return Expr('(NOT (%s))' % eq.sql, eq.params)
-    if kind not in _COMPARE:
-        raise PermissionConditionError(
-            'Cannot lower comparison %r.' % (kind,)
-        )
     left, right = _align(left, right, connection)
     if kind == 'ne':
-        # ``<>`` is the same Kleene test as ``NOT (=)``. The policy
-        # formatter accepts ``=`` and ``NOT``, not ``<>``.
+        # The policy formatter accepts ``=`` and ``NOT``. ``<>`` is not
+        # emitted.
         return Expr(
             '(NOT (%s = %s))' % (left.value_sql, right.value_sql),
             left.value_params + right.value_params,
+        )
+    if kind not in _COMPARE:
+        raise PermissionConditionError(
+            'Cannot lower comparison %r.' % (kind,)
         )
     return Expr(
         '(%s %s %s)' % (left.value_sql, _COMPARE[kind], right.value_sql),
@@ -263,7 +262,7 @@ def lower(node, scope):
     if kind == 'exists':
         operand = scope.exists_operand(node.item)
         return Expr('(%s)' % operand.reached_sql, operand.reached_params)
-    if kind in _COMPARE:
+    if kind == 'ne' or kind in _COMPARE:
         return compare(
             kind, scope.operand(node.left), scope.operand(node.right),
             scope.connection,

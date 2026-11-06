@@ -10,7 +10,6 @@ from trusts.plan.hops import lookup_text, require_instance
 from trusts.plan.writers import (
     boolean_q,
     expression_q,
-    negate_q,
     column_q,
     columns_q,
     contains_q,
@@ -116,8 +115,6 @@ class _PredicateCompiler(object):
             return self.compile(node.left) & self.compile(node.right)
         if node.kind == 'or':
             return self.compile(node.left) | self.compile(node.right)
-        if node.kind == 'not':
-            return negate_q(self.record.root, self.compile(node.item))
         if needs_expression(node):
             return expression_q(
                 node, self._row_field,
@@ -142,8 +139,6 @@ class _PredicateCompiler(object):
         partner = node.inquiry_partner()
         if partner is not None:
             return self._bind_inquiry(partner.path)
-        if node.left.kind == 'const' or node.right.kind == 'const':
-            return self._against_constant(node, True)
         return Q(**{
             lookup_text(node.left.path): F(lookup_text(node.right.path)),
         })
@@ -164,24 +159,12 @@ class _PredicateCompiler(object):
                 lookup_text(column.path),
                 bind_terminal(self.permission, 'permission'),
                 False,
-                field=True,
             )
-        if node.left.kind == 'const' or node.right.kind == 'const':
-            return self._against_constant(node, False)
         return columns_q(
             lookup_text(node.left.path),
             lookup_text(node.right.path),
             False,
         )
-
-    def _against_constant(self, node, equal):
-        if node.left.kind == 'const':
-            lookup = lookup_text(node.right.path)
-            value = node.left.value
-        else:
-            lookup = lookup_text(node.left.path)
-            value = node.right.value
-        return column_q(lookup, value, equal, field=False)
 
     def _contains(self, node):
         if node.inquiry_partner() is not None:

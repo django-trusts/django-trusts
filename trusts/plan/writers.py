@@ -74,16 +74,6 @@ def _walk_model_path(instance, model, path, *, collection=False):
     return current
 
 
-class _Bound(object):
-    def __init__(self, value):
-        self.value = value
-
-
-class _Unbound(object):
-    def __init__(self, lookup):
-        self.lookup = lookup
-
-
 def _permission_attr(perm, path):
     """One attribute of the permission this inquiry asked for.
 
@@ -116,35 +106,6 @@ def _permission_attr(perm, path):
     )
 
 
-def _classify(node, model, user, perm, user_model):
-    if _node(node, 'const'):
-        return _Bound(node.value)
-    if _node(node, 'field'):
-        if node.root == 'object':
-            return _Unbound('__'.join(node.path))
-        if node.root == 'user':
-            if not node.path:
-                return _Bound(user)
-            return _Bound(_walk_model_path(user, user_model, node.path))
-        if node.root == 'permission':
-            return _Bound(_permission_attr(perm, node.path))
-    raise PermissionConditionError(
-        'Cannot compile permission condition node %r.' % (node,)
-    )
-
-
-def values_match(left, right, equal, *, fields):
-    """The NULL rule on loaded values.
-
-    Between two fields (``fields``) NULL on either side never matches. A
-    field against a constant follows Python: ``None == None`` holds and
-    ``None != 5`` holds.
-    """
-    if fields and (left is None or right is None):
-        return False
-    return (left == right) == equal
-
-
 def columns_q(a, b, equal):
     """Two columns. NULL on either side does not match.
 
@@ -160,44 +121,14 @@ def columns_q(a, b, equal):
     )
 
 
-def column_q(lookup, value, equal, *, field):
-    """One column against a loaded value.
-
-    ``field`` is true when ``value`` came from another field: NULL on
-    either side then does not match. Against a constant, ``== None`` is
-    ``IS NULL``. The ``field`` false inequality still matches a NULL
-    column. Scalar entry points do not use that form.
-    """
+def column_q(lookup, value, equal):
+    """One column against a loaded value. NULL does not match."""
     value = member_pk(value)
-    if value is None and field:
-        return Q(pk__in=())
     if value is None:
-        return Q(**{'%s__isnull' % lookup: equal})
+        return Q(pk__in=())
     if equal:
         return Q(**{lookup: value})
-    if field:
-        return Q(**{'%s__isnull' % lookup: False}) & ~Q(**{lookup: value})
-    return Q(**{'%s__isnull' % lookup: True}) | ~Q(**{lookup: value})
-
-
-def _both_fields(node):
-    return _node(node.left, 'field') and _node(node.right, 'field')
-
-
-def _compile_comparison(node, model, user, perm, user_model):
-    left = _classify(node.left, model, user, perm, user_model)
-    right = _classify(node.right, model, user, perm, user_model)
-    equal = _node(node, 'eq')
-    fields = _both_fields(node)
-    if isinstance(left, _Bound) and isinstance(right, _Bound):
-        if values_match(left.value, right.value, equal, fields=fields):
-            return Q()
-        return Q(pk__in=())
-    if isinstance(left, _Unbound) and isinstance(right, _Unbound):
-        return columns_q(left.lookup, right.lookup, equal)
-    if isinstance(left, _Unbound):
-        return column_q(left.lookup, right.value, equal, field=fields)
-    return column_q(right.lookup, left.value, equal, field=fields)
+    return Q(**{'%s__isnull' % lookup: False}) & ~Q(**{lookup: value})
 
 
 def boolean_holds(value):
@@ -208,17 +139,6 @@ def boolean_holds(value):
 def boolean_q(lookup):
     """Column is True. NULL is not True."""
     return Q(**{lookup: True})
-
-
-def negate_q(model, q):
-    """Rows for which ``q`` is not true.
-
-    A row ``q`` rejects, including a row it rejects because a value is
-    NULL, is included. That is Python ``not``. ``~Q`` does not do this
-    for a comparison: ``NOT (left = right)`` is unknown when either side
-    is NULL, and ``~Q()`` is not an empty match.
-    """
-    return ~Q(pk__in=model._base_manager.filter(q).values('pk'))
 
 
 def member_pk(value):
@@ -254,15 +174,6 @@ def _load_collection(node, user, obj, model, user_model):
     raise PermissionConditionError(
         'Cannot evaluate permission condition node %r.' % (node,)
     )
-
-
-def _compile_bare(node, model, user, perm, user_model):
-    field = node.item
-    if field.root == 'object':
-        return boolean_q('__'.join(field.path))
-    if boolean_holds(_bound_value(field, user, perm, user_model)):
-        return Q()
-    return Q(pk__in=())
 
 
 def _compile_contains(node, model, user, perm, user_model):
