@@ -606,8 +606,6 @@ def _compare_sql(node, user_model, content_model, content, carriers, name, qn,
         )
     if getattr(left, 'kind', None) != 'field' or left.root != 'user':
         raise _cannot(name)
-    if node.kind not in ('eq', 'ne'):
-        raise _cannot(name)
     try:
         user_operand = field_operand(
             user_model, left.path, ('alias', '{alias}'), qn,

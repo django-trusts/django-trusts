@@ -327,11 +327,6 @@ def _value_column(field):
 
 
 def _reject_path(field, name):
-    if getattr(field, 'many_to_many', False) or getattr(field, 'one_to_many', False):
-        raise PermissionConditionError(
-            'Multi-valued relation %r is not lowered as one value. '
-            'Collection membership keeps its existing join.' % (name,)
-        )
     raise PermissionConditionError(
         'Cannot push condition path %r down to SQL.' % (name,)
     )
@@ -553,13 +548,9 @@ class Scope(object):
             if path:
                 return 'user.' + path
             return 'user.id'
-        if node.root == 'permission':
-            if node.path:
-                return 'permission.' + '.'.join(node.path)
-            return 'permission.codename'
         if path:
             return path
-        return 'literal'
+        return None
 
     def _mark_binds(self, operand, node):
         binding = self.bindings.get(node.root)
@@ -702,10 +693,6 @@ def _freeze(value):
         return tuple(_freeze(item) for item in value)
     if isinstance(value, Model):
         return ('model', value._meta.label, value.pk)
-    if isinstance(value, datetime):
-        return ('datetime', value.isoformat())
-    if isinstance(value, Decimal):
-        return ('decimal', str(value))
     try:
         hash(value)
     except TypeError:
