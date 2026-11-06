@@ -235,6 +235,14 @@ def _same_sheet_in_both_walks(delegation, sponsor_records, permission,
                 delegation, ordinary, permission, content_identity,
                 lookup, ordinary_lookup, depth=2, user_q=user_q,
             )
+            # No walk on this grant. Sharing any prefix with the handoff
+            # would let one prefix authorize a protected row on another.
+            # The grant has to reach this row's own prefix.
+            rows = rows.filter(**{
+                ordinary_lookup: OuterRef(_content_scope_lookup(
+                    delegation, lookup, target_attname,
+                )),
+            })
             correlation = _content_scope_lookup(
                 ordinary, ordinary_lookup, ordinary_attname,
             )

@@ -5285,14 +5285,17 @@ class SponsorAncestorRowTest(TransactionTestCase):
                     self.assertEqual(listed, {parent.pk})
 
 
-def _to_many_answers(ordinary_along):
-    """Two drawers under one office, and what each entry point answers.
+def _to_many_answers(ordinary_along, split=False, cross=False):
+    """Two drawers, and what each entry point answers.
 
-    The grant and the handoff store the office. Each drawer hangs off
-    its own cabinet. The low page fails the content condition. The
-    high page satisfies it. Neither real primary key matches the
-    grant. A decoy page reuses the grant primary key, sits on the low
-    drawer, and fails the condition.
+    The low page fails the content condition. The high page satisfies
+    it. Neither real primary key matches the grant. A decoy page
+    reuses the grant primary key, sits on the low drawer, and fails
+    the condition. Without ``split``, one office holds both drawers,
+    so the grant and the handoff reach both. With ``split``, the
+    grant's office reaches only the low drawer and the handoff's
+    office reaches both. ``cross`` makes the low page's parent the
+    high page, so an ``along=`` step can leave drawer 1.
     """
     User = get_user_model()
 
@@ -5368,18 +5371,27 @@ def _to_many_answers(ordinary_along):
     with _tables(Office, Drawer, Cabinet, Page, OfficeGrant, PageHandoff):
         change = _permission(Page, 'change_slicepage')
         code = 'trusts_tests.change_slicepage'
-        suffix = 'along' if ordinary_along else 'exact'
+        suffix = '%s-%s-%s' % (
+            'along' if ordinary_along else 'exact',
+            'split' if split else 'shared',
+            'cross' if cross else 'apart',
+        )
         ada = User.objects.create_user('slice-ada-%s' % suffix, password='x')
         bea = User.objects.create_user('slice-bea-%s' % suffix, password='x')
         ada.zone = 'east'
         bea.zone = 'east'
         ada.save()
         bea.save()
-        office = Office.objects.create(pk=50)
+        grant_office = Office.objects.create(pk=50)
+        handoff_office = Office.objects.create(pk=51) if split else grant_office
         low = Drawer.objects.create(pk=1)
         high = Drawer.objects.create(pk=2)
-        Cabinet.objects.create(pk=3, office=office, drawer=low)
-        Cabinet.objects.create(pk=4, office=office, drawer=high)
+        Cabinet.objects.create(pk=3, office=grant_office, drawer=low)
+        if split:
+            Cabinet.objects.create(pk=4, office=handoff_office, drawer=low)
+            Cabinet.objects.create(pk=5, office=handoff_office, drawer=high)
+        else:
+            Cabinet.objects.create(pk=4, office=grant_office, drawer=high)
         pages = {
             'low': Page.objects.create(
                 pk=11, region='east', mark='no', drawer=low,
@@ -5391,11 +5403,16 @@ def _to_many_answers(ordinary_along):
                 pk=100, region='west', mark='yes', drawer=low,
             ),
         }
+        if cross:
+            # The walk follows ``parent`` toward children: a page whose
+            # parent is the granted page.
+            pages['high'].parent = pages['low']
+            pages['high'].save()
         OfficeGrant.objects.create(
-            pk=100, user=ada, office=office, permission=change,
+            pk=100, user=ada, office=grant_office, permission=change,
         )
         PageHandoff.objects.create(
-            pk=80, office=office, delegate=bea, sponsor=ada,
+            pk=80, office=handoff_office, delegate=bea, sponsor=ada,
         )
         handle = compiler(path='tests.core.slice-%s' % (
             'along' if ordinary_along else 'exact',
@@ -5482,6 +5499,63 @@ class ToManyPrefixSliceTest(TransactionTestCase):
         expected = _same_row_kept()
         self.assertEqual(report['answers'], expected['answers'])
         self.assertEqual(report['listed'], expected['listed'])
+
+    def test_along_grant_on_one_drawer_does_not_cover_the_other(self):
+        """A walking grant on drawer 1 does not cover drawer 2's page.
+
+        The ordinary grant reaches only the low drawer. The handoff
+        reaches both. Only the high page passes the overlay.
+        """
+        self._assert_split_is_denied(True)
+
+    def test_exact_grant_on_one_drawer_does_not_cover_the_other(self):
+        """A grant without ``along=`` on drawer 1 does not cover drawer 2.
+
+        Same offices as the walking grant. The sheet's prefix membership
+        still has to be the grant's drawer, not the handoff's other one.
+        """
+        self._assert_split_is_denied(False)
+
+    def test_along_step_can_reach_the_other_drawer(self):
+        """The walk may step from the granted drawer onto the other page.
+
+        The low page is the grant's page and fails the overlay. The
+        high page's parent is that low page, so ``along=`` includes
+        the high page. It is allowed and its drawer is listed. A grant
+        that does not walk does not gain that child.
+        """
+        allowed = _same_row_kept()['answers']['high']
+        denied = _denied_answers()
+        walking = _to_many_answers(True, split=True, cross=True)
+        self.assertEqual(walking['answers'], {
+            'low': denied,
+            'high': allowed,
+            'decoy': denied,
+        })
+        self.assertEqual(walking['listed'], {2})
+
+    def test_exact_grant_does_not_follow_the_parent_step(self):
+        """Without ``along=``, the parent on the other drawer stays denied."""
+        self._assert_split_is_denied(False, cross=True)
+
+    def _assert_split_is_denied(self, ordinary_along, cross=False):
+        denied = _denied_answers()
+        report = _to_many_answers(ordinary_along, split=True, cross=cross)
+        self.assertEqual(report['answers'], {
+            'low': denied,
+            'high': denied,
+            'decoy': denied,
+        })
+        self.assertEqual(report['listed'], set())
+
+
+def _denied_answers():
+    return {
+        'has_perm': False,
+        'permitted': False,
+        'get_permitted_users': False,
+        'authorization_required': False,
+    }
 
 
 def _same_row_kept():
