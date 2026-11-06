@@ -1340,6 +1340,7 @@ def _validate_expression_comparison(node, root):
     for leaf in walk((node.left, node.right)):
         if leaf.kind == 'field':
             _require_row_field(leaf)
+            require_lowerable_operand(leaf, root, root, exists=False)
     check_comparison_types(node, root, root)
 
 
@@ -1369,10 +1370,13 @@ def _validate_row_comparison(node, root, *, delegated, matches):
         if side.kind == 'const':
             continue
         _require_row_field(side)
-        require_lowerable_operand(side, root, root, exists=False)
     if node.left.kind == 'field' and node.right.kind == 'field':
         if _row_paths_comparable(node.left.path, node.right.path, root):
             return
+    for side in (node.left, node.right):
+        if side.kind == 'const':
+            continue
+        require_lowerable_operand(side, root, root, exists=False)
     check_comparison_types(node, root, root)
 
 
