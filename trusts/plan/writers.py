@@ -2,28 +2,21 @@
 
 ``trusts.plan.conditions`` parses and checks a builder. ``compile_to_q``
 turns that tree into a Django ``Q``. It does not register a filter and
-it does not look one up. ``values_match`` and ``boolean_holds`` are the
-NULL rules for values already loaded while compiling.
+it does not look one up. Scalar comparisons, boolean fields, ``Exists``,
+and ``~`` lower through ``trusts.plan.trivalent``. A missing row is
+unknown. ``.contains()`` keeps the membership join it already had.
 """
 
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import DateTimeField, F, Model, Q, Value
-from django.db.models.functions import Cast, Coalesce, Lower, Now
-from django.db.models.lookups import (
-    Exact,
-    GreaterThan,
-    GreaterThanOrEqual,
-    LessThan,
-    LessThanOrEqual,
-)
+from django.db.models import Exists, F, Model, Q
 
 from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
     ModelIdentity,
-    coalesce_output_field,
     resolve_field_path,
 )
-from trusts.plan.grammar import Tree, needs_expression
+from trusts.plan.grammar import EXISTS_NAME, Tree
+from trusts.plan.trivalent import grant_q, has_contains
 
 
 def contains_q(lookup, member):
@@ -72,16 +65,6 @@ def _walk_model_path(instance, model, path, *, collection=False):
     return current
 
 
-class _Bound(object):
-    def __init__(self, value):
-        self.value = value
-
-
-class _Unbound(object):
-    def __init__(self, lookup):
-        self.lookup = lookup
-
-
 def _permission_attr(perm, path):
     """One attribute of the permission this inquiry asked for.
 
@@ -114,108 +97,12 @@ def _permission_attr(perm, path):
     )
 
 
-def _classify(node, model, user, perm, user_model):
-    if _node(node, 'const'):
-        return _Bound(node.value)
-    if _node(node, 'field'):
-        if node.root == 'object':
-            return _Unbound('__'.join(node.path))
-        if node.root == 'user':
-            if not node.path:
-                return _Bound(user)
-            return _Bound(_walk_model_path(user, user_model, node.path))
-        if node.root == 'permission':
-            return _Bound(_permission_attr(perm, node.path))
-    raise PermissionConditionError(
-        'Cannot compile permission condition node %r.' % (node,)
-    )
-
-
-def values_match(left, right, equal, *, fields):
-    """The NULL rule on loaded values.
-
-    Between two fields (``fields``) NULL on either side never matches. A
-    field against a constant follows Python: ``None == None`` holds and
-    ``None != 5`` holds.
-    """
-    if fields and (left is None or right is None):
-        return False
-    return (left == right) == equal
-
-
-def columns_q(a, b, equal):
-    """Two columns. NULL on either side does not match.
-
-    ``~Q(a=F(b))`` alone is true for NULL, because Django negates
-    ``a = b AND a IS NOT NULL AND b IS NOT NULL``.
-    """
-    if equal:
-        return Q(**{a: F(b)})
-    return (
-        Q(**{'%s__isnull' % a: False})
-        & Q(**{'%s__isnull' % b: False})
-        & ~Q(**{a: F(b)})
-    )
-
-
-def column_q(lookup, value, equal, *, field):
-    """One column against a loaded value, under the NULL rule.
-
-    ``field`` is true when ``value`` came from another field: NULL on
-    either side then does not match. Against a constant, ``== None`` is
-    ``IS NULL`` and ``!= 5`` matches a NULL column, as in Python.
-    """
+def column_q(lookup, value):
+    """One column against a loaded value. NULL does not match."""
     value = member_pk(value)
-    if value is None and field:
-        return Q(pk__in=())
     if value is None:
-        return Q(**{'%s__isnull' % lookup: equal})
-    if equal:
-        return Q(**{lookup: value})
-    if field:
-        return Q(**{'%s__isnull' % lookup: False}) & ~Q(**{lookup: value})
-    return Q(**{'%s__isnull' % lookup: True}) | ~Q(**{lookup: value})
-
-
-def _both_fields(node):
-    return _node(node.left, 'field') and _node(node.right, 'field')
-
-
-def _compile_comparison(node, model, user, perm, user_model):
-    left = _classify(node.left, model, user, perm, user_model)
-    right = _classify(node.right, model, user, perm, user_model)
-    equal = _node(node, 'eq')
-    fields = _both_fields(node)
-    if isinstance(left, _Bound) and isinstance(right, _Bound):
-        if values_match(left.value, right.value, equal, fields=fields):
-            return Q()
         return Q(pk__in=())
-    if isinstance(left, _Unbound) and isinstance(right, _Unbound):
-        return columns_q(left.lookup, right.lookup, equal)
-    if isinstance(left, _Unbound):
-        return column_q(left.lookup, right.value, equal, field=fields)
-    return column_q(right.lookup, left.value, equal, field=fields)
-
-
-def boolean_holds(value):
-    """A boolean field holds only when it is True. NULL does not."""
-    return value is True
-
-
-def boolean_q(lookup):
-    """Column is True. NULL is not True."""
-    return Q(**{lookup: True})
-
-
-def negate_q(model, q):
-    """Rows for which ``q`` is not true.
-
-    A row ``q`` rejects, including a row it rejects because a value is
-    NULL, is included. That is Python ``not``. ``~Q`` does not do this
-    for a comparison: ``NOT (left = right)`` is unknown when either side
-    is NULL, and ``~Q()`` is not an empty match.
-    """
-    return ~Q(pk__in=model._base_manager.filter(q).values('pk'))
+    return Q(**{'%s__isnull' % lookup: False}) & ~Q(**{lookup: value})
 
 
 def member_pk(value):
@@ -223,12 +110,6 @@ def member_pk(value):
     if isinstance(value, (Model, ModelIdentity)):
         return value.pk
     return value
-
-
-def _collection_contains(manager, pk):
-    if manager is None or pk is None:
-        return False
-    return manager.filter(pk=pk).exists()
 
 
 def _bound_value(node, user, perm, user_model):
@@ -259,15 +140,6 @@ def _load_collection(node, user, obj, model, user_model):
     )
 
 
-def _compile_bare(node, model, user, perm, user_model):
-    field = node.item
-    if field.root == 'object':
-        return boolean_q('__'.join(field.path))
-    if boolean_holds(_bound_value(field, user, perm, user_model)):
-        return Q()
-    return Q(pk__in=())
-
-
 def _compile_contains(node, model, user, perm, user_model):
     left = node.left
     right = node.right
@@ -285,126 +157,46 @@ def _compile_contains(node, model, user, perm, user_model):
             return Q(pk__in=())
         member = '__'.join(right.path)
         return Q(**{'%s__in' % member: manager.values('pk')})
-    if _collection_contains(
-        manager, member_pk(_bound_value(right, user, perm, user_model)),
-    ):
-        return Q()
-    return Q(pk__in=())
+    # A known member used to become an empty ``Q()``. Django drops that
+    # child of ``|``, so a true membership disappeared beside an unknown
+    # comparison and the forward check disagreed with the reverse one.
+    # ``EXISTS`` is still one matching member, and it survives ``|`` / ``&``.
+    value = member_pk(_bound_value(right, user, perm, user_model))
+    if manager is None or value is None:
+        return Q(pk__in=())
+    return Q(Exists(manager.filter(pk=value)))
 
 
-_FUNCTIONS = {'now': Now, 'lower': Lower, 'coalesce': Coalesce}
-_COMPARISON_LOOKUPS = {
-    'eq': Exact,
-    'lt': LessThan,
-    'le': LessThanOrEqual,
-    'gt': GreaterThan,
-    'ge': GreaterThanOrEqual,
-}
-
-
-def comparison_q(kind, lhs, rhs):
-    """One comparison. NULL does not match, including inequality."""
-    if kind == 'ne':
-        return comparison_q('lt', lhs, rhs) | comparison_q(
-            'gt', lhs.copy(), rhs.copy(),
-        )
-    # Lookup.output_field is a BooleanField, so the lookup is already
-    # conditional. Django 6 exposes that as a read-only property.
-    return Q(_COMPARISON_LOOKUPS[kind](lhs, rhs))
-
-
-class _DateTimeArgument(Cast):
-    """A datetime constant inside a call.
-
-    MySQL types a placeholder as text. ``COALESCE`` of a ``DATETIME(6)``
-    column and that text returns text, so ``...00.000000`` is greater than
-    ``...00``. The cast keeps the argument a datetime. Other backends
-    already compare the parameter as a datetime.
-    """
-
-    def __init__(self, expression):
-        super().__init__(expression, DateTimeField())
-
-    def as_sql(self, compiler, connection, **extra_context):
-        return compiler.compile(self.source_expressions[0])
-
-    def as_sqlite(self, compiler, connection, **extra_context):
-        return compiler.compile(self.source_expressions[0])
-
-    def as_postgresql(self, compiler, connection, **extra_context):
-        return compiler.compile(self.source_expressions[0])
-
-    def as_mysql(self, compiler, connection, **extra_context):
-        return Cast.as_sql(self, compiler, connection, **extra_context)
-
-
-def sql_expression(node, field, model=None, user_model=None, *, inside=False):
-    """One comparison operand as Django's own function call or value.
-
-    ``field`` builds the leaf for a ``field`` node. A ``Coalesce`` whose
-    arguments include a column uses that column's field as ``output_field``
-    so a ``Value()`` cannot disagree with it at query time.
-    """
-    if node.kind == 'const':
-        expr = Value(member_pk(node.value))
-        if inside and isinstance(expr.output_field, DateTimeField):
-            expr = _DateTimeArgument(expr)
-        return expr
-    if node.kind == 'call':
-        expr = _FUNCTIONS[node.value](*(
-            sql_expression(arg, field, model, user_model, inside=True)
-            for arg in node.item
-        ))
-        if node.value == 'coalesce' and model is not None:
-            output = coalesce_output_field(node, model, user_model)
-            if output is not None:
-                expr.output_field = output
-        return expr
-    return field(node)
-
-
-def expression_q(node, field, right_field=None, *, model=None, user_model=None):
-    """The ``Q`` for one ordered or function comparison."""
-    return comparison_q(
-        node.kind,
-        sql_expression(node.left, field, model, user_model),
-        sql_expression(node.right, right_field or field, model, user_model),
-    )
-
-
-def _compile_sql_comparison(node, model, user, perm, user_model):
-    def field(leaf):
-        if leaf.root == 'object':
-            return F('__'.join(leaf.path))
-        return Value(member_pk(_bound_value(leaf, user, perm, user_model)))
-
-    return expression_q(node, field, model=model, user_model=user_model)
+def _filter_bindings(model, user, perm, user_model):
+    bindings = {'object': ('alias', model, ())}
+    if user is not None and getattr(user, 'pk', None) is not None:
+        host = user_model or user.__class__
+        bindings['user'] = ('pk', host, user.pk)
+    bindings['permission'] = ('permission', perm)
+    return bindings
 
 
 def compile_to_q(node, model, user, perm, user_model=None):
-    """Compile an expression tree to a Django ``Q`` for ``model`` rows."""
+    """Compile an expression tree to a Django ``Q`` for ``model`` rows.
+
+    Scalar predicates are one three-valued expression. ``.contains()``
+    stays a membership lookup and is combined only at ``&`` / ``|``.
+    """
+    bindings = _filter_bindings(model, user, perm, user_model)
+    if not has_contains(node):
+        return grant_q(node, bindings)
     if _node(node, 'and'):
-        return compile_to_q(node.left, model, user, perm, user_model) & compile_to_q(
-            node.right, model, user, perm, user_model
-        )
+        return compile_to_q(
+            node.left, model, user, perm, user_model,
+        ) & compile_to_q(node.right, model, user, perm, user_model)
     if _node(node, 'or'):
-        return compile_to_q(node.left, model, user, perm, user_model) | compile_to_q(
-            node.right, model, user, perm, user_model
-        )
-    if needs_expression(node):
-        return _compile_sql_comparison(node, model, user, perm, user_model)
-    if _node(node, 'eq', 'ne'):
-        return _compile_comparison(node, model, user, perm, user_model)
+        return compile_to_q(
+            node.left, model, user, perm, user_model,
+        ) | compile_to_q(node.right, model, user, perm, user_model)
     if _node(node, 'contains'):
         return _compile_contains(node, model, user, perm, user_model)
-    if _node(node, 'bare'):
-        return _compile_bare(node, model, user, perm, user_model)
-    if _node(node, 'not'):
-        return negate_q(model, compile_to_q(
-            node.item, model, user, perm, user_model,
-        ))
     raise PermissionConditionError(
         'Permission condition did not produce a comparison, '
-        '.contains(), or boolean field.'
+        '%s(), .contains(), or boolean field.' % EXISTS_NAME
     )
 

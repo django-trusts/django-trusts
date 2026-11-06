@@ -11,8 +11,17 @@ Roots are named roles (``row``, ``inquiry``, ``user``, ``object``,
 second grammar. ``contains`` is a method, not a field hop.
 """
 
+import copy
+
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.hops import path_text
+
+# Public spelling of the reachability function. The class in
+# ``trusts.functions`` uses this same word. A later rename changes
+# ``EXISTS_NAME`` and that class together; ``EXISTS_KIND`` stays the
+# stored node kind.
+EXISTS_KIND = 'exists'
+EXISTS_NAME = 'Exists'
 
 _KIND_LABELS = {
     'eq': "'=='",
@@ -28,17 +37,18 @@ _KIND_LABELS = {
     'bare': 'A bare boolean field',
     'const': 'A constant',
     'call': 'An SQL function',
+    EXISTS_KIND: '%s()' % EXISTS_NAME,
 }
 
 _RETURN_HINT = (
-    'Return a comparison, .contains(), a boolean field, or a combination '
-    "with '&' and '|'."
-)
+    'Return a comparison, %s(), .contains(), a boolean field, or a '
+    "combination with '&' and '|'."
+) % EXISTS_NAME
 
 ORDERED_KINDS = frozenset(('lt', 'le', 'gt', 'ge'))
 
 _PREDICATE_KINDS = frozenset((
-    'eq', 'ne', 'and', 'or', 'not', 'contains', 'bare',
+    'eq', 'ne', 'and', 'or', 'not', 'contains', 'bare', EXISTS_KIND,
 )) | ORDERED_KINDS
 
 _OP_LABELS = {
@@ -149,6 +159,19 @@ class Tree(object):
         object.__setattr__(self, 'right', right)
         object.__setattr__(self, 'item', item)
 
+    def __deepcopy__(self, memo):
+        cloned = Tree(
+            self.kind,
+            root=self.root,
+            path=self.path,
+            value=copy.deepcopy(self.value, memo),
+            left=copy.deepcopy(self.left, memo),
+            right=copy.deepcopy(self.right, memo),
+            item=copy.deepcopy(self.item, memo),
+        )
+        memo[id(self)] = cloned
+        return cloned
+
     def __setattr__(self, name, value):
         raise unsupported('Assignment')
 
@@ -174,7 +197,8 @@ class Tree(object):
         if _negatable(self):
             return Tree('not', item=self)
         raise unsupported(
-            "'~' on a comparison", hint='Negate a boolean field.',
+            "'~' on a comparison",
+            hint='Negate a boolean field or %s().' % EXISTS_NAME,
         )
 
     def __eq__(self, other):
@@ -325,8 +349,8 @@ def _join(kind, left, right):
 def _require_predicate(result):
     if type(result) is bool:
         raise PermissionConditionError(
-            'A comparison returned a Python bool. Import Now, Lower, and '
-            'Coalesce from trusts.functions.'
+            'A comparison returned a Python bool. Import Now, Lower, '
+            'Coalesce, and %s from trusts.functions.' % EXISTS_NAME
         )
     if isinstance(result, Symbol):
         if not result._path:
@@ -344,10 +368,11 @@ def _negatable(node):
 
     User rules at ``92141b0`` (``trusts/plan/standards.py`` ``Bit.__invert__``)
     accepted ``~`` on a boolean field and on ``&`` / nested ``~`` of those.
+    ``Exists()`` negates the same way: unknown is not a value it returns.
     A comparison, ``.contains()``, or ``|`` is outside that shape, including
     one nested inside ``&`` or ``|``.
     """
-    if node.kind == 'bare':
+    if node.kind in ('bare', EXISTS_KIND):
         return True
     if node.kind == 'not':
         return _negatable(node.item)
@@ -418,8 +443,8 @@ def invoke(fn, roots, prepare=None):
         raise
     except (TypeError, ValueError) as exc:
         raise PermissionConditionError(
-            'Condition builder failed: %s. Import Now, Lower, and Coalesce '
-            'from trusts.functions.' % exc
+            'Condition builder failed: %s. Import Now, Lower, Coalesce, '
+            'and %s from trusts.functions.' % (exc, EXISTS_NAME)
         ) from exc
     except Exception as exc:
         raise PermissionConditionError(

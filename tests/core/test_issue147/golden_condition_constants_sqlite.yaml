@@ -16,82 +16,82 @@ backends:
             sql: |-
               SELECT "documents_constantdocument"."id", "documents_constantdocument"."amount", "documents_constantdocument"."payload", "documents_constantdocument"."price", "documents_constantdocument"."token", "documents_constantdocument"."day", "documents_constantdocument"."clock", "documents_constantdocument"."stamp", "documents_constantdocument"."span", "documents_constantdocument"."label", "documents_constantdocument"."owner_id"
               FROM "documents_constantdocument"
-              WHERE "documents_constantdocument"."amount" = %s
+              WHERE ("documents_constantdocument"."amount" = %s)
           - id: "documents__ConstantDocument__negzero"
             params: ["amount=-0.0"]
             sql: |-
               SELECT "documents_constantdocument"."id", "documents_constantdocument"."amount", "documents_constantdocument"."payload", "documents_constantdocument"."price", "documents_constantdocument"."token", "documents_constantdocument"."day", "documents_constantdocument"."clock", "documents_constantdocument"."stamp", "documents_constantdocument"."span", "documents_constantdocument"."label", "documents_constantdocument"."owner_id"
               FROM "documents_constantdocument"
-              WHERE "documents_constantdocument"."amount" = %s
+              WHERE ("documents_constantdocument"."amount" = %s)
           - id: "documents__ConstantDocument__nan"
             params: ["amount={\"type\":\"float\",\"value\":\"NaN\"}"]
             sql: |-
               SELECT "documents_constantdocument"."id", "documents_constantdocument"."amount", "documents_constantdocument"."payload", "documents_constantdocument"."price", "documents_constantdocument"."token", "documents_constantdocument"."day", "documents_constantdocument"."clock", "documents_constantdocument"."stamp", "documents_constantdocument"."span", "documents_constantdocument"."label", "documents_constantdocument"."owner_id"
               FROM "documents_constantdocument"
-              WHERE "documents_constantdocument"."amount" = %s
+              WHERE ("documents_constantdocument"."amount" = %s)
           - id: "documents__ConstantDocument__infinity"
             params: ["amount={\"type\":\"float\",\"value\":\"Infinity\"}"]
             sql: |-
               SELECT "documents_constantdocument"."id", "documents_constantdocument"."amount", "documents_constantdocument"."payload", "documents_constantdocument"."price", "documents_constantdocument"."token", "documents_constantdocument"."day", "documents_constantdocument"."clock", "documents_constantdocument"."stamp", "documents_constantdocument"."span", "documents_constantdocument"."label", "documents_constantdocument"."owner_id"
               FROM "documents_constantdocument"
-              WHERE "documents_constantdocument"."amount" = %s
+              WHERE ("documents_constantdocument"."amount" = %s)
           - id: "documents__ConstantDocument__negative_infinity"
             params: ["amount={\"type\":\"float\",\"value\":\"-Infinity\"}"]
             sql: |-
               SELECT "documents_constantdocument"."id", "documents_constantdocument"."amount", "documents_constantdocument"."payload", "documents_constantdocument"."price", "documents_constantdocument"."token", "documents_constantdocument"."day", "documents_constantdocument"."clock", "documents_constantdocument"."stamp", "documents_constantdocument"."span", "documents_constantdocument"."label", "documents_constantdocument"."owner_id"
               FROM "documents_constantdocument"
-              WHERE "documents_constantdocument"."amount" = %s
+              WHERE ("documents_constantdocument"."amount" = %s)
           - id: "documents__ConstantDocument__payload"
             params: ["payload={\"type\":\"bytes\",\"hex\":\"00ff\"}"]
             sql: |-
               SELECT "documents_constantdocument"."id", "documents_constantdocument"."amount", "documents_constantdocument"."payload", "documents_constantdocument"."price", "documents_constantdocument"."token", "documents_constantdocument"."day", "documents_constantdocument"."clock", "documents_constantdocument"."stamp", "documents_constantdocument"."span", "documents_constantdocument"."label", "documents_constantdocument"."owner_id"
               FROM "documents_constantdocument"
-              WHERE "documents_constantdocument"."payload" = %s
+              WHERE ("documents_constantdocument"."payload" = %s)
           - id: "documents__ConstantDocument__price"
             params: ["price={\"type\":\"decimal\",\"value\":\"12.50\"}"]
             sql: |-
               SELECT "documents_constantdocument"."id", "documents_constantdocument"."amount", "documents_constantdocument"."payload", "documents_constantdocument"."price", "documents_constantdocument"."token", "documents_constantdocument"."day", "documents_constantdocument"."clock", "documents_constantdocument"."stamp", "documents_constantdocument"."span", "documents_constantdocument"."label", "documents_constantdocument"."owner_id"
               FROM "documents_constantdocument"
-              WHERE "documents_constantdocument"."price" = %s
+              WHERE ("documents_constantdocument"."price" = %s)
           - id: "documents__ConstantDocument__token"
             params: ["token={\"type\":\"uuid\",\"value\":\"12345678-1234-5678-1234-567812345678\"}"]
             sql: |-
               SELECT "documents_constantdocument"."id", "documents_constantdocument"."amount", "documents_constantdocument"."payload", "documents_constantdocument"."price", "documents_constantdocument"."token", "documents_constantdocument"."day", "documents_constantdocument"."clock", "documents_constantdocument"."stamp", "documents_constantdocument"."span", "documents_constantdocument"."label", "documents_constantdocument"."owner_id"
               FROM "documents_constantdocument"
-              WHERE "documents_constantdocument"."token" = %s
+              WHERE ("documents_constantdocument"."token" = %s)
           - id: "documents__ConstantDocument__day"
             params: ["day={\"type\":\"date\",\"value\":\"2024-03-04\"}"]
             sql: |-
               SELECT "documents_constantdocument"."id", "documents_constantdocument"."amount", "documents_constantdocument"."payload", "documents_constantdocument"."price", "documents_constantdocument"."token", "documents_constantdocument"."day", "documents_constantdocument"."clock", "documents_constantdocument"."stamp", "documents_constantdocument"."span", "documents_constantdocument"."label", "documents_constantdocument"."owner_id"
               FROM "documents_constantdocument"
-              WHERE "documents_constantdocument"."day" = %s
+              WHERE ("documents_constantdocument"."day" = %s)
           - id: "documents__ConstantDocument__clock"
             params: ["clock={\"type\":\"time\",\"value\":\"05:06:07\"}"]
             sql: |-
               SELECT "documents_constantdocument"."id", "documents_constantdocument"."amount", "documents_constantdocument"."payload", "documents_constantdocument"."price", "documents_constantdocument"."token", "documents_constantdocument"."day", "documents_constantdocument"."clock", "documents_constantdocument"."stamp", "documents_constantdocument"."span", "documents_constantdocument"."label", "documents_constantdocument"."owner_id"
               FROM "documents_constantdocument"
-              WHERE "documents_constantdocument"."clock" = %s
+              WHERE ("documents_constantdocument"."clock" = %s)
           - id: "documents__ConstantDocument__stamp"
             params: ["stamp={\"type\":\"datetime\",\"value\":\"2024-03-04T05:06:07+00:00\"}"]
             sql: |-
               SELECT "documents_constantdocument"."id", "documents_constantdocument"."amount", "documents_constantdocument"."payload", "documents_constantdocument"."price", "documents_constantdocument"."token", "documents_constantdocument"."day", "documents_constantdocument"."clock", "documents_constantdocument"."stamp", "documents_constantdocument"."span", "documents_constantdocument"."label", "documents_constantdocument"."owner_id"
               FROM "documents_constantdocument"
-              WHERE "documents_constantdocument"."stamp" = %s
+              WHERE ("documents_constantdocument"."stamp" = %s)
           - id: "documents__ConstantDocument__span"
             params: ["span={\"type\":\"timedelta\",\"days\":1,\"seconds\":2,\"microseconds\":3}"]
             sql: |-
               SELECT "documents_constantdocument"."id", "documents_constantdocument"."amount", "documents_constantdocument"."payload", "documents_constantdocument"."price", "documents_constantdocument"."token", "documents_constantdocument"."day", "documents_constantdocument"."clock", "documents_constantdocument"."stamp", "documents_constantdocument"."span", "documents_constantdocument"."label", "documents_constantdocument"."owner_id"
               FROM "documents_constantdocument"
-              WHERE "documents_constantdocument"."span" = %s
+              WHERE ("documents_constantdocument"."span" = %s)
           - id: "documents__ConstantDocument__owner"
             params: ["owner={\"type\":\"model\",\"app_label\":\"auth\",\"model\":\"user\",\"pk\":7}"]
             sql: |-
               SELECT "documents_constantdocument"."id", "documents_constantdocument"."amount", "documents_constantdocument"."payload", "documents_constantdocument"."price", "documents_constantdocument"."token", "documents_constantdocument"."day", "documents_constantdocument"."clock", "documents_constantdocument"."stamp", "documents_constantdocument"."span", "documents_constantdocument"."label", "documents_constantdocument"."owner_id"
               FROM "documents_constantdocument"
-              WHERE "documents_constantdocument"."owner_id" = %s
+              WHERE ("documents_constantdocument"."owner_id" = %s)
           - id: "documents__ConstantDocument__label"
             params: ["label=\"alpha\""]
             sql: |-
               SELECT "documents_constantdocument"."id", "documents_constantdocument"."amount", "documents_constantdocument"."payload", "documents_constantdocument"."price", "documents_constantdocument"."token", "documents_constantdocument"."day", "documents_constantdocument"."clock", "documents_constantdocument"."stamp", "documents_constantdocument"."span", "documents_constantdocument"."label", "documents_constantdocument"."owner_id"
               FROM "documents_constantdocument"
-              WHERE "documents_constantdocument"."label" = %s
+              WHERE ("documents_constantdocument"."label" = %s)

@@ -317,6 +317,19 @@ class PolicySqlFormatTest(SimpleTestCase):
             _rejected(self, raw, token)
 
 
+    def test_three_valued_forms_round_trip(self):
+        forms = (
+            'SELECT 1 WHERE (CASE WHEN (1=1) THEN ("t"."a" IS NULL) ELSE NULL END)',
+            'SELECT 1 WHERE (NOT ("t"."a" = %s))',
+            'SELECT 1 WHERE (EXISTS (SELECT 1 FROM "t" WHERE "t"."id" = "u"."id"))',
+            'SELECT 1 WHERE (CAST(COALESCE("t"."a", %s) AS decimal) = %s)',
+            'SELECT 1 WHERE (CAST(%s AS DATETIME(6)) = "t"."stamp")',
+        )
+        for raw in forms:
+            formatted = _format_policy_sql(raw)
+            self.assertEqual(_texts(raw), _texts(formatted))
+            self.assertEqual(formatted, _format_policy_sql(formatted))
+
     def test_malformed_sql_fails_closed(self):
         with self.assertRaises(TrustsConfigurationError):
             _format_policy_sql(None)

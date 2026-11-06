@@ -34,6 +34,7 @@ from trusts.compile.graph import (
     _require_ref,
 )
 from trusts.plan.grammar import (
+    EXISTS_KIND,
     Symbol,
     Tree,
     is_predicate,
@@ -68,6 +69,8 @@ from trusts.plan.conditions import (
     parse_named_filter,
     validate_expression,
     require_boolean_field,
+    require_lowerable_operand,
+    resolve_field_path,
 )
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan, bind_checked_user
 from trusts.plan.standards import (
@@ -1309,6 +1312,11 @@ def _validate_relation_node(node, root, permission_model, *,
             root, node.item.path, 'condition', where='a relation condition',
         )
         return
+    if node.kind == EXISTS_KIND:
+        _require_row_field(node.item)
+        resolve_field_path(root, node.item.path, ref_kind='condition')
+        require_lowerable_operand(node.item, root, root, exists=True)
+        return
     if needs_expression(node):
         _validate_expression_comparison(node, root)
         return
@@ -1332,6 +1340,7 @@ def _validate_expression_comparison(node, root):
     for leaf in walk((node.left, node.right)):
         if leaf.kind == 'field':
             _require_row_field(leaf)
+            require_lowerable_operand(leaf, root, root, exists=False)
     check_comparison_types(node, root, root)
 
 
@@ -1364,6 +1373,10 @@ def _validate_row_comparison(node, root, *, delegated, matches):
     if node.left.kind == 'field' and node.right.kind == 'field':
         if _row_paths_comparable(node.left.path, node.right.path, root):
             return
+    for side in (node.left, node.right):
+        if side.kind == 'const':
+            continue
+        require_lowerable_operand(side, root, root, exists=False)
     check_comparison_types(node, root, root)
 
 
