@@ -37,11 +37,13 @@ from trusts.plan.recursions import (
 )
 from trusts.plan.via import (
     bind_grant_qs,
+    content_filters_selected,
     delegate_q,
     delegate_user_q,
     prefix_occurrence,
     sponsor_constraint,
     via_scope,
+    via_seed_depth,
     via_side,
 )
 from trusts.plan.relations import (
@@ -104,7 +106,7 @@ def _walk_seed_from_rows(walk, rows):
 
 def _sponsor_rows_for_handoff(delegation, ordinary, permission,
                               content_identity, lookup, ordinary_lookup, *,
-                              depth):
+                              depth, user_q=None):
     """Sponsor grants on the same prefix as the delegation row.
 
     The comparison is the prefix value stored on that row, so a grant
@@ -113,6 +115,8 @@ def _sponsor_rows_for_handoff(delegation, ordinary, permission,
     on the sheet query, and 1 when they are a direct subquery of it.
     A single stored foreign key compares columns. A longer lookup reads
     the handoff's prefix through a subquery nested one level deeper.
+    ``user_q`` replaces sponsor equality. A sponsor ``via=`` hop is that
+    predicate, so the hop and the grant row are one filter.
     """
     handoff_column = _stored_prefix_column(delegation.root, lookup)
     grant_column = _stored_prefix_column(ordinary.root, ordinary_lookup)
@@ -129,13 +133,15 @@ def _sponsor_rows_for_handoff(delegation, ordinary, permission,
         correlation = Q(**{_root_relative_column(
             ordinary.root, ordinary_lookup,
         ): prefix_on_handoff})
-    return bind_record_qs(
-        ordinary,
-        permission=permission,
-        content_identity=content_identity,
-        user=_outer_column(delegation.sponsor_field, depth),
-        correlation=correlation,
-    )
+    bindings = {
+        'permission': permission,
+        'content_identity': content_identity,
+        'correlation': correlation,
+    }
+    if user_q is None:
+        bindings['user'] = _outer_column(delegation.sponsor_field, depth)
+        return bind_record_qs(ordinary, **bindings)
+    return bind_record_qs(ordinary, **bindings).filter(user_q)
 
 
 def _stored_prefix_column(model, lookup):
@@ -157,15 +163,17 @@ def _stored_prefix_column(model, lookup):
 
 def _same_sheet_in_both_walks(delegation, sponsor_records, permission,
                               content_identity, prefix_model, lookup, overlay,
-                              row_via=None):
+                              row_via=None, bind_sponsor_via=False):
     """One filtered sheet is in the delegation walk and the sponsor walk.
 
     Two separate ``EXISTS`` checks can match different sheets and list
     the prefix. The sheet query holds both walks, so one row has to
     satisfy the filter and both reaches. Each walk seed is correlated
     outside its recursive member. ``row_via`` is the delegate hop for
-    this same sheet. The sheet query sits inside the delegation, so
-    that row is two levels out.
+    this same sheet. ``bind_sponsor_via`` puts the sponsor hop on these
+    same grant rows, and the sheet query resolves that hop, so the hop
+    reads this sheet rather than another protected row. The sheet query
+    sits inside the delegation, so that row is two levels out.
     """
     sheet = delegation.content_model._default_manager.filter(overlay)
     sheet = sheet.filter(Q(GrantReach(
@@ -185,10 +193,17 @@ def _same_sheet_in_both_walks(delegation, sponsor_records, permission,
         if ordinary.along is not None:
             _reject_unsupported_delegated_suffix(ordinary.along)
         for ordinary_lookup, ordinary_attname in ordinary_lookups:
+            user_q = None
+            if bind_sponsor_via:
+                # The sheet resolves this hop, then the delegation
+                # resolves the walk seed. One extra level keeps the
+                # delegation column off the protected row.
+                with via_seed_depth(2):
+                    user_q = sponsor_constraint(delegation, ordinary)
             if ordinary.along is not None:
                 rows = _sponsor_rows_for_handoff(
                     delegation, ordinary, permission, content_identity,
-                    lookup, ordinary_lookup, depth=2,
+                    lookup, ordinary_lookup, depth=2, user_q=user_q,
                 )
                 sponsor_parts.append(Q(GrantReach(
                     ordinary,
@@ -197,7 +212,9 @@ def _same_sheet_in_both_walks(delegation, sponsor_records, permission,
                 continue
             rows = _sponsor_rows_for_handoff(
                 delegation, ordinary, permission, content_identity,
-                lookup, ordinary_lookup, depth=1,
+                lookup, ordinary_lookup,
+                depth=2 if user_q is not None else 1,
+                user_q=user_q,
             )
             correlation = _content_scope_lookup(
                 ordinary, ordinary_lookup, ordinary_attname,
@@ -615,21 +632,32 @@ def _delegation_prefix_exists(record, sponsor_records, user, permission,
                              target_attname, candidate, position,
                              skipped=(), content_overlay=None, nested=False):
     """``EXISTS`` delegation row correlated to ``candidate``."""
-    # Sponsor ``via=`` on an ancestor prefix stays on this delegation
-    # row. That hop can still read a different content row than the
-    # overlay. Its carrier and the ordinary grant's user column are
-    # compiled by one query, so it is not moved onto the sheet here.
-    sponsor_q = _prefix_sponsor_q(
-        record, sponsor_records, permission, content_identity, prefix_model,
-        candidate, lookup,
-    )
-
-    on_sheet = (
+    # An ancestor prefix is not one protected row. A sponsor hop
+    # compiled here would resolve against this delegation, or against
+    # the prefix, and could read a different protected row than the
+    # grant. The sheet query below binds that hop to the same row the
+    # walk and the overlay keep.
+    on_ancestor = (
         content_overlay is not None
         and position == 'before'
         and record.along is not None
-        and via_side(record) == 'delegate'
     )
+    bind_sponsor_via = on_ancestor and _sponsor_via_on_sheet(
+        record, sponsor_records,
+    )
+    on_sheet = on_ancestor and via_side(record) == 'delegate'
+    if bind_sponsor_via:
+        sponsor_q = _same_sheet_in_both_walks(
+            record, sponsor_records, permission, content_identity,
+            prefix_model, lookup, content_overlay,
+            row_via=delegate_q(record, user) if on_sheet else None,
+            bind_sponsor_via=True,
+        )
+    else:
+        sponsor_q = _prefix_sponsor_q(
+            record, sponsor_records, permission, content_identity,
+            prefix_model, candidate, lookup,
+        )
 
     def bound():
         combined = Q() if on_sheet else delegate_q(record, user)
@@ -644,17 +672,30 @@ def _delegation_prefix_exists(record, sponsor_records, user, permission,
     )
     if combined is None:
         return None
-    if (
-        content_overlay is not None
-        and position == 'before'
-        and record.along is not None
-    ):
+    if on_ancestor and not bind_sponsor_via:
         combined &= _same_sheet_in_both_walks(
             record, sponsor_records, permission, content_identity,
             prefix_model, lookup, content_overlay,
             row_via=delegate_q(record, user) if on_sheet else None,
         )
     return Exists(record.root._default_manager.filter(combined))
+
+
+def _sponsor_via_on_sheet(record, sponsor_records):
+    """True when a sponsor hop has to be compiled on the protected row.
+
+    The hop compares a walked user with that row. Compiling it on the
+    delegation lets ``[:1]`` or the grant primary key choose a different
+    row from the one the walk authorizes.
+    """
+    if not content_filters_selected():
+        return False
+    for ordinary in sponsor_records:
+        if not _sponsor_record_matches(ordinary, record):
+            continue
+        if sponsor_constraint(record, ordinary) is not None:
+            return True
+    return False
 
 
 def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,

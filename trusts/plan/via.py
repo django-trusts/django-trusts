@@ -19,7 +19,6 @@ from django.db.models.expressions import Expression
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.conditions import condition_model_key
 from trusts.plan.grammar import Tree
-from trusts.plan.hops import content_scope_lookup, resolved_hop
 from trusts.plan.predicates import bind_record_qs, bind_terminal
 from trusts.plan.rewrites import CallInput
 from trusts.plan.writers import member_pk
@@ -45,6 +44,7 @@ _inquiry = ContextVar('trusts_via_inquiry', default=None)
 _reuse = ContextVar('trusts_via_reuse', default=None)
 _hop_record = ContextVar('trusts_via_hop_record', default=None)
 _active_prefix = ContextVar('trusts_via_active_prefix', default=None)
+_seed_depth = ContextVar('trusts_via_seed_depth', default=1)
 _UNSET = object()
 
 
@@ -181,14 +181,38 @@ def via_grant_q(record, user):
     return Q(ViaReach(record, user, mode='from_row'))
 
 
+def _nested_outer(name, depth):
+    """``name`` on a query ``depth`` levels outside the current one."""
+    ref = name
+    for _index in range(depth):
+        ref = OuterRef(ref)
+    return ref
+
+
+@contextmanager
+def via_seed_depth(depth):
+    """Count the protected-row query between a grant and its delegation.
+
+    A sponsor hop compiled on the protected row resolves once against
+    that row and once against the delegation. The walk seed needs both
+    levels so the delegation column is not looked up on the protected row.
+    """
+    token = _seed_depth.set(depth)
+    try:
+        yield
+    finally:
+        _seed_depth.reset(token)
+
+
 def walk_seed_expression(record):
     """Walk identity of ``record``'s row, as seen from a nested grant query."""
     walk = record.via
+    depth = _seed_depth.get()
     if len(walk.walk_path) == 1:
-        return OuterRef(_grant_walk_attname(record, walk))
+        return _nested_outer(_grant_walk_attname(record, walk), depth)
     return Subquery(
         record.root._default_manager.filter(
-            pk=OuterRef('pk'),
+            pk=_nested_outer('pk', depth),
         ).values(walk.walk_field)[:1]
     )
 
@@ -218,7 +242,13 @@ def sponsor_constraint(delegation, ordinary):
     elif side == 'sponsor':
         part = sponsor_via_q(delegation, ordinary)
     else:
-        part = via_grant_q(ordinary, OuterRef(delegation.sponsor_field))
+        # ``depth`` counts the protected-row query between the grant and
+        # the delegation. One level is the delegation row. Two levels
+        # put that column outside the protected row as well.
+        part = via_grant_q(
+            ordinary,
+            _nested_outer(delegation.sponsor_field, _seed_depth.get()),
+        )
     extra = _reached_sponsor_q(delegation, ordinary)
     if extra is not None:
         part = part & extra
@@ -377,6 +407,23 @@ def _render_hop(record, rules, filters, content, qn):
         return ' AND '.join(parts), carriers
     finally:
         _hop_record.reset(token)
+
+
+def content_filters_selected():
+    """True when this inquiry's hop reads the protected object.
+
+    Named filters and catalog user conditions both count. A hop that
+    reads the object has to be compiled on that row.
+    """
+    inquiry = _inquiry.get() or {}
+    for expr in inquiry.get('filters') or ():
+        if _mentions(expr, 'object'):
+            return True
+    for rule in inquiry.get('conditions') or ():
+        expr = getattr(rule, 'expr', None)
+        if expr is not None and _mentions(expr, 'object'):
+            return True
+    return False
 
 
 def _mentions(node, root):
@@ -679,52 +726,16 @@ def _add_carrier(carriers, expr):
     return len(carriers) - 1
 
 
-def _candidate_lookup(record, outer_model, occurrence=None):
-    """Content-row lookup and the outer attname it matches.
-
-    The query outside the grant is the candidate content row, so the
-    match is that row's primary key. A permitted-content prefix is one
-    hop on ``content_path``: the match walks back from the protected
-    object to that hop. ``occurrence`` is that hop when the same model
-    appears more than once; the first hop of the model is not a
-    substitute for a later one.
-    """
-    outer = outer_model._meta.concrete_model
-    content = record.content_model._meta.concrete_model
-    if outer is content:
-        return 'pk', outer._meta.pk.attname
-    path = tuple(record.content_path)
-    if occurrence is not None:
-        prefix, attname, model = occurrence
-        if model is outer:
-            return content_scope_lookup(
-                record.root, path, tuple(prefix), attname,
-            ), attname
-    current = record.root
-    chosen = None
-    for index, name in enumerate(path):
-        field = current._meta.get_field(name)
-        related, attname = resolved_hop(field, 'content', path)
-        if related is outer and index != len(path) - 1:
-            chosen = (path[:index + 1], attname)
-            break
-        current = related
-    if chosen is None:
-        return 'pk', outer._meta.pk.attname
-    prefix, attname = chosen
-    return content_scope_lookup(
-        record.root, path, prefix, attname,
-    ), attname
-
-
 class _CandidateContent(Expression):
-    """Scalar content path for the candidate content row.
+    """Content path for the one protected row this decision is about.
 
-    The carrier is compiled inside the grant query. Resolving there
-    stays pending, because that row is the grant and not the content.
-    The next query out is the candidate: its own primary key, or the
-    content row that sits on a permitted-content prefix. A saved
-    content object never reaches this expression.
+    The carrier is compiled inside the grant query. That row is the
+    grant, so resolution stays pending there. It also stays pending on
+    a delegation row and on an ancestor prefix. The protected-row query
+    binds the path from that row's own joins. A grant primary key is
+    not that row, and a ``[:1]`` under the prefix would let the hop read
+    a different protected row than the one the authority check kept.
+    A saved content object never reaches this expression.
     """
 
     def __init__(self, model, path, record):
@@ -735,23 +746,13 @@ class _CandidateContent(Expression):
         self.occurrence = _active_prefix.get()
 
     def resolve_expression(self, query, *args, **kwargs):
-        root = self.record.root._meta.concrete_model
-        if query.model._meta.concrete_model is root:
-            return self.copy()
         outer = query.model._meta.concrete_model
         content = self.record.content_model._meta.concrete_model
-        if outer is content:
-            # This query is the one candidate row. Read the path from
-            # its own joins. A same-model subquery would reuse that
-            # row's alias and compare the row to itself.
-            return query.resolve_ref('__'.join(self.path))
-        lookup, attname = _candidate_lookup(
-            self.record, query.model, self.occurrence,
-        )
-        rows = self.model._default_manager.filter(**{
-            lookup: OuterRef(attname),
-        }).values('__'.join(self.path))[:1]
-        return Subquery(rows).resolve_expression(query, *args, **kwargs)
+        if outer is not content:
+            return self.copy()
+        # A same-model subquery would reuse this row's alias and
+        # compare the row to itself. Read the path from its joins.
+        return query.resolve_ref('__'.join(self.path))
 
 
 def _object_value(model, content, path, name):

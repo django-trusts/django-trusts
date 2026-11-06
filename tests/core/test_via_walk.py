@@ -4934,3 +4934,224 @@ class PrefixOccurrenceTest(TransactionTestCase):
             self.assertIs(unfiltered_grand, False)
             self.assertIs(grouped, False)
 
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class SponsorAncestorRowTest(TransactionTestCase):
+    """The hop and the grant come from the same protected row.
+
+    Two pages sit under one ancestor. Their primary keys do not match
+    the grant. A decoy page uses the grant's primary key and the other
+    region, so a correlation of ``page.id = grant.id`` reads the decoy.
+    Only a page that itself satisfies the hop is permitted. A hop-only
+    page does not combine with an authority-only page. ``has_perm``,
+    ``.permitted()``, ``get_permitted_users()``, and
+    ``filter_by_permitted_content`` agree. The content path is
+    ``office__cabinets__pages``. The shapes are an ordinary ``via=``,
+    a delegate ``via=``, a sponsor ``via=``, and an ordinary ``via=``
+    that replaces the sponsor user.
+    """
+
+    def test_hop_and_authority_use_one_row(self):
+        User = get_user_model()
+        _attach_manager(self, User)
+
+        class Office(models.Model):
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_probe_office'
+
+        class Cabinet(models.Model):
+            office = models.ForeignKey(
+                Office, related_name='cabinets', on_delete=models.CASCADE,
+            )
+            parent = models.ForeignKey(
+                'self', null=True, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_probe_cabinet'
+
+        class PageQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Page(PermittedUsersMixin, models.Model):
+            region = models.CharField(max_length=20)
+            mark = models.CharField(max_length=20)
+            cabinet = models.ForeignKey(
+                Cabinet, related_name='pages', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(PageQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_probe_page'
+
+        class OfficeGrant(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            office = models.ForeignKey(Office, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_probe_grant'
+
+        class PageHandoff(models.Model):
+            office = models.ForeignKey(Office, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(
+                User, related_name='+', on_delete=models.CASCADE,
+            )
+            sponsor = models.ForeignKey(
+                User, related_name='+', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_probe_handoff'
+
+        _add_user_column(
+            self, User, 'zone', models.CharField(max_length=20, null=True),
+        )
+        with _tables(Office, Cabinet, Page, OfficeGrant, PageHandoff):
+            change = _permission(Page, 'change_rowpage')
+            code = 'trusts_tests.change_rowpage'
+            ada = User.objects.create_user('row-ada', password='x')
+            bea = User.objects.create_user('row-bea', password='x')
+            cy = User.objects.create_user('row-cy', password='x')
+            for person in (ada, bea, cy):
+                person.zone = 'east'
+            ada.via_manager = cy
+            bea.via_manager = cy
+            ada.save()
+            bea.save()
+            cy.save()
+            office = Office.objects.create(pk=50)
+            root = Cabinet.objects.create(office=office, pk=60)
+            child = Cabinet.objects.create(office=office, parent=root, pk=61)
+            # The decoy reuses the grant primary key. The real pages do not.
+            shapes = (
+                ('ordinary', ada, None),
+                ('delegate', bea, ('delegate__via_manager', 1)),
+                ('sponsor', bea, ('sponsor__via_manager', 1)),
+                # Ordinary ``via=`` replaces the sponsor user on the
+                # same ancestor. The hop still has to read the page the
+                # grant reaches.
+                ('grant-via', bea, 'ordinary'),
+            )
+
+            def plant(case):
+                Page.objects.all().delete()
+                OfficeGrant.objects.all().delete()
+                PageHandoff.objects.all().delete()
+                if case == 'positive':
+                    pages = {
+                        'decoy': Page.objects.create(
+                            pk=100, region='west', mark='yes', cabinet=child,
+                        ),
+                        'other': Page.objects.create(
+                            pk=11, region='west', mark='yes', cabinet=child,
+                        ),
+                        'kept': Page.objects.create(
+                            pk=22, region='east', mark='yes', cabinet=child,
+                        ),
+                    }
+                else:
+                    pages = {
+                        'decoy': Page.objects.create(
+                            pk=100, region='east', mark='no', cabinet=child,
+                        ),
+                        'other': Page.objects.create(
+                            pk=11, region='west', mark='yes', cabinet=child,
+                        ),
+                    }
+                OfficeGrant.objects.create(
+                    pk=100, user=ada, office=office, permission=change,
+                )
+                return pages
+
+            def register(name, case, via):
+                handle = compiler(path='tests.core.via-row-%s-%s' % (name, case))
+                handle.add_named_filter(
+                    Page, 'kept',
+                    lambda user, permission, content: (
+                        (user.zone == content.region) & (content.mark == 'yes')
+                    ),
+                )
+                grant = dict(
+                    trust=OfficeGrant, user='user', permission='permission',
+                    content='office__cabinets__pages',
+                    along=('office__cabinets__parent', 1),
+                )
+                if name in ('ordinary', 'grant-via'):
+                    grant['via'] = ('user__via_manager', 1)
+                handle.register(**grant)
+                if name != 'ordinary':
+                    hand = dict(
+                        trust=PageHandoff, delegate='delegate',
+                        sponsor='sponsor', content='office__cabinets__pages',
+                        along=('office__cabinets__parent', 1),
+                    )
+                    if via not in (None, 'ordinary'):
+                        hand['via'] = via
+                    handle.register(**hand)
+                    PageHandoff.objects.create(
+                        pk=80, office=office, delegate=bea, sponsor=ada,
+                    )
+                return handle
+
+            def answers(handle, actor, page):
+                filtered = '%s:kept' % code
+                with _listed(handle):
+                    has = actor.has_perm(filtered, page)
+                    permitted = page.pk in set(Page.objects.permitted(
+                        code, actor, conditions=('kept',),
+                    ).values_list('pk', flat=True))
+                    reached = actor.pk in set(page.get_permitted_users(
+                        filtered,
+                    ).values_list('pk', flat=True))
+                    listed = office.pk in set(filter_by_permitted_content(
+                        Office.objects.all(), actor, change,
+                        content=Page, conditions=('kept',),
+                    ).values_list('pk', flat=True))
+
+                    @authorization_required(Page, code, ('kept',))
+                    def view(request, pk):
+                        return 'ok'
+
+                    try:
+                        view(_request(actor), pk=page.pk)
+                        guarded = True
+                    except PermissionDenied:
+                        guarded = False
+                return {
+                    'has_perm': has,
+                    'permitted': permitted,
+                    'get_permitted_users': reached,
+                    'filter_by_permitted_content': listed,
+                    'authorization_required': guarded,
+                }
+
+            for name, actor, via in shapes:
+                for case, allowed_name in (
+                    ('positive', 'kept'),
+                    ('split', None),
+                ):
+                    pages = plant(case)
+                    handle = register(name, case, via)
+                    with self.subTest(shape=name, case=case):
+                        for label, page in pages.items():
+                            got = answers(handle, actor, page)
+                            allowed = label == allowed_name
+                            expect = {
+                                'has_perm': allowed,
+                                'permitted': allowed,
+                                'get_permitted_users': allowed,
+                                'filter_by_permitted_content': allowed_name is not None,
+                                'authorization_required': allowed,
+                            }
+                            self.assertEqual(got, expect, label)
+
