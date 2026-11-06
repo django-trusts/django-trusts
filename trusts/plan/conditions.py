@@ -425,6 +425,8 @@ def _scalar_types_for_field(field):
 
 
 def _spec_from_field(field):
+    if not getattr(field, 'concrete', True) and getattr(field, 'is_relation', False):
+        return ('instance', field.related_model, field.name)
     if field.is_relation and not field.many_to_many and not field.one_to_many:
         related = field.related_model
         return ('instance', related, '%s %s' % (field.get_internal_type(), field.name))
@@ -434,6 +436,8 @@ def _spec_from_field(field):
 
 def _column_field(field, name):
     """The stored column. ``owner_id`` is the target key, not the relation."""
+    if not getattr(field, 'concrete', False):
+        return field
     if (
         field.is_relation
         and not field.many_to_many

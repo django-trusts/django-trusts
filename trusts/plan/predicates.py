@@ -4,14 +4,11 @@ from django.contrib.auth.models import Permission
 from django.db.models import F, Model, Q, Subquery
 
 from trusts.errors import PermissionConditionError
-from trusts.plan.grammar import Tree, needs_expression, unsupported, walk
+from trusts.plan.grammar import Tree, unsupported, walk
 from trusts.plan.trivalent import grant_q
 from trusts.plan.hops import lookup_text, require_instance
 from trusts.plan.writers import (
-    boolean_q,
-    expression_q,
     column_q,
-    columns_q,
     contains_q,
     member_pk,
 )
@@ -115,55 +112,36 @@ class _PredicateCompiler(object):
             return self.compile(node.left) & self.compile(node.right)
         if node.kind == 'or':
             return self.compile(node.left) | self.compile(node.right)
-        if needs_expression(node):
-            return expression_q(
-                node, self._row_field,
-                model=self.record.root, user_model=self.record.root,
-            )
         if node.kind == 'eq':
             return self._eq(node)
         if node.kind == 'ne':
             return self._ne(node)
         if node.kind == 'contains':
             return self._contains(node)
-        if node.kind == 'bare':
-            return boolean_q(lookup_text(node.item.path))
         raise unsupported(node.kind, 'a relation condition')
-
-    def _row_field(self, node):
-        if node.root == 'row' and node.path:
-            return F(lookup_text(node.path))
-        raise unsupported('This condition', 'a relation condition')
 
     def _eq(self, node):
         partner = node.inquiry_partner()
-        if partner is not None:
-            return self._bind_inquiry(partner.path)
-        return Q(**{
-            lookup_text(node.left.path): F(lookup_text(node.right.path)),
-        })
+        if partner is None:
+            raise unsupported('This condition', 'a relation condition')
+        return self._bind_inquiry(partner.path)
 
     def _ne(self, node):
         column = node.inquiry_partner()
         if (
-            column is not None
-            and column.kind == 'field'
-            and column.path
+            column is None
+            or column.kind != 'field'
+            or not column.path
         ):
-            if self.permission is None:
-                raise PermissionConditionError(
-                    'Delegated inquiry-permission condition needs the requested '
-                    'permission binding.'
-                )
-            return column_q(
-                lookup_text(column.path),
-                bind_terminal(self.permission, 'permission'),
-                False,
+            raise unsupported('This condition', 'a relation condition')
+        if self.permission is None:
+            raise PermissionConditionError(
+                'Delegated inquiry-permission condition needs the requested '
+                'permission binding.'
             )
-        return columns_q(
-            lookup_text(node.left.path),
-            lookup_text(node.right.path),
-            False,
+        return column_q(
+            lookup_text(column.path),
+            bind_terminal(self.permission, 'permission'),
         )
 
     def _contains(self, node):

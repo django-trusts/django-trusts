@@ -94,8 +94,6 @@ def _runtime_param(param, connection):
         value = param.runtime
     else:
         value = _unwrap(param)
-    if isinstance(value, memoryview):
-        value = value.tobytes()
     if connection.vendor == 'sqlite' and isinstance(value, Decimal):
         # SQLite stores a decimal column as a real. ``str(Decimal('2.50'))``
         # is ``2.50``, which is not equal to that real; ``2.5`` is.
@@ -211,10 +209,6 @@ def compare(kind, left, right, connection=None):
             '(NOT (%s = %s))' % (left.value_sql, right.value_sql),
             left.value_params + right.value_params,
         )
-    if kind not in _COMPARE:
-        raise PermissionConditionError(
-            'Cannot lower comparison %r.' % (kind,)
-        )
     return Expr(
         '(%s %s %s)' % (left.value_sql, _COMPARE[kind], right.value_sql),
         left.value_params + right.value_params,
@@ -258,7 +252,6 @@ def lower(node, scope):
                     _Marked(prepared, const_hint=operand.export_hint or 'literal'),
                 ),
             )
-        return Expr('(%s)' % operand.value_sql, operand.value_params)
     if kind == 'exists':
         operand = scope.exists_operand(node.item)
         return Expr('(%s)' % operand.reached_sql, operand.reached_params)
@@ -278,8 +271,6 @@ def has_contains(node):
 
 def prepare_value(value):
     if isinstance(value, ModelIdentity):
-        return value.pk
-    if isinstance(value, Model):
         return value.pk
     return value
 
@@ -378,8 +369,6 @@ def relation_hops(model, path):
     """Joins that reach the row ``Exists(path)`` asks about."""
     hops = []
     current = model
-    if not path:
-        return hops
     for index, name in enumerate(path):
         try:
             field = current._meta.get_field(name)

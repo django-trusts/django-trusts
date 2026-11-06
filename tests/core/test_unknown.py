@@ -23,7 +23,7 @@ from tests.support import compiler, published_class_catalog
 from trusts.backends import TrustModelBackendMixin
 from trusts.decorators import authorization_required, filter_by_permitted_content
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
-from trusts.functions import Exists
+from trusts.functions import Exists, Lower
 from trusts.models import (
     AuthorizedQuerySet,
     PermittedQuerySet,
@@ -395,6 +395,106 @@ class UnknownEntryTests(TransactionTestCase):
                 )
                 with self.assertRaises(PermissionDenied):
                     roomless(request, pk=stored.pk)
+
+    def test_reachable_shapes_the_suite_had_not_executed(self):
+        """Public shapes that the rest of the suite never built.
+
+        A reverse one-to-one is a hop for ``Exists`` and not a stored
+        NULL. A permission codename and app label are the string carried
+        into the grant. A function on the left takes the right-hand
+        field's export hint. ``Exists`` rejects a non-path. A relation
+        condition may be ``Exists(row.field)``.
+        """
+        User = get_user_model()
+        Room, _Tag, Desk, _Note, DeskGrant = _models()
+
+        class Card(models.Model):
+            desk = models.OneToOneField(
+                Desk, related_name='card', on_delete=models.CASCADE,
+            )
+            unit = models.CharField(max_length=20, null=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'unk_card'
+
+        factory = compiler(path='tests.core.test_unknown.gaps')
+        factory.add_named_filter(
+            Desk, 'has_card', lambda u, p, o: Exists(o.card),
+        )
+        factory.add_named_filter(
+            Desk, 'has_unit', lambda u, p, o: Exists(o.card.unit),
+        )
+        factory.add_named_filter(
+            Desk, 'app_label',
+            lambda u, p, o: p.app_label == 'trusts_tests',
+        )
+        factory.add_named_filter(
+            Desk, 'codename',
+            lambda u, p, o: p.codename == 'change_unkdesk',
+        )
+        factory.add_named_filter(
+            Desk, 'other_code',
+            lambda u, p, o: p.codename == 'missing',
+        )
+        factory.add_named_filter(
+            Desk, 'lower_room',
+            lambda u, p, o: Lower(o.label) == o.room.name,
+        )
+        factory.add_named_filter(
+            Desk, 'card_null', lambda u, p, o: o.card == None,  # noqa: E711
+        )
+        with self.assertRaises(PermissionConditionError):
+            factory.add_named_filter(
+                Desk, 'bad_exists', lambda u, p, o: Exists(o),
+            )
+        relation = compiler(path='tests.core.test_unknown.relation')
+        relation.register(
+            trust=DeskGrant, user='user', permission='permission',
+            content='desk',
+            condition=lambda row: Exists(row.desk),
+        )
+        self.assertEqual(len(relation.records), 1)
+        factory.register(
+            trust=DeskGrant, user='user', permission='permission',
+            content='desk',
+        )
+        with _tables(Room, _Tag, Desk, Card, DeskGrant):
+            kept = Room.objects.create(name='kept')
+            other = Room.objects.create(name='other')
+            matched = Desk.objects.create(label='Kept', room=kept)
+            differ = Desk.objects.create(label='no', room=other)
+            blank = Desk.objects.create(label=None, room=kept)
+            Card.objects.create(desk=matched, unit=None)
+            change = Permission.objects.create(
+                content_type=ContentType.objects.get_for_model(Desk),
+                codename='change_unkdesk',
+                name='Can change unk desk',
+            )
+            alice = User.objects.create_user('alice-gap', password='x')
+            for row in (matched, differ, blank):
+                DeskGrant.objects.create(
+                    desk=row, user=alice, permission=change,
+                )
+            expected = {
+                'has_card': {matched.pk},
+                'has_unit': {matched.pk},
+                'app_label': {matched.pk, differ.pk, blank.pk},
+                'codename': {matched.pk, differ.pk, blank.pk},
+                'other_code': set(),
+                'lower_room': {matched.pk},
+            }
+            with published_class_catalog(
+                _DeskBackend, factory,
+            ), override_settings(AUTHENTICATION_BACKENDS=(BACKEND,)):
+                for code, wanted in expected.items():
+                    listed = set(Desk.objects.permitted(
+                        PERM, alice, conditions=(code,),
+                    ).values_list('pk', flat=True))
+                    self.assertEqual(listed, wanted, code)
+                with self.assertRaises(PermissionConditionError) as raised:
+                    alice.has_perm('%s:card_null' % PERM, matched)
+                self.assertIn('Cannot push condition path', str(raised.exception))
 
 
 class _ParityBackend(TrustModelBackendMixin, ModelBackend):
@@ -779,6 +879,10 @@ class EntryPointParityTests(TransactionTestCase):
                  change, False, False),
                 ('ne-other', lambda row, permission: row.perm != permission,
                  other, False, True),
+                ('eq-same', lambda row, permission: row.perm == permission,
+                 change, False, True),
+                ('eq-other', lambda row, permission: row.perm == permission,
+                 other, False, False),
                 ('eq-none', lambda row, permission: row.perm == None,  # noqa: E711
                  None, False, True),
                 ('eq-none-set', lambda row, permission: row.perm == None,  # noqa: E711

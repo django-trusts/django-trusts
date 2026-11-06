@@ -29,6 +29,7 @@ from trusts.backends import TrustModelBackendMixin
 from trusts.compile.graph import Along, Ref
 from trusts.decorators import authorization_required, filter_by_permitted_content
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
+from trusts.functions import Exists
 from trusts.models import (
     AuthorizedQuerySet,
     PermittedQuerySetMixin,
@@ -2744,6 +2745,48 @@ class ViaPermissionTerminalTest(TransactionTestCase):
                 self.change.save(update_fields=['codename'])
                 self.assertIs(self._sees(handle, self.ada), False)
                 self.assertIs(self._sees(handle, self.ben), False)
+
+    def test_object_exists_in_a_user_or_is_rejected(self):
+        handle = compiler(path='tests.core.via-term.object-exists')
+        handle.add_named_filter(
+            self.Task, 'kept',
+            lambda user, permission, content: (
+                Exists(content.name) | (user.username == 'term-ada')
+            ),
+        )
+        with self.assertRaises(TrustsConfigurationError) as raised:
+            handle.register(
+                trust=self.models[1],
+                user='holder',
+                permission='permit',
+                content='task',
+                via=('holder__via_manager', 8),
+            )
+        self.assertIn('cannot be written', str(raised.exception))
+
+    def test_scalar_permission_inequality_is_not_equal(self):
+        handle = compiler(path='tests.core.via-term.unequal-scalar')
+        handle.add_named_filter(
+            self.Task, 'kept',
+            lambda user, permission, content: (
+                user.username != permission.codename
+            ),
+        )
+        handle.register(
+            trust=self.models[1],
+            user='holder',
+            permission='permit',
+            content='task',
+            via=('holder__via_manager', 8),
+        )
+        self.change.codename = 'term-ada'
+        self.change.save(update_fields=['codename'])
+        self.assertIs(self._sees(handle, self.ada), False)
+        self.assertIs(self._sees(handle, self.ben), False)
+        self.change.codename = 'other-code'
+        self.change.save(update_fields=['codename'])
+        self.assertIs(self._sees(handle, self.ada), True)
+        self.assertIs(self._sees(handle, self.ben), True)
 
     def test_rejected_terminals(self):
         handle = compiler(path='tests.core.via-term.unequal')

@@ -8,20 +8,11 @@ unknown. ``.contains()`` keeps the membership join it already had.
 """
 
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import DateTimeField, Exists, F, Model, Q, Value
-from django.db.models.functions import Cast, Coalesce, Lower, Now
-from django.db.models.lookups import (
-    Exact,
-    GreaterThan,
-    GreaterThanOrEqual,
-    LessThan,
-    LessThanOrEqual,
-)
+from django.db.models import Exists, F, Model, Q
 
 from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
     ModelIdentity,
-    coalesce_output_field,
     resolve_field_path,
 )
 from trusts.plan.grammar import Tree
@@ -106,39 +97,12 @@ def _permission_attr(perm, path):
     )
 
 
-def columns_q(a, b, equal):
-    """Two columns. NULL on either side does not match.
-
-    ``~Q(a=F(b))`` alone is true for NULL, because Django negates
-    ``a = b AND a IS NOT NULL AND b IS NOT NULL``.
-    """
-    if equal:
-        return Q(**{a: F(b)})
-    return (
-        Q(**{'%s__isnull' % a: False})
-        & Q(**{'%s__isnull' % b: False})
-        & ~Q(**{a: F(b)})
-    )
-
-
-def column_q(lookup, value, equal):
+def column_q(lookup, value):
     """One column against a loaded value. NULL does not match."""
     value = member_pk(value)
     if value is None:
         return Q(pk__in=())
-    if equal:
-        return Q(**{lookup: value})
     return Q(**{'%s__isnull' % lookup: False}) & ~Q(**{lookup: value})
-
-
-def boolean_holds(value):
-    """A boolean field holds only when it is True. NULL does not."""
-    return value is True
-
-
-def boolean_q(lookup):
-    """Column is True. NULL is not True."""
-    return Q(**{lookup: True})
 
 
 def member_pk(value):
@@ -201,95 +165,6 @@ def _compile_contains(node, model, user, perm, user_model):
     if manager is None or value is None:
         return Q(pk__in=())
     return Q(Exists(manager.filter(pk=value)))
-
-
-_FUNCTIONS = {'now': Now, 'lower': Lower, 'coalesce': Coalesce}
-_COMPARISON_LOOKUPS = {
-    'eq': Exact,
-    'lt': LessThan,
-    'le': LessThanOrEqual,
-    'gt': GreaterThan,
-    'ge': GreaterThanOrEqual,
-}
-
-
-def comparison_q(kind, lhs, rhs):
-    """One comparison. NULL does not match, including inequality."""
-    if kind == 'ne':
-        return comparison_q('lt', lhs, rhs) | comparison_q(
-            'gt', lhs.copy(), rhs.copy(),
-        )
-    # Lookup.output_field is a BooleanField, so the lookup is already
-    # conditional. Django 6 exposes that as a read-only property.
-    return Q(_COMPARISON_LOOKUPS[kind](lhs, rhs))
-
-
-class _DateTimeArgument(Cast):
-    """A datetime constant inside a call.
-
-    MySQL types a placeholder as text. ``COALESCE`` of a ``DATETIME(6)``
-    column and that text returns text, so ``...00.000000`` is greater than
-    ``...00``. The cast keeps the argument a datetime. Other backends
-    already compare the parameter as a datetime.
-    """
-
-    def __init__(self, expression):
-        super().__init__(expression, DateTimeField())
-
-    def as_sql(self, compiler, connection, **extra_context):
-        return compiler.compile(self.source_expressions[0])
-
-    def as_sqlite(self, compiler, connection, **extra_context):
-        return compiler.compile(self.source_expressions[0])
-
-    def as_postgresql(self, compiler, connection, **extra_context):
-        return compiler.compile(self.source_expressions[0])
-
-    def as_mysql(self, compiler, connection, **extra_context):
-        return Cast.as_sql(self, compiler, connection, **extra_context)
-
-
-def sql_expression(node, field, model=None, user_model=None, *, inside=False):
-    """One comparison operand as Django's own function call or value.
-
-    ``field`` builds the leaf for a ``field`` node. A ``Coalesce`` whose
-    arguments include a column uses that column's field as ``output_field``
-    so a ``Value()`` cannot disagree with it at query time.
-    """
-    if node.kind == 'const':
-        expr = Value(member_pk(node.value))
-        if inside and isinstance(expr.output_field, DateTimeField):
-            expr = _DateTimeArgument(expr)
-        return expr
-    if node.kind == 'call':
-        expr = _FUNCTIONS[node.value](*(
-            sql_expression(arg, field, model, user_model, inside=True)
-            for arg in node.item
-        ))
-        if node.value == 'coalesce' and model is not None:
-            output = coalesce_output_field(node, model, user_model)
-            if output is not None:
-                expr.output_field = output
-        return expr
-    return field(node)
-
-
-def expression_q(node, field, right_field=None, *, model=None, user_model=None):
-    """The ``Q`` for one ordered or function comparison."""
-    return comparison_q(
-        node.kind,
-        sql_expression(node.left, field, model, user_model),
-        sql_expression(node.right, right_field or field, model, user_model),
-    )
-
-
-def _compile_sql_comparison(node, model, user, perm, user_model):
-    def field(leaf):
-        if leaf.root == 'object':
-            return F('__'.join(leaf.path))
-        return Value(member_pk(_bound_value(leaf, user, perm, user_model)))
-
-    return expression_q(node, field, model=model, user_model=user_model)
 
 
 def _filter_bindings(model, user, perm, user_model):

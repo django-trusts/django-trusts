@@ -9,7 +9,7 @@ __all__ = []
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import Permission
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Exists, F, Model, OuterRef, Q, Value
+from django.db.models import Exists, F, Model, OuterRef, Q
 
 from trusts.plan.conditions import (
     condition_model_key,
@@ -17,9 +17,6 @@ from trusts.plan.conditions import (
     resolve_field_path,
 )
 from trusts.plan.writers import (
-    boolean_holds,
-    boolean_q,
-    expression_q,
     contains_q,
     member_pk,
 )
@@ -27,7 +24,7 @@ from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.utils import parse_perm_code
 from trusts.plan.contents import _as_q
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
-from trusts.plan.grammar import Tree, needs_expression, walk
+from trusts.plan.grammar import Tree
 from trusts.plan.trivalent import grant_q, has_contains
 
 
@@ -151,12 +148,8 @@ def _condition_outcome(expr, content, singular, user_model):
             _condition_outcome(expr.left, content, singular, user_model),
             _condition_outcome(expr.right, content, singular, user_model),
         )
-    if isinstance(expr, Tree) and needs_expression(expr):
-        return _expression_outcome(expr, content, singular, user_model)
     if isinstance(expr, Tree) and expr.kind == 'contains':
         return _contains_outcome(expr, content, singular, user_model)
-    if isinstance(expr, Tree) and expr.kind == 'bare':
-        return _bare_outcome(expr, content, singular, user_model)
     raise TrustsConfigurationError(
         'Reverse permission inquiry cannot compile permission condition %r.'
         % (expr,)
@@ -222,18 +215,6 @@ def _contains_outcome(expr, content, singular, user_model):
     return _exists_q(content, contains_q(lookup, pk))
 
 
-def _bare_outcome(expr, content, singular, user_model):
-    field = expr.item
-    if field.root == 'user':
-        return boolean_q(_user_lookup(user_model, field.path))
-    if field.root == 'object':
-        lookup = _object_lookup(content, field.path)
-        return _exists_q(content, boolean_q(lookup))
-    if boolean_holds(_side_value(field, content, singular, user_model)):
-        return True
-    return None
-
-
 def _side_value(node, content, singular, user_model):
     kind, value = _condition_side(node, content, singular, user_model)
     if kind == 'user' or kind == 'object':
@@ -242,51 +223,6 @@ def _side_value(node, content, singular, user_model):
             'node %r.' % (node,)
         )
     return value
-
-
-def _expression_outcome(expr, content, singular, user_model):
-    """Ordered comparison or function, in SQL. NULL does not grant."""
-    places = (_expression_place(expr.left), _expression_place(expr.right))
-    if 'mixed' in places:
-        raise TrustsConfigurationError(
-            'Reverse permission inquiry cannot compile permission condition %r.'
-            % (expr,)
-        )
-
-    def field(place):
-        def leaf(node):
-            return _reverse_field(node, place, content, singular, user_model)
-        return leaf
-
-    if 'object' not in places:
-        return expression_q(
-            expr, field('user'),
-            model=content.__class__, user_model=user_model,
-        )
-    # A user column outside the saved-row subquery is an outer reference.
-    left, right = (
-        field('object' if place == 'object' else 'outer') for place in places
-    )
-    return _exists_q(content, expression_q(
-        expr, left, right, model=content.__class__, user_model=user_model,
-    ))
-
-
-def _expression_place(node):
-    roots = {leaf.root for leaf in walk(node) if leaf.kind == 'field'}
-    roots.discard('permission')
-    if len(roots) > 1:
-        return 'mixed'
-    return roots.pop() if roots else 'either'
-
-
-def _reverse_field(node, place, content, singular, user_model):
-    if node.root == 'permission':
-        return Value(singular)
-    if node.root == 'user':
-        lookup = _user_lookup(user_model, node.path)
-        return OuterRef(lookup) if place == 'outer' else F(lookup)
-    return F(_object_lookup(content, node.path))
 
 
 def _condition_side(node, content, singular, user_model):
