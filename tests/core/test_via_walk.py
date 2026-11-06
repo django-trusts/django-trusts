@@ -4935,6 +4935,43 @@ class PrefixOccurrenceTest(TransactionTestCase):
             self.assertIs(grouped, False)
 
 
+def _row_inquiries(handle, actor, obj, *, code, change, content_model, prefixes):
+    """Filtered entry points for one object, and the prefix listing.
+
+    The listing is one question about the prefix, not about this object.
+    Callers assert it once per case.
+    """
+    filtered = '%s:kept' % code
+    with _listed(handle):
+        has = actor.has_perm(filtered, obj)
+        permitted = obj.pk in set(content_model.objects.permitted(
+            code, actor, conditions=('kept',),
+        ).values_list('pk', flat=True))
+        reached = actor.pk in set(obj.get_permitted_users(
+            filtered,
+        ).values_list('pk', flat=True))
+        listed = set(filter_by_permitted_content(
+            prefixes, actor, change,
+            content=content_model, conditions=('kept',),
+        ).values_list('pk', flat=True))
+
+        @authorization_required(content_model, code, ('kept',))
+        def view(request, pk):
+            return 'ok'
+
+        try:
+            view(_request(actor), pk=obj.pk)
+            guarded = True
+        except PermissionDenied:
+            guarded = False
+    return {
+        'has_perm': has,
+        'permitted': permitted,
+        'get_permitted_users': reached,
+        'authorization_required': guarded,
+    }, listed
+
+
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class SponsorAncestorRowTest(TransactionTestCase):
     """The hop and the grant come from the same protected row.
@@ -5103,38 +5140,6 @@ class SponsorAncestorRowTest(TransactionTestCase):
                     )
                 return handle
 
-            def answers(handle, actor, page):
-                filtered = '%s:kept' % code
-                with _listed(handle):
-                    has = actor.has_perm(filtered, page)
-                    permitted = page.pk in set(Page.objects.permitted(
-                        code, actor, conditions=('kept',),
-                    ).values_list('pk', flat=True))
-                    reached = actor.pk in set(page.get_permitted_users(
-                        filtered,
-                    ).values_list('pk', flat=True))
-                    listed = office.pk in set(filter_by_permitted_content(
-                        Office.objects.all(), actor, change,
-                        content=Page, conditions=('kept',),
-                    ).values_list('pk', flat=True))
-
-                    @authorization_required(Page, code, ('kept',))
-                    def view(request, pk):
-                        return 'ok'
-
-                    try:
-                        view(_request(actor), pk=page.pk)
-                        guarded = True
-                    except PermissionDenied:
-                        guarded = False
-                return {
-                    'has_perm': has,
-                    'permitted': permitted,
-                    'get_permitted_users': reached,
-                    'filter_by_permitted_content': listed,
-                    'authorization_required': guarded,
-                }
-
             for name, actor, via in shapes:
                 for case, allowed_name in (
                     ('positive', 'kept'),
@@ -5143,15 +5148,139 @@ class SponsorAncestorRowTest(TransactionTestCase):
                     pages = plant(case)
                     handle = register(name, case, via)
                     with self.subTest(shape=name, case=case):
+                        listed = None
                         for label, page in pages.items():
-                            got = answers(handle, actor, page)
+                            got, listed = _row_inquiries(
+                                handle, actor, page, code=code, change=change,
+                                content_model=Page, prefixes=Office.objects.all(),
+                            )
                             allowed = label == allowed_name
-                            expect = {
+                            self.assertEqual(got, {
                                 'has_perm': allowed,
                                 'permitted': allowed,
                                 'get_permitted_users': allowed,
-                                'filter_by_permitted_content': allowed_name is not None,
                                 'authorization_required': allowed,
-                            }
-                            self.assertEqual(got, expect, label)
+                            }, label)
+                        self.assertEqual(
+                            listed, {office.pk} if allowed_name else set(),
+                        )
+
+    def test_same_model_does_not_read_the_grant_row(self):
+        """A grant that is the content model is not the protected row.
+
+        The grant node and the candidate node are both ``Node`` and hold
+        different regions. The hop has to read the candidate.
+        """
+        User = get_user_model()
+        _attach_manager(self, User)
+
+        class NodeQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Node(PermittedUsersMixin, models.Model):
+            region = models.CharField(max_length=20)
+            mark = models.CharField(max_length=20)
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+            user = models.ForeignKey(
+                User, null=True, on_delete=models.CASCADE, related_name='+',
+            )
+            permission = models.ForeignKey(
+                Permission, null=True, on_delete=models.CASCADE, related_name='+',
+            )
+            delegate = models.ForeignKey(
+                User, null=True, on_delete=models.CASCADE, related_name='+',
+            )
+            sponsor = models.ForeignKey(
+                User, null=True, on_delete=models.CASCADE, related_name='+',
+            )
+            objects = models.Manager.from_queryset(NodeQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_same_model_node'
+
+        _add_user_column(
+            self, User, 'zone', models.CharField(max_length=20, null=True),
+        )
+        with _tables(Node):
+            change = _permission(Node, 'change_samemodel')
+            code = 'trusts_tests.change_samemodel'
+            ada = User.objects.create_user('same-ada', password='x')
+            bea = User.objects.create_user('same-bea', password='x')
+            cy = User.objects.create_user('same-cy', password='x')
+            for person in (ada, bea, cy):
+                person.zone = 'east'
+            ada.via_manager = cy
+            bea.via_manager = cy
+            ada.save()
+            bea.save()
+            cy.save()
+            parent = Node.objects.create(
+                pk=1, region='west', mark='no',
+            )
+            # The grant row is a Node. Its region is not the candidate's.
+            grant = Node.objects.create(
+                pk=2, region='west', mark='yes', parent=parent,
+                user=ada, permission=change,
+            )
+            kept = Node.objects.create(
+                pk=3, region='east', mark='yes', parent=parent,
+            )
+            other = Node.objects.create(
+                pk=4, region='west', mark='yes', parent=parent,
+            )
+            shapes = (
+                ('ordinary', ada, False),
+                ('sponsor', bea, True),
+                ('delegate', bea, True),
+            )
+            for name, actor, handoff in shapes:
+                handle = compiler(path='tests.core.via-same-model-%s' % name)
+                handle.add_named_filter(
+                    Node, 'kept',
+                    lambda user, permission, content: (
+                        (user.zone == content.region) & (content.mark == 'yes')
+                    ),
+                )
+                grant_reg = dict(
+                    trust=Node, user='user', permission='permission',
+                    content='parent__children',
+                )
+                if name == 'ordinary':
+                    grant_reg['via'] = ('user__via_manager', 1)
+                handle.register(**grant_reg)
+                if handoff:
+                    via = (
+                        ('sponsor__via_manager', 1) if name == 'sponsor'
+                        else ('delegate__via_manager', 1)
+                    )
+                    handle.register(
+                        trust=Node, delegate='delegate', sponsor='sponsor',
+                        content='parent__children', via=via,
+                    )
+                    Node.objects.filter(pk=grant.pk).update(
+                        delegate=bea, sponsor=ada,
+                    )
+                with self.subTest(shape=name):
+                    listed = None
+                    for label, node, allowed in (
+                        ('kept', kept, True),
+                        ('grant', grant, False),
+                        ('other', other, False),
+                        ('parent', parent, False),
+                    ):
+                        got, listed = _row_inquiries(
+                            handle, actor, node, code=code, change=change,
+                            content_model=Node, prefixes=Node.objects.all(),
+                        )
+                        self.assertEqual(got, {
+                            'has_perm': allowed,
+                            'permitted': allowed,
+                            'get_permitted_users': allowed,
+                            'authorization_required': allowed,
+                        }, label)
+                    self.assertEqual(listed, {parent.pk})
 

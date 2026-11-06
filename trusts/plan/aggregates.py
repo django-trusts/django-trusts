@@ -21,7 +21,7 @@ from trusts.plan.contents import (
     _delegation_sponsor_q,
     _ordinary_records,
 )
-from trusts.plan.via import delegate_q, via_scope
+from trusts.plan.via import delegate_q, protected_row, via_scope
 from trusts.plan.delegations import (
     _compatible_sponsor_records,
     _matched_delegation_q,
@@ -108,7 +108,9 @@ def _instance_grant_queryset(catalog, obj, user, permission, *, kind='complete',
     if extra_q is not None:
         granted_q = granted_q & extra_q
     model = obj._meta.concrete_model
-    return model._default_manager.filter(pk=obj.pk).filter(granted_q)
+    return protected_row(
+        model._default_manager.filter(pk=obj.pk),
+    ).filter(granted_q)
 
 
 def _bound_saved_row(catalog, obj, user, permission, *, kind='complete',

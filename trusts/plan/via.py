@@ -43,8 +43,6 @@ from trusts.plan.walk import (
 _inquiry = ContextVar('trusts_via_inquiry', default=None)
 _reuse = ContextVar('trusts_via_reuse', default=None)
 _hop_record = ContextVar('trusts_via_hop_record', default=None)
-_active_prefix = ContextVar('trusts_via_active_prefix', default=None)
-_seed_depth = ContextVar('trusts_via_seed_depth', default=1)
 _UNSET = object()
 
 
@@ -70,22 +68,6 @@ def via_scope(catalog=None, skipped=None, filters=_UNSET, content=_UNSET):
         yield
     finally:
         _inquiry.reset(token)
-
-
-@contextmanager
-def prefix_occurrence(prefix, attname, model):
-    """Bind carriers to this content-path hop, not the first of its model.
-
-    A permitted-content prefix can name the same model twice. The hop
-    compiled for the later occurrence must use that occurrence.
-    """
-    token = _active_prefix.set((
-        tuple(prefix), attname, model._meta.concrete_model,
-    ))
-    try:
-        yield
-    finally:
-        _active_prefix.reset(token)
 
 
 class _HopWalk(object):
@@ -181,73 +163,59 @@ def via_grant_q(record, user):
     return Q(ViaReach(record, user, mode='from_row'))
 
 
-def _nested_outer(name, depth):
-    """``name`` on a query ``depth`` levels outside the current one."""
+def _outer_steps(name, levels):
+    """``name`` on a query ``levels`` steps outside the current one."""
     ref = name
-    for _index in range(depth):
+    for _index in range(levels):
         ref = OuterRef(ref)
     return ref
 
 
-@contextmanager
-def via_seed_depth(depth):
-    """Count the protected-row query between a grant and its delegation.
+def walk_seed_expression(record, outer=1):
+    """Walk identity of ``record``'s row, seen from a nested grant query.
 
-    A sponsor hop compiled on the protected row resolves once against
-    that row and once against the delegation. The walk seed needs both
-    levels so the delegation column is not looked up on the protected row.
+    ``outer`` is how many queries sit between that grant and the
+    delegation row. The sheet witness passes 2: the protected row is
+    in between, and the delegation column is not read from it.
     """
-    token = _seed_depth.set(depth)
-    try:
-        yield
-    finally:
-        _seed_depth.reset(token)
-
-
-def walk_seed_expression(record):
-    """Walk identity of ``record``'s row, as seen from a nested grant query."""
     walk = record.via
-    depth = _seed_depth.get()
     if len(walk.walk_path) == 1:
-        return _nested_outer(_grant_walk_attname(record, walk), depth)
+        return _outer_steps(_grant_walk_attname(record, walk), outer)
     return Subquery(
         record.root._default_manager.filter(
-            pk=_nested_outer('pk', depth),
+            pk=_outer_steps('pk', outer),
         ).values(walk.walk_field)[:1]
     )
 
 
-def sponsor_via_q(delegation, ordinary):
+def sponsor_via_q(delegation, ordinary, outer=1):
     """Ordinary row whose user the delegation's sponsor walk reaches."""
     return Q(ViaReach(
         delegation,
-        walk_seed_expression(delegation),
+        walk_seed_expression(delegation, outer),
         mode='from_value',
         match_record=ordinary,
     ))
 
 
-def sponsor_constraint(delegation, ordinary):
+def sponsor_constraint(delegation, ordinary, outer=1):
     """User predicate for one ordinary grant, or ``None`` for equality.
 
     A sponsor walk, an ordinary ``via=``, or both. Sponsor conditions
     select each reached user when the walked row is a group or a link.
+    ``outer`` is passed through to the delegation reference.
     """
     side = via_side(delegation)
     ordinary_via = replaces_user(ordinary)
     if side != 'sponsor' and not ordinary_via:
         return None
     if side == 'sponsor' and ordinary_via:
-        part = Q(ViaMeet(delegation, ordinary))
+        part = Q(ViaMeet(delegation, ordinary, outer))
     elif side == 'sponsor':
-        part = sponsor_via_q(delegation, ordinary)
+        part = sponsor_via_q(delegation, ordinary, outer)
     else:
-        # ``depth`` counts the protected-row query between the grant and
-        # the delegation. One level is the delegation row. Two levels
-        # put that column outside the protected row as well.
         part = via_grant_q(
-            ordinary,
-            _nested_outer(delegation.sponsor_field, _seed_depth.get()),
+            ordinary, _outer_steps(delegation.sponsor_field, outer),
         )
     extra = _reached_sponsor_q(delegation, ordinary)
     if extra is not None:
@@ -407,23 +375,6 @@ def _render_hop(record, rules, filters, content, qn):
         return ' AND '.join(parts), carriers
     finally:
         _hop_record.reset(token)
-
-
-def content_filters_selected():
-    """True when this inquiry's hop reads the protected object.
-
-    Named filters and catalog user conditions both count. A hop that
-    reads the object has to be compiled on that row.
-    """
-    inquiry = _inquiry.get() or {}
-    for expr in inquiry.get('filters') or ():
-        if _mentions(expr, 'object'):
-            return True
-    for rule in inquiry.get('conditions') or ():
-        expr = getattr(rule, 'expr', None)
-        if expr is not None and _mentions(expr, 'object'):
-            return True
-    return False
 
 
 def _mentions(node, root):
@@ -726,16 +677,23 @@ def _add_carrier(carriers, expr):
     return len(carriers) - 1
 
 
-class _CandidateContent(Expression):
-    """Content path for the one protected row this decision is about.
+def protected_row(queryset):
+    """Mark ``queryset`` as the one protected row a via hop may read.
 
-    The carrier is compiled inside the grant query. That row is the
-    grant, so resolution stays pending there. It also stays pending on
-    a delegation row and on an ancestor prefix. The protected-row query
-    binds the path from that row's own joins. A grant primary key is
-    not that row, and a ``[:1]`` under the prefix would let the hop read
-    a different protected row than the one the authority check kept.
-    A saved content object never reaches this expression.
+    A grant, a delegation, or an earlier prefix may use the same model
+    and hold different values. Model equality does not select the row.
+    """
+    queryset.query._trusts_protected_row = True
+    return queryset
+
+
+class _CandidateContent(Expression):
+    """Content path for the protected row marked by ``protected_row``.
+
+    The carrier is compiled inside the grant query. That query is not
+    the protected row, even when it is the same model, so resolution
+    stays pending there. The marked query binds the path from its own
+    joins. A saved content object never reaches this expression.
     """
 
     def __init__(self, model, path, record):
@@ -743,15 +701,10 @@ class _CandidateContent(Expression):
         self.model = model
         self.path = tuple(path)
         self.record = record
-        self.occurrence = _active_prefix.get()
 
     def resolve_expression(self, query, *args, **kwargs):
-        outer = query.model._meta.concrete_model
-        content = self.record.content_model._meta.concrete_model
-        if outer is not content:
+        if not getattr(query, '_trusts_protected_row', False):
             return self.copy()
-        # A same-model subquery would reuse this row's alias and
-        # compare the row to itself. Read the path from its joins.
         return query.resolve_ref('__'.join(self.path))
 
 
@@ -1169,10 +1122,11 @@ class ViaMeet(Expression):
     filterable = True
     subquery = True
 
-    def __init__(self, delegation, ordinary):
+    def __init__(self, delegation, ordinary, outer=1):
         super().__init__(output_field=BooleanField())
         self.sponsor_users = _ReachedUsers(
-            delegation, walk_seed_expression(delegation), mode='from_value',
+            delegation, walk_seed_expression(delegation, outer),
+            mode='from_value',
         )
         self.ordinary_users = _ReachedUsers(
             ordinary, None, mode='from_row',

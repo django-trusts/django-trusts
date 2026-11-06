@@ -41,7 +41,7 @@ from trusts.plan.hops import (
     require_instance,
 )
 from trusts.plan.relations import _candidate_model, bind_checked_user
-from trusts.plan.via import _mentions, via_scope
+from trusts.plan.via import _mentions, protected_row, via_scope
 from trusts.plan.users import (
     _named_filter_q,
     _permission_binding_for_plan,
@@ -188,7 +188,7 @@ class Catalog(object):
             kind='complete', skipped=values,
         )
         return bind_filtered_queryset(
-            queryset, granted_q, user_model=self.user_model,
+            protected_row(queryset), granted_q, user_model=self.user_model,
         )
 
     def filter_by_permitted_content(self, queryset, user, permission, *,
@@ -558,7 +558,7 @@ class Catalog(object):
             api='permitted', skipped=values,
         )
         return bind_filtered_queryset(
-            queryset, predicate, user_model=self.user_model,
+            protected_row(queryset), predicate, user_model=self.user_model,
         )
 
     def _question_filter_by_permitted_content(
@@ -645,7 +645,7 @@ class Catalog(object):
             api='permitted', skipped=values,
         )
         return bind_filtered_queryset(
-            queryset, predicate, user_model=self.user_model,
+            protected_row(queryset), predicate, user_model=self.user_model,
         )
 
 
@@ -842,7 +842,7 @@ def filter_catalogs(catalogs, queryset, user, *, ask, skip_flags,
         clause = part if extra_q is None else part & extra_q
         combined = clause if combined is None else combined | clause
     return bind_filtered_queryset(
-        queryset, combined, user_model=user_model,
+        protected_row(queryset), combined, user_model=user_model,
     )
 
 
