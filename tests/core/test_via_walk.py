@@ -16,7 +16,7 @@ from django.core.exceptions import PermissionDenied
 from django.db import connection, models
 from django.http import HttpRequest
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
-from django.test.utils import isolate_apps
+from django.test.utils import CaptureQueriesContext, isolate_apps
 
 from tests.support import (
     built_catalog,
@@ -26,6 +26,7 @@ from tests.support import (
     scoped_permitted_content,
 )
 from trusts.backends import TrustModelBackendMixin
+from trusts.plan import rewrites as bind_once_module
 from trusts.compile.graph import Along, Ref
 from trusts.decorators import authorization_required, filter_by_permitted_content
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
@@ -4935,6 +4936,41 @@ class PrefixOccurrenceTest(TransactionTestCase):
             self.assertIs(grouped, False)
 
 
+def _capture_call(call):
+    """Return ``call()`` and each SQL statement it ran."""
+    with CaptureQueriesContext(connection) as captured:
+        result = call()
+    return result, [item['sql'] for item in captured.captured_queries]
+
+
+def _assert_binds_once(test, call):
+    """``call`` agrees with bind_once off and does not fall back.
+
+    An along statement contains ``RECURSIVE``. That statement names the
+    ``trusts_bind`` row when binding is on, and does not when it is off.
+    """
+    with override_settings(TRUSTS_SQL_BIND_ONCE=False):
+        plain, plain_queries = _capture_call(call)
+    bind_once_module._warned = False
+    with test.assertNoLogs('trusts', level='WARNING'):
+        with override_settings(TRUSTS_SQL_BIND_ONCE=True):
+            bound, bound_queries = _capture_call(call)
+    test.assertEqual(bound, plain)
+    recursive = [
+        sql for sql in plain_queries if 'RECURSIVE' in sql.upper()
+    ]
+    if recursive:
+        bound_recursive = [
+            sql for sql in bound_queries if 'RECURSIVE' in sql.upper()
+        ]
+        test.assertEqual(len(bound_recursive), len(recursive))
+        for sql in bound_recursive:
+            test.assertIn('trusts_bind', sql)
+        for sql in plain_queries:
+            test.assertNotIn('trusts_bind', sql)
+    return bound
+
+
 def _row_inquiries(handle, actor, obj, *, code, change, content_model, prefixes):
     """Filtered entry points for one object, and the prefix listing.
 
@@ -5072,6 +5108,8 @@ class SponsorAncestorRowTest(TransactionTestCase):
             # The decoy reuses the grant primary key. The real pages do not.
             shapes = (
                 ('ordinary', ada, None),
+                # The same ancestor and protected row, with no ``via=``.
+                ('along', ada, None),
                 ('delegate', bea, ('delegate__via_manager', 1)),
                 ('sponsor', bea, ('sponsor__via_manager', 1)),
                 # Ordinary ``via=`` replaces the sponsor user on the
@@ -5126,7 +5164,7 @@ class SponsorAncestorRowTest(TransactionTestCase):
                 if name in ('ordinary', 'grant-via'):
                     grant['via'] = ('user__via_manager', 1)
                 handle.register(**grant)
-                if name != 'ordinary':
+                if name not in ('ordinary', 'along'):
                     hand = dict(
                         trust=PageHandoff, delegate='delegate',
                         sponsor='sponsor', content='office__cabinets__pages',
@@ -5164,6 +5202,61 @@ class SponsorAncestorRowTest(TransactionTestCase):
                         self.assertEqual(
                             listed, {office.pk} if allowed_name else set(),
                         )
+                        filtered = '%s:kept' % code
+                        sample = pages.get(allowed_name) or next(iter(pages.values()))
+                        expect_sample = sample is pages.get(allowed_name)
+                        with _listed(handle):
+
+                            def offices():
+                                return set(filter_by_permitted_content(
+                                    Office.objects.all(), actor, change,
+                                    content=Page, conditions=('kept',),
+                                ).values_list('pk', flat=True))
+
+                            def cabinets():
+                                return set(filter_by_permitted_content(
+                                    Cabinet.objects.all(), actor, change,
+                                    content=Page, conditions=('kept',),
+                                ).values_list('pk', flat=True))
+
+                            self.assertEqual(
+                                _assert_binds_once(self, offices), listed,
+                            )
+                            cabinets_listed = _assert_binds_once(self, cabinets)
+                            if allowed_name is not None:
+                                self.assertEqual(cabinets_listed, {child.pk})
+                            else:
+                                self.assertEqual(cabinets_listed, set())
+                            self.assertIs(
+                                _assert_binds_once(
+                                    self, lambda: actor.has_perm(filtered, sample),
+                                ),
+                                expect_sample,
+                            )
+                            self.assertIs(
+                                _assert_binds_once(self, lambda: (
+                                    sample.pk in set(Page.objects.permitted(
+                                        code, actor, conditions=('kept',),
+                                    ).values_list('pk', flat=True))
+                                )),
+                                expect_sample,
+                            )
+                            self.assertIs(
+                                _assert_binds_once(self, lambda: (
+                                    actor.pk in set(sample.get_permitted_users(
+                                        filtered,
+                                    ).values_list('pk', flat=True))
+                                )),
+                                expect_sample,
+                            )
+                            # Named filters are not part of these two inquiries.
+                            # Bind_once on and off still have to agree.
+                            _assert_binds_once(self, lambda: (
+                                code in actor.get_all_permissions(sample)
+                            ))
+                            _assert_binds_once(self, lambda: (
+                                code in actor.get_group_permissions(sample)
+                            ))
 
     def test_same_model_does_not_read_the_grant_row(self):
         """A grant that is the content model is not the protected row.
