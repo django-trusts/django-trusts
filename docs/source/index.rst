@@ -837,8 +837,6 @@ that object, and its value is carried into a user-row ``via=`` walk.
 A repeated link adds no user. The bound stops the walk, and the users
 reached are the users reached with that link removed.
 
-A user override grants without this walk.
-
 On a delegated registration, ``via=`` walks ``delegate=`` or
 ``sponsor=``, the one whose path shares the prefix. A delegate walk
 reaches the users who may act for that row. A sponsor walk reaches the
