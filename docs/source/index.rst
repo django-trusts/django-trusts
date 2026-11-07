@@ -425,7 +425,9 @@ List the user's permissions on an object:
    user.get_all_permissions(document)
    # {"documents.change_document"}
 
-List only the permissions obtained through registered Django groups:
+List only the permissions obtained through registered Django groups the user
+belongs to; a permission a delegate holds through its sponsor's group is not
+included:
 
 .. code-block:: python
 
@@ -440,15 +442,6 @@ group-derived subset.
 A ``permission=`` registration is not treated as group-derived merely because its
 ``user=`` path crosses ``auth.Group``; only explicit ``group=`` registrations
 contribute to ``get_group_permissions()``.
-
-.. _inquiry-agreement:
-
-Those six inquiries agree only for an applicable ordinary ``group=``
-registration: ``has_perm()``, ``.permitted()``,
-``filter_by_permitted_content``, ``get_all_permissions()``,
-``get_group_permissions()``, and ``get_permitted_users()``.
-``get_group_permissions()`` does not include a delegation or an ordinary
-``permission=`` record.
 
 Filter a queryset to the objects permitted for a particular permission:
 
@@ -766,8 +759,7 @@ delegated registrations. For example, ``along=("parent", 8)`` on
 permitted-content querysets, permission enumeration, users from content, and
 authorization-policy output. See the `bounded-reach security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
-for the recursive-query and database boundaries. Inquiry agreement for
-that walk is :ref:`stated above <inquiry-agreement>`.
+for the recursive-query and database boundaries.
 
 .. _nested-users:
 
@@ -845,8 +837,7 @@ that object, and its value is carried into a user-row ``via=`` walk.
 A repeated link adds no user. The bound stops the walk, and the users
 reached are the users reached with that link removed.
 
-Inquiry agreement for this walk is :ref:`stated above <inquiry-agreement>`. A user
-override grants without this walk.
+A user override grants without this walk.
 
 On a delegated registration, ``via=`` walks ``delegate=`` or
 ``sponsor=``, the one whose path shares the prefix. A delegate walk

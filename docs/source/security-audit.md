@@ -430,8 +430,7 @@ bounded reachability. Audit:
 - the resolved identity at every hop;
 - the supported database renderer; and
 - agreement among object, queryset, enumeration, and users-from-content
-  projections, as stated in the setup guide's
-  [inquiry agreement](index.rst#inquiry-agreement).
+  projections.
 
 The inquiry for users from content derives walk-site identities from the bound content and
 traverses the inverse graph without the outer candidate user. Eligible grants
@@ -492,12 +491,11 @@ reaches. A condition with `on="user"` applies to the checked user and to
 users reached on the delegate side. The relationship `condition=` stays on
 the grant row.
 
-Inquiry agreement for this walk is the setup guide's
-[inquiry agreement](index.rst#inquiry-agreement). The inquiry for users
-from content seeds the walk from grants on that content. An object check
-can walk the inverse from the candidate user. Either form must return the
-same users. If the walk cannot be rendered, the inquiry raises before SQL
-rather than returning a broader set. The policy output does the same.
+The inquiry for users from content seeds the walk from grants on that
+content. An object check can walk the inverse from the candidate user.
+Either form must return the same users. If the walk cannot be rendered, the
+inquiry raises before SQL rather than returning a broader set. The policy
+output does the same.
 
 `via=` on an ordinary registration walks the `user=` path. On a delegated
 registration it walks `delegate=` or `sponsor=`, the path that shares the
