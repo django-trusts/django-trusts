@@ -16,7 +16,7 @@ from django.core.exceptions import PermissionDenied
 from django.db import connection, models
 from django.http import HttpRequest
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
-from django.test.utils import isolate_apps
+from django.test.utils import CaptureQueriesContext, isolate_apps
 
 from tests.support import (
     built_catalog,
@@ -26,6 +26,7 @@ from tests.support import (
     scoped_permitted_content,
 )
 from trusts.backends import TrustModelBackendMixin
+from trusts.plan import rewrites as bind_once_module
 from trusts.compile.graph import Along, Ref
 from trusts.decorators import authorization_required, filter_by_permitted_content
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
@@ -5030,4 +5031,737 @@ class PrefixOccurrenceTest(TransactionTestCase):
             self.assertIs(unfiltered_east, True)
             self.assertIs(unfiltered_grand, False)
             self.assertIs(grouped, False)
+
+
+def _capture_call(call):
+    """Return ``call()`` and each SQL statement it ran."""
+    with CaptureQueriesContext(connection) as captured:
+        result = call()
+    return result, [item['sql'] for item in captured.captured_queries]
+
+
+def _assert_binds_once(test, call):
+    """``call`` agrees with bind_once off and does not fall back.
+
+    An along statement contains ``RECURSIVE``. That statement names the
+    ``trusts_bind`` row when binding is on, and does not when it is off.
+    """
+    with override_settings(TRUSTS_SQL_BIND_ONCE=False):
+        plain, plain_queries = _capture_call(call)
+    bind_once_module._warned = False
+    with test.assertNoLogs('trusts', level='WARNING'):
+        with override_settings(TRUSTS_SQL_BIND_ONCE=True):
+            bound, bound_queries = _capture_call(call)
+    test.assertEqual(bound, plain)
+    recursive = [
+        sql for sql in plain_queries if 'RECURSIVE' in sql.upper()
+    ]
+    if recursive:
+        bound_recursive = [
+            sql for sql in bound_queries if 'RECURSIVE' in sql.upper()
+        ]
+        test.assertEqual(len(bound_recursive), len(recursive))
+        for sql in bound_recursive:
+            test.assertIn('trusts_bind', sql)
+        for sql in plain_queries:
+            test.assertNotIn('trusts_bind', sql)
+    return bound
+
+
+def _row_inquiries(handle, actor, obj, *, code, change, content_model, prefixes):
+    """Filtered entry points for one object, and the prefix listing.
+
+    The listing is one question about the prefix, not about this object.
+    Callers assert it once per case.
+    """
+    filtered = '%s:kept' % code
+    with _listed(handle):
+        has = actor.has_perm(filtered, obj)
+        permitted = obj.pk in set(content_model.objects.permitted(
+            code, actor, conditions=('kept',),
+        ).values_list('pk', flat=True))
+        reached = actor.pk in set(obj.get_permitted_users(
+            filtered,
+        ).values_list('pk', flat=True))
+        listed = set(filter_by_permitted_content(
+            prefixes, actor, change,
+            content=content_model, conditions=('kept',),
+        ).values_list('pk', flat=True))
+
+        @authorization_required(content_model, code, ('kept',))
+        def view(request, pk):
+            return 'ok'
+
+        try:
+            view(_request(actor), pk=obj.pk)
+            guarded = True
+        except PermissionDenied:
+            guarded = False
+    return {
+        'has_perm': has,
+        'permitted': permitted,
+        'get_permitted_users': reached,
+        'authorization_required': guarded,
+    }, listed
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class SponsorAncestorRowTest(TransactionTestCase):
+    """The hop and the grant come from the same protected row.
+
+    Two pages sit under one ancestor. Their primary keys do not match
+    the grant. A decoy page uses the grant's primary key and the other
+    region, so a correlation of ``page.id = grant.id`` reads the decoy.
+    Only a page that itself satisfies the hop is permitted. A hop-only
+    page does not combine with an authority-only page. ``has_perm``,
+    ``.permitted()``, ``get_permitted_users()``, and
+    ``filter_by_permitted_content`` agree. The content path is
+    ``office__cabinets__pages``. The shapes are an ordinary ``via=``,
+    a delegate ``via=``, a sponsor ``via=``, and an ordinary ``via=``
+    that replaces the sponsor user.
+    """
+
+    def test_hop_and_authority_use_one_row(self):
+        User = get_user_model()
+        _attach_manager(self, User)
+
+        class Office(models.Model):
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_probe_office'
+
+        class Cabinet(models.Model):
+            office = models.ForeignKey(
+                Office, related_name='cabinets', on_delete=models.CASCADE,
+            )
+            parent = models.ForeignKey(
+                'self', null=True, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_probe_cabinet'
+
+        class PageQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Page(PermittedUsersMixin, models.Model):
+            region = models.CharField(max_length=20)
+            mark = models.CharField(max_length=20)
+            cabinet = models.ForeignKey(
+                Cabinet, related_name='pages', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(PageQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_probe_page'
+
+        class OfficeGrant(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            office = models.ForeignKey(Office, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_probe_grant'
+
+        class PageHandoff(models.Model):
+            office = models.ForeignKey(Office, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(
+                User, related_name='+', on_delete=models.CASCADE,
+            )
+            sponsor = models.ForeignKey(
+                User, related_name='+', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_probe_handoff'
+
+        _add_user_column(
+            self, User, 'zone', models.CharField(max_length=20, null=True),
+        )
+        with _tables(Office, Cabinet, Page, OfficeGrant, PageHandoff):
+            change = _permission(Page, 'change_rowpage')
+            code = 'trusts_tests.change_rowpage'
+            ada = User.objects.create_user('row-ada', password='x')
+            bea = User.objects.create_user('row-bea', password='x')
+            cy = User.objects.create_user('row-cy', password='x')
+            for person in (ada, bea, cy):
+                person.zone = 'east'
+            ada.via_manager = cy
+            bea.via_manager = cy
+            ada.save()
+            bea.save()
+            cy.save()
+            office = Office.objects.create(pk=50)
+            root = Cabinet.objects.create(office=office, pk=60)
+            child = Cabinet.objects.create(office=office, parent=root, pk=61)
+            # The decoy reuses the grant primary key. The real pages do not.
+            shapes = (
+                ('ordinary', ada, None),
+                # The same ancestor and protected row, with no ``via=``.
+                ('along', ada, None),
+                ('delegate', bea, ('delegate__via_manager', 1)),
+                ('sponsor', bea, ('sponsor__via_manager', 1)),
+                # Ordinary ``via=`` replaces the sponsor user on the
+                # same ancestor. The hop still has to read the page the
+                # grant reaches.
+                ('grant-via', bea, 'ordinary'),
+            )
+
+            def plant(case):
+                Page.objects.all().delete()
+                OfficeGrant.objects.all().delete()
+                PageHandoff.objects.all().delete()
+                if case == 'positive':
+                    pages = {
+                        'decoy': Page.objects.create(
+                            pk=100, region='west', mark='yes', cabinet=child,
+                        ),
+                        'other': Page.objects.create(
+                            pk=11, region='west', mark='yes', cabinet=child,
+                        ),
+                        'kept': Page.objects.create(
+                            pk=22, region='east', mark='yes', cabinet=child,
+                        ),
+                    }
+                else:
+                    pages = {
+                        'decoy': Page.objects.create(
+                            pk=100, region='east', mark='no', cabinet=child,
+                        ),
+                        'other': Page.objects.create(
+                            pk=11, region='west', mark='yes', cabinet=child,
+                        ),
+                    }
+                OfficeGrant.objects.create(
+                    pk=100, user=ada, office=office, permission=change,
+                )
+                return pages
+
+            def register(name, case, via):
+                handle = compiler(path='tests.core.via-row-%s-%s' % (name, case))
+                handle.add_named_filter(
+                    Page, 'kept',
+                    lambda user, permission, content: (
+                        (user.zone == content.region) & (content.mark == 'yes')
+                    ),
+                )
+                grant = dict(
+                    trust=OfficeGrant, user='user', permission='permission',
+                    content='office__cabinets__pages',
+                    along=('office__cabinets__parent', 1),
+                )
+                if name in ('ordinary', 'grant-via'):
+                    grant['via'] = ('user__via_manager', 1)
+                handle.register(**grant)
+                if name not in ('ordinary', 'along'):
+                    hand = dict(
+                        trust=PageHandoff, delegate='delegate',
+                        sponsor='sponsor', content='office__cabinets__pages',
+                        along=('office__cabinets__parent', 1),
+                    )
+                    if via not in (None, 'ordinary'):
+                        hand['via'] = via
+                    handle.register(**hand)
+                    PageHandoff.objects.create(
+                        pk=80, office=office, delegate=bea, sponsor=ada,
+                    )
+                return handle
+
+            for name, actor, via in shapes:
+                for case, allowed_name in (
+                    ('positive', 'kept'),
+                    ('split', None),
+                ):
+                    pages = plant(case)
+                    handle = register(name, case, via)
+                    with self.subTest(shape=name, case=case):
+                        listed = None
+                        for label, page in pages.items():
+                            got, listed = _row_inquiries(
+                                handle, actor, page, code=code, change=change,
+                                content_model=Page, prefixes=Office.objects.all(),
+                            )
+                            allowed = label == allowed_name
+                            self.assertEqual(got, {
+                                'has_perm': allowed,
+                                'permitted': allowed,
+                                'get_permitted_users': allowed,
+                                'authorization_required': allowed,
+                            }, label)
+                        self.assertEqual(
+                            listed, {office.pk} if allowed_name else set(),
+                        )
+                        filtered = '%s:kept' % code
+                        sample = pages.get(allowed_name) or next(iter(pages.values()))
+                        expect_sample = sample is pages.get(allowed_name)
+                        with _listed(handle):
+
+                            def offices():
+                                return set(filter_by_permitted_content(
+                                    Office.objects.all(), actor, change,
+                                    content=Page, conditions=('kept',),
+                                ).values_list('pk', flat=True))
+
+                            def cabinets():
+                                return set(filter_by_permitted_content(
+                                    Cabinet.objects.all(), actor, change,
+                                    content=Page, conditions=('kept',),
+                                ).values_list('pk', flat=True))
+
+                            self.assertEqual(
+                                _assert_binds_once(self, offices), listed,
+                            )
+                            cabinets_listed = _assert_binds_once(self, cabinets)
+                            if allowed_name is not None:
+                                self.assertEqual(cabinets_listed, {child.pk})
+                            else:
+                                self.assertEqual(cabinets_listed, set())
+                            self.assertIs(
+                                _assert_binds_once(
+                                    self, lambda: actor.has_perm(filtered, sample),
+                                ),
+                                expect_sample,
+                            )
+                            self.assertIs(
+                                _assert_binds_once(self, lambda: (
+                                    sample.pk in set(Page.objects.permitted(
+                                        code, actor, conditions=('kept',),
+                                    ).values_list('pk', flat=True))
+                                )),
+                                expect_sample,
+                            )
+                            self.assertIs(
+                                _assert_binds_once(self, lambda: (
+                                    actor.pk in set(sample.get_permitted_users(
+                                        filtered,
+                                    ).values_list('pk', flat=True))
+                                )),
+                                expect_sample,
+                            )
+                            # Named filters are not part of these two inquiries.
+                            # Bind_once on and off still have to agree.
+                            _assert_binds_once(self, lambda: (
+                                code in actor.get_all_permissions(sample)
+                            ))
+                            _assert_binds_once(self, lambda: (
+                                code in actor.get_group_permissions(sample)
+                            ))
+
+    def test_same_model_does_not_read_the_grant_row(self):
+        """A grant that is the content model is not the protected row.
+
+        The grant node and the candidate node are both ``Node`` and hold
+        different regions. The hop has to read the candidate.
+        """
+        User = get_user_model()
+        _attach_manager(self, User)
+
+        class NodeQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Node(PermittedUsersMixin, models.Model):
+            region = models.CharField(max_length=20)
+            mark = models.CharField(max_length=20)
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+            user = models.ForeignKey(
+                User, null=True, on_delete=models.CASCADE, related_name='+',
+            )
+            permission = models.ForeignKey(
+                Permission, null=True, on_delete=models.CASCADE, related_name='+',
+            )
+            delegate = models.ForeignKey(
+                User, null=True, on_delete=models.CASCADE, related_name='+',
+            )
+            sponsor = models.ForeignKey(
+                User, null=True, on_delete=models.CASCADE, related_name='+',
+            )
+            objects = models.Manager.from_queryset(NodeQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_same_model_node'
+
+        _add_user_column(
+            self, User, 'zone', models.CharField(max_length=20, null=True),
+        )
+        with _tables(Node):
+            change = _permission(Node, 'change_samemodel')
+            code = 'trusts_tests.change_samemodel'
+            ada = User.objects.create_user('same-ada', password='x')
+            bea = User.objects.create_user('same-bea', password='x')
+            cy = User.objects.create_user('same-cy', password='x')
+            for person in (ada, bea, cy):
+                person.zone = 'east'
+            ada.via_manager = cy
+            bea.via_manager = cy
+            ada.save()
+            bea.save()
+            cy.save()
+            parent = Node.objects.create(
+                pk=1, region='west', mark='no',
+            )
+            # The grant row is a Node. Its region is not the candidate's.
+            grant = Node.objects.create(
+                pk=2, region='west', mark='yes', parent=parent,
+                user=ada, permission=change,
+            )
+            kept = Node.objects.create(
+                pk=3, region='east', mark='yes', parent=parent,
+            )
+            other = Node.objects.create(
+                pk=4, region='west', mark='yes', parent=parent,
+            )
+            shapes = (
+                ('ordinary', ada, False),
+                ('sponsor', bea, True),
+                ('delegate', bea, True),
+            )
+            for name, actor, handoff in shapes:
+                handle = compiler(path='tests.core.via-same-model-%s' % name)
+                handle.add_named_filter(
+                    Node, 'kept',
+                    lambda user, permission, content: (
+                        (user.zone == content.region) & (content.mark == 'yes')
+                    ),
+                )
+                grant_reg = dict(
+                    trust=Node, user='user', permission='permission',
+                    content='parent__children',
+                )
+                if name == 'ordinary':
+                    grant_reg['via'] = ('user__via_manager', 1)
+                handle.register(**grant_reg)
+                if handoff:
+                    via = (
+                        ('sponsor__via_manager', 1) if name == 'sponsor'
+                        else ('delegate__via_manager', 1)
+                    )
+                    handle.register(
+                        trust=Node, delegate='delegate', sponsor='sponsor',
+                        content='parent__children', via=via,
+                    )
+                    Node.objects.filter(pk=grant.pk).update(
+                        delegate=bea, sponsor=ada,
+                    )
+                with self.subTest(shape=name):
+                    listed = None
+                    for label, node, allowed in (
+                        ('kept', kept, True),
+                        ('grant', grant, False),
+                        ('other', other, False),
+                        ('parent', parent, False),
+                    ):
+                        got, listed = _row_inquiries(
+                            handle, actor, node, code=code, change=change,
+                            content_model=Node, prefixes=Node.objects.all(),
+                        )
+                        self.assertEqual(got, {
+                            'has_perm': allowed,
+                            'permitted': allowed,
+                            'get_permitted_users': allowed,
+                            'authorization_required': allowed,
+                        }, label)
+                    self.assertEqual(listed, {parent.pk})
+
+
+def _to_many_answers(ordinary_along, split=False, cross=False):
+    """Two drawers, and what each entry point answers.
+
+    The low page fails the content condition. The high page satisfies
+    it. Neither real primary key matches the grant. A decoy page
+    reuses the grant primary key, sits on the low drawer, and fails
+    the condition. Without ``split``, one office holds both drawers,
+    so the grant and the handoff reach both. With ``split``, the
+    grant's office reaches only the low drawer and the handoff's
+    office reaches both. ``cross`` makes the low page's parent the
+    high page, so an ``along=`` step can leave drawer 1.
+    """
+    User = get_user_model()
+
+    class Office(models.Model):
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'slice_office'
+
+    class Drawer(models.Model):
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'slice_drawer'
+
+    class Cabinet(models.Model):
+        office = models.ForeignKey(
+            Office, related_name='cabinets', on_delete=models.CASCADE,
+        )
+        drawer = models.ForeignKey(
+            Drawer, related_name='cabinets', on_delete=models.CASCADE,
+        )
+
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'slice_cabinet'
+
+    class PageQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+        pass
+
+    class Page(PermittedUsersMixin, models.Model):
+        region = models.CharField(max_length=20)
+        mark = models.CharField(max_length=20)
+        drawer = models.ForeignKey(
+            Drawer, related_name='pages', on_delete=models.CASCADE,
+        )
+        parent = models.ForeignKey(
+            'self', null=True, related_name='children',
+            on_delete=models.CASCADE,
+        )
+        objects = models.Manager.from_queryset(PageQuerySet)()
+
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'slice_page'
+
+    class OfficeGrant(models.Model):
+        user = models.ForeignKey(
+            User, on_delete=models.CASCADE, related_name='+',
+        )
+        office = models.ForeignKey(Office, on_delete=models.CASCADE)
+        permission = models.ForeignKey(
+            Permission, on_delete=models.CASCADE, related_name='+',
+        )
+
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'slice_grant'
+
+    class PageHandoff(models.Model):
+        office = models.ForeignKey(Office, on_delete=models.CASCADE)
+        delegate = models.ForeignKey(
+            User, related_name='+', on_delete=models.CASCADE,
+        )
+        sponsor = models.ForeignKey(
+            User, related_name='+', on_delete=models.CASCADE,
+        )
+
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'slice_handoff'
+
+    content = 'office__cabinets__drawer__pages'
+    along = ('office__cabinets__drawer__pages__parent', 1)
+    with _tables(Office, Drawer, Cabinet, Page, OfficeGrant, PageHandoff):
+        change = _permission(Page, 'change_slicepage')
+        code = 'trusts_tests.change_slicepage'
+        suffix = '%s-%s-%s' % (
+            'along' if ordinary_along else 'exact',
+            'split' if split else 'shared',
+            'cross' if cross else 'apart',
+        )
+        ada = User.objects.create_user('slice-ada-%s' % suffix, password='x')
+        bea = User.objects.create_user('slice-bea-%s' % suffix, password='x')
+        ada.zone = 'east'
+        bea.zone = 'east'
+        ada.save()
+        bea.save()
+        grant_office = Office.objects.create(pk=50)
+        handoff_office = Office.objects.create(pk=51) if split else grant_office
+        low = Drawer.objects.create(pk=1)
+        high = Drawer.objects.create(pk=2)
+        Cabinet.objects.create(pk=3, office=grant_office, drawer=low)
+        if split:
+            Cabinet.objects.create(pk=4, office=handoff_office, drawer=low)
+            Cabinet.objects.create(pk=5, office=handoff_office, drawer=high)
+        else:
+            Cabinet.objects.create(pk=4, office=grant_office, drawer=high)
+        pages = {
+            'low': Page.objects.create(
+                pk=11, region='east', mark='no', drawer=low,
+            ),
+            'high': Page.objects.create(
+                pk=22, region='east', mark='yes', drawer=high,
+            ),
+            'decoy': Page.objects.create(
+                pk=100, region='west', mark='yes', drawer=low,
+            ),
+        }
+        if cross:
+            # The walk follows ``parent`` toward children: a page whose
+            # parent is the granted page.
+            pages['high'].parent = pages['low']
+            pages['high'].save()
+        OfficeGrant.objects.create(
+            pk=100, user=ada, office=grant_office, permission=change,
+        )
+        PageHandoff.objects.create(
+            pk=80, office=handoff_office, delegate=bea, sponsor=ada,
+        )
+        handle = compiler(path='tests.core.slice-%s' % (
+            'along' if ordinary_along else 'exact',
+        ))
+        handle.add_named_filter(
+            Page, 'kept',
+            lambda user, permission, content: (
+                (user.zone == content.region) & (content.mark == 'yes')
+            ),
+        )
+        grant = dict(
+            trust=OfficeGrant, user='user', permission='permission',
+            content=content,
+        )
+        if ordinary_along:
+            grant['along'] = along
+        handle.register(**grant)
+        handle.register(
+            trust=PageHandoff, delegate='delegate', sponsor='sponsor',
+            content=content, along=along,
+        )
+        report = {
+            'grant': 100,
+            'decoy_pk': pages['decoy'].pk,
+            'drawers': {low.pk, high.pk},
+            'page_drawers': {
+                label: page.drawer_id for label, page in pages.items()
+            },
+            'answers': {},
+        }
+        listed = None
+        for label, page in pages.items():
+            got, listed = _row_inquiries(
+                handle, bea, page, code=code, change=change,
+                content_model=Page, prefixes=Drawer.objects.all(),
+            )
+            report['answers'][label] = got
+        report['listed'] = listed
+        return report
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class ToManyPrefixSliceTest(TransactionTestCase):
+    """A prefix that crosses a reverse foreign key keeps every row.
+
+    ``register()`` accepts ``office__cabinets__drawer__pages``: a
+    forward hop, a reverse one-to-many, then a forward hop and a
+    reverse suffix. Listing the drawer is an ancestor of the page
+    walk. The high page is the only one the condition keeps, so its
+    drawer is the prefix listing returns. The decoy reuses the grant
+    primary key.
+    """
+
+    def setUp(self):
+        super().setUp()
+        _add_user_column(
+            self, get_user_model(), 'zone',
+            models.CharField(max_length=20, null=True),
+        )
+
+    def test_handoff_prefix_keeps_every_related_drawer(self):
+        """``_sponsor_rows_for_handoff`` matches every related prefix.
+
+        The ordinary grant walks too, so the sheet uses that handoff
+        match and not the second comparison on the page. ``has_perm``,
+        ``.permitted()``, ``get_permitted_users`` and
+        ``authorization_required`` allow the high page, and the drawer
+        listing is that page's drawer.
+        """
+        report = _to_many_answers(True)
+        expected = _same_row_kept()
+        self.assertEqual(report['answers'], expected['answers'])
+        self.assertEqual(report['listed'], expected['listed'])
+
+    def test_sheet_prefix_keeps_every_related_drawer(self):
+        """``_same_sheet_in_both_walks`` matches every related prefix.
+
+        The ordinary grant does not walk, so the sheet also requires
+        the protected page's prefix to be one of the handoff's rows.
+        The page entry points allow the high page, and the drawer
+        listing is that page's drawer.
+        """
+        report = _to_many_answers(False)
+        expected = _same_row_kept()
+        self.assertEqual(report['answers'], expected['answers'])
+        self.assertEqual(report['listed'], expected['listed'])
+
+    def test_along_grant_on_one_drawer_does_not_cover_the_other(self):
+        """A walking grant on drawer 1 does not cover drawer 2's page.
+
+        The ordinary grant reaches only the low drawer. The handoff
+        reaches both. Only the high page passes the overlay.
+        """
+        self._assert_split_is_denied(True)
+
+    def test_exact_grant_on_one_drawer_does_not_cover_the_other(self):
+        """A grant without ``along=`` on drawer 1 does not cover drawer 2.
+
+        Same offices as the walking grant. The sheet's prefix membership
+        still has to be the grant's drawer, not the handoff's other one.
+        """
+        self._assert_split_is_denied(False)
+
+    def test_along_step_can_reach_the_other_drawer(self):
+        """The walk may step from the granted drawer onto the other page.
+
+        The low page is the grant's page and fails the overlay. The
+        high page's parent is that low page, so ``along=`` includes
+        the high page. It is allowed and its drawer is listed. A grant
+        that does not walk does not gain that child.
+        """
+        allowed = _same_row_kept()['answers']['high']
+        denied = _denied_answers()
+        walking = _to_many_answers(True, split=True, cross=True)
+        self.assertEqual(walking['answers'], {
+            'low': denied,
+            'high': allowed,
+            'decoy': denied,
+        })
+        self.assertEqual(walking['listed'], {2})
+
+    def test_exact_grant_does_not_follow_the_parent_step(self):
+        """Without ``along=``, the parent on the other drawer stays denied."""
+        self._assert_split_is_denied(False, cross=True)
+
+    def _assert_split_is_denied(self, ordinary_along, cross=False):
+        denied = _denied_answers()
+        report = _to_many_answers(ordinary_along, split=True, cross=cross)
+        self.assertEqual(report['answers'], {
+            'low': denied,
+            'high': denied,
+            'decoy': denied,
+        })
+        self.assertEqual(report['listed'], set())
+
+
+def _denied_answers():
+    return {
+        'has_perm': False,
+        'permitted': False,
+        'get_permitted_users': False,
+        'authorization_required': False,
+    }
+
+
+def _same_row_kept():
+    allowed = {
+        'has_perm': True,
+        'permitted': True,
+        'get_permitted_users': True,
+        'authorization_required': True,
+    }
+    denied = {key: False for key in allowed}
+    return {
+        'grant': 100,
+        'decoy_pk': 100,
+        'drawers': {1, 2},
+        'page_drawers': {'low': 1, 'high': 2, 'decoy': 1},
+        'answers': {'low': denied, 'high': allowed, 'decoy': denied},
+        'listed': {2},
+    }
 
