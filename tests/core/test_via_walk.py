@@ -30,6 +30,7 @@ from trusts.plan import rewrites as bind_once_module
 from trusts.compile.graph import Along, Ref
 from trusts.decorators import authorization_required, filter_by_permitted_content
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
+from trusts.functions import Exists
 from trusts.models import (
     AuthorizedQuerySet,
     PermittedQuerySetMixin,
@@ -2332,7 +2333,9 @@ class ViaHopFilterTest(TransactionTestCase):
                 lambda user: user.via_nick != 'stop',
                 {'ada': 'keep', 'ben': None, 'dee': 'keep', 'eve': 'stop'},
                 {},
-                {'ada': True, 'ben': True, 'cy': True, 'dee': True, 'eve': False},
+                # ben's NULL comparison is unknown and does not grant, so
+                # the walk stops before cy. cy's own nick would match.
+                {'ada': True, 'ben': False, 'cy': False, 'dee': True, 'eve': False},
             ),
             (
                 'eq-two-fields',
@@ -2394,8 +2397,10 @@ class ViaHopFilterTest(TransactionTestCase):
 
         Each case is the grant holder, so the hop seed and the queryset
         condition read the same row. One expected value is both answers.
-        ``!= True`` and ``!= False`` on a NULL boolean keep the row, the
-        same as ``.permitted()``. A ``!= None`` guard drops that row.
+        A NULL column compared with ``!=`` is unknown, so it does not
+        grant, on the walked hop and on ``.permitted()``. ``!= None`` is
+        the negation of ``== None``: unknown when the value is missing,
+        true only for a reached non-NULL column.
         """
         self._activate()
         ada = self.people['ada']
@@ -2411,7 +2416,7 @@ class ViaHopFilterTest(TransactionTestCase):
             ('null-eq-const', lambda user: user.via_nick == 'ada',
              dict(via_nick=None, via_other=None, via_reset=None), False),
             ('null-ne-const', lambda user: user.via_nick != 'ada',
-             dict(via_nick=None, via_other=None, via_reset=None), True),
+             dict(via_nick=None, via_other=None, via_reset=None), False),
             ('eq-const', lambda user: user.via_nick == 'ada',
              dict(via_nick='ada', via_other='ada', via_reset=True), True),
             ('ne-const', lambda user: user.via_nick != 'ada',
@@ -2435,9 +2440,9 @@ class ViaHopFilterTest(TransactionTestCase):
             ('bool-ne-true', lambda user: user.via_reset != True,  # noqa: E712
              dict(via_nick='ada', via_other='ada', via_reset=False), True),
             ('ne-bool-null', lambda user: user.via_reset != True,  # noqa: E712
-             dict(via_nick=None, via_other=None, via_reset=None), True),
+             dict(via_nick=None, via_other=None, via_reset=None), False),
             ('ne-bool-null-false', lambda user: user.via_reset != False,  # noqa: E712
-             dict(via_nick=None, via_other=None, via_reset=None), True),
+             dict(via_nick=None, via_other=None, via_reset=None), False),
             ('bool-ne-false', lambda user: user.via_reset != False,  # noqa: E712
              dict(via_nick='ada', via_other='ada', via_reset=True), True),
             ('ne-bool-false-held', lambda user: user.via_reset != False,  # noqa: E712
@@ -2467,7 +2472,7 @@ class ViaHopFilterTest(TransactionTestCase):
             ('not-bool-false', lambda user: ~user.via_reset,
              dict(via_nick='ada', via_other='ada', via_reset=False), True),
             ('not-bool-null', lambda user: ~user.via_reset,
-             dict(via_nick=None, via_other=None, via_reset=None), True),
+             dict(via_nick=None, via_other=None, via_reset=None), False),
             ('or-null', lambda user: (user.via_nick == None) | (user.via_reset == True),  # noqa: E711, E712
              dict(via_nick=None, via_other=None, via_reset=None), True),
             ('or-miss', lambda user: (user.via_nick == None) | (user.via_reset == True),  # noqa: E711, E712
@@ -2741,6 +2746,98 @@ class ViaPermissionTerminalTest(TransactionTestCase):
                 self.change.save(update_fields=['codename'])
                 self.assertIs(self._sees(handle, self.ada), False)
                 self.assertIs(self._sees(handle, self.ben), False)
+
+    def test_object_exists_in_a_user_or_is_rejected(self):
+        handle = compiler(path='tests.core.via-term.object-exists')
+        handle.add_named_filter(
+            self.Task, 'kept',
+            lambda user, permission, content: (
+                Exists(content.name) | (user.username == 'term-ada')
+            ),
+        )
+        with self.assertRaises(TrustsConfigurationError) as raised:
+            handle.register(
+                trust=self.models[1],
+                user='holder',
+                permission='permit',
+                content='task',
+                via=('holder__via_manager', 8),
+            )
+        self.assertIn('cannot be written', str(raised.exception))
+
+    def test_object_boolean_in_a_user_or_is_carried(self):
+        """A bare object boolean inside a user OR is that row's value.
+
+        The hop carries the saved flag. True makes the OR true for every
+        walked user. False leaves only the username match. NULL stays
+        unknown, including under NOT, so it does not grant.
+        """
+        _add_user_column(
+            self, self.Task, 'flag', models.BooleanField(null=True),
+        )
+
+        def open_handle(name, predicate):
+            handle = compiler(path='tests.core.via-term.%s' % name)
+            handle.add_named_filter(self.Task, 'kept', predicate)
+            handle.register(
+                trust=self.models[1],
+                user='holder',
+                permission='permit',
+                content='task',
+                via=('holder__via_manager', 8),
+            )
+            return handle
+
+        carried = open_handle(
+            'object-flag',
+            lambda user, permission, content: (
+                content.flag | (user.username == 'term-ada')
+            ),
+        )
+        negated = open_handle(
+            'object-flag-not',
+            lambda user, permission, content: (
+                (~content.flag) | (user.username == 'no-such-user')
+            ),
+        )
+        cases = (
+            (True, True, True, False, False),
+            (False, True, False, True, True),
+            (None, True, False, False, False),
+        )
+        for flag, ada_or, ben_or, ada_not, ben_not in cases:
+            self.task.flag = flag
+            self.task.save(update_fields=['flag'])
+            with self.subTest(flag=flag, shape='or'):
+                self.assertIs(self._sees(carried, self.ada), ada_or)
+                self.assertIs(self._sees(carried, self.ben), ben_or)
+            with self.subTest(flag=flag, shape='not'):
+                self.assertIs(self._sees(negated, self.ada), ada_not)
+                self.assertIs(self._sees(negated, self.ben), ben_not)
+
+    def test_scalar_permission_inequality_is_not_equal(self):
+        handle = compiler(path='tests.core.via-term.unequal-scalar')
+        handle.add_named_filter(
+            self.Task, 'kept',
+            lambda user, permission, content: (
+                user.username != permission.codename
+            ),
+        )
+        handle.register(
+            trust=self.models[1],
+            user='holder',
+            permission='permit',
+            content='task',
+            via=('holder__via_manager', 8),
+        )
+        self.change.codename = 'term-ada'
+        self.change.save(update_fields=['codename'])
+        self.assertIs(self._sees(handle, self.ada), False)
+        self.assertIs(self._sees(handle, self.ben), False)
+        self.change.codename = 'other-code'
+        self.change.save(update_fields=['codename'])
+        self.assertIs(self._sees(handle, self.ada), True)
+        self.assertIs(self._sees(handle, self.ben), True)
 
     def test_rejected_terminals(self):
         handle = compiler(path='tests.core.via-term.unequal')

@@ -9,7 +9,7 @@ __all__ = []
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import Permission
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Exists, F, Model, OuterRef, Q, Value
+from django.db.models import Exists, F, Model, OuterRef, Q
 
 from trusts.plan.conditions import (
     condition_model_key,
@@ -17,21 +17,15 @@ from trusts.plan.conditions import (
     resolve_field_path,
 )
 from trusts.plan.writers import (
-    boolean_holds,
-    boolean_q,
-    expression_q,
-    negate_q,
-    column_q,
-    columns_q,
     contains_q,
     member_pk,
-    values_match,
 )
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.utils import parse_perm_code
 from trusts.plan.contents import _as_q
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
-from trusts.plan.grammar import Tree, needs_expression, walk
+from trusts.plan.grammar import Tree
+from trusts.plan.trivalent import grant_q, has_contains
 
 
 def _reverse_checked(plan, exists, user_model, permission, content, values,
@@ -131,7 +125,19 @@ def _named_filter_q(named_filters, content, code, singular, user_model):
     return _condition_outcome(expr, content, singular, user_model)
 
 
+def _reverse_bindings(content, singular, user_model):
+    return {
+        'user': ('alias', user_model, ()),
+        'object': ('pk', content.__class__, content.pk),
+        'permission': ('permission', singular),
+    }
+
+
 def _condition_outcome(expr, content, singular, user_model):
+    if isinstance(expr, Tree) and not has_contains(expr):
+        return grant_q(
+            expr, _reverse_bindings(content, singular, user_model),
+        )
     if isinstance(expr, Tree) and expr.kind == 'and':
         return _combine_and(
             _condition_outcome(expr.left, content, singular, user_model),
@@ -142,19 +148,8 @@ def _condition_outcome(expr, content, singular, user_model):
             _condition_outcome(expr.left, content, singular, user_model),
             _condition_outcome(expr.right, content, singular, user_model),
         )
-    if isinstance(expr, Tree) and needs_expression(expr):
-        return _expression_outcome(expr, content, singular, user_model)
-    if isinstance(expr, Tree) and expr.kind in ('eq', 'ne'):
-        return _comparison_outcome(
-            expr, content, singular, user_model,
-            equal=expr.kind == 'eq',
-        )
     if isinstance(expr, Tree) and expr.kind == 'contains':
         return _contains_outcome(expr, content, singular, user_model)
-    if isinstance(expr, Tree) and expr.kind == 'bare':
-        return _bare_outcome(expr, content, singular, user_model)
-    if isinstance(expr, Tree) and expr.kind == 'not':
-        return _negated_outcome(expr, content, singular, user_model)
     raise TrustsConfigurationError(
         'Reverse permission inquiry cannot compile permission condition %r.'
         % (expr,)
@@ -220,27 +215,6 @@ def _contains_outcome(expr, content, singular, user_model):
     return _exists_q(content, contains_q(lookup, pk))
 
 
-def _bare_outcome(expr, content, singular, user_model):
-    field = expr.item
-    if field.root == 'user':
-        return boolean_q(_user_lookup(user_model, field.path))
-    if field.root == 'object':
-        lookup = _object_lookup(content, field.path)
-        return _exists_q(content, boolean_q(lookup))
-    if boolean_holds(_side_value(field, content, singular, user_model)):
-        return True
-    return None
-
-
-def _negated_outcome(expr, content, singular, user_model):
-    inner = _condition_outcome(expr.item, content, singular, user_model)
-    if inner is True:
-        return None
-    if inner is None:
-        return True
-    return negate_q(user_model, inner)
-
-
 def _side_value(node, content, singular, user_model):
     kind, value = _condition_side(node, content, singular, user_model)
     if kind == 'user' or kind == 'object':
@@ -249,67 +223,6 @@ def _side_value(node, content, singular, user_model):
             'node %r.' % (node,)
         )
     return value
-
-
-def _expression_outcome(expr, content, singular, user_model):
-    """Ordered comparison or function, in SQL. NULL does not grant."""
-    places = (_expression_place(expr.left), _expression_place(expr.right))
-    if 'mixed' in places:
-        raise TrustsConfigurationError(
-            'Reverse permission inquiry cannot compile permission condition %r.'
-            % (expr,)
-        )
-
-    def field(place):
-        def leaf(node):
-            return _reverse_field(node, place, content, singular, user_model)
-        return leaf
-
-    if 'object' not in places:
-        return expression_q(
-            expr, field('user'),
-            model=content.__class__, user_model=user_model,
-        )
-    # A user column outside the saved-row subquery is an outer reference.
-    left, right = (
-        field('object' if place == 'object' else 'outer') for place in places
-    )
-    return _exists_q(content, expression_q(
-        expr, left, right, model=content.__class__, user_model=user_model,
-    ))
-
-
-def _expression_place(node):
-    roots = {leaf.root for leaf in walk(node) if leaf.kind == 'field'}
-    roots.discard('permission')
-    if len(roots) > 1:
-        return 'mixed'
-    return roots.pop() if roots else 'either'
-
-
-def _reverse_field(node, place, content, singular, user_model):
-    if node.root == 'permission':
-        return Value(singular)
-    if node.root == 'user':
-        lookup = _user_lookup(user_model, node.path)
-        return OuterRef(lookup) if place == 'outer' else F(lookup)
-    return F(_object_lookup(content, node.path))
-
-
-def _comparison_outcome(expr, content, singular, user_model, *, equal):
-    left = _condition_side(expr.left, content, singular, user_model)
-    right = _condition_side(expr.right, content, singular, user_model)
-    if left[0] == 'user' and right[0] == 'user':
-        return columns_q(left[1], right[1], equal)
-    if left[0] == 'object' or right[0] == 'object':
-        return _object_comparison(content, left, right, equal)
-    fields = 'const' not in (left[0], right[0])
-    if left[0] == 'user' or right[0] == 'user':
-        column, other = (left, right) if left[0] == 'user' else (right, left)
-        return column_q(column[1], other[1], equal, field=fields)
-    if values_match(left[1], right[1], equal, fields=fields):
-        return True
-    return None
 
 
 def _condition_side(node, content, singular, user_model):
@@ -363,40 +276,6 @@ def _saved_rows(content):
 
 def _exists_q(content, q):
     return Q(Exists(_saved_rows(content).filter(q)))
-
-
-def _object_comparison(content, left, right, equal):
-    if left[0] == 'user' or right[0] == 'user':
-        user_side, object_side = (
-            (left, right) if left[0] == 'user' else (right, left)
-        )
-        return _user_object_q(
-            content, user_side[1], object_side[1], equal,
-        )
-    if left[0] == 'object' and right[0] == 'object':
-        return _exists_q(content, columns_q(left[1], right[1], equal))
-    object_side, other = (
-        (left, right) if left[0] == 'object' else (right, left)
-    )
-    fields = other[0] != 'const'
-    return _exists_q(
-        content,
-        column_q(object_side[1], other[1], equal, field=fields),
-    )
-
-
-def _user_object_q(content, user_lookup, object_lookup, equal):
-    """User column against one saved object column. NULL never matches."""
-    rows = _saved_rows(content)
-    matched = rows.filter(**{object_lookup: OuterRef(user_lookup)})
-    if equal:
-        return Q(Exists(matched))
-    present = rows.filter(**{'%s__isnull' % object_lookup: False})
-    return (
-        Q(**{'%s__isnull' % user_lookup: False})
-        & Q(Exists(present))
-        & ~Q(Exists(matched))
-    )
 
 
 def _concrete_field(model, name):

@@ -18,12 +18,12 @@ backends:
             permission: {path: "permission", model: "auth.Permission", target: "id"}
             content: {path: "document", model: "documents.Document", target: "id"}
         permitted:
-          params: ["$user.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "$permission.codename"]
+          params: ["$user.id", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "user.is_active=True", "$permission.codename"]
           sql: |-
             SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential"
             FROM "documents_document"
             CROSS JOIN (
-              SELECT %s AS "user_id", %s AS "is_active", %s AS "app_label", %s AS "model"
+              SELECT %s AS "user_id", %s AS "app_label", %s AS "model"
             ) "trusts_bind"
             WHERE (
               EXISTS (
@@ -31,7 +31,7 @@ backends:
                 FROM "auth_user" "U0"
                 WHERE ("U0"."id" = ("trusts_bind"."user_id")
                     AND ((%s)
-                      OR "U0"."is_active" = ("trusts_bind"."is_active")
+                      OR ("U0"."is_active" = %s)
                   )
                 )
                 LIMIT 1
@@ -60,12 +60,12 @@ backends:
                 LIMIT 1
               ) )
         has_perm:
-          params: ["$user.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "$permission.codename"]
+          params: ["$user.id", "$content.id", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "user.is_active=True", "$permission.codename"]
           sql: |-
             SELECT 1 AS "a"
             FROM "documents_document"
             CROSS JOIN (
-              SELECT %s AS "user_id", %s AS "content_pk", %s AS "is_active", %s AS "app_label", %s AS "model"
+              SELECT %s AS "user_id", %s AS "content_pk", %s AS "app_label", %s AS "model"
             ) "trusts_bind"
             WHERE ("documents_document"."id" = ("trusts_bind"."content_pk")
               AND EXISTS (
@@ -73,7 +73,7 @@ backends:
                 FROM "auth_user" "U0"
                 WHERE ("U0"."id" = ("trusts_bind"."user_id")
                     AND ((%s)
-                      OR "U0"."is_active" = ("trusts_bind"."is_active")
+                      OR ("U0"."is_active" = %s)
                   )
                 )
                 LIMIT 1
@@ -103,12 +103,12 @@ backends:
               ) )
             LIMIT 1
         get_all_permissions:
-          params: ["$user.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False"]
+          params: ["$user.id", "$content.id", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "user.is_active=True"]
           sql: |-
             SELECT DISTINCT "auth_permission"."id", "auth_permission"."name", "auth_permission"."content_type_id", "auth_permission"."codename", "django_content_type"."app_label", "django_content_type"."model"
             FROM "auth_permission"
             CROSS JOIN (
-              SELECT %s AS "user_id", %s AS "content_pk", %s AS "is_active", %s AS "app_label", %s AS "model"
+              SELECT %s AS "user_id", %s AS "content_pk", %s AS "app_label", %s AS "model"
             ) "trusts_bind"
             INNER JOIN "django_content_type" ON ("auth_permission"."content_type_id" = "django_content_type"."id")
             WHERE (
@@ -127,7 +127,7 @@ backends:
                         FROM "auth_user" "U0"
                         WHERE ("U0"."id" = ("trusts_bind"."user_id")
                             AND ((%s)
-                              OR "U0"."is_active" = ("trusts_bind"."is_active")
+                              OR ("U0"."is_active" = %s)
                           )
                         )
                         LIMIT 1
@@ -149,15 +149,15 @@ backends:
                 ) ) )
             ORDER BY "django_content_type"."app_label" ASC, "django_content_type"."model" ASC, "auth_permission"."codename" ASC
         get_permitted_users:
-          params: ["$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "$permission.codename"]
+          params: ["$content.id", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "user.is_active=True", "$permission.codename"]
           sql: |-
             SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined"
             FROM "auth_user"
             CROSS JOIN (
-              SELECT %s AS "content_id", %s AS "is_active", %s AS "app_label", %s AS "model"
+              SELECT %s AS "content_id", %s AS "app_label", %s AS "model"
             ) "trusts_bind"
             WHERE (((%s)
-                  OR "auth_user"."is_active" = ("trusts_bind"."is_active")
+                  OR ("auth_user"."is_active" = %s)
               )
               AND EXISTS (
                 SELECT 1 AS "a"
@@ -188,16 +188,14 @@ backends:
             sql: |-
               SELECT "documents_document"."id", "documents_document"."title", "documents_document"."confidential"
               FROM "documents_document"
-              WHERE ("documents_document"."confidential" IS NULL
-                  OR NOT ("documents_document"."confidential" = %s)
-              )
+              WHERE (NOT ("documents_document"."confidential" = %s))
             has_perm:
-              params: ["$user.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "$permission.codename", "confidential=True"]
+              params: ["$user.id", "$content.id", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "user.is_active=True", "$permission.codename", "confidential=True"]
               sql: |-
                 SELECT 1 AS "a"
                 FROM "documents_document"
                 CROSS JOIN (
-                  SELECT %s AS "user_id", %s AS "content_pk", %s AS "is_active", %s AS "app_label", %s AS "model"
+                  SELECT %s AS "user_id", %s AS "content_pk", %s AS "app_label", %s AS "model"
                 ) "trusts_bind"
                 WHERE ("documents_document"."id" = ("trusts_bind"."content_pk")
                   AND EXISTS (
@@ -205,7 +203,7 @@ backends:
                     FROM "auth_user" "U0"
                     WHERE ("U0"."id" = ("trusts_bind"."user_id")
                         AND ((%s)
-                          OR "U0"."is_active" = ("trusts_bind"."is_active")
+                          OR ("U0"."is_active" = %s)
                       )
                     )
                     LIMIT 1
@@ -233,18 +231,16 @@ backends:
                     )
                     LIMIT 1
                   )
-                    AND ("documents_document"."confidential" IS NULL
-                      OR NOT ("documents_document"."confidential" = %s)
-                  )
+                    AND (NOT ("documents_document"."confidential" = %s))
                 )
                 LIMIT 1
             permitted:
-              params: ["$user.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "$permission.codename", "confidential=True"]
+              params: ["$user.id", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "user.is_active=True", "$permission.codename", "confidential=True"]
               sql: |-
                 SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential"
                 FROM "documents_document"
                 CROSS JOIN (
-                  SELECT %s AS "user_id", %s AS "is_active", %s AS "app_label", %s AS "model"
+                  SELECT %s AS "user_id", %s AS "app_label", %s AS "model"
                 ) "trusts_bind"
                 WHERE (
                   EXISTS (
@@ -252,7 +248,7 @@ backends:
                     FROM "auth_user" "U0"
                     WHERE ("U0"."id" = ("trusts_bind"."user_id")
                         AND ((%s)
-                          OR "U0"."is_active" = ("trusts_bind"."is_active")
+                          OR ("U0"."is_active" = %s)
                       )
                     )
                     LIMIT 1
@@ -280,9 +276,7 @@ backends:
                     )
                     LIMIT 1
                   )
-                    AND ("documents_document"."confidential" IS NULL
-                      OR NOT ("documents_document"."confidential" = %s)
-                  )
+                    AND (NOT ("documents_document"."confidential" = %s))
                 )
   - path: "documents.backends.OrBackend"
     contents:
@@ -301,12 +295,12 @@ backends:
             content: {path: "document", model: "documents.Document", target: "id"}
             or_group: true
         permitted:
-          params: ["$user.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "$permission.codename", "$permission.codename"]
+          params: ["$user.id", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "user.is_active=True", "$permission.codename", "$permission.codename"]
           sql: |-
             SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential"
             FROM "documents_document"
             CROSS JOIN (
-              SELECT %s AS "user_id", %s AS "is_active", %s AS "app_label", %s AS "model"
+              SELECT %s AS "user_id", %s AS "app_label", %s AS "model"
             ) "trusts_bind"
             WHERE (
               EXISTS (
@@ -314,7 +308,7 @@ backends:
                 FROM "auth_user" "U0"
                 WHERE ("U0"."id" = ("trusts_bind"."user_id")
                     AND ((%s)
-                      OR "U0"."is_active" = ("trusts_bind"."is_active")
+                      OR ("U0"."is_active" = %s)
                   )
                 )
                 LIMIT 1
@@ -368,12 +362,12 @@ backends:
                   LIMIT 1
                 ) ) )
         has_perm:
-          params: ["$user.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "$permission.codename", "$permission.codename"]
+          params: ["$user.id", "$content.id", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "user.is_active=True", "$permission.codename", "$permission.codename"]
           sql: |-
             SELECT 1 AS "a"
             FROM "documents_document"
             CROSS JOIN (
-              SELECT %s AS "user_id", %s AS "content_pk", %s AS "is_active", %s AS "app_label", %s AS "model"
+              SELECT %s AS "user_id", %s AS "content_pk", %s AS "app_label", %s AS "model"
             ) "trusts_bind"
             WHERE ("documents_document"."id" = ("trusts_bind"."content_pk")
               AND EXISTS (
@@ -381,7 +375,7 @@ backends:
                 FROM "auth_user" "U0"
                 WHERE ("U0"."id" = ("trusts_bind"."user_id")
                     AND ((%s)
-                      OR "U0"."is_active" = ("trusts_bind"."is_active")
+                      OR ("U0"."is_active" = %s)
                   )
                 )
                 LIMIT 1
@@ -436,12 +430,12 @@ backends:
                 ) ) )
             LIMIT 1
         get_all_permissions:
-          params: ["$user.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False"]
+          params: ["$user.id", "$content.id", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "user.is_active=True"]
           sql: |-
             SELECT DISTINCT "auth_permission"."id", "auth_permission"."name", "auth_permission"."content_type_id", "auth_permission"."codename", "django_content_type"."app_label", "django_content_type"."model"
             FROM "auth_permission"
             CROSS JOIN (
-              SELECT %s AS "user_id", %s AS "content_pk", %s AS "is_active", %s AS "app_label", %s AS "model"
+              SELECT %s AS "user_id", %s AS "content_pk", %s AS "app_label", %s AS "model"
             ) "trusts_bind"
             INNER JOIN "django_content_type" ON ("auth_permission"."content_type_id" = "django_content_type"."id")
             WHERE (
@@ -460,7 +454,7 @@ backends:
                         FROM "auth_user" "U0"
                         WHERE ("U0"."id" = ("trusts_bind"."user_id")
                             AND ((%s)
-                              OR "U0"."is_active" = ("trusts_bind"."is_active")
+                              OR ("U0"."is_active" = %s)
                           )
                         )
                         LIMIT 1
@@ -497,15 +491,15 @@ backends:
                 ) ) )
             ORDER BY "django_content_type"."app_label" ASC, "django_content_type"."model" ASC, "auth_permission"."codename" ASC
         get_permitted_users:
-          params: ["$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "$permission.codename", "$permission.codename"]
+          params: ["$content.id", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "user.is_active=True", "$permission.codename", "$permission.codename"]
           sql: |-
             SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined"
             FROM "auth_user"
             CROSS JOIN (
-              SELECT %s AS "content_id", %s AS "is_active", %s AS "app_label", %s AS "model"
+              SELECT %s AS "content_id", %s AS "app_label", %s AS "model"
             ) "trusts_bind"
             WHERE (((%s)
-                  OR "auth_user"."is_active" = ("trusts_bind"."is_active")
+                  OR ("auth_user"."is_active" = %s)
               )
                 AND ( EXISTS (
                   SELECT 1 AS "a"

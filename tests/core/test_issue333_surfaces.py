@@ -164,7 +164,7 @@ def _relation_cases(member_pk):
         (
             'ne-const',
             lambda t: t.status != 'open',
-            lambda row: row.status != 'open',
+            lambda row: row.status is not None and row.status != 'open',
         ),
         (
             'eq-null',
@@ -187,7 +187,7 @@ def _relation_cases(member_pk):
         (
             'not',
             lambda t: ~t.flag,
-            lambda row: row.flag is not True,
+            lambda row: row.flag is False,
         ),
         (
             'contains',
@@ -209,8 +209,8 @@ def _relation_cases(member_pk):
         (
             'not-related',
             lambda t: ~t.marker.flag,
-            lambda row: not (
-                row.marker_id is not None and row.marker.flag is True
+            lambda row: (
+                row.marker_id is not None and row.marker.flag is False
             ),
         ),
     )
@@ -416,7 +416,7 @@ class SurfaceAgreementTest(TransactionTestCase):
             (
                 'off',
                 lambda u: ~u.is_staff,
-                lambda user: user.is_staff is not True,
+                lambda user: user.is_staff is False,
             ),
         )
         for name, builder, predicate in cases:
