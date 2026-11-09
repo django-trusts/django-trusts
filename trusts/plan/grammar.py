@@ -17,11 +17,10 @@ from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.hops import path_text
 
 # Public spelling of the reachability function. The class in
-# ``trusts.functions`` uses this same word. A later rename changes
-# ``EXISTS_NAME`` and that class together; ``EXISTS_KIND`` stays the
+# ``trusts.functions`` uses this same word. ``EXISTS_KIND`` stays the
 # stored node kind.
 EXISTS_KIND = 'exists'
-EXISTS_NAME = 'Exists'
+EXISTS_NAME = 'Reachable'
 
 _KIND_LABELS = {
     'eq': "'=='",
@@ -368,7 +367,7 @@ def _negatable(node):
 
     User rules at ``92141b0`` (``trusts/plan/standards.py`` ``Bit.__invert__``)
     accepted ``~`` on a boolean field and on ``&`` / nested ``~`` of those.
-    ``Exists()`` negates the same way: unknown is not a value it returns.
+    ``Reachable()`` negates the same way: unknown is not a value it returns.
     A comparison, ``.contains()``, or ``|`` is outside that shape, including
     one nested inside ``&`` or ``|``.
     """

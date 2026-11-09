@@ -712,14 +712,28 @@ Supported lambda expressions
 
 A condition lambda accepts ``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=``,
 ``&``, ``|``, ``.contains(member)``, a bare boolean field, and comparison
-with a constant, including ``None``; ``~`` applies only to a boolean field or
-to ``&`` of boolean fields. Parenthesize comparisons when combining them with
-``&`` or ``|``.
+with a constant, including ``None``. ``~`` applies to a boolean field, to
+``Reachable(path)``, and to ``&`` of those. Parenthesize comparisons when
+combining them with ``&`` or ``|``.
+
+``Reachable(path)`` from ``trusts.functions`` is true when the join reached
+the row named by the last relation. It is neither SQL ``EXISTS`` nor a
+NULL check. A valid path ends in a forward foreign key or a reverse
+one-to-one, for example ``Reachable(c.dept)`` and ``Reachable(c.dept.unit)``.
+``Reachable(c.dept.unit)`` is false when ``unit`` is NULL or the key does
+not match a row. ``~Reachable(path)`` is that test negated. Registration
+raises ``PermissionConditionError`` for a root alone (``Reachable(c)``,
+``Reachable(u)``, ``Reachable(t)``) and for a path that ends in a column
+(``c.name``, ``c.dept.name``, ``c.dept.unit_id``, ``c.dept.id``). An
+attname in the middle of a path (``c.dept_id.unit``) is rejected, as are
+a reverse foreign key, a many-to-many, and a ``GenericForeignKey``
+continuation such as ``x.target.id``.
 
 The supported SQL functions are ``Now()``, ``Lower(expression)``, and
 ``Coalesce(first, second, ...)`` from ``trusts.functions``. Only these
-three Trusts functions are supported; using Django's own versions is rejected
-by ``register()``. Function arguments may be field references, typed
+three SQL functions are supported; using Django's own versions is rejected
+by ``register()``. ``Reachable`` is a relation test, not one of them.
+Function arguments may be field references, typed
 constants, or nested supported functions. For example:
 
 .. code-block:: python

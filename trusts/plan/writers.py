@@ -2,9 +2,10 @@
 
 ``trusts.plan.conditions`` parses and checks a builder. ``compile_to_q``
 turns that tree into a Django ``Q``. It does not register a filter and
-it does not look one up. Scalar comparisons, boolean fields, ``Exists``,
-and ``~`` lower through ``trusts.plan.trivalent``. A missing row is
-unknown. ``.contains()`` keeps the membership join it already had.
+it does not look one up. Scalar comparisons, boolean fields,
+``Reachable``, and ``~`` lower through ``trusts.plan.trivalent``. A
+missing row is unknown. ``.contains()`` keeps the membership join it
+already had.
 """
 
 from django.core.exceptions import ObjectDoesNotExist

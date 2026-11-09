@@ -35,6 +35,7 @@ from trusts.compile.graph import (
 )
 from trusts.plan.grammar import (
     EXISTS_KIND,
+    EXISTS_NAME,
     Symbol,
     Tree,
     is_predicate,
@@ -1313,9 +1314,19 @@ def _validate_relation_node(node, root, permission_model, *,
         )
         return
     if node.kind == EXISTS_KIND:
-        _require_row_field(node.item)
-        resolve_field_path(root, node.item.path, ref_kind='condition')
-        require_lowerable_operand(node.item, root, root, exists=True)
+        item = node.item
+        if getattr(item, 'kind', None) != 'field':
+            raise PermissionConditionError(
+                '%s() needs a field path.' % EXISTS_NAME
+            )
+        if not item.path:
+            raise PermissionConditionError(
+                '%s() needs a relation. A root alone is not a path.'
+                % EXISTS_NAME
+            )
+        _require_row_field(item)
+        resolve_field_path(root, item.path, ref_kind='condition')
+        require_lowerable_operand(item, root, root, exists=True)
         return
     if needs_expression(node):
         _validate_expression_comparison(node, root)

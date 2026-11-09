@@ -2,9 +2,10 @@
 
 ``Now``, ``Lower``, and ``Coalesce`` are Django's functions plus
 ``ComparableMixin``. The mixin compares by returning a condition node.
-``Exists`` asks whether the row that owns a field was joined. The
-objects last only while the builder runs. Registration lowers them to
-stored nodes, and the compiler emits SQL.
+``Reachable`` asks whether the join reached the row named by the last
+relation. It is neither SQL ``EXISTS`` nor a NULL check. The objects
+last only while the builder runs. Registration lowers them to stored
+nodes, and the compiler emits SQL.
 """
 
 from django.db.models import functions
@@ -50,20 +51,27 @@ class Coalesce(ComparableMixin, functions.Coalesce):
     pass
 
 
-class Exists(object):
-    """Whether the row that owns a field was joined.
+class Reachable(object):
+    """Whether the join reached the row named by the last relation.
 
-    ``Exists(dept.unit)`` is true when ``dept`` was joined, even when
-    ``unit`` is NULL, and false when ``dept`` was not joined. The same
-    rule makes ``Exists(room.desk)`` true when the room row was reached
-    even if ``room.desk`` is NULL. A dangling key is still that column's
-    value: ``Exists`` does not follow it.
-    ``Exists(dept.unit.code)`` is false when the unit row cannot be
-    joined. The result is true or false, never unknown.
-    ``~Exists(path)`` is the no-row test.
+    This is neither SQL ``EXISTS`` nor a NULL check. ``Reachable(a.b)``
+    is true when the row named by ``b`` was joined, and false when that
+    join missed. A terminal forward foreign key is followed:
+    ``Reachable(c.dept.unit)`` is false when ``unit`` is NULL or the key
+    does not match a row. ``~Reachable(path)`` is that test negated.
+    The result is true or false, never unknown.
 
-    The public name is ``EXISTS_NAME``. A later rename changes that
-    constant and this class together.
+    Registration accepts a path that ends in a forward foreign key or a
+    reverse one-to-one, for example ``Reachable(c.dept)`` and
+    ``Reachable(c.dept.unit)``. A root alone (``Reachable(c)``,
+    ``Reachable(u)``, ``Reachable(t)``) and a path that ends in a column
+    (``c.name``, ``c.dept.name``, ``c.dept.unit_id``, ``c.dept.id``)
+    raise ``PermissionConditionError``. An attname in the middle of a
+    path (``c.dept_id.unit``) is rejected, as are a reverse foreign key
+    and a many-to-many.
+
+    The public name is ``EXISTS_NAME``. The stored node kind stays
+    ``exists``.
     """
 
     def __new__(cls, arg):
@@ -74,10 +82,20 @@ class Exists(object):
             symbol_root,
             unsupported,
         )
-        if not isinstance(arg, Symbol) or not symbol_path(arg):
+        if isinstance(arg, Symbol) and not symbol_path(arg):
+            from trusts.errors import PermissionConditionError
+            if symbol_root(arg) == 'permission':
+                raise PermissionConditionError(
+                    '%s() does not apply to a permission field.' % EXISTS_NAME
+                )
+            raise PermissionConditionError(
+                '%s() needs a relation. A root alone is not a path.'
+                % EXISTS_NAME
+            )
+        if not isinstance(arg, Symbol):
             raise unsupported(
                 '%s() on a value that is not a field path' % EXISTS_NAME,
-                hint='Name a field, for example %s(o.dept.unit).' % EXISTS_NAME,
+                hint='Name a relation, for example %s(o.dept).' % EXISTS_NAME,
             )
         return Tree(
             EXISTS_KIND,

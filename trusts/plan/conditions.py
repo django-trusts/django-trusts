@@ -22,10 +22,11 @@ tree out. The compiler stores that tree. This module does not.
 V1 grammar: principal/object field refs and relationship traversal
 (``_meta`` fields on the content model and the entity/user model; not
 Python properties); literal constants; ``==`` / ``!=`` and ordered
-comparisons of ordered scalars; ``Now``, ``Lower``, and ``Coalesce``
-from ``trusts.functions``; nested ``&`` / ``|``; ``.contains()`` on a
-forward many-to-many; a bare boolean field; and ``~`` on a boolean
-field or on ``&`` / ``|``. Operand types must
+comparisons of ordered scalars; ``Now``, ``Lower``, ``Coalesce``, and
+``Reachable`` from ``trusts.functions``; nested ``&`` / ``|``;
+``.contains()`` on a forward many-to-many; a bare boolean field; and
+``~`` on a boolean field, on ``Reachable``, or on ``&`` of those.
+Operand types must
 match without Django field coercion:
 ``CharField`` compares to ``str``, relations compare to model identity
 (not raw primary keys). Missing attribute names fail closed; they are
@@ -69,7 +70,7 @@ from django.http import HttpRequest
 from django.utils.functional import Promise, SimpleLazyObject
 
 from trusts.errors import PermissionConditionError
-from trusts.functions import Coalesce, Exists, Lower, Now
+from trusts.functions import Coalesce, Lower, Now, Reachable
 from trusts.plan.grammar import (
     EXISTS_KIND,
     EXISTS_NAME,
@@ -218,7 +219,7 @@ def normalize_constant(value):
     return value
 
 
-_FUNCTIONS = (Now, Lower, Coalesce, Exists)
+_FUNCTIONS = (Now, Lower, Coalesce, Reachable)
 
 
 def capture_expression(builder, roots):
@@ -356,6 +357,14 @@ def resolve_field_path(model, path, ref_kind='object', *, collection=False):
                 )
             )
         if not last:
+            attname = getattr(field, 'attname', None)
+            if attname and name == attname and name != field.name:
+                raise PermissionConditionError(
+                    'Cannot traverse column %r on %s in a permission '
+                    'condition. Name the relation.' % (
+                        name, current._meta.label,
+                    )
+                )
             if not field.is_relation:
                 raise PermissionConditionError(
                     'Cannot traverse field %r on %s in a permission '
@@ -364,7 +373,15 @@ def resolve_field_path(model, path, ref_kind='object', *, collection=False):
                         name, current._meta.label
                     )
                 )
-            current = field.remote_field.model
+            remote = getattr(field, 'remote_field', None)
+            related = getattr(remote, 'model', None) if remote is not None else None
+            if related is None:
+                raise PermissionConditionError(
+                    'Cannot traverse field %r on %s in a permission '
+                    'condition. A GenericForeignKey has no single target.'
+                    % (name, current._meta.label)
+                )
+            current = related
     return '__'.join(path)
 
 
@@ -726,9 +743,11 @@ def _validate_bare(node, model, user_model):
 def require_lowerable_operand(node, model, user_model, *, exists):
     """Reject a field that ``register()`` would accept and SQL cannot lower.
 
-    Comparisons need a stored column or a forward foreign key. ``Exists``
-    stops on that same column, and may also follow a terminal reverse
-    one-to-one. A permission field has no joined row, so ``Exists`` on it
+    Comparisons need a stored column or a forward foreign key.
+    ``Reachable`` needs a path that ends in a forward foreign key or a
+    reverse one-to-one: the last relation is the row the join must
+    reach. A root alone and a path that ends in a column are rejected
+    here. A permission field has no joined row, so ``Reachable`` on it
     is rejected here. The lowering raises stay for a tree that skips
     registration.
     """
@@ -744,6 +763,11 @@ def require_lowerable_operand(node, model, user_model, *, exists):
                 '%s() does not apply to a permission field.' % EXISTS_NAME
             )
         return
+    if exists and not node.path:
+        raise PermissionConditionError(
+            '%s() needs a relation. A root alone is not a path.'
+            % EXISTS_NAME
+        )
     if node.root == 'object':
         host = model
     elif node.root == 'user':
@@ -758,7 +782,7 @@ def require_lowerable_operand(node, model, user_model, *, exists):
         return
     from trusts.plan.trivalent import relation_hops, split_value_path
     if exists:
-        relation_hops(host, node.path)
+        relation_hops(host, node.path, register=True)
     else:
         split_value_path(host, node.path)
 
@@ -799,6 +823,18 @@ def _validate_node(node, model, user_model):
         _validate_bare(node, model, user_model)
         return
     if _node(node, 'not', EXISTS_KIND):
+        if node.kind == EXISTS_KIND and _node(node.item, 'field'):
+            item = node.item
+            if item.root == 'permission':
+                raise PermissionConditionError(
+                    '%s() does not apply to a permission field.'
+                    % EXISTS_NAME
+                )
+            if not item.path:
+                raise PermissionConditionError(
+                    '%s() needs a relation. A root alone is not a path.'
+                    % EXISTS_NAME
+                )
         _validate_node(node.item, model, user_model)
         if node.kind == EXISTS_KIND:
             require_lowerable_operand(

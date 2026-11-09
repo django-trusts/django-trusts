@@ -30,7 +30,7 @@ from trusts.plan import rewrites as bind_once_module
 from trusts.compile.graph import Along, Ref
 from trusts.decorators import authorization_required, filter_by_permitted_content
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
-from trusts.functions import Exists
+from trusts.functions import Reachable
 from trusts.models import (
     AuthorizedQuerySet,
     PermittedQuerySetMixin,
@@ -2747,12 +2747,19 @@ class ViaPermissionTerminalTest(TransactionTestCase):
                 self.assertIs(self._sees(handle, self.ada), False)
                 self.assertIs(self._sees(handle, self.ben), False)
 
-    def test_object_exists_in_a_user_or_is_rejected(self):
+    def test_object_reachable_in_a_user_or_is_rejected(self):
+        _add_user_column(
+            self, self.Task, 'owner',
+            models.ForeignKey(
+                self.User, null=True, on_delete=models.DO_NOTHING,
+                related_name='+', db_constraint=False,
+            ),
+        )
         handle = compiler(path='tests.core.via-term.object-exists')
         handle.add_named_filter(
             self.Task, 'kept',
             lambda user, permission, content: (
-                Exists(content.name) | (user.username == 'term-ada')
+                Reachable(content.owner) | (user.username == 'term-ada')
             ),
         )
         with self.assertRaises(TrustsConfigurationError) as raised:

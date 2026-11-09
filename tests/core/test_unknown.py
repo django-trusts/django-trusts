@@ -1,10 +1,10 @@
 """Unknown stays unknown until the grant.
 
-``Exists(path)`` is true when the row that owns the terminal field was
-reached. A terminal foreign key is a column on that row, so ``Exists``
-is true even when the key is NULL or dangling. ``Exists(room.name)``
-is false when the room row cannot be joined. ``== None`` is true only
-for a stored NULL on a reached row. ``!= None`` is that test negated,
+``Reachable(path)`` is true when the row named by the last relation was
+joined. A terminal forward foreign key is followed, so a NULL or dangling
+key is false. A path that reaches the evaluator and ends in a column
+ignores that column and tests the table that owns it. ``== None`` is true
+only for a stored NULL on a reached row. ``!= None`` is that test negated,
 and unknown stays unknown under negation. Collection membership is the
 join it already was: one member is enough, and an empty collection is
 not.
@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import Group, Permission
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied
 from django.db import connection, models
@@ -26,7 +27,7 @@ from tests.support import compiler, published_class_catalog
 from trusts.backends import TrustModelBackendMixin
 from trusts.decorators import authorization_required, filter_by_permitted_content
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
-from trusts.functions import Coalesce, Exists, Lower
+from trusts.functions import Coalesce, Lower, Reachable
 from trusts.plan.grammar import EXISTS_NAME
 from trusts.models import (
     AuthorizedQuerySet,
@@ -153,7 +154,7 @@ class UnknownLoweringTests(TransactionTestCase):
     """The expression module and the grant boundary agree on one connection."""
 
     def test_reached_null_missing_and_dangling(self):
-        self.assertEqual(Exists.__name__, EXISTS_NAME)
+        self.assertEqual(Reachable.__name__, EXISTS_NAME)
         Room, _Tag, Desk, _Note, _Grant = _models()
         with _tables(Room, _Tag, Desk):
             blank = Room.objects.create(name=None)
@@ -199,15 +200,17 @@ class UnknownLoweringTests(TransactionTestCase):
             expect(_cmp('ne', ('room', 'name'), None), 'named', 'differ')
             expect(_cmp('eq', ('room', 'name'), 'kept'), 'named')
             expect(_cmp('ne', ('room', 'name'), 'kept'), 'differ')
-            # The desk row is reached, so Exists(room) is true even when
-            # the room key is NULL or dangling. Exists(room.name) is the
-            # room row. ~Exists(room) matches none of these desks.
-            expect(
-                _exists(('room',)),
-                'stored', 'named', 'differ', 'missing', 'dangling',
-            )
+            # Reachable(room) follows the key. A NULL or dangling room
+            # is false. A column on that path, if one reaches the
+            # evaluator, ignores the column and tests the room row.
+            # A bare root counts as reached.
+            expect(_exists(()), 'stored', 'named', 'differ', 'missing', 'dangling')
+            expect(_exists(('room',)), 'stored', 'named', 'differ')
             expect(_exists(('room', 'name')), 'stored', 'named', 'differ')
-            expect(Tree('not', item=_exists(('room',))))
+            expect(
+                Tree('not', item=_exists(('room',))),
+                'missing', 'dangling',
+            )
             expect(
                 Tree('not', item=_exists(('room', 'name'))),
                 'missing', 'dangling',
@@ -266,16 +269,21 @@ class UnknownLoweringTests(TransactionTestCase):
             present = exists_operand(
                 Desk, ('room',), ('alias', quoted('d')), quoted,
             )
-            # The desk alias already is the owning row. The room key is
-            # not joined, so a NULL room.desk-style key cannot turn this
-            # false.
-            self.assertNotIn('unk_room', present.reached_sql)
-            self.assertIn('1=1', present.reached_sql)
+            # The terminal foreign key is followed. NULL and dangling
+            # keys produce no room row.
+            self.assertIn('EXISTS', present.reached_sql)
+            self.assertIn('unk_room', present.reached_sql)
+            self.assertNotIn('1=1', present.reached_sql)
             followed = exists_operand(
                 Desk, ('room', 'name'), ('alias', quoted('d')), quoted,
             )
             self.assertIn('EXISTS', followed.reached_sql)
             self.assertIn('unk_room', followed.reached_sql)
+            root = exists_operand(
+                Desk, (), ('alias', quoted('d')), quoted,
+            )
+            self.assertIn('1=1', root.reached_sql)
+            self.assertNotIn('EXISTS', root.reached_sql)
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -290,10 +298,8 @@ class UnknownEntryTests(TransactionTestCase):
             'ne_none_name': lambda u, p, o: o.room.name != None,  # noqa: E711
             'eq_name': lambda u, p, o: o.room.name == 'kept',
             'ne_name': lambda u, p, o: o.room.name != 'kept',
-            'exists_room': lambda u, p, o: Exists(o.room),
-            'exists_name': lambda u, p, o: Exists(o.room.name),
-            'no_room': lambda u, p, o: ~Exists(o.room.name),
-            'not_exists_room': lambda u, p, o: ~Exists(o.room),
+            'exists_room': lambda u, p, o: Reachable(o.room),
+            'no_room': lambda u, p, o: ~Reachable(o.room),
             'fk_null': lambda u, p, o: o.room == None,  # noqa: E711
             'label_null': lambda u, p, o: o.label == None,  # noqa: E711
             'flag_off': lambda u, p, o: ~o.flag,
@@ -379,12 +385,8 @@ class UnknownEntryTests(TransactionTestCase):
                 'ne_none_name': {named.pk, differ.pk},
                 'eq_name': {named.pk},
                 'ne_name': {differ.pk},
-                'exists_room': {
-                    stored.pk, named.pk, differ.pk, missing.pk, dangling.pk,
-                },
-                'exists_name': {stored.pk, named.pk, differ.pk},
+                'exists_room': {stored.pk, named.pk, differ.pk},
                 'no_room': {missing.pk, dangling.pk},
-                'not_exists_room': set(),
                 'fk_null': {missing.pk},
                 'label_null': {stored.pk},
                 'flag_off': {named.pk, missing.pk},
@@ -435,8 +437,8 @@ class UnknownEntryTests(TransactionTestCase):
                 with self.assertRaises(PermissionDenied):
                     roomless(request, pk=stored.pk)
 
-    def test_exists_is_true_when_room_desk_is_null(self):
-        """Once the room row is reached, Exists(desk) is true even when room.desk is null."""
+    def test_reachable_follows_a_null_or_dangling_desk(self):
+        """Reachable(desk) is the desk row. NULL and dangling keys are false."""
         User = get_user_model()
 
         class Desk(models.Model):
@@ -480,14 +482,16 @@ class UnknownEntryTests(TransactionTestCase):
         )
         factory = compiler(path='tests.core.test_unknown.room-desk')
         factory.add_named_filter(
-            Room, 'has_desk', lambda u, p, o: Exists(o.desk),
+            Room, 'has_desk', lambda u, p, o: Reachable(o.desk),
         )
         factory.add_named_filter(
-            Room, 'no_desk', lambda u, p, o: ~Exists(o.desk),
+            Room, 'no_desk', lambda u, p, o: ~Reachable(o.desk),
         )
-        factory.add_named_filter(
-            Room, 'desk_label', lambda u, p, o: Exists(o.desk.label),
-        )
+        with self.assertRaises(PermissionConditionError) as raised:
+            factory.add_named_filter(
+                Room, 'desk_label', lambda u, p, o: Reachable(o.desk.label),
+            )
+        self.assertIn('is a column', str(raised.exception))
         factory.add_named_filter(
             Room, 'label_null', lambda u, p, o: o.desk.label == None,  # noqa: E711
         )
@@ -524,9 +528,8 @@ class UnknownEntryTests(TransactionTestCase):
                 )
             self.assertIsNone(null_room.desk_id)
             questions = (
-                ('has_desk', {null_room.pk, dangling_room.pk, linked.pk, stored_null.pk}),
-                ('no_desk', set()),
-                ('desk_label', {linked.pk, stored_null.pk}),
+                ('has_desk', {linked.pk, stored_null.pk}),
+                ('no_desk', {null_room.pk, dangling_room.pk}),
                 ('label_null', {stored_null.pk}),
             )
             with published_class_catalog(
@@ -555,11 +558,11 @@ class UnknownEntryTests(TransactionTestCase):
     def test_reachable_shapes_the_suite_had_not_executed(self):
         """Public shapes that the rest of the suite never built.
 
-        A reverse one-to-one is a hop for ``Exists`` and not a stored
+        A reverse one-to-one is a hop for ``Reachable`` and not a stored
         NULL. A permission codename and app label are the string carried
         into the grant. A function on the left takes the right-hand
-        field's export hint. ``Exists`` rejects a non-path. A relation
-        condition may be ``Exists(row.field)``.
+        field's export hint. ``Reachable`` rejects a non-path. A relation
+        condition may be ``Reachable(row.desk)``.
         """
         User = get_user_model()
         Room, _Tag, Desk, _Note, DeskGrant = _models()
@@ -576,11 +579,13 @@ class UnknownEntryTests(TransactionTestCase):
 
         factory = compiler(path='tests.core.test_unknown.gaps')
         factory.add_named_filter(
-            Desk, 'has_card', lambda u, p, o: Exists(o.card),
+            Desk, 'has_card', lambda u, p, o: Reachable(o.card),
         )
-        factory.add_named_filter(
-            Desk, 'has_unit', lambda u, p, o: Exists(o.card.unit),
-        )
+        with self.assertRaises(PermissionConditionError) as raised:
+            factory.add_named_filter(
+                Desk, 'has_unit', lambda u, p, o: Reachable(o.card.unit),
+            )
+        self.assertIn('is a column', str(raised.exception))
         factory.add_named_filter(
             Desk, 'app_label',
             lambda u, p, o: p.app_label == 'trusts_tests',
@@ -613,10 +618,11 @@ class UnknownEntryTests(TransactionTestCase):
                 Desk, 'lower_card', lambda u, p, o: Lower(o.card) == 'x',
             )
         self.assertIn('Cannot push condition path', str(raised.exception))
-        with self.assertRaises(PermissionConditionError):
+        with self.assertRaises(PermissionConditionError) as raised:
             factory.add_named_filter(
-                Desk, 'bad_exists', lambda u, p, o: Exists(o),
+                Desk, 'bad_exists', lambda u, p, o: Reachable(o),
             )
+        self.assertIn('root alone', str(raised.exception))
 
         class Stub(models.Model):
             grant = models.OneToOneField(
@@ -639,7 +645,7 @@ class UnknownEntryTests(TransactionTestCase):
         relation.register(
             trust=DeskGrant, user='user', permission='permission',
             content='desk',
-            condition=lambda row: Exists(row.desk),
+            condition=lambda row: Reachable(row.desk),
         )
         self.assertEqual(len(relation.records), 1)
         factory.register(
@@ -665,7 +671,6 @@ class UnknownEntryTests(TransactionTestCase):
                 )
             expected = {
                 'has_card': {matched.pk},
-                'has_unit': {matched.pk},
                 'app_label': {matched.pk, differ.pk, blank.pk},
                 'codename': {matched.pk, differ.pk, blank.pk},
                 'other_code': set(),
@@ -685,7 +690,7 @@ class UnknownEntryTests(TransactionTestCase):
 
         An unsaved user has no primary key, so the condition is compiled
         without a user binding. An object comparison still runs. A user
-        field cannot. ``Exists`` on a permission attribute is rejected
+        field cannot. ``Reachable`` on a permission attribute is rejected
         at registration. A string permission's ``name`` still fails when
         the inquiry passes a codename. A permission row is the pk for a
         bare ``p``, and a real column for ``p.codename``. Two function
@@ -709,7 +714,7 @@ class UnknownEntryTests(TransactionTestCase):
         )
         with self.assertRaises(PermissionConditionError) as raised:
             factory.add_named_filter(
-                Note, 'perm_exists', lambda u, p, o: Exists(p.codename),
+                Note, 'perm_exists', lambda u, p, o: Reachable(p.codename),
             )
         self.assertIn(
             'does not apply to a permission field', str(raised.exception),
@@ -717,7 +722,7 @@ class UnknownEntryTests(TransactionTestCase):
         with self.assertRaises(PermissionConditionError) as raised:
             factory.add_named_filter(
                 Note, 'perm_exists_label',
-                lambda u, p, o: Exists(p.app_label),
+                lambda u, p, o: Reachable(p.app_label),
             )
         self.assertIn(
             'does not apply to a permission field', str(raised.exception),
@@ -843,6 +848,95 @@ class UnknownEntryTests(TransactionTestCase):
                     'Permission references cannot traverse attributes in V1',
                     str(raised.exception),
                 )
+
+    def test_registration_rejects_root_and_column_paths(self):
+        """A Reachable path ends in a forward FK or a reverse one-to-one."""
+        _Room, _Tag, Desk, _Note, DeskGrant = _models()
+
+        class Marker(models.Model):
+            content_type = models.ForeignKey(
+                ContentType, on_delete=models.CASCADE,
+            )
+            object_id = models.PositiveIntegerField()
+            target = GenericForeignKey('content_type', 'object_id')
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'unk_marker'
+
+        factory = compiler(path='tests.core.test_unknown.shapes')
+        rejected = (
+            ('root', lambda u, p, o: Reachable(o), 'root alone'),
+            ('user_root', lambda u, p, o: Reachable(u), 'root alone'),
+            ('column', lambda u, p, o: Reachable(o.label), 'is a column'),
+            ('through', lambda u, p, o: Reachable(o.room.name), 'is a column'),
+            ('attname', lambda u, p, o: Reachable(o.room_id), 'is a column'),
+            ('pk', lambda u, p, o: Reachable(o.room.id), 'is a column'),
+            ('mid_attname', lambda u, p, o: Reachable(o.room_id.name),
+             'Name the relation'),
+            ('m2m', lambda u, p, o: Reachable(o.tags), 'Multi-valued'),
+            ('reverse', lambda u, p, o: Reachable(o.notes), 'Multi-valued'),
+            ('perm', lambda u, p, o: Reachable(p), 'permission field'),
+            ('perm_col', lambda u, p, o: Reachable(p.codename),
+             'permission field'),
+        )
+        for code, builder, text in rejected:
+            with self.subTest(code=code):
+                with self.assertRaises(PermissionConditionError) as raised:
+                    factory.add_named_filter(Desk, code, builder)
+                self.assertIn(text, str(raised.exception))
+        gfk_cases = (
+            ('gfk_cont', lambda u, p, o: Reachable(o.target.id)),
+            ('gfk_cmp', lambda u, p, o: o.target.id == 1),
+        )
+        for code, builder in gfk_cases:
+            with self.subTest(code=code):
+                with self.assertRaises(PermissionConditionError) as raised:
+                    factory.add_named_filter(Marker, code, builder)
+                self.assertIn('GenericForeignKey', str(raised.exception))
+        with self.assertRaises(PermissionConditionError) as raised:
+            factory.set_user_condition('root', lambda user: Reachable(user))
+        self.assertIn('root alone', str(raised.exception))
+        with self.assertRaises(PermissionConditionError) as raised:
+            factory.set_user_condition(
+                'nick', lambda user: Reachable(user.username),
+            )
+        self.assertIn('is a column', str(raised.exception))
+
+        refused = compiler(path='tests.core.test_unknown.shapes-row')
+        with self.assertRaises(PermissionConditionError) as raised:
+            refused.register(
+                trust=DeskGrant, user='user', permission='permission',
+                content='desk',
+                condition=lambda row: Reachable(row),
+            )
+        self.assertIn('root alone', str(raised.exception))
+        with self.assertRaises(PermissionConditionError) as raised:
+            refused.register(
+                trust=DeskGrant, user='user', permission='permission',
+                content='desk',
+                condition=lambda row: Reachable(row.desk.label),
+            )
+        self.assertIn('is a column', str(raised.exception))
+        with self.assertRaises(PermissionConditionError) as raised:
+            refused.register(
+                trust=DeskGrant, user='user', permission='permission',
+                content='desk',
+                condition=lambda row: Reachable(row.desk_id.room),
+            )
+        self.assertIn('desk_id', str(raised.exception))
+        self.assertIn('Name the relation', str(raised.exception))
+
+        accepted = compiler(path='tests.core.test_unknown.shapes-ok')
+        accepted.add_named_filter(
+            Desk, 'room', lambda u, p, o: Reachable(o.room),
+        )
+        accepted.register(
+            trust=DeskGrant, user='user', permission='permission',
+            content='desk',
+            condition=lambda row: Reachable(row.desk),
+        )
+        self.assertEqual(len(accepted.records), 1)
 
 
 class _ParityBackend(TrustModelBackendMixin, ModelBackend):
@@ -1032,30 +1126,27 @@ class EntryPointParityTests(TransactionTestCase):
                  passing, dict(parity_nick=None), True, False),
                 ('not-null-child', lambda user: ~user.parity_flag,
                  passing, dict(parity_flag=None), True, False),
-                # The walked user is the owning row. Exists(parity_room) stays
-                # true when that user's room key is NULL or dangling.
-                ('exists-dangling-child', lambda user: Exists(user.parity_room),
-                 passing, dict(parity_room_id=DANGLING_ID), True, True),
-                ('exists-missing-child', lambda user: Exists(user.parity_room),
-                 passing, dict(parity_room=None), True, True),
-                ('exists-name-missing-child',
-                 lambda user: Exists(user.parity_room.name),
-                 passing, dict(parity_room=None), True, False),
-                ('exists-name-dangling-child',
-                 lambda user: Exists(user.parity_room.name),
+                # Reachable(parity_room) follows the key. NULL and dangling
+                # are false. Reachable(parity_room.unit) follows unit too,
+                # including a unit row whose code is NULL.
+                ('exists-dangling-child', lambda user: Reachable(user.parity_room),
                  passing, dict(parity_room_id=DANGLING_ID), True, False),
-                ('not-exists-room-child',
-                 lambda user: ~Exists(user.parity_room),
-                 passing, dict(parity_room=None), False, False),
-                ('exists-unit-null-key',
-                 lambda user: Exists(user.parity_room.unit),
+                ('exists-missing-child', lambda user: Reachable(user.parity_room),
                  passing, dict(parity_room=None), True, False),
+                # Ada is the walk seed. Her failure would stop the path
+                # before Ben, so the missing room is hers.
+                ('not-exists-room-child',
+                 lambda user: ~Reachable(user.parity_room),
+                 dict(parity_room=None), passing, True, False),
+                ('exists-unit-null-key',
+                 lambda user: Reachable(user.parity_room.unit),
+                 passing, dict(parity_room=None), False, False),
                 ('exists-unit-dangling-key',
-                 lambda user: Exists(user.parity_room.unit),
+                 lambda user: Reachable(user.parity_room.unit),
                  dict(parity_room=dangling_unit),
-                 dict(parity_room_id=DANGLING_ID), True, False),
-                ('exists-unit-code-null-key',
-                 lambda user: Exists(user.parity_room.unit.code),
+                 dict(parity_room_id=DANGLING_ID), False, False),
+                ('reachable-unit-null-code',
+                 lambda user: Reachable(user.parity_room.unit),
                  dict(parity_room=blank), dict(parity_room=kept), True, False),
                 ('eq-none-unit-code',
                  lambda user: user.parity_room.unit.code == None,  # noqa: E711
@@ -1113,34 +1204,27 @@ class EntryPointParityTests(TransactionTestCase):
                  dict(room=blank, label='yes', flag=False), True),
                 ('obj-eq-none-dangling', lambda u, p, o: o.room.name == None,  # noqa: E711
                  dict(room_id=DANGLING_ID, label='yes', flag=False), False),
-                ('obj-exists-null', lambda u, p, o: Exists(o.room),
-                 dict(room=None, label='yes', flag=False), True),
-                ('obj-exists-dangling', lambda u, p, o: Exists(o.room),
-                 dict(room_id=DANGLING_ID, label='yes', flag=False), True),
-                ('obj-not-exists-dangling', lambda u, p, o: ~Exists(o.room),
-                 dict(room_id=DANGLING_ID, label='yes', flag=False), False),
-                ('obj-exists-name-null', lambda u, p, o: Exists(o.room.name),
+                ('obj-exists-null', lambda u, p, o: Reachable(o.room),
                  dict(room=None, label='yes', flag=False), False),
-                ('obj-exists-name-dangling', lambda u, p, o: Exists(o.room.name),
+                ('obj-exists-dangling', lambda u, p, o: Reachable(o.room),
                  dict(room_id=DANGLING_ID, label='yes', flag=False), False),
+                ('obj-not-exists-dangling', lambda u, p, o: ~Reachable(o.room),
+                 dict(room_id=DANGLING_ID, label='yes', flag=False), True),
                 ('obj-exists-unit-null-key',
-                 lambda u, p, o: Exists(o.room.unit),
-                 dict(room=kept, label='yes', flag=False), True),
+                 lambda u, p, o: Reachable(o.room.unit),
+                 dict(room=kept, label='yes', flag=False), False),
                 ('obj-exists-unit-missing-room',
-                 lambda u, p, o: Exists(o.room.unit),
+                 lambda u, p, o: Reachable(o.room.unit),
                  dict(room=None, label='yes', flag=False), False),
                 ('obj-exists-unit-dangling-room',
-                 lambda u, p, o: Exists(o.room.unit),
+                 lambda u, p, o: Reachable(o.room.unit),
                  dict(room_id=DANGLING_ID, label='yes', flag=False), False),
                 ('obj-exists-unit-dangling-key',
-                 lambda u, p, o: Exists(o.room.unit),
-                 dict(room=dangling_unit, label='yes', flag=False), True),
-                ('obj-exists-unit-code-dangling-key',
-                 lambda u, p, o: Exists(o.room.unit.code),
+                 lambda u, p, o: Reachable(o.room.unit),
                  dict(room=dangling_unit, label='yes', flag=False), False),
-                ('obj-exists-unit-code-null-key',
-                 lambda u, p, o: Exists(o.room.unit.code),
-                 dict(room=kept, label='yes', flag=False), False),
+                ('obj-reachable-unit-null-code',
+                 lambda u, p, o: Reachable(o.room.unit),
+                 dict(room=blank, label='yes', flag=False), True),
                 ('obj-eq-none-unit-code',
                  lambda u, p, o: o.room.unit.code == None,  # noqa: E711
                  dict(room=blank, label='yes', flag=False), True),

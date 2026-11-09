@@ -3,9 +3,11 @@
 Path resolution stays separate from the truth value. A missing row, including
 a dangling foreign key whose target was not joined, is not a stored NULL.
 Ordinary comparisons and ``== None`` are NULL (Unknown) until the owning row
-is joined. ``Exists`` is true or false: the owning row was joined, even when
-the named column is NULL. Only a final true grants. Negation and ``&`` / ``|``
-are Kleene. ``!= None`` is the negation of ``== None``.
+is joined. ``Reachable`` is true or false: the row named by its last relation
+was joined. A terminal forward foreign key is followed, so a NULL or dangling
+key is false. It is neither SQL ``EXISTS`` nor a NULL check. Only a final true
+grants. Negation and ``&`` / ``|`` are Kleene. ``!= None`` is the negation of
+``== None``.
 
 Collection membership is not lowered here. ``.contains()`` and a
 permission many-to-many ``EXISTS`` keep today's join: one matching member
@@ -332,18 +334,33 @@ def _reject_path(field, name):
     )
 
 
+def _names_attname(field, name):
+    """True when ``name`` is the column attname, not the relation name."""
+    attname = getattr(field, 'attname', None)
+    return bool(attname) and name == attname and name != field.name
+
+
+def _lookup_field(model, name):
+    try:
+        return model._meta.get_field(name)
+    except Exception as exc:
+        raise PermissionConditionError(
+            'Cannot push condition path %r down to SQL.' % (name,)
+        ) from exc
+
+
 def split_value_path(model, path):
     """Hops to the row that holds the leaf column, and that column."""
     hops = []
     current = model
     for index, name in enumerate(path):
-        try:
-            field = current._meta.get_field(name)
-        except Exception as exc:
-            raise PermissionConditionError(
-                'Cannot push condition path %r down to SQL.' % (name,)
-            ) from exc
+        field = _lookup_field(current, name)
         last = index == len(path) - 1
+        if _names_attname(field, name) and not last:
+            raise PermissionConditionError(
+                'Cannot traverse column %r on %s. Name the relation.'
+                % (name, current._meta.label)
+            )
         if last and (_value_column(field) or _forward_fk(field)):
             return hops, field
         if not last and _forward_fk(field):
@@ -360,29 +377,44 @@ def split_value_path(model, path):
     )
 
 
-def relation_hops(model, path):
-    """Joins that reach the row that owns the terminal field.
+def relation_hops(model, path, *, register=False):
+    """Joins that reach the row named by the last relation.
 
-    A terminal forward foreign key is a column on the current row.
-    ``Exists(room)`` is true once that row is reached, whatever the key
-    holds, including NULL and a dangling id. A terminal reverse
-    one-to-one has no source column, so that hop is the related row.
+    A terminal forward foreign key is followed, so a NULL or dangling
+    key does not reach the target. A terminal column is not a hop: the
+    joins are only those that reach the table that owns it. An empty
+    path is the root row, which counts as reached. ``register`` rejects
+    that root and any path that ends in a column, including an attname
+    or a primary key. An attname in the middle of a path is rejected
+    either way.
     """
+    if register and not path:
+        raise PermissionConditionError(
+            '%s() needs a relation. A root alone is not a path.'
+            % EXISTS_NAME
+        )
     hops = []
     current = model
     for index, name in enumerate(path):
-        try:
-            field = current._meta.get_field(name)
-        except Exception as exc:
-            raise PermissionConditionError(
-                'Cannot push condition path %r down to SQL.' % (name,)
-            ) from exc
+        field = _lookup_field(current, name)
         last = index == len(path) - 1
-        if last and (_forward_fk(field) or _value_column(field)):
-            return hops
+        if _names_attname(field, name):
+            if last and not register:
+                return hops
+            if last:
+                raise PermissionConditionError(
+                    '%s() needs a relation. %r is a column.'
+                    % (EXISTS_NAME, name)
+                )
+            raise PermissionConditionError(
+                'Cannot traverse column %r on %s. Name the relation.'
+                % (name, current._meta.label)
+            )
         if _forward_fk(field):
             hops.append(('fk', field))
             current = field.remote_field.model
+            if last:
+                return hops
             continue
         if _reverse_one_to_one(field):
             hops.append(('rev', field))
@@ -390,6 +422,13 @@ def relation_hops(model, path):
             if last:
                 return hops
             continue
+        if last and _value_column(field):
+            if register:
+                raise PermissionConditionError(
+                    '%s() needs a relation. %r is a column.'
+                    % (EXISTS_NAME, name)
+                )
+            return hops
         _reject_path(field, name)
     return hops
 
@@ -780,7 +819,8 @@ class Scope(object):
                 prepared.append(part.value_sql)
                 params.extend(part.value_params)
             # An unreachable argument is NULL here, so a later argument can
-            # replace it. Exists() is how a caller rejects that path.
+            # replace it. Reachable() on the relation is how a caller
+            # rejects that path.
             sql = 'COALESCE(%s)' % ', '.join(prepared)
             if (
                 field is not None
