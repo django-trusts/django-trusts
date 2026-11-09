@@ -24,6 +24,8 @@ from trusts.plan.rewrites import CallInput
 from trusts.plan.trivalent import (
     Operand,
     compare,
+    concrete_owner_hops,
+    correlated,
     reachable_operand,
     field_operand,
     split_value_path,
@@ -471,6 +473,15 @@ def _walk_node(node, user_model, content_model, content, carriers, name, qn,
     raise _cannot(name)
 
 
+def _stored_column(field, name):
+    if (
+        not getattr(field, 'concrete', False)
+        or getattr(field, 'many_to_many', False)
+    ):
+        raise _cannot(name)
+    return field
+
+
 def _local_field(model, path, name):
     if not path:
         return model._meta.pk
@@ -480,32 +491,64 @@ def _local_field(model, path, name):
         field = model._meta.get_field(path[0])
     except Exception as exc:
         raise _cannot(name) from exc
-    if (
-        not getattr(field, 'concrete', False)
-        or getattr(field, 'many_to_many', False)
-        or field.model._meta.db_table != model._meta.db_table
-    ):
+    return _stored_column(field, name)
+
+
+def _parent_column_sql(model, field, prev, qn, name):
+    """Select ``field`` from the parent table that stores it.
+
+    ``prev`` is the alias of ``model``. An empty parent chain means
+    the column is already on that alias.
+    """
+    hops = concrete_owner_hops(model, field)
+    if not hops:
+        return '%s.%s' % (prev, qn(field.column))
+    sql, params = correlated(
+        model, hops, field.column, ('alias', prev), qn, reachable=False,
+    )
+    if params:
         raise _cannot(name)
-    return field
+    return sql
+
+
+def _join_forward(from_sql, where_sql, prev, field, dest, qn):
+    related = field.remote_field.model
+    quoted = qn(dest)
+    cond = '%s.%s = %s.%s' % (
+        quoted, qn(field.target_field.column),
+        prev, qn(field.column),
+    )
+    if not from_sql:
+        from_sql = '%s AS %s' % (qn(related._meta.db_table), quoted)
+        where_sql = cond
+    else:
+        from_sql += ' JOIN %s AS %s ON %s' % (
+            qn(related._meta.db_table), quoted, cond,
+        )
+    return from_sql, where_sql, quoted
 
 
 def _user_expr(model, path, name, qn):
     """SQL for one user path on the walked row.
 
     One local column stays ``{alias}.column``, so an unnested comparison
-    is unchanged. A longer forward chain is a scalar subquery off that
-    row: each hop joins the related table, and the last column is the
-    stored target (``to_field`` and ``db_column``). The subquery does
-    not name the recursive result.
+    is unchanged. A column inherited from a concrete parent is a scalar
+    subquery through that parent link. A longer forward chain is a
+    scalar subquery off that row: each hop joins the related table, and
+    the last column is the stored target (``to_field`` and ``db_column``).
+    The subquery does not name the recursive result.
     """
     if len(path) <= 1:
         field = _local_field(model, path, name)
-        return '{alias}.%s' % qn(field.column), field
+        if not path or field.model._meta.db_table == model._meta.db_table:
+            return '{alias}.%s' % qn(field.column), field
+        return _parent_column_sql(model, field, '{alias}', qn, name), field
     current = model
     prev = '{alias}'
     from_sql = ''
     where_sql = ''
-    for index, part in enumerate(path[:-1]):
+    aliases = 0
+    for part in path[:-1]:
         try:
             field = current._meta.get_field(part)
         except Exception as exc:
@@ -518,35 +561,29 @@ def _user_expr(model, path, name, qn):
             )
         ):
             raise _cannot(name)
-        dest = 'hopu%s' % (index + 1)
-        related = field.remote_field.model
-        quoted = qn(dest)
-        if not from_sql:
-            from_sql = '%s AS %s' % (qn(related._meta.db_table), quoted)
-            where_sql = '%s.%s = %s.%s' % (
-                quoted, qn(field.target_field.column),
-                prev, qn(field.column),
+        for _kind, link in concrete_owner_hops(current, field):
+            aliases += 1
+            from_sql, where_sql, prev = _join_forward(
+                from_sql, where_sql, prev, link, 'hopu%s' % aliases, qn,
             )
-        else:
-            from_sql += ' JOIN %s AS %s ON %s.%s = %s.%s' % (
-                qn(related._meta.db_table), quoted,
-                quoted, qn(field.target_field.column),
-                prev, qn(field.column),
-            )
-        prev = quoted
-        current = related
+        aliases += 1
+        from_sql, where_sql, prev = _join_forward(
+            from_sql, where_sql, prev, field, 'hopu%s' % aliases, qn,
+        )
+        current = field.remote_field.model
     try:
         last = current._meta.get_field(path[-1])
     except Exception as exc:
         raise _cannot(name) from exc
-    if (
-        not getattr(last, 'concrete', False)
-        or getattr(last, 'many_to_many', False)
-        or last.model._meta.db_table != current._meta.db_table
-    ):
-        raise _cannot(name)
+    last = _stored_column(last, name)
+    select_alias = prev
+    for _kind, link in concrete_owner_hops(current, last):
+        aliases += 1
+        from_sql, where_sql, select_alias = _join_forward(
+            from_sql, where_sql, select_alias, link, 'hopu%s' % aliases, qn,
+        )
     sql = '(SELECT %s.%s FROM %s WHERE %s)' % (
-        prev, qn(last.column), from_sql, where_sql,
+        select_alias, qn(last.column), from_sql, where_sql,
     )
     return sql, last
 

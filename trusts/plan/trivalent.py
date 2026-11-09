@@ -349,6 +349,32 @@ def _lookup_field(model, name):
         ) from exc
 
 
+def concrete_owner_hops(model, field):
+    """Parent-link joins from ``model`` to the table that stores ``field``.
+
+    Multi-table inheritance keeps an inherited column on the parent.
+    The child alias does not have that column. A field on ``model``'s
+    own table, including a proxy of that table, needs no join.
+    """
+    owner = getattr(field, 'model', None)
+    if owner is None or owner._meta.db_table == model._meta.db_table:
+        return []
+    chain = model._meta.get_base_chain(owner)
+    if not chain:
+        _reject_path(field, getattr(field, 'name', 'parent'))
+    hops = []
+    current = model
+    for parent in chain:
+        link = current._meta.parents.get(parent)
+        if link is None:
+            link = current._meta.get_ancestor_link(parent)
+        if link is None or not _forward_fk(link):
+            _reject_path(field, getattr(field, 'name', 'parent'))
+        hops.append(('fk', link))
+        current = parent
+    return hops
+
+
 def split_value_path(model, path):
     """Hops to the row that holds the leaf column, and that column."""
     hops = []
@@ -362,8 +388,10 @@ def split_value_path(model, path):
                 % (name, current._meta.label)
             )
         if last and (_value_column(field) or _forward_fk(field)):
+            hops.extend(concrete_owner_hops(current, field))
             return hops, field
         if not last and _forward_fk(field):
+            hops.extend(concrete_owner_hops(current, field))
             hops.append(('fk', field))
             current = field.remote_field.model
             continue
@@ -400,6 +428,7 @@ def relation_hops(model, path, *, register=False):
         last = index == len(path) - 1
         if _names_attname(field, name):
             if last and not register:
+                hops.extend(concrete_owner_hops(current, field))
                 return hops
             if last:
                 raise PermissionConditionError(
@@ -411,6 +440,7 @@ def relation_hops(model, path, *, register=False):
                 % (name, current._meta.label)
             )
         if _forward_fk(field):
+            hops.extend(concrete_owner_hops(current, field))
             hops.append(('fk', field))
             current = field.remote_field.model
             if last:
@@ -428,6 +458,7 @@ def relation_hops(model, path, *, register=False):
                     '%s() needs a relation. %r is a column.'
                     % (REACHABLE_NAME, name)
                 )
+            hops.extend(concrete_owner_hops(current, field))
             return hops
         _reject_path(field, name)
     return hops
