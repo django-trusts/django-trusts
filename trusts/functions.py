@@ -10,7 +10,7 @@ nodes, and the compiler emits SQL.
 
 from django.db.models import functions
 
-from trusts.plan.grammar import EXISTS_KIND, EXISTS_NAME, Tree, unsupported
+from trusts.plan.grammar import REACHABLE_KIND, REACHABLE_NAME, Tree, unsupported
 
 
 def _comparison(kind):
@@ -70,8 +70,8 @@ class Reachable(object):
     path (``c.dept_id.unit``) is rejected, as are a reverse foreign key
     and a many-to-many.
 
-    The public name is ``EXISTS_NAME``. The stored node kind stays
-    ``exists``.
+    The public name is ``REACHABLE_NAME``. The stored node kind is
+    ``reachable``.
     """
 
     def __new__(cls, arg):
@@ -86,19 +86,19 @@ class Reachable(object):
             from trusts.errors import PermissionConditionError
             if symbol_root(arg) == 'permission':
                 raise PermissionConditionError(
-                    '%s() does not apply to a permission field.' % EXISTS_NAME
+                    '%s() does not apply to a permission field.' % REACHABLE_NAME
                 )
             raise PermissionConditionError(
                 '%s() needs a relation. A root alone is not a path.'
-                % EXISTS_NAME
+                % REACHABLE_NAME
             )
         if not isinstance(arg, Symbol):
             raise unsupported(
-                '%s() on a value that is not a field path' % EXISTS_NAME,
-                hint='Name a relation, for example %s(o.dept).' % EXISTS_NAME,
+                '%s() on a value that is not a field path' % REACHABLE_NAME,
+                hint='Name a relation, for example %s(o.dept).' % REACHABLE_NAME,
             )
         return Tree(
-            EXISTS_KIND,
+            REACHABLE_KIND,
             item=Tree(
                 'field', root=symbol_root(arg), path=symbol_path(arg),
             ),

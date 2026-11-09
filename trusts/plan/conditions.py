@@ -72,8 +72,8 @@ from django.utils.functional import Promise, SimpleLazyObject
 from trusts.errors import PermissionConditionError
 from trusts.functions import Coalesce, Lower, Now, Reachable
 from trusts.plan.grammar import (
-    EXISTS_KIND,
-    EXISTS_NAME,
+    REACHABLE_KIND,
+    REACHABLE_NAME,
     ORDERED_KINDS,
     Symbol,
     Tree,
@@ -241,7 +241,7 @@ def normalize_expression(node, token=None):
         if left is node.left and right is node.right:
             return node
         return Tree(node.kind, left=left, right=right)
-    if _node(node, 'not', 'bare', EXISTS_KIND):
+    if _node(node, 'not', 'bare', REACHABLE_KIND):
         item = normalize_expression(node.item, token)
         if item is node.item:
             return node
@@ -281,7 +281,7 @@ def _lower_value(value, token, *, inside=False):
             'A %s constant is not supported in a named filter. '
             'SQL functions in a condition must be Now, Lower, Coalesce, '
             'and %s from trusts.functions.' % (
-                type(value).__name__, EXISTS_NAME,
+                type(value).__name__, REACHABLE_NAME,
             )
         )
     return Tree('const', value=normalize_constant(value))
@@ -740,7 +740,7 @@ def _validate_bare(node, model, user_model):
     require_boolean_field(host, item.path, ref, where='a named filter')
 
 
-def require_lowerable_operand(node, model, user_model, *, exists):
+def require_lowerable_operand(node, model, user_model, *, reachable):
     """Reject a field that ``register()`` would accept and SQL cannot lower.
 
     Comparisons need a stored column or a forward foreign key.
@@ -752,21 +752,21 @@ def require_lowerable_operand(node, model, user_model, *, exists):
     registration.
     """
     if not _node(node, 'field'):
-        if exists:
+        if reachable:
             raise PermissionConditionError(
-                '%s() needs a field path.' % EXISTS_NAME
+                '%s() needs a field path.' % REACHABLE_NAME
             )
         return
     if node.root == 'permission':
-        if exists:
+        if reachable:
             raise PermissionConditionError(
-                '%s() does not apply to a permission field.' % EXISTS_NAME
+                '%s() does not apply to a permission field.' % REACHABLE_NAME
             )
         return
-    if exists and not node.path:
+    if reachable and not node.path:
         raise PermissionConditionError(
             '%s() needs a relation. A root alone is not a path.'
-            % EXISTS_NAME
+            % REACHABLE_NAME
         )
     if node.root == 'object':
         host = model
@@ -781,7 +781,7 @@ def require_lowerable_operand(node, model, user_model, *, exists):
     if not node.path:
         return
     from trusts.plan.trivalent import relation_hops, split_value_path
-    if exists:
+    if reachable:
         relation_hops(host, node.path, register=True)
     else:
         split_value_path(host, node.path)
@@ -799,7 +799,7 @@ def validate_expression(node, model, user_model=None):
     if not is_predicate(node):
         raise PermissionConditionError(
             'Permission condition did not produce a comparison, '
-            '%s(), .contains(), or boolean field.' % EXISTS_NAME
+            '%s(), .contains(), or boolean field.' % REACHABLE_NAME
         )
     _validate_node(node, model, user_model)
 
@@ -812,8 +812,8 @@ def _validate_node(node, model, user_model):
     if _node(node, 'eq', 'ne', *ORDERED_KINDS):
         _validate_node(node.left, model, user_model)
         _validate_node(node.right, model, user_model)
-        require_lowerable_operand(node.left, model, user_model, exists=False)
-        require_lowerable_operand(node.right, model, user_model, exists=False)
+        require_lowerable_operand(node.left, model, user_model, reachable=False)
+        require_lowerable_operand(node.right, model, user_model, reachable=False)
         check_comparison_types(node, model, user_model)
         return
     if _node(node, 'contains'):
@@ -822,23 +822,23 @@ def _validate_node(node, model, user_model):
     if _node(node, 'bare'):
         _validate_bare(node, model, user_model)
         return
-    if _node(node, 'not', EXISTS_KIND):
-        if node.kind == EXISTS_KIND and _node(node.item, 'field'):
+    if _node(node, 'not', REACHABLE_KIND):
+        if node.kind == REACHABLE_KIND and _node(node.item, 'field'):
             item = node.item
             if item.root == 'permission':
                 raise PermissionConditionError(
                     '%s() does not apply to a permission field.'
-                    % EXISTS_NAME
+                    % REACHABLE_NAME
                 )
             if not item.path:
                 raise PermissionConditionError(
                     '%s() needs a relation. A root alone is not a path.'
-                    % EXISTS_NAME
+                    % REACHABLE_NAME
                 )
         _validate_node(node.item, model, user_model)
-        if node.kind == EXISTS_KIND:
+        if node.kind == REACHABLE_KIND:
             require_lowerable_operand(
-                node.item, model, user_model, exists=True,
+                node.item, model, user_model, reachable=True,
             )
         return
     if _node(node, 'const'):
@@ -849,7 +849,7 @@ def _validate_node(node, model, user_model):
         for leaf in walk(node):
             if leaf.kind == 'field':
                 require_lowerable_operand(
-                    leaf, model, user_model, exists=False,
+                    leaf, model, user_model, reachable=False,
                 )
         _reject_split_function(node)
         return

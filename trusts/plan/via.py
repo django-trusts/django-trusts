@@ -18,13 +18,13 @@ from django.db.models.expressions import Expression
 
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.conditions import condition_model_key
-from trusts.plan.grammar import EXISTS_KIND, Tree
+from trusts.plan.grammar import REACHABLE_KIND, Tree
 from trusts.plan.predicates import bind_record_qs, bind_terminal
 from trusts.plan.rewrites import CallInput
 from trusts.plan.trivalent import (
     Operand,
     compare,
-    exists_operand,
+    reachable_operand,
     field_operand,
     split_value_path,
 )
@@ -391,7 +391,7 @@ def _mentions(node, root):
         return node.root == root
     if node.kind in ('and', 'or', 'eq', 'ne', 'contains'):
         return _mentions(node.left, root) or _mentions(node.right, root)
-    if node.kind in ('not', 'bare', EXISTS_KIND):
+    if node.kind in ('not', 'bare', REACHABLE_KIND):
         return _mentions(node.item, root)
     return False
 
@@ -452,14 +452,14 @@ def _walk_node(node, user_model, content_model, content, carriers, name, qn,
         return _compare_sql(
             node, user_model, content_model, content, carriers, name, qn, force,
         )
-    if node.kind == EXISTS_KIND:
+    if node.kind == REACHABLE_KIND:
         if not force and not _mentions(node, 'user'):
             return None
         field = node.item
         if getattr(field, 'kind', None) != 'field' or field.root != 'user':
             raise _cannot(name)
         try:
-            return exists_operand(
+            return reachable_operand(
                 user_model, field.path, ('alias', '{alias}'), qn,
             ).reached_sql
         except PermissionConditionError as exc:

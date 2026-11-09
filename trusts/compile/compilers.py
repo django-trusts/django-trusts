@@ -34,8 +34,8 @@ from trusts.compile.graph import (
     _require_ref,
 )
 from trusts.plan.grammar import (
-    EXISTS_KIND,
-    EXISTS_NAME,
+    REACHABLE_KIND,
+    REACHABLE_NAME,
     Symbol,
     Tree,
     is_predicate,
@@ -1313,20 +1313,20 @@ def _validate_relation_node(node, root, permission_model, *,
             root, node.item.path, 'condition', where='a relation condition',
         )
         return
-    if node.kind == EXISTS_KIND:
+    if node.kind == REACHABLE_KIND:
         item = node.item
         if getattr(item, 'kind', None) != 'field':
             raise PermissionConditionError(
-                '%s() needs a field path.' % EXISTS_NAME
+                '%s() needs a field path.' % REACHABLE_NAME
             )
         if not item.path:
             raise PermissionConditionError(
                 '%s() needs a relation. A root alone is not a path.'
-                % EXISTS_NAME
+                % REACHABLE_NAME
             )
         _require_row_field(item)
         resolve_field_path(root, item.path, ref_kind='condition')
-        require_lowerable_operand(item, root, root, exists=True)
+        require_lowerable_operand(item, root, root, reachable=True)
         return
     if needs_expression(node):
         _validate_expression_comparison(node, root)
@@ -1351,7 +1351,7 @@ def _validate_expression_comparison(node, root):
     for leaf in walk((node.left, node.right)):
         if leaf.kind == 'field':
             _require_row_field(leaf)
-            require_lowerable_operand(leaf, root, root, exists=False)
+            require_lowerable_operand(leaf, root, root, reachable=False)
     check_comparison_types(node, root, root)
 
 
@@ -1387,7 +1387,7 @@ def _validate_row_comparison(node, root, *, delegated, matches):
     for side in (node.left, node.right):
         if side.kind == 'const':
             continue
-        require_lowerable_operand(side, root, root, exists=False)
+        require_lowerable_operand(side, root, root, reachable=False)
     check_comparison_types(node, root, root)
 
 

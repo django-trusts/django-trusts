@@ -26,7 +26,7 @@ from django.db.models.lookups import Lookup
 
 from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import ModelIdentity
-from trusts.plan.grammar import EXISTS_KIND, EXISTS_NAME, walk
+from trusts.plan.grammar import REACHABLE_KIND, REACHABLE_NAME, walk
 
 
 class _Marked(object):
@@ -254,8 +254,8 @@ def lower(node, scope):
                     _Marked(prepared, const_hint=operand.export_hint or 'literal'),
                 ),
             )
-    if kind == EXISTS_KIND:
-        operand = scope.exists_operand(node.item)
+    if kind == REACHABLE_KIND:
+        operand = scope.reachable_operand(node.item)
         return Expr('(%s)' % operand.reached_sql, operand.reached_params)
     if kind == 'ne' or kind in _COMPARE:
         return compare(
@@ -391,7 +391,7 @@ def relation_hops(model, path, *, register=False):
     if register and not path:
         raise PermissionConditionError(
             '%s() needs a relation. A root alone is not a path.'
-            % EXISTS_NAME
+            % REACHABLE_NAME
         )
     hops = []
     current = model
@@ -404,7 +404,7 @@ def relation_hops(model, path, *, register=False):
             if last:
                 raise PermissionConditionError(
                     '%s() needs a relation. %r is a column.'
-                    % (EXISTS_NAME, name)
+                    % (REACHABLE_NAME, name)
                 )
             raise PermissionConditionError(
                 'Cannot traverse column %r on %s. Name the relation.'
@@ -426,7 +426,7 @@ def relation_hops(model, path, *, register=False):
             if register:
                 raise PermissionConditionError(
                     '%s() needs a relation. %r is a column.'
-                    % (EXISTS_NAME, name)
+                    % (REACHABLE_NAME, name)
                 )
             return hops
         _reject_path(field, name)
@@ -528,7 +528,7 @@ def _referenced_prefix(query, raw_alias, hops):
     return alias, nullable, taken, last_model
 
 
-def correlated(model, hops, leaf_column, source, qn, *, exists,
+def correlated(model, hops, leaf_column, source, qn, *, reachable,
                query=None, raw_alias=None):
     """Scalar value or ``EXISTS`` from ``source``.
 
@@ -546,7 +546,7 @@ def correlated(model, hops, leaf_column, source, qn, *, exists,
             quoted = qn(alias)
             rest = hops[taken:]
             if not rest:
-                if exists:
+                if reachable:
                     if nullable:
                         column = qn(last_model._meta.pk.column)
                         return '%s.%s IS NOT NULL' % (quoted, column), ()
@@ -572,14 +572,14 @@ def correlated(model, hops, leaf_column, source, qn, *, exists,
                 parts.append('JOIN %s AS %s ON %s' % (table, dest, cond))
             prev = dest
         if not hops:
-            if exists:
+            if reachable:
                 return '(1=1)', ()
             return '%s.%s' % (source[1], qn(leaf_column)), ()
-        selected = '1' if exists else '%s.%s' % (prev, qn(leaf_column))
+        selected = '1' if reachable else '%s.%s' % (prev, qn(leaf_column))
         body = 'SELECT %s FROM %s WHERE %s' % (
             selected, ' '.join(parts), where,
         )
-        if exists:
+        if reachable:
             return 'EXISTS (%s)' % body, ()
         return '(%s)' % body, ()
     pk, row_model = source[1], source[2]
@@ -597,7 +597,7 @@ def correlated(model, hops, leaf_column, source, qn, *, exists,
         )
         prev = dest
     where = '%s.%s = %%s' % (src, pk_column)
-    if exists:
+    if reachable:
         body = 'SELECT 1 FROM %s WHERE %s' % (' '.join(parts), where)
         return 'EXISTS (%s)' % body, (pk,)
     column = qn(leaf_column) if leaf_column else qn(row_model._meta.pk.column)
@@ -616,19 +616,19 @@ def field_operand(model, path, source, qn, query=None, raw_alias=None):
             sql = '%s.%s' % (source[1], qn(column))
             return Operand(sql, (), '(1=1)', (), False)
         sql, params = correlated(
-            model, (), model._meta.pk.column, source, qn, exists=False,
+            model, (), model._meta.pk.column, source, qn, reachable=False,
         )
         reached, reached_params = correlated(
-            model, (), None, source, qn, exists=True,
+            model, (), None, source, qn, reachable=True,
         )
         return Operand(sql, params, reached, reached_params, False)
     hops, leaf = split_value_path(model, path)
     value_sql, value_params = correlated(
-        model, hops, leaf.column, source, qn, exists=False,
+        model, hops, leaf.column, source, qn, reachable=False,
         query=query, raw_alias=raw_alias,
     )
     reached_sql, reached_params = correlated(
-        model, hops, leaf.column, source, qn, exists=True,
+        model, hops, leaf.column, source, qn, reachable=True,
         query=query, raw_alias=raw_alias,
     )
     return Operand(
@@ -636,10 +636,10 @@ def field_operand(model, path, source, qn, query=None, raw_alias=None):
     )
 
 
-def exists_operand(model, path, source, qn, query=None, raw_alias=None):
+def reachable_operand(model, path, source, qn, query=None, raw_alias=None):
     hops = relation_hops(model, path)
     reached_sql, reached_params = correlated(
-        model, hops, None, source, qn, exists=True,
+        model, hops, None, source, qn, reachable=True,
         query=query, raw_alias=raw_alias,
     )
     return Operand('(1=0)', (), reached_sql, reached_params, False)
@@ -668,14 +668,14 @@ class Scope(object):
             'Cannot lower condition node %r.' % (node,)
         )
 
-    def exists_operand(self, node):
+    def reachable_operand(self, node):
         if node.kind != 'field':
             raise PermissionConditionError(
-                '%s() needs a field path.' % EXISTS_NAME
+                '%s() needs a field path.' % REACHABLE_NAME
             )
         model, source = self._source(node)
         path = self._path(node)
-        operand = exists_operand(
+        operand = reachable_operand(
             model, path, source, self.qn, self.query, self.raw_alias,
         )
         operand.export_hint = self._export_hint(node)

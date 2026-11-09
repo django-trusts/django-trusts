@@ -23,7 +23,7 @@ from trusts.plan.conditions import (
     validate_expression,
 )
 from trusts.plan.grammar import (
-    EXISTS_KIND, ORDERED_KINDS, Tree, contains_call, unsupported,
+    REACHABLE_KIND, ORDERED_KINDS, Tree, contains_call, unsupported,
 )
 from trusts.plan.trivalent import grant_q, has_contains
 from trusts.plan.writers import (
@@ -175,7 +175,7 @@ def validate_user_rule(model, expr, name):
     if expr.kind == 'bare':
         _require_user_boolean(model, expr.item, name)
         return
-    if expr.kind == EXISTS_KIND:
+    if expr.kind == REACHABLE_KIND:
         validate_expression(expr, model, model)
         return
     if expr.kind in ORDERED_KINDS:

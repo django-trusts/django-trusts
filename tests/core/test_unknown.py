@@ -28,7 +28,7 @@ from trusts.backends import TrustModelBackendMixin
 from trusts.decorators import authorization_required, filter_by_permitted_content
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.functions import Coalesce, Lower, Reachable
-from trusts.plan.grammar import EXISTS_NAME
+from trusts.plan.grammar import REACHABLE_NAME
 from trusts.models import (
     AuthorizedQuerySet,
     PermittedQuerySet,
@@ -41,7 +41,7 @@ from trusts.plan.trivalent import (
     Operand,
     _unwrap,
     compare,
-    exists_operand,
+    reachable_operand,
     field_operand,
     grant_q,
     lower,
@@ -141,8 +141,8 @@ def _cmp(kind, path, value):
     return Tree(kind, left=_field(path), right=_const(value))
 
 
-def _exists(path):
-    return Tree('exists', item=_field(path))
+def _reachable(path):
+    return Tree('reachable', item=_field(path))
 
 
 def _bindings(model):
@@ -154,7 +154,7 @@ class UnknownLoweringTests(TransactionTestCase):
     """The expression module and the grant boundary agree on one connection."""
 
     def test_reached_null_missing_and_dangling(self):
-        self.assertEqual(Reachable.__name__, EXISTS_NAME)
+        self.assertEqual(Reachable.__name__, REACHABLE_NAME)
         Room, _Tag, Desk, _Note, _Grant = _models()
         with _tables(Room, _Tag, Desk):
             blank = Room.objects.create(name=None)
@@ -204,15 +204,15 @@ class UnknownLoweringTests(TransactionTestCase):
             # is false. A column on that path, if one reaches the
             # evaluator, ignores the column and tests the room row.
             # A bare root counts as reached.
-            expect(_exists(()), 'stored', 'named', 'differ', 'missing', 'dangling')
-            expect(_exists(('room',)), 'stored', 'named', 'differ')
-            expect(_exists(('room', 'name')), 'stored', 'named', 'differ')
+            expect(_reachable(()), 'stored', 'named', 'differ', 'missing', 'dangling')
+            expect(_reachable(('room',)), 'stored', 'named', 'differ')
+            expect(_reachable(('room', 'name')), 'stored', 'named', 'differ')
             expect(
-                Tree('not', item=_exists(('room',))),
+                Tree('not', item=_reachable(('room',))),
                 'missing', 'dangling',
             )
             expect(
-                Tree('not', item=_exists(('room', 'name'))),
+                Tree('not', item=_reachable(('room', 'name'))),
                 'missing', 'dangling',
             )
             expect(
@@ -266,7 +266,7 @@ class UnknownLoweringTests(TransactionTestCase):
             self.assertIn('IS NULL', derived.sql)
             self.assertIn('NOT', derived.sql)
             self.assertNotIn('IS NOT NULL', derived.sql)
-            present = exists_operand(
+            present = reachable_operand(
                 Desk, ('room',), ('alias', quoted('d')), quoted,
             )
             # The terminal foreign key is followed. NULL and dangling
@@ -274,12 +274,12 @@ class UnknownLoweringTests(TransactionTestCase):
             self.assertIn('EXISTS', present.reached_sql)
             self.assertIn('unk_room', present.reached_sql)
             self.assertNotIn('1=1', present.reached_sql)
-            followed = exists_operand(
+            followed = reachable_operand(
                 Desk, ('room', 'name'), ('alias', quoted('d')), quoted,
             )
             self.assertIn('EXISTS', followed.reached_sql)
             self.assertIn('unk_room', followed.reached_sql)
-            root = exists_operand(
+            root = reachable_operand(
                 Desk, (), ('alias', quoted('d')), quoted,
             )
             self.assertIn('1=1', root.reached_sql)
