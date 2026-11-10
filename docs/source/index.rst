@@ -764,6 +764,51 @@ Applications may register more than one valid path to the same content. A
 direct user grant and a team-derived grant can coexist, with either
 path providing permission.
 
+Testing related rows
+~~~~~~~~~~~~~~~~~~~~
+
+Use ``Any(path, predicate)`` or ``All(path, predicate)`` from
+``trusts.functions`` in an ordinary ``register(condition=...)``
+without ``along=`` or ``via=``. For example, allow an issue-closing
+grant only when all its blocking issues are closed:
+
+.. code-block:: python
+
+   from trusts.functions import All
+
+   registry.register(
+       trust=IssueCloseGrant,
+       user="user",
+       permission="permission",
+       content="issue",
+       name="issue_close",
+       description=(
+           "A direct close grant applies only when every blocker is closed."
+       ),
+       condition=lambda grant: (
+           (grant.permission.codename == "close_issue")
+           & All(grant.issue.blocked_by, lambda blocker: blocker.is_closed)
+       ),
+   )
+
+``Any(grant.issue.blocked_by, lambda blocker: blocker.is_closed)``
+instead asks whether at least one blocker is closed. A predicate's tests
+apply to the same related row. The predicate receives a symbolic row when
+the condition is built, not a Django model instance during an inquiry.
+
+The path may follow to-one relations before ending in a reverse foreign
+key or a many-to-many relation. The predicate can compare fields on the
+related row (including through to-one relations) with one another or with
+constants. It cannot refer to another root or contain another quantifier.
+A bare comparison across a to-many relation is still rejected.
+
+On a reached collection, ``Any()`` is true if any predicate is true and
+``All()`` is false if any predicate is false. Otherwise, an unknown
+predicate makes the result unknown. With no members, ``Any()`` is false
+and ``All()`` is true. If a to-one step before the collection cannot be
+reached, both results are unknown, not empty. Only a final true condition
+grants permission.
+
 Inherited relationships
 ~~~~~~~~~~~~~~~~~~~~~~~
 
