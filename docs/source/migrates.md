@@ -33,7 +33,7 @@ Migration-bot checklist:
 Previously, NULL and missing related rows could affect conditions
 differently depending on the expression. Conditions now combine using SQL
 three-valued logic: Unknown is distinct from False, and only a final True
-qualifies a grant. Review conditions that rely on how missing values were
+grants permission. Review conditions that rely on how missing values were
 handled and test the permissions they should grant after upgrading. See
 [supported lambda expressions](index.rst#supported-lambda-expressions).
 
