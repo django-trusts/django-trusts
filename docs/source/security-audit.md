@@ -442,11 +442,10 @@ The policy output does the same for that statement, so output that would omit
 or simplify the query for users from content is not emitted. Audit the declared
 walk, bound, generated recursive SQL, and returned-user parity together.
 
-For an `along=` condition, verify that a step continues only when it is
-True. Check forward and reverse inquiries, including each
-delegation and sponsor walk, for agreement. Neither a cycle nor a missing
-row should change the configured boundary; an independent valid grant can
-still apply.
+For a conditional path, verify that a step continues only when the
+condition is True. Check forward and reverse inquiries, including each
+delegation and sponsor walk, for agreement. An independent valid grant
+can still apply.
 
 Current CI exercises Along only for the database combinations listed in the
 support matrix.

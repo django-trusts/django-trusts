@@ -27,6 +27,10 @@ log.
   policy-output, and delegation inquiries support bounded `along=` on the
   documented databases. See the [user guide](index.rst) and [#286].
 
+- **Bounded user walks.** `via=` reaches users through a relationship.
+  Both `along=` and `via=` accept a path lambda that controls when a step
+  continues. See [Inherited relationships](index.rst#inherited-relationships).
+
 - **Permitted content follows `along=`.** `filter_by_permitted_content` uses the
   same bounded walk and the same one-level delegation as the object
   check. Policy output includes that statement. See the
