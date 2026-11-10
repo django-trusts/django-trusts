@@ -64,8 +64,11 @@ from trusts.models import (
     PermittedQuerySetMixin,
     PermittedUsersMixin,
 )
+from trusts.compile.compilers import _path_ends_on_m2m
 from trusts.plan.rewrites import bind_once
-from trusts.plan.writers import compile_to_q
+from trusts.plan.trivalent import _permission_app_label
+from trusts.plan.via import _SavedIdentity
+from trusts.plan.writers import _permission_attr, compile_to_q
 from trusts.plan.users import assert_persisted_principal
 import trusts.plan.rewrites as rewrites
 
@@ -1630,6 +1633,65 @@ class NamedFilterAgreementTest(TransactionTestCase):
         self._agree(filled, self.alice, self.notes['bare'], False, name='filled')
         document = render_configured_policy(lowered)
         self.assertIn(b'LOWER', document.upper())
+
+    def test_membership_binds_and_a_missing_label_stays_unknown(self):
+        User = get_user_model()
+        whole = Tree(
+            'contains',
+            left=Tree('field', root='user', path=('groups',)),
+            right=Tree('field', root='permission', path=()),
+        )
+        matched = set(User.objects.filter(compile_to_q(
+            whole, User, self.alice, self.change, User,
+        )).values_list('pk', flat=True))
+        self.assertEqual(
+            self.alice.pk in matched,
+            self.alice.groups.filter(pk=self.change.pk).exists(),
+        )
+        self.assertEqual(
+            _permission_attr(self.change, ('name',)), self.change.name,
+        )
+        with self.assertRaises(PermissionConditionError):
+            _permission_attr(self.change, ('no_such',))
+        with self.assertRaises(PermissionConditionError):
+            _permission_attr('not-a-code', ('app_label',))
+        self.assertEqual(
+            _permission_attr('trusts_tests.change_covnote:kept', ('codename',)),
+            'change_covnote',
+        )
+        self.assertEqual(
+            _permission_attr('trusts_tests.change_covnote:kept', ('app_label',)),
+            'trusts_tests',
+        )
+        unsaved = Permission(codename='render')
+        self.assertEqual(_permission_app_label(unsaved), '')
+        unsaved._state.adding = False
+        self.assertIsNone(_permission_app_label(unsaved))
+        dangling = Permission(codename='render', content_type_id=2147483646)
+        dangling._state.adding = False
+        self.assertIsNone(_permission_app_label(dangling))
+
+        class _NumberLabel(object):
+            content_type_id = 1
+            _state = type('State', (), {'adding': False})()
+            content_type = type('ContentType', (), {'app_label': 5})()
+
+        self.assertIsNone(_permission_app_label(_NumberLabel()))
+        with self.assertRaises(PermissionConditionError):
+            _SavedIdentity(User, self.alice.pk, ('username',))
+        saved = _SavedIdentity(
+            Permission, self.change.pk, ('content_type',),
+        )
+        self.assertEqual(saved.get_source_expressions(), [])
+        saved.set_source_expressions(())
+        with self.assertRaises(TypeError):
+            saved.set_source_expressions((1,))
+        self.assertEqual(
+            saved.resolve_expression().path, ('content_type',),
+        )
+        self.assertIs(
+            _path_ends_on_m2m(User, ('no_such_field',)), False,
+        )
 
     def test_a_permission_id_is_not_a_group(self):
         handle = compiler(path='tests.core.coverage-permission-id')
