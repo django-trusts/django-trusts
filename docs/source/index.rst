@@ -705,8 +705,8 @@ with a constant, including ``None``. ``~`` applies to a boolean field, to
 combining them with ``&`` or ``|``.
 
 Conditions combine using SQL three-valued logic: for example, True | Unknown
-is True. A comparison with a NULL operand or an unreachable field evaluates
-to Unknown. Only a final True grants permission.
+is True. An ordinary comparison with a NULL operand or an unreachable field
+evaluates to Unknown. Only a final True grants permission.
 
 The supported functions come from ``trusts.functions``; Django's own versions
 are rejected by ``register()``. Arguments may be fields, typed constants, or
