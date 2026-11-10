@@ -704,15 +704,24 @@ with a constant, including ``None``. ``~`` applies to a boolean field, to
 ``Reachable(path)``, and to ``&`` of those. Parenthesize comparisons when
 combining them with ``&`` or ``|``.
 
-``Reachable(path)`` is true when the join reached the row named by the last
-relation. A valid path ends in a forward foreign key or a reverse
-one-to-one, for example ``Reachable(c.dept)`` and ``Reachable(c.dept.unit)``.
+Lambda evaluation follows 3-Valued-Logic, for example, True | Unknown is True.
+A comparison with a NULL operand or an unreachable field evaluates to Unknown.
+Only a final True grants permission.
 
-The supported functions are ``Now()``, ``Lower(expression)``,
-``Coalesce(first, second, ...)``, and ``Reachable(path)`` from
-``trusts.functions``. Only these four functions are supported; using
-Django's own versions is rejected by ``register()``. Function arguments may
-be field references, typed constants, or nested supported functions. For example:
+The supported functions come from ``trusts.functions``; Django's own versions
+are rejected by ``register()``. Arguments may be fields, typed constants, or
+nested supported functions.
+
+- ``Now()``: the database time when the query executes.
+- ``Lower(expression)``: lowercases text.
+- ``Coalesce(first, second, ...)``: the first non-null of two or more
+  compatible arguments.
+- ``Reachable(path)``: true when the path of relations, such as ``c.dept`` or
+  ``c.dept.unit``, reaches a related object, meaning the join along it found a
+  row. The path ends in a relation, a forward foreign key or reverse
+  one-to-one, not a field.
+
+For example:
 
 .. code-block:: python
 
@@ -721,13 +730,12 @@ be field references, typed constants, or nested supported functions. For example
 
    condition=lambda d: Lower(d.name) == Lower(Value("BOB"))
 
-Use Django's ``Value`` for a literal string inside a function. ``Lower``
-accepts text; ``Coalesce`` requires at least two compatible arguments. The
-same expressions can be used in named filters.
+Use Django's ``Value`` for a literal string inside a function. The same
+expressions can be used in named filters.
 
-``Now()`` uses the database time when the query executes; clock precision and
-time-zone behavior follow the database backend. An evaluated queryset keeps
-its cached results; make a fresh inquiry to check expiration again.
+Clock precision and time-zone behavior of ``Now()`` follow the database
+backend. An evaluated queryset keeps its cached results; make a fresh
+inquiry to check expiration again.
 
 Python ``in``, ``and`` / ``or`` / ``not``, unsupported calls, arithmetic,
 and indexing are rejected.
@@ -744,28 +752,6 @@ path providing permission.
 
 Inherited relationships
 ~~~~~~~~~~~~~~~~~~~~~~~
-
-Content: along=
-^^^^^^^^^^^^^^^
-
-``along=`` declares bounded hierarchical reachability. For example,
-``along=("parent", 8)`` on ``registry.register`` applies the same bounded
-walk to object checks, permitted-content querysets, permission enumeration,
-users from content, and authorization-policy output. An optional third
-element sets an inheritance reset:
-``along=("parent", 8, "reset_inheritance")``. See the `bounded-reach
-security audit
-<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
-for the recursive query, the reset, and the database boundaries.
-
-.. _users-via:
-
-Users: via=
-^^^^^^^^^^^
-
-``via=`` reaches users by walking a relation from the grant. The form is
-``via=(path, bound)`` or ``via=(path, bound, field)``. The path, the bound,
-and a reset are the same as ``along=``.
 
 Members of a parent group inherit into its subgroups:
 
@@ -808,6 +794,28 @@ Members of a parent group inherit into its subgroups:
 
 ``along=`` and ``via=`` on the same registration are two walks. The user
 must be reached by ``via=`` and the object must be reached by ``along=``.
+
+Content: along=
+^^^^^^^^^^^^^^^
+
+``along=`` declares bounded hierarchical reachability. For example,
+``along=("parent", 8)`` on ``registry.register`` applies the same bounded
+walk to object checks, permitted-content querysets, permission enumeration,
+users from content, and authorization-policy output. An optional third
+element sets an inheritance reset:
+``along=("parent", 8, "reset_inheritance")``. See the `bounded-reach
+security audit
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
+for the recursive query, the reset, and the database boundaries.
+
+.. _users-via:
+
+Users: via=
+^^^^^^^^^^^
+
+``via=`` reaches users by walking a relation from the grant. The form is
+``via=(path, bound)`` or ``via=(path, bound, field)``. The path, the bound,
+and a reset are the same as ``along=``.
 
 See the `via= security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#users-via>`_.
