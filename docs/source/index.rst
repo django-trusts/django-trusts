@@ -425,9 +425,7 @@ List the user's permissions on an object:
    user.get_all_permissions(document)
    # {"documents.change_document"}
 
-List only the permissions obtained through registered Django groups the user
-belongs to; a permission a delegate holds through its sponsor's group is not
-included:
+List only the permissions obtained through registered Django groups:
 
 .. code-block:: python
 
@@ -487,10 +485,8 @@ the same model.
 
 ``permission`` is an ``auth.Permission`` instance. ``content`` is the protected
 model. ``conditions`` is the same tuple of named-filter names ``.permitted()``
-takes. The filter is resolved in SQL. A missing name, or a tuple that is not
-that exact form, returns an empty queryset. ``backend`` is optional and
-defaults to the installed relationship backends; pass ``backend=`` to select
-one.
+takes. ``backend`` is optional and defaults to the installed relationship
+backends; pass ``backend=`` to select one.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
 the user may read:
@@ -708,25 +704,15 @@ with a constant, including ``None``. ``~`` applies to a boolean field, to
 ``Reachable(path)``, and to ``&`` of those. Parenthesize comparisons when
 combining them with ``&`` or ``|``.
 
-``Reachable(path)`` from ``trusts.functions`` is true when the join reached
-the row named by the last relation. It is neither SQL ``EXISTS`` nor a
-NULL check. A valid path ends in a forward foreign key or a reverse
+``Reachable(path)`` is true when the join reached the row named by the last
+relation. A valid path ends in a forward foreign key or a reverse
 one-to-one, for example ``Reachable(c.dept)`` and ``Reachable(c.dept.unit)``.
-``Reachable(c.dept.unit)`` is false when ``unit`` is NULL or the key does
-not match a row. ``~Reachable(path)`` is that test negated. Registration
-raises ``PermissionConditionError`` for a root alone (``Reachable(c)``,
-``Reachable(u)``, ``Reachable(t)``) and for a path that ends in a column
-(``c.name``, ``c.dept.name``, ``c.dept.unit_id``, ``c.dept.id``). An
-attname in the middle of a path (``c.dept_id.unit``) is rejected, as are
-a reverse foreign key, a many-to-many, and a ``GenericForeignKey``
-continuation such as ``x.target.id``.
 
-The supported SQL functions are ``Now()``, ``Lower(expression)``, and
-``Coalesce(first, second, ...)`` from ``trusts.functions``. Only these
-three SQL functions are supported; using Django's own versions is rejected
-by ``register()``. ``Reachable`` is a relation test, not one of them.
-Function arguments may be field references, typed
-constants, or nested supported functions. For example:
+The supported functions are ``Now()``, ``Lower(expression)``,
+``Coalesce(first, second, ...)``, and ``Reachable(path)`` from
+``trusts.functions``. Only these four functions are supported; using
+Django's own versions is rejected by ``register()``. Function arguments may
+be field references, typed constants, or nested supported functions. For example:
 
 .. code-block:: python
 
@@ -756,12 +742,8 @@ Applications may register more than one valid path to the same content. A
 direct user grant and a team-derived grant can coexist, with either
 path providing permission.
 
-.. _inherited-relationships:
-
 Inherited relationships
 ~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _content-along:
 
 Content: along=
 ^^^^^^^^^^^^^^^
@@ -776,7 +758,7 @@ security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
 for the recursive query, the reset, and the database boundaries.
 
-.. _nested-users:
+.. _users-via:
 
 Users: via=
 ^^^^^^^^^^^
@@ -822,15 +804,13 @@ Members of a parent group inherit into its subgroups:
 ``org`` is the parent of ``backend``, and ``backend`` is the parent of
 ``api``. Alice is a member of ``org`` only. The grant's group is
 ``backend``. She has the permission on the projects in ``backend`` and
-``api``. Bob, a member of ``backend``, does too. With the bound at 1, a
-member of the group above ``org`` is out of reach.
+``api``.
 
 ``along=`` and ``via=`` on the same registration are two walks. The user
 must be reached by ``via=`` and the object must be reached by ``along=``.
-Each keeps its own path and bound.
 
-See the `nested-user security audit
-<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#nested-users>`_.
+See the `via= security audit
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#users-via>`_.
 
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
