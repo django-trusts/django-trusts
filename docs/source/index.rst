@@ -701,7 +701,7 @@ Supported lambda expressions
 A condition lambda accepts ``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=``,
 ``&``, ``|``, ``.contains(member)``, a bare boolean field, and comparison
 with a constant, including ``None``. ``~`` applies to a boolean field, to
-``Reachable(path)``, and to ``&`` of those. Parenthesize comparisons when
+``Reachable(path)`` (below), and to ``&`` of those. Parenthesize comparisons when
 combining them with ``&`` or ``|``.
 
 Lambda evaluation follows 3-Valued-Logic, for example, True | Unknown is True.
@@ -742,9 +742,7 @@ and indexing are rejected.
 
 A path lambda, a ``condition=`` lambda, and a delegated condition builder
 are evaluated only when registering and compiling, never during a
-permission query.
-
-As a path in ``register()``, it is limited to attribute access.
+permission query. A path lambda is limited to attribute access.
 
 Applications may register more than one valid path to the same content. A
 direct user grant and a team-derived grant can coexist, with either
@@ -756,12 +754,12 @@ Inherited relationships
 Content: along=
 ^^^^^^^^^^^^^^^
 
-``along=`` declares bounded hierarchical reachability. For example,
-``along=("parent", 8)`` on ``registry.register`` applies the same bounded
-walk to object checks, permitted-content querysets, permission enumeration,
-users from content, and authorization-policy output. An optional third
-element sets an inheritance reset:
-``along=("parent", 8, "reset_inheritance")``. See the `bounded-reach
+``along=`` declares bounded hierarchical reachability. The form is
+``along=(path, bound)`` or ``along=(path, bound, field)``, where ``field``
+sets an inheritance reset. For example, ``along=("parent", 8)`` on
+``registry.register`` applies the same bounded walk to object checks,
+permitted-content querysets, permission enumeration, users from content, and
+authorization-policy output. See the `bounded-reach
 security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
 for the recursive query, the reset, and the database boundaries.
@@ -771,9 +769,8 @@ for the recursive query, the reset, and the database boundaries.
 Users: via=
 ^^^^^^^^^^^
 
-``via=`` reaches users by walking a relation from the grant. The form is
-``via=(path, bound)`` or ``via=(path, bound, field)``. The path, the bound,
-and a reset are the same as ``along=``.
+``via=`` reaches users by walking a relation from the grant. The form, the
+path, the bound, and the reset are the same as ``along=``.
 
 ``along=`` and ``via=`` on the same registration are two walks. The user
 must be reached by ``via=`` and the object must be reached by ``along=``.
