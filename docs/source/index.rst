@@ -756,8 +756,8 @@ Content: along=
 
 ``along=`` declares bounded hierarchical reachability. The form is
 ``along=(path, bound)``. The path is a ``__`` string or a path lambda.
-With ``along=(lambda n: n.inherits & n.parent, 8)``, each step continues
-only if ``n.inherits`` is True. For example, ``along=("parent", 8)`` on
+With ``along=(lambda t: t.node.inherits & t.node.parent, 8)``, a step
+from ``t.node`` to its parent requires ``t.node.inherits`` to be True. For example, ``along=("parent", 8)`` on
 ``registry.register`` applies the same bounded walk to object checks,
 permitted-content querysets, permission enumeration, users from content, and
 authorization-policy output. See the `bounded-reach
