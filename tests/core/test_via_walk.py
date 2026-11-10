@@ -34,6 +34,7 @@ from trusts.functions import Reachable
 from trusts.models import (
     AuthorizedQuerySet,
     PermittedQuerySetMixin,
+    PermittedUsersManagerMixin,
     PermittedUsersMixin,
 )
 
@@ -6235,16 +6236,212 @@ class ViaStoredTargetTest(TransactionTestCase):
                 Page.objects.filter(pk=page.pk).update(parent_id='missing')
                 page.refresh_from_db()
                 self.assertIs(ada.has_perm('%s:mark' % code, page), False)
-                # PostgreSQL has no integer = text operator for this
-                # pk-to-code comparison. The reverse inquiry errors
-                # instead of granting. SQLite and MySQL compare and
-                # return nobody.
-                if connection.vendor != 'postgresql':
-                    self.assertEqual(
-                        set(page.get_permitted_users(
-                            '%s:mark' % code,
-                        ).values_list('username', flat=True)),
-                        set(),
-                    )
+                self.assertEqual(
+                    set(page.get_permitted_users(
+                        '%s:mark' % code,
+                    ).values_list('username', flat=True)),
+                    set(),
+                )
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class IdentityDomainTest(TransactionTestCase):
+    """Two relations to one model compare that model's primary key.
+
+    ``stamp`` stores the primary key. ``token`` stores ``code``. The
+    decoy row's code is the wanted primary key, so a stored-column
+    compare would grant it. A dangling ``token`` is SQL NULL of the
+    primary-key type, not an ``integer = text`` error.
+    """
+
+    def test_via_along_and_condition_agree(self):
+        User = get_user_model()
+        _attach_manager(self, User)
+
+        class Mark(models.Model):
+            id = models.IntegerField(primary_key=True)
+            code = models.CharField(max_length=20, unique=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'ident_mark'
+
+        class PageQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Page(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=20)
+            parent = models.ForeignKey(
+                'self', null=True, related_name='kids',
+                on_delete=models.CASCADE,
+            )
+            stamp = models.ForeignKey(
+                Mark, on_delete=models.CASCADE, related_name='+',
+            )
+            token = models.ForeignKey(
+                Mark, to_field='code', null=True, blank=True,
+                db_constraint=False, on_delete=models.CASCADE,
+                related_name='+',
+            )
+            objects = models.Manager.from_queryset(PageQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'ident_page'
+
+        class SheetQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Sheet(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=20)
+            page = models.ForeignKey(
+                Page, related_name='sheets', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(SheetQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'ident_sheet'
+
+        class Grant(models.Model):
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            page = models.ForeignKey(Page, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'ident_grant'
+
+        with _tables(Mark, Page, Sheet, Grant):
+            _add_user_column(
+                self, User, 'badge',
+                models.ForeignKey(
+                    Mark, null=True, blank=True,
+                    db_constraint=False, db_index=False,
+                    on_delete=models.DO_NOTHING, related_name='+',
+                ),
+            )
+            wanted = Mark.objects.create(id=1, code='2')
+            decoy = Mark.objects.create(id=2, code='1')
+            root = Page.objects.create(
+                title='root', stamp=wanted, token=wanted,
+            )
+            match = Page.objects.create(
+                title='match', parent=root, stamp=wanted, token=wanted,
+            )
+            swapped = Page.objects.create(
+                title='swap', parent=root, stamp=wanted, token=decoy,
+            )
+            dangling = Page.objects.create(
+                title='gone', parent=root, stamp=wanted, token_id='missing',
+            )
+            sheets = {}
+            for page in (root, match, swapped, dangling):
+                sheets[page.title] = Sheet.objects.create(
+                    title=page.title, page=page,
+                )
+            change = _permission(Sheet, 'change_identsheet')
+            code = 'trusts_tests.change_identsheet'
+            ada = User.objects.create_user('ident-ada', password='x')
+            ada.badge = wanted
+            ada.save(update_fields=['badge'])
+            for page in (root, match, swapped, dangling):
+                Grant.objects.create(user=ada, page=page, permission=change)
+
+            def users_of(sheet, perm):
+                class Listing(PermittedUsersManagerMixin, type(User.objects)):
+                    pass
+                listing = Listing()
+                listing.model = User
+                return set(listing.permitted(sheet, perm).values_list(
+                    'username', flat=True,
+                ))
+
+            def check(handle, allowed, *, named=None, unfiltered=None):
+                filtered = set(allowed)
+                plain = filtered if unfiltered is None else set(unfiltered)
+                with _listed(handle):
+                    permitted = set(Sheet.objects.permitted(
+                        code, ada, conditions=(named,) if named else (),
+                    ).values_list('title', flat=True))
+                    self.assertEqual(permitted, filtered)
+                    authorized = set(Sheet.objects.authorized(
+                        ada, change,
+                    ).values_list('title', flat=True))
+                    self.assertEqual(authorized, plain)
+                    pages = set(filter_by_permitted_content(
+                        Page.objects.all(), ada, change, content=Sheet,
+                        conditions=(named,) if named else (),
+                    ).values_list('title', flat=True))
+                    self.assertEqual(pages, filtered)
+                    for title, sheet in sheets.items():
+                        selected = title in filtered
+                        base = title in plain
+                        asked = '%s:%s' % (code, named) if named else code
+                        self.assertIs(
+                            ada.has_perm(asked, sheet), selected, title,
+                        )
+                        self.assertIs(ada.has_perm(code, sheet), base, title)
+                        self.assertEqual(
+                            set(sheet.get_permitted_users(asked).values_list(
+                                'username', flat=True,
+                            )),
+                            {'ident-ada'} if selected else set(),
+                            title,
+                        )
+                        self.assertEqual(
+                            users_of(sheet, asked),
+                            {'ident-ada'} if selected else set(),
+                            title,
+                        )
+                        self.assertEqual(
+                            code in ada.get_all_permissions(sheet),
+                            base,
+                            title,
+                        )
+
+            via = compiler(path='tests.core.ident-via')
+            via.add_named_filter(
+                Sheet, 'same',
+                lambda user, permission, content: (
+                    user.badge == content.page.token
+                ),
+            )
+            via.register(
+                trust=Grant, user='user', permission='permission',
+                content='page__sheets', via=('user__via_manager', 2),
+            )
+            check(
+                via, {'root', 'match'}, named='same',
+                unfiltered={'root', 'match', 'swap', 'gone'},
+            )
+
+            Grant.objects.all().delete()
+            for page in (root, match, swapped, dangling):
+                Grant.objects.create(user=ada, page=page, permission=change)
+            conditioned = compiler(path='tests.core.ident-plain')
+            conditioned.register(
+                trust=Grant, user='user', permission='permission',
+                content='page__sheets',
+                condition=lambda row: row.user.badge == row.page.token,
+            )
+            check(conditioned, {'root', 'match'})
+
+            Grant.objects.all().delete()
+            Grant.objects.create(user=ada, page=root, permission=change)
+            walked = compiler(path='tests.core.ident-along')
+            walked.register(
+                trust=Grant, user='user', permission='permission',
+                content='page__sheets',
+                along=(
+                    lambda row: (
+                        (row.page.stamp == row.page.token) & row.page.parent
+                    ),
+                    4,
+                ),
+            )
+            check(walked, {'root', 'match'})
 
 
