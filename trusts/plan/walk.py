@@ -175,12 +175,16 @@ class _ProofConnection(object):
 
 
 class _CompiledWalk(object):
-    """Walk plus the SQL for its path condition and any hop already stored."""
+    """Walk plus the SQL for its path condition.
 
-    def __init__(self, walk, hop_sql, hop_format=None):
+    ``hop_sql`` stays the user-condition text already stored on the
+    walk. The path condition is a separate predicate so each one can
+    name its own row.
+    """
+
+    def __init__(self, walk, condition_sql):
         self._walk = walk
-        self.hop_sql = hop_sql
-        self.hop_format = hop_format or {}
+        self.condition_sql = condition_sql
 
     def __getattr__(self, name):
         return getattr(self._walk, name)
@@ -198,13 +202,8 @@ def _prepare_walk(walk, connection):
     if condition is None:
         return walk, ()
     expr = compile_walk_condition(condition, walk.walk_model, connection)
-    sql = expr.sql
-    existing = getattr(walk, 'hop_sql', None) or ''
-    if existing:
-        sql = '(%s) AND (%s)' % (sql, existing)
-    hop_format = getattr(walk, 'hop_format', None) or {}
     return (
-        _CompiledWalk(walk, sql, hop_format),
+        _CompiledWalk(walk, expr.sql),
         _condition_params(expr.params, connection),
     )
 
@@ -376,17 +375,7 @@ def _m2m_contains(field, hops, member_sql, member_params, qn):
     return Expr(sql, member_params)
 
 
-def _hop_predicate(walk, qn, node_alias):
-    """Condition text on one walked node. Empty when the hop is unconditional.
-
-    ``{alias}`` in the stored template is this node's quoted alias.
-    ``{c0}`` and the following names are values copied onto the
-    recursive row. The text does not name the recursive result inside a
-    subquery and it does not read the outer query. AND-ing the text into
-    the hop keeps the step only when the condition is true. False and
-    NULL do not match.
-    """
-    template = getattr(walk, 'hop_sql', None)
+def _format_hop(walk, template, node_alias):
     if not template:
         return ''
     values = {'alias': node_alias}
@@ -396,23 +385,48 @@ def _hop_predicate(walk, qn, node_alias):
     return template.format(**values)
 
 
-def _step_predicate(walk, qn, node_alias):
-    """Condition text for the row a step leaves.
+def _hop_predicate(walk, qn, node_alias):
+    """User-condition text on one walked node. Empty when there is none.
 
-    That row is the one the path is followed from. False and NULL do
-    not match, so the step stops.
+    ``{alias}`` in the stored template is this node's quoted alias.
+    ``{c0}`` and the following names are values copied onto the
+    recursive row. The text does not name the recursive result inside a
+    subquery and it does not read the outer query.
     """
-    return _hop_predicate(walk, qn, node_alias)
+    return _format_hop(walk, getattr(walk, 'hop_sql', None), node_alias)
 
 
-def _node_guard(walk, qn, match_sql):
-    """Join the row a step leaves when this hop does not already expose it.
+def _link_predicate(walk, qn, node_alias):
+    """Path condition on the node whose parent link this step follows.
 
-    The joined alias supplies the columns the condition reads. The
-    predicate is true only for a step that continues.
+    False and NULL do not match, so the step stops. The inverse walk
+    reads the same node for that edge.
+    """
+    return _format_hop(walk, getattr(walk, 'condition_sql', None), node_alias)
+
+
+def _row_predicate(walk, qn, node_alias, *, link=True, hop=True):
+    parts = []
+    if link:
+        text = _link_predicate(walk, qn, node_alias)
+        if text:
+            parts.append(text)
+    if hop:
+        text = _hop_predicate(walk, qn, node_alias)
+        if text:
+            parts.append(text)
+    return ' AND '.join(parts)
+
+
+def _node_guard(walk, qn, match_sql, *, link=True, hop=True):
+    """Join a walked row when this hop does not already expose it.
+
+    The joined alias supplies the columns the predicate reads.
     """
     alias = qn('rstn')
-    predicate = _step_predicate(walk, qn, alias)
+    predicate = _row_predicate(
+        walk, qn, alias, link=link, hop=hop,
+    )
     if not predicate:
         return ''
     return (
@@ -441,7 +455,7 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
             % {
                 'g': g, 'walk_table': walk_table, 'child': child,
                 'parent_col': parent_col, 'ident_col': ident_col,
-                'extra': _and_sql(_step_predicate(walk, qn, child)),
+                'extra': _and_sql(_row_predicate(walk, qn, child)),
             }
         )
         project = '%s.%s' % (child, ident_sql)
@@ -453,14 +467,19 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
         walk_table = qn(walk.walk_model._meta.db_table)
         frm = source + (
             'JOIN %(walk_table)s AS %(cur)s '
-            'ON %(cur)s.%(ident)s = %(g)s.%(ident_col)s '
+            'ON %(cur)s.%(ident)s = %(g)s.%(ident_col)s%(from_row)s '
             'JOIN %(walk_table)s AS %(parent)s '
-            'ON %(parent)s.%(ident)s = %(cur)s.%(parent_col)s%(extra)s'
+            'ON %(parent)s.%(ident)s = %(cur)s.%(parent_col)s%(hop)s'
             % {
                 'g': g, 'walk_table': walk_table, 'cur': cur,
                 'ident': ident_sql, 'ident_col': ident_col,
                 'parent': parent, 'parent_col': parent_col,
-                'extra': _and_sql(_step_predicate(walk, qn, parent)),
+                'from_row': _and_sql(_row_predicate(
+                    walk, qn, cur, hop=False,
+                )),
+                'hop': _and_sql(_row_predicate(
+                    walk, qn, parent, link=False,
+                )),
             }
         )
         project = '%s.%s' % (parent, ident_sql)
@@ -507,7 +526,7 @@ def _inverse_neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
             % {
                 'g': g, 'walk_table': walk_table, 'cur': cur,
                 'ident': ident_sql, 'ident_col': ident_col,
-                'extra': _and_sql(_step_predicate(walk, qn, cur)),
+                'extra': _and_sql(_row_predicate(walk, qn, cur)),
             }
         )
         return frm, '%s.%s' % (cur, parent_col)
@@ -516,13 +535,16 @@ def _inverse_neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
         parent_col = qn(_model_column(walk.walk_model, walk.parent_attname))
         walk_table = qn(walk.walk_model._meta.db_table)
         frm = source + _node_guard(
-            walk, qn, '%s.%s' % (g, ident_col),
+            walk, qn, '%s.%s' % (g, ident_col), link=False,
         ) + (
             'JOIN %(walk_table)s AS %(child)s '
-            'ON %(child)s.%(parent_col)s = %(g)s.%(ident_col)s'
+            'ON %(child)s.%(parent_col)s = %(g)s.%(ident_col)s%(from_row)s'
             % {
                 'g': g, 'walk_table': walk_table, 'child': child,
                 'parent_col': parent_col, 'ident_col': ident_col,
+                'from_row': _and_sql(_row_predicate(
+                    walk, qn, child, hop=False,
+                )),
             }
         )
         return frm, '%s.%s' % (child, ident_sql)

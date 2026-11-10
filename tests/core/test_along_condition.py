@@ -286,14 +286,56 @@ class AlongConditionTest(TransactionTestCase):
         self.alice.save(update_fields=['is_active'])
         self._agree(handle, self.alice, set())
 
-    def test_upward_walk_uses_the_row_being_stepped_from(self):
+    def test_parent_link_condition_is_the_same_edge_either_way(self):
+        # Downward. B's parent link is followed, so B.inherits gates B
+        # even though A.inherits is false.
         self.nodes['A'].inherits = False
         self.nodes['A'].save(update_fields=['inherits'])
         self.nodes['B'].inherits = True
         self.nodes['B'].save(update_fields=['inherits'])
+        self.nodes['C'].inherits = False
+        self.nodes['C'].save(update_fields=['inherits'])
+        self._grant(self.alice, 'A')
+        down = self._open('edge-down', (
+            lambda t: t.node.inherits & t.node.parent, 8,
+        ))
+        with self.subTest('downward checks the child that points at its parent'):
+            self._agree(down, self.alice, {'A', 'B'})
+
+        # Upward. Leaving B for A follows B's parent link, so B.inherits
+        # stops that step even though A.inherits is true.
+        self.Grant.objects.all().delete()
+        self.nodes['A'].inherits = True
+        self.nodes['A'].save(update_fields=['inherits'])
+        self.nodes['B'].inherits = False
+        self.nodes['B'].save(update_fields=['inherits'])
+        self.nodes['C'].inherits = True
+        self.nodes['C'].save(update_fields=['inherits'])
         self._grant(self.alice, 'C')
-        handle = self._open('up', (lambda t: t.node.inherits & t.node.children, 8))
-        self._agree(handle, self.alice, {'C', 'B'})
+        up = self._open('edge-up', (
+            lambda t: t.node.inherits & t.node.children, 8,
+        ))
+        with self.subTest('upward checks that same child'):
+            self._agree(up, self.alice, {'C', 'B'})
+
+        self.Grant.objects.all().delete()
+        self._grant(self.sponsor, 'C')
+        self.Delegation.objects.create(
+            delegate=self.delegate, sponsor=self.sponsor, node=self.nodes['C'],
+        )
+        delegated = compiler(path='tests.core.along-condition.edge-deleg')
+        delegated.register(
+            trust=self.Grant, user='user', permission='permission',
+            content='node__sheets', along=('node__children', 8),
+        )
+        delegated.register(
+            trust=self.Delegation, delegate='delegate', sponsor='sponsor',
+            content='node__sheets',
+            along=(lambda t: t.node.inherits & t.node.children, 8),
+        )
+        with self.subTest('sponsor walk and delegation walk share the edge'):
+            self._agree(delegated, self.sponsor, {'A', 'B', 'C'})
+            self._agree(delegated, self.delegate, {'B', 'C'})
 
     def test_group_delegation_and_catalogs_agree(self):
         self._grant(self.sponsor, 'A')
@@ -501,6 +543,22 @@ class ViaConditionTest(TransactionTestCase):
             self.unit.save(update_fields=['inherits'])
             self.assertIs(self._held(opened, self.cara), True)
             self.assertIs(self._held(opened, self.ned), True)
+        desk_job = self.Job.objects.create(name='desk-job', team=self.desk)
+        self.TeamGrant.objects.create(team=self.desk, permission=self.change)
+        upward = self._open('up', (
+            lambda t: t.team.inherits & t.team.subgroups, 8,
+        ))
+        with self.subTest('upward via checks the team whose parent link is followed'):
+            # desk.inherits is true, so the step to unit is taken.
+            # unit.inherits is false, so the step to org is not.
+            with _listed(upward):
+                self.assertIs(self.ned.has_perm(self.code, desk_job), True)
+                self.assertIs(self.cara.has_perm(self.code, desk_job), True)
+                self.assertIs(self.alice.has_perm(self.code, desk_job), False)
+                holders = set(desk_job.get_permitted_users(
+                    self.change,
+                ).values_list('pk', flat=True))
+            self.assertEqual(holders, {self.ned.pk, self.cara.pk})
         with self.subTest('via rejects a third element'):
             handle = compiler(path='tests.core.along-condition.via-triple')
             with self.assertNumQueries(0):
