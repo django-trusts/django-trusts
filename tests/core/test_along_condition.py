@@ -1,7 +1,7 @@
 """Path conditions on ``along=`` and ``via=``.
 
-A step is taken only when the condition on the row being entered is
-true. False and NULL stop that step. The grant's own row is depth 0.
+A step is taken only when the condition on the row being stepped from
+is true. False and NULL stop that step. The grant's own row is depth 0.
 """
 
 from contextlib import contextmanager
@@ -286,7 +286,7 @@ class AlongConditionTest(TransactionTestCase):
         self.alice.save(update_fields=['is_active'])
         self._agree(handle, self.alice, set())
 
-    def test_upward_walk_uses_the_entered_row(self):
+    def test_upward_walk_uses_the_row_being_stepped_from(self):
         self.nodes['A'].inherits = False
         self.nodes['A'].save(update_fields=['inherits'])
         self.nodes['B'].inherits = True
@@ -358,7 +358,7 @@ class AlongConditionTest(TransactionTestCase):
         self.assertIn('WITH RECURSIVE', text)
         self.assertIn('inherits', text)
         self.assertIn('condition: "inherits"', text)
-        self.assertIn('__alongcond', text)
+        self.assertIn('__along_cond', text)
         self.assertNotIn('IS NOT TRUE', text)
         self.assertNotIn('reset:', text)
 

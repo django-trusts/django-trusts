@@ -396,19 +396,23 @@ def _hop_predicate(walk, qn, node_alias):
     return template.format(**values)
 
 
-def _entered_predicate(walk, qn, node_alias):
-    """Condition text for the row a hop is entering."""
+def _step_predicate(walk, qn, node_alias):
+    """Condition text for the row a step leaves.
+
+    That row is the one the path is followed from. False and NULL do
+    not match, so the step stops.
+    """
     return _hop_predicate(walk, qn, node_alias)
 
 
 def _node_guard(walk, qn, match_sql):
-    """Join the walked row when this step does not already expose it.
+    """Join the row a step leaves when this hop does not already expose it.
 
     The joined alias supplies the columns the condition reads. The
     predicate is true only for a step that continues.
     """
     alias = qn('rstn')
-    predicate = _entered_predicate(walk, qn, alias)
+    predicate = _step_predicate(walk, qn, alias)
     if not predicate:
         return ''
     return (
@@ -437,7 +441,7 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
             % {
                 'g': g, 'walk_table': walk_table, 'child': child,
                 'parent_col': parent_col, 'ident_col': ident_col,
-                'extra': _and_sql(_entered_predicate(walk, qn, child)),
+                'extra': _and_sql(_step_predicate(walk, qn, child)),
             }
         )
         project = '%s.%s' % (child, ident_sql)
@@ -456,7 +460,7 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
                 'g': g, 'walk_table': walk_table, 'cur': cur,
                 'ident': ident_sql, 'ident_col': ident_col,
                 'parent': parent, 'parent_col': parent_col,
-                'extra': _and_sql(_entered_predicate(walk, qn, parent)),
+                'extra': _and_sql(_step_predicate(walk, qn, parent)),
             }
         )
         project = '%s.%s' % (parent, ident_sql)
@@ -503,7 +507,7 @@ def _inverse_neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
             % {
                 'g': g, 'walk_table': walk_table, 'cur': cur,
                 'ident': ident_sql, 'ident_col': ident_col,
-                'extra': _and_sql(_entered_predicate(walk, qn, cur)),
+                'extra': _and_sql(_step_predicate(walk, qn, cur)),
             }
         )
         return frm, '%s.%s' % (cur, parent_col)

@@ -981,7 +981,7 @@ def _base_id(record):
             getattr(along, 'bound', None),
         )
         if getattr(along, 'condition', None) is not None:
-            label += '__alongcond'
+            label += '__along_cond'
     via = getattr(record, 'via', None)
     if via is not None:
         label += '__via_%s_%s_%s' % (
@@ -990,7 +990,7 @@ def _base_id(record):
             getattr(via, 'bound', None),
         )
         if getattr(via, 'condition', None) is not None:
-            label += '__alongcond'
+            label += '__along_cond'
     return label.replace('.', '__')
 
 
