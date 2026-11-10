@@ -2,7 +2,7 @@
 
 ``via=`` replaces equality at the user, delegate, or sponsor walk-site.
 The ``WITH RECURSIVE`` statement, the depth cap, the cycle clause, and
-the reset predicate are the ones ``along=`` renders. This module chooses
+the per-hop condition are the ones ``along=`` renders. This module chooses
 the seed, the user match, and the comparisons on a walked user.
 """
 

@@ -277,14 +277,9 @@ class ViaRegistrationTest(SimpleTestCase):
                 'walk-site model',
             ),
             (
-                'reset-type',
+                'triple',
                 dict(via=('team__subgroups', 2, 'rank')),
-                'BooleanField',
-            ),
-            (
-                'reset-missing',
-                dict(via=('team__subgroups', 2, 'missing')),
-                'missing field',
+                'pair',
             ),
         )
         for name, extra, fragment in cases:
@@ -346,7 +341,7 @@ class ViaRegistrationTest(SimpleTestCase):
             ('string', 'team__subgroups', 'pair'),
             ('empty', (), 'pair'),
             ('one', ('team__subgroups',), 'pair'),
-            ('four', ('team__subgroups', 2, 'reset_inheritance', 1), 'triple'),
+            ('four', ('team__subgroups', 2, 'reset_inheritance', 1), 'pair'),
             (
                 'along',
                 Along(Ref(self.Grant, ('team', 'subgroups')), 2),
@@ -510,43 +505,19 @@ class ViaRegistrationTest(SimpleTestCase):
                     user=user,
                 )
 
-    def test_rejects_a_reset_field_along_equals_rejects(self):
-        cases = (
-            (('team__subgroups', 4, 'portrait__reset_inheritance'), 'reverse one-to-one'),
-            (('team__subgroups', 4, 'parent__reset_inheritance'), 'forward foreign key'),
-            (('team__subgroups', 4, 'badge__reset_inheritance'), 'forward foreign key'),
-            (
-                ('team__subgroups', 4, 'parent__subgroups__reset_inheritance'),
-                'one relation',
-            ),
-            (('team__subgroups', 4, 'notes__reset_inheritance'), 'generic relation'),
-            (('team__subgroups', 4, 'title'), 'BooleanField'),
-            (('team__subgroups', 4, 'rank'), 'BooleanField'),
-            (('team__subgroups', 4, 'flags__name'), 'BooleanField'),
-            (('team__subgroups', 4, 'missing'), 'missing'),
-            (('team__subgroups', 4, None), 'field path'),
-            (('team__subgroups', 4, ''), 'field path'),
-            (
-                ('team__parent_links__parent', 4, 'parent_links__parent'),
-                'BooleanField',
-            ),
-            (
-                (
-                    'team__held_parents__parent', 4,
-                    'held_parents__reset_inheritance',
-                ),
-                'parent-table',
-            ),
-            (('team__subgroups', 4, 'wide__reset_inheritance'), 'parent-table'),
-        )
-        for via, fragment in cases:
+    def test_rejects_a_third_tuple_element(self):
+        for via in (
+            ('team__subgroups', 4, 'inherits'),
+            ('team__subgroups', 4, None),
+            ('team__subgroups', 4, ''),
+        ):
             with self.subTest(via=via):
-                self._reject('reset-%s' % (via[2],), via, fragment)
+                self._reject('triple-%s' % (via[2],), via, 'pair')
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ViaWalkTest(TransactionTestCase):
-    """The six inquiries agree on one group walk, including reset."""
+    """The six inquiries agree on one group walk."""
 
     def setUp(self):
         super().setUp()
@@ -750,29 +721,13 @@ class ViaWalkTest(TransactionTestCase):
             self.assertEqual(self._titles(short, self.bob), {'backend', 'api'})
         self.Grant.objects.all().delete()
 
-        self.teams['backend'].reset_inheritance = True
-        self.teams['backend'].save(update_fields=['reset_inheritance'])
-        stopped = self._open('reset', ('team__subgroups', 8, 'reset_inheritance'))
-        self._grant('api')
-        with self.subTest('reset stops before the flagged team'):
-            self.assertEqual(self._titles(stopped, self.cara), {'api'})
-            self.assertEqual(self._titles(stopped, self.bob), set())
-        self.Grant.objects.all().delete()
-        self._grant('backend')
-        with self.subTest('reset grant on the stop continues past it'):
-            self.assertEqual(self._titles(stopped, self.bob), {'backend'})
-            self.assertEqual(self._titles(stopped, self.alice), {'backend'})
-            self.assertEqual(self._titles(stopped, self.rita), {'backend'})
-            self.assertEqual(self._titles(stopped, self.cara), set())
-
-    def test_lockfile_records_bound_and_reset(self):
-        handle = self._open('lock', ('team__subgroups', 4, 'reset_inheritance'))
+    def test_lockfile_records_the_bound(self):
+        handle = self._open('lock', ('team__subgroups', 4))
         text = render_configured_policy(handle).decode()
         self.assertIn('$via_bound', text)
         self.assertIn('via:', text)
-        self.assertIn('reset: "reset_inheritance"', text)
         self.assertIn('__via_team__subgroups_C_4', text)
-        self.assertIn('__reset_reset_inheritance', text)
+        self.assertNotIn('reset:', text)
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -1258,223 +1213,6 @@ class ViaAgreementTest(_AgreementMixin, TransactionTestCase):
                 finally:
                     user.is_active = True
                     user.save(update_fields=['is_active'])
-
-
-@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class ViaResetPlacementTest(_AgreementMixin, TransactionTestCase):
-    """The four reset placements cut every path into the stop."""
-
-    path_prefix = 'via-cut'
-
-    def setUp(self):
-        super().setUp()
-        User = get_user_model()
-
-        class Flag(models.Model):
-            reset_inheritance = models.BooleanField(null=True)
-
-            class Meta:
-                app_label = 'trusts_tests'
-                db_table = 'via_cut_flag'
-
-        class Team(models.Model):
-            name = models.CharField(max_length=20)
-            parent = models.ForeignKey(
-                'self', null=True, related_name='subgroups',
-                on_delete=models.CASCADE,
-            )
-            members = models.ManyToManyField(User, related_name='+')
-            auth_group = models.ForeignKey(
-                Group, on_delete=models.CASCADE, related_name='+',
-            )
-            reset_inheritance = models.BooleanField(null=True)
-            flags = models.ManyToManyField(Flag, related_name='teams')
-
-            class Meta:
-                app_label = 'trusts_tests'
-                db_table = 'via_cut_team'
-
-        members = Team._meta.get_field('members')
-        if not hasattr(members, 'm2m_field_name'):
-            members.contribute_to_related_class(User, members.remote_field)
-
-        class Link(models.Model):
-            parent = models.ForeignKey(
-                Team, related_name='child_links', on_delete=models.CASCADE,
-            )
-            child = models.ForeignKey(
-                Team, related_name='parent_links', on_delete=models.CASCADE,
-            )
-            reset_inheritance = models.BooleanField(null=True)
-
-            class Meta:
-                app_label = 'trusts_tests'
-                db_table = 'via_cut_link'
-
-        class Policy(models.Model):
-            team = models.ForeignKey(
-                Team, related_name='policies', on_delete=models.CASCADE,
-            )
-            reset_inheritance = models.BooleanField(null=True)
-
-            class Meta:
-                app_label = 'trusts_tests'
-                db_table = 'via_cut_policy'
-
-        class JobQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
-            pass
-
-        class Job(PermittedUsersMixin, models.Model):
-            name = models.CharField(max_length=20)
-            team = models.ForeignKey(
-                Team, related_name='jobs', on_delete=models.CASCADE,
-            )
-            objects = models.Manager.from_queryset(JobQuerySet)()
-
-            class Meta:
-                app_label = 'trusts_tests'
-                db_table = 'via_cut_job'
-
-        class Grant(models.Model):
-            team = models.ForeignKey(Team, on_delete=models.CASCADE)
-            auth_group = models.ForeignKey(
-                Group, on_delete=models.CASCADE, related_name='+',
-            )
-
-            class Meta:
-                app_label = 'trusts_tests'
-                db_table = 'via_cut_grant'
-
-        self.Team, self.Job, self.Grant = Team, Job, Grant
-        self.Flag, self.Link, self.Policy = Flag, Link, Policy
-        cm = _tables(Flag, Team, Link, Policy, Job, Grant)
-        cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
-        self.change = _permission(Job, 'change_cutjob')
-        self.code = 'trusts_tests.change_cutjob'
-        self.teams = {}
-        self.users = {}
-        for name, parent in (('A', None), ('B', 'A'), ('C', 'B'), ('D', None)):
-            group = Group.objects.create(name='cut-%s' % name)
-            group.permissions.add(self.change)
-            self.teams[name] = Team.objects.create(
-                name=name, parent=self.teams.get(parent), auth_group=group,
-            )
-            Job.objects.create(name=name, team=self.teams[name])
-            user = User.objects.create_user('cut-%s' % name, password='x')
-            self.users[name] = user
-            self.teams[name].members.add(user)
-        self.links = {
-            'AB': Link.objects.create(
-                parent=self.teams['A'], child=self.teams['B'],
-            ),
-            'DB': Link.objects.create(
-                parent=self.teams['D'], child=self.teams['B'],
-            ),
-            'BC': Link.objects.create(
-                parent=self.teams['B'], child=self.teams['C'],
-            ),
-        }
-
-    def _clear_cuts(self):
-        self.Team.objects.update(reset_inheritance=None)
-        self.Link.objects.update(reset_inheritance=None)
-        self.Flag.objects.all().delete()
-        self.Policy.objects.all().delete()
-        self.Grant.objects.all().delete()
-
-    def _arm_node(self):
-        team = self.teams['B']
-        team.reset_inheritance = True
-        team.save(update_fields=['reset_inheritance'])
-
-    def _arm_false(self):
-        team = self.teams['B']
-        team.reset_inheritance = False
-        team.save(update_fields=['reset_inheritance'])
-
-    def _arm_flags(self):
-        true = self.Flag.objects.create(reset_inheritance=True)
-        false = self.Flag.objects.create(reset_inheritance=False)
-        self.teams['B'].flags.add(false, true)
-        self.teams['C'].flags.add(false)
-
-    def _arm_policies(self):
-        self.Policy.objects.create(
-            team=self.teams['B'], reset_inheritance=False,
-        )
-        self.Policy.objects.create(
-            team=self.teams['B'], reset_inheritance=True,
-        )
-        self.Policy.objects.create(
-            team=self.teams['C'], reset_inheritance=None,
-        )
-
-    def _arm_edge(self):
-        self.links['AB'].reset_inheritance = True
-        self.links['AB'].save(update_fields=['reset_inheritance'])
-        self.links['BC'].reset_inheritance = False
-        self.links['BC'].save(update_fields=['reset_inheritance'])
-
-    def test_four_placements_cut_every_path_into_the_stop(self):
-        stopped = (
-            ('A', {'A': {'A'}, 'B': set(), 'C': set(), 'D': set()}),
-            ('B', {'A': set(), 'B': {'B'}, 'C': {'B'}, 'D': set()}),
-        )
-        opened = (
-            ('A', {'A': {'A'}, 'B': {'A'}, 'C': {'A'}, 'D': set()}),
-        )
-        edge_stopped = (
-            ('A', {'A': {'A'}, 'B': set(), 'C': set(), 'D': set()}),
-            ('D', {'D': {'D'}, 'B': {'D'}, 'C': {'D'}, 'A': set()}),
-            ('B', {'B': {'B'}, 'C': {'B'}, 'A': set(), 'D': set()}),
-        )
-        every_path = (
-            ('A', {'A': {'A'}, 'B': set(), 'C': set(), 'D': set()}),
-            ('D', {'D': {'D'}, 'B': set(), 'C': set(), 'A': set()}),
-            ('B', {'B': {'B'}, 'C': {'B'}, 'A': set(), 'D': set()}),
-        )
-        cases = (
-            ('node', ('team__parent', 8, 'reset_inheritance'), self._arm_node, stopped),
-            ('node-null', ('team__parent', 8, 'reset_inheritance'), lambda: None, opened),
-            ('node-false', ('team__parent', 8, 'reset_inheritance'), self._arm_false, opened),
-            ('m2m', ('team__parent', 8, 'flags__reset_inheritance'), self._arm_flags, stopped),
-            (
-                'reverse-fk',
-                ('team__parent', 8, 'policies__reset_inheritance'),
-                self._arm_policies,
-                stopped,
-            ),
-            (
-                'edge',
-                (
-                    'team__parent_links__parent', 8,
-                    'parent_links__reset_inheritance',
-                ),
-                self._arm_edge,
-                edge_stopped,
-            ),
-            (
-                'node-every-path',
-                ('team__parent_links__parent', 8, 'reset_inheritance'),
-                self._arm_node,
-                every_path,
-            ),
-        )
-        for label, via, arm, expects in cases:
-            with self.subTest(label):
-                self._clear_cuts()
-                arm()
-                handle = self._open(label, via)
-                for grant_name, checks in expects:
-                    self._grant(grant_name)
-                    for user_name, want in checks.items():
-                        self.assertEqual(
-                            self._held(handle, self.users[user_name]),
-                            set(want),
-                            '%s grant %s' % (user_name, grant_name),
-                        )
-                    self.Grant.objects.all().delete()
 
 
 def _drop_manager_column(user_model):
@@ -2216,35 +1954,6 @@ class ViaHopFilterTest(TransactionTestCase):
         DeskGrant.objects.filter(user=dee).update(user=cy)
         with self.subTest(walk='sponsor', grant='cy'):
             self.assertIs(self._bundle(sponsor, zed, filtered=True)['has'], False)
-
-        dee.via_reset = True
-        dee.save(update_fields=['via_reset'])
-        reset = self._seat(
-            'reset',
-            lambda user, permission, content: user.username != 'hop-nobody',
-            ('holder__via_manager', 8, 'via_reset'),
-        )
-        for name, selected in (
-            ('ada', True), ('ben', True), ('cy', True),
-            ('dee', False), ('eve', False),
-        ):
-            with self.subTest(user=name, walk='reset'):
-                self._expect(
-                    reset, self.people[name], selected=selected, plain=selected,
-                )
-        blocked = self._seat(
-            'reset-seed',
-            lambda user, permission, content: user.username != 'hop-ada',
-            ('holder__via_manager', 8, 'via_reset'),
-        )
-        for name, plain in (
-            ('ada', True), ('ben', True), ('cy', True),
-            ('dee', False), ('eve', False),
-        ):
-            with self.subTest(user=name, walk='reset-seed'):
-                self._expect(
-                    blocked, self.people[name], selected=False, plain=plain,
-                )
 
     def test_user_condition_stops_at_each_hop(self):
         self._activate()
@@ -3151,29 +2860,6 @@ class ViaForeignKeyTargetTest(TransactionTestCase):
                 self._sees(handle, self.people[name], self.jobs['root']),
                 True, name,
             )
-
-    def test_reset_targets(self):
-        self.Grant.objects.create(
-            team=self.teams['root'], auth_group=self.teams['root'].auth_group,
-        )
-        mark = self.Mark.objects.create(slug='stop', reset_inheritance=True)
-        self.teams['mid'].marks.add(mark)
-        self.Flag.objects.create(team=self.teams['mid'], reset_inheritance=True)
-        self.teams['mid'].reset_inheritance = True
-        self.teams['mid'].save(update_fields=['reset_inheritance'])
-        cases = (
-            ('node', ('team__parent', 8, 'reset_inheritance')),
-            ('m2m', ('team__parent', 8, 'marks__reset_inheritance')),
-            ('reverse', ('team__parent', 8, 'flags__reset_inheritance')),
-        )
-        for name, via in cases:
-            handle = self._open(name, via)
-            job = self.jobs['root']
-            with self.subTest(reset=name):
-                self.assertIs(self._sees(handle, self.people['ada'], job), True)
-                self.assertIs(self._sees(handle, self.people['ben'], job), False)
-                self.assertIs(self._sees(handle, self.people['cy'], job), False)
-
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ViaInquiryParityTest(TransactionTestCase):

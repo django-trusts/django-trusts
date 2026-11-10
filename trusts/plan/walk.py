@@ -11,8 +11,18 @@ __all__ = []
 from django.db.models import F, Q
 from django.db.models.fields.related import ManyToManyRel
 
+from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.predicates import bind_record_qs, bind_terminal
-from trusts.errors import TrustsConfigurationError
+from trusts.plan.trivalent import (
+    Expr,
+    Scope,
+    _export_param,
+    _exporting,
+    _runtime_param,
+    has_contains,
+    lower,
+)
+from trusts.plan.writers import member_pk
 
 
 _DJANGO_SQLITE3 = 'django.db.backends.sqlite3'
@@ -148,13 +158,233 @@ def _suffix_link(walk, qn, principal):
     )
 
 
+class _ProofOps(object):
+    def quote_name(self, name):
+        return '"%s"' % name
+
+    def adapt_booleanfield_value(self, value):
+        return value
+
+
+class _ProofConnection(object):
+    """Quoter used to prove a condition renders. It does not open a database."""
+
+    vendor = 'sqlite'
+    ops = _ProofOps()
+    mysql_is_mariadb = False
+
+
+class _CompiledWalk(object):
+    """Walk plus the SQL for its path condition and any hop already stored."""
+
+    def __init__(self, walk, hop_sql, hop_format=None):
+        self._walk = walk
+        self.hop_sql = hop_sql
+        self.hop_format = hop_format or {}
+
+    def __getattr__(self, name):
+        return getattr(self._walk, name)
+
+
+def _condition_params(params, connection):
+    if _exporting():
+        return tuple(_export_param(param) for param in params)
+    return tuple(_runtime_param(param, connection) for param in params)
+
+
+def _prepare_walk(walk, connection):
+    """Compile a stored path condition into the per-hop predicate."""
+    condition = getattr(walk, 'condition', None)
+    if condition is None:
+        return walk, ()
+    expr = compile_walk_condition(condition, walk.walk_model, connection)
+    sql = expr.sql
+    existing = getattr(walk, 'hop_sql', None) or ''
+    if existing:
+        sql = '(%s) AND (%s)' % (sql, existing)
+    hop_format = getattr(walk, 'hop_format', None) or {}
+    return (
+        _CompiledWalk(walk, sql, hop_format),
+        _condition_params(expr.params, connection),
+    )
+
+
+def prove_walk_condition(node, model):
+    """Reject a condition that cannot be rendered. No query is issued."""
+    compile_walk_condition(node, model, _ProofConnection())
+
+
+def compile_walk_condition(node, model, connection):
+    """SQL for ``node`` on one walked row. ``{alias}`` names that row."""
+    return _lower_walk_node(node, model, connection)
+
+
+def _lower_walk_node(node, model, connection):
+    qn = connection.ops.quote_name
+    if node.kind == 'contains':
+        return _contains_expr(node, model, qn)
+    if node.kind in ('and', 'or') and has_contains(node):
+        left = _lower_walk_node(node.left, model, connection)
+        right = _lower_walk_node(node.right, model, connection)
+        word = 'AND' if node.kind == 'and' else 'OR'
+        return Expr(
+            '((%s) %s (%s))' % (left.sql, word, right.sql),
+            left.params + right.params,
+        )
+    if node.kind == 'not' and has_contains(node):
+        inner = _lower_walk_node(node.item, model, connection)
+        return Expr('(NOT (%s))' % inner.sql, inner.params)
+    try:
+        return lower(node, Scope(
+            {'row': ('alias', model, ())}, qn, connection, '{alias}',
+        ))
+    except PermissionConditionError:
+        raise
+    except Exception as exc:
+        raise PermissionConditionError(
+            'This condition cannot be rendered in SQL: %s' % exc
+        ) from exc
+
+
+def _contains_expr(node, model, qn):
+    left = node.left
+    if getattr(left, 'kind', None) != 'field' or left.root != 'row' or not left.path:
+        raise PermissionConditionError(
+            'This condition cannot be rendered in SQL.'
+        )
+    current = model
+    hops = []
+    field = None
+    for index, name in enumerate(left.path):
+        try:
+            field = current._meta.get_field(name)
+        except Exception as exc:
+            raise PermissionConditionError(
+                'This condition cannot be rendered in SQL.'
+            ) from exc
+        last = index == len(left.path) - 1
+        if not last:
+            if not (
+                getattr(field, 'concrete', False)
+                and (
+                    getattr(field, 'many_to_one', False)
+                    or getattr(field, 'one_to_one', False)
+                )
+            ):
+                raise PermissionConditionError(
+                    'This condition cannot be rendered in SQL.'
+                )
+            hops.append(field)
+            current = field.remote_field.model
+    member_sql, member_params = _member_sql(node.right, model, qn)
+    if getattr(field, 'many_to_many', False) and not isinstance(field, ManyToManyRel):
+        return _m2m_contains(field, hops, member_sql, member_params, qn)
+    if getattr(field, 'concrete', False) and not getattr(field, 'many_to_many', False):
+        return _column_equals(hops, field, member_sql, member_params, qn)
+    raise PermissionConditionError(
+        'This condition cannot be rendered in SQL.'
+    )
+
+
+def _member_sql(node, model, qn):
+    if getattr(node, 'kind', None) == 'const':
+        return '%s', (member_pk(node.value),)
+    if (
+        getattr(node, 'kind', None) == 'field'
+        and node.root == 'row'
+        and len(node.path) == 1
+    ):
+        try:
+            field = model._meta.get_field(node.path[0])
+        except Exception as exc:
+            raise PermissionConditionError(
+                'This condition cannot be rendered in SQL.'
+            ) from exc
+        if getattr(field, 'concrete', False) and not getattr(field, 'many_to_many', False):
+            return '{alias}.%s' % qn(field.column), ()
+    raise PermissionConditionError(
+        'This condition cannot be rendered in SQL.'
+    )
+
+
+def _chain(hops, qn):
+    """Related-row FROM clause correlated to ``{alias}``, and that row's alias."""
+    if not hops:
+        return '{alias}', '', ''
+    first = hops[0]
+    dest = qn('cnd0')
+    frm = '%s AS %s' % (qn(first.remote_field.model._meta.db_table), dest)
+    where = '%s.%s = {alias}.%s' % (
+        dest, qn(first.target_field.column), qn(first.column),
+    )
+    prev = dest
+    for index, field in enumerate(hops[1:], start=1):
+        nxt = qn('cnd%s' % index)
+        frm += ' JOIN %s AS %s ON %s.%s = %s.%s' % (
+            qn(field.remote_field.model._meta.db_table), nxt,
+            nxt, qn(field.target_field.column),
+            prev, qn(field.column),
+        )
+        prev = nxt
+    return prev, frm, where
+
+
+def _column_equals(hops, field, member_sql, member_params, qn):
+    if not hops:
+        return Expr(
+            '{alias}.%s = %s' % (qn(field.column), member_sql), member_params,
+        )
+    owner, frm, where = _chain(hops, qn)
+    sql = '(SELECT %s.%s FROM %s WHERE %s) = %s' % (
+        owner, qn(field.column), frm, where, member_sql,
+    )
+    return Expr(sql, member_params)
+
+
+def _fk_for_column(model, column):
+    for candidate in model._meta.local_fields:
+        if (
+            getattr(candidate, 'column', None) == column
+            and getattr(candidate, 'is_relation', False)
+        ):
+            return candidate
+    raise PermissionConditionError(
+        'This condition cannot be rendered in SQL.'
+    )
+
+
+def _m2m_contains(field, hops, member_sql, member_params, qn):
+    forward, here_col, there_col = _m2m_columns(field)
+    through = forward.remote_field.through
+    here_fk = _fk_for_column(through, here_col)
+    far_fk = _fk_for_column(through, there_col)
+    probe = qn('cndm')
+    through_sql = '%s AS %s' % (qn(through._meta.db_table), probe)
+    owner, frm, where = _chain(hops, qn)
+    link = '%s.%s = %s.%s' % (
+        probe, qn(here_fk.column), owner, qn(here_fk.target_field.column),
+    )
+    far = '%s.%s = %s' % (probe, qn(far_fk.column), member_sql)
+    if hops:
+        sql = 'EXISTS (SELECT 1 FROM %s JOIN %s ON %s WHERE %s AND %s)' % (
+            frm, through_sql, link, where, far,
+        )
+    else:
+        sql = 'EXISTS (SELECT 1 FROM %s WHERE %s AND %s)' % (
+            through_sql, link, far,
+        )
+    return Expr(sql, member_params)
+
+
 def _hop_predicate(walk, qn, node_alias):
-    """User-condition text on a walked user. Empty for a group or a link.
+    """Condition text on one walked node. Empty when the hop is unconditional.
 
     ``{alias}`` in the stored template is this node's quoted alias.
     ``{c0}`` and the following names are values copied onto the
     recursive row. The text does not name the recursive result inside a
-    subquery and it does not read the outer query.
+    subquery and it does not read the outer query. AND-ing the text into
+    the hop keeps the step only when the condition is true. False and
+    NULL do not match.
     """
     template = getattr(walk, 'hop_sql', None)
     if not template:
@@ -167,75 +397,20 @@ def _hop_predicate(walk, qn, node_alias):
 
 
 def _entered_predicate(walk, qn, node_alias):
-    """Reset and user-condition tests for the row a hop is entering."""
-    parts = []
-    stop = _stop_predicate(walk, qn, node_alias)
-    if stop:
-        parts.append(stop)
-    hop = _hop_predicate(walk, qn, node_alias)
-    if hop:
-        parts.append(hop)
-    return ' AND '.join(parts)
-
-
-def _stop_predicate(walk, qn, node_alias):
-    """Predicate on a walked-model alias. Empty for an edge reset.
-
-    ``node`` reads that alias's column. ``any`` is ``NOT EXISTS`` against
-    another table, correlated to the alias, never to the recursive name.
-    """
-    spec = getattr(walk, 'reset', None)
-    if spec is None or spec.kind == 'edge':
-        return ''
-    if spec.kind == 'node':
-        return '%s.%s IS NOT TRUE' % (node_alias, qn(spec.column))
-    if spec.kind != 'any':
-        raise TrustsConfigurationError(
-            'along reset kind %r cannot be rendered.' % (spec.kind,)
-        )
-    probe = qn('rst')
-    through = qn(spec.through_table)
-    match = '%s.%s = %s.%s' % (
-        probe, qn(spec.through_node), node_alias, qn(spec.node_column),
-    )
-    flag = qn(spec.column)
-    if spec.far_table:
-        far = qn('rsf')
-        frm = (
-            '%s AS %s JOIN %s AS %s ON %s.%s = %s.%s'
-            % (
-                through, probe, qn(spec.far_table), far,
-                far, qn(spec.far_column), probe, qn(spec.far_fk),
-            )
-        )
-        flag_sql = '%s.%s IS TRUE' % (far, flag)
-    else:
-        frm = '%s AS %s' % (through, probe)
-        flag_sql = '%s.%s IS TRUE' % (probe, flag)
-    return 'NOT EXISTS (SELECT 1 FROM %s WHERE %s AND %s)' % (
-        frm, match, flag_sql,
-    )
-
-
-def _edge_predicate(walk, qn, link_alias):
-    spec = getattr(walk, 'reset', None)
-    if spec is None or spec.kind != 'edge':
-        return ''
-    return '%s.%s IS NOT TRUE' % (link_alias, qn(spec.column))
+    """Condition text for the row a hop is entering."""
+    return _hop_predicate(walk, qn, node_alias)
 
 
 def _node_guard(walk, qn, match_sql):
     """Join the walked row when this step does not already expose it.
 
-    The recursive member must not name the CTE inside ``NOT EXISTS``.
-    The joined alias supplies the column that subquery reads.
+    The joined alias supplies the columns the condition reads. The
+    predicate is true only for a step that continues.
     """
-    spec = getattr(walk, 'reset', None)
-    hop = getattr(walk, 'hop_sql', None)
-    if (spec is None or spec.kind == 'edge') and not hop:
-        return ''
     alias = qn('rstn')
     predicate = _entered_predicate(walk, qn, alias)
+    if not predicate:
+        return ''
     return (
         'JOIN %s AS %s ON %s.%s = %s AND %s '
         % (
@@ -293,11 +468,10 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
         child_col = qn(_model_column(walk.edge_model, walk.edge_child_attname))
         frm = source + (
             'JOIN %(edge_table)s AS %(link)s '
-            'ON %(link)s.%(parent_col)s = %(g)s.%(ident_col)s%(extra)s'
+            'ON %(link)s.%(parent_col)s = %(g)s.%(ident_col)s'
             % {
                 'g': g, 'edge_table': edge_table, 'link': link,
                 'parent_col': parent_col, 'ident_col': ident_col,
-                'extra': _and_sql(_edge_predicate(walk, qn, link)),
             }
         )
         guard = _node_guard(walk, qn, '%s.%s' % (link, child_col))
@@ -357,11 +531,10 @@ def _inverse_neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
             walk, qn, '%s.%s' % (g, ident_col),
         ) + (
             'JOIN %(edge_table)s AS %(link)s '
-            'ON %(link)s.%(child_col)s = %(g)s.%(ident_col)s%(extra)s'
+            'ON %(link)s.%(child_col)s = %(g)s.%(ident_col)s'
             % {
                 'g': g, 'edge_table': edge_table, 'link': link,
                 'child_col': child_col, 'ident_col': ident_col,
-                'extra': _and_sql(_edge_predicate(walk, qn, link)),
             }
         )
         return frm, '%s.%s' % (link, parent_col)
@@ -402,6 +575,7 @@ def _render_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None,
     The lockfile records the plain statement. MariaDB is rejected before
     this SQL.
     """
+    walk, hop_params = _prepare_walk(walk, connection)
     qn = connection.ops.quote_name
     gen = qn('gen')
     g = qn('g')
@@ -447,7 +621,7 @@ def _render_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None,
             'carrier_copy': carrier_copy,
         }
     )
-    return sql, tuple(seed_params) + (walk.bound,)
+    return sql, tuple(seed_params) + tuple(hop_params) + (walk.bound,)
 
 
 def _content_walk_seed(walk, content):
@@ -546,6 +720,7 @@ def _render_keyed_reach_sql(walk, seed_sql, seed_params, connection, neighbor=No
     ``CYCLE`` clause stays the only engine-specific suffix, and it still
     names the ident column.
     """
+    walk, hop_params = _prepare_walk(walk, connection)
     qn = connection.ops.quote_name
     gen = qn('gen')
     g = qn('g')
@@ -582,7 +757,7 @@ def _render_keyed_reach_sql(walk, seed_sql, seed_params, connection, neighbor=No
             'cycle': _along_cycle_clause(connection, ident_col, qn),
         }
     )
-    return sql, tuple(seed_params) + (walk.bound,)
+    return sql, tuple(seed_params) + tuple(hop_params) + (walk.bound,)
 
 
 def _unwrap_seed_sql(seed_sql):

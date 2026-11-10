@@ -73,20 +73,43 @@ class Ref(object):
         return 'Ref(%s).%s' % (self._root.__name__, '.'.join(self._path))
 
 
+def _condition_key(node):
+    """Hashable picture of a condition tree. ``Tree`` itself is not hashed."""
+    if node is None:
+        return None
+    item = getattr(node, 'item', None)
+    if isinstance(item, tuple):
+        item_key = tuple(_condition_key(part) for part in item)
+    elif getattr(item, 'kind', None):
+        item_key = _condition_key(item)
+    else:
+        item_key = repr(item)
+    return (
+        node.kind,
+        node.root,
+        tuple(node.path),
+        repr(node.value),
+        _condition_key(node.left),
+        _condition_key(node.right),
+        item_key,
+    )
+
+
 class Along(object):
     """Bounded directed walk that replaces equality at one walk-site.
 
     ``ref`` names the directed edge from the walk-site. ``bound`` is the
-    maximum hop distance (1..64). Depth 0 is always included. ``reset``
-    is the optional field path resolved onto the walked model.
+    maximum hop distance (1..64). Depth 0 is always included. ``condition``
+    is an optional predicate on the walked node. A step is taken only
+    when that predicate is true.
     """
 
-    __slots__ = ('ref', 'bound', 'reset')
+    __slots__ = ('ref', 'bound', 'condition')
 
-    def __init__(self, ref, bound, reset=None):
+    def __init__(self, ref, bound, condition=None):
         object.__setattr__(self, 'ref', ref)
         object.__setattr__(self, 'bound', bound)
-        object.__setattr__(self, 'reset', reset)
+        object.__setattr__(self, 'condition', condition)
 
     def __setattr__(self, name, value):
         raise TrustsConfigurationError('Along is immutable.')
@@ -99,16 +122,18 @@ class Along(object):
             isinstance(other, Along)
             and self.ref == other.ref
             and self.bound == other.bound
-            and self.reset == other.reset
+            and self.condition == other.condition
         )
 
     def __hash__(self):
-        return hash((self.ref, self.bound, self.reset))
+        return hash((self.ref, self.bound, _condition_key(self.condition)))
 
     def __repr__(self):
-        if self.reset is None:
+        if self.condition is None:
             return 'Along(%r, bound=%r)' % (self.ref, self.bound)
-        return 'Along(%r, bound=%r, reset=%r)' % (self.ref, self.bound, self.reset)
+        return 'Along(%r, bound=%r, condition=%r)' % (
+            self.ref, self.bound, self.condition,
+        )
 
 
 def _require_ref(value, role):
@@ -117,28 +142,6 @@ def _require_ref(value, role):
             '%s must be a root-relative Ref, not %r.' % (role, value)
         )
     return value
-
-
-@dataclass(frozen=True, slots=True)
-class ResetAt:
-    """Inheritance stop resolved from the third ``along`` element.
-
-    ``kind`` is ``node`` (column on the walked model), ``edge`` (column
-    on the link row this walk already joins), or ``any`` (true when any
-    row of another many-to-many, or of a reverse one-to-many, is true).
-    ``far_column`` is the column the far through-FK targets. That is
-    the far primary key only when the FK has no ``to_field``.
-    """
-
-    path: str
-    kind: str
-    column: str
-    through_table: str | None = None
-    through_node: str | None = None
-    far_table: str | None = None
-    far_column: str | None = None
-    far_fk: str | None = None
-    node_column: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,4 +163,4 @@ class AlongWalk:
     edge_parent_attname: str | None
     edge_child_attname: str | None
     rewrite_attname: str | None
-    reset: ResetAt | None = None
+    condition: object | None = None

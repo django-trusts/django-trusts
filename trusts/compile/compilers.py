@@ -15,7 +15,7 @@ from django.apps import apps as django_apps
 from django.conf import settings
 from django.contrib.auth.models import Permission
 from django.core.exceptions import AppRegistryNotReady, FieldDoesNotExist
-from django.db.models import ManyToManyField, Model, Q
+from django.db.models import Model, Q
 
 from trusts.plan.hops import (
     concrete_model,
@@ -29,7 +29,6 @@ from trusts.compile.graph import (
     Along,
     AlongWalk,
     Ref,
-    ResetAt,
     _is_model_class,
     _require_ref,
 )
@@ -67,6 +66,7 @@ from trusts.plan.conditions import (
     check_const_member,
     condition_model_key,
     condition_model_label,
+    normalize_expression,
     parse_named_filter,
     validate_expression,
     require_boolean_field,
@@ -1688,156 +1688,182 @@ def _suffix_rewrite_attname(walk_model, suffix_path, content_model, walk_ident):
         return None
     return fk.name
 
-def _boolean_column(model, name, text, role='along'):
-    """Concrete boolean column stored on ``model``'s own table."""
-    try:
-        field = model._meta.get_field(name)
-    except FieldDoesNotExist:
-        raise TrustsConfigurationError(
-            '%s reset %r refers to missing field %r on %s.'
-            % (role, text, name, model._meta.label)
-        )
-    internal = field.get_internal_type()
-    if (
-        not getattr(field, 'concrete', False)
-        or getattr(field, 'many_to_many', False)
-        or internal != 'BooleanField'
-    ):
-        raise TrustsConfigurationError(
-            '%s reset %r must be a concrete BooleanField on %s, '
-            'not %s.' % (role, text, model._meta.label, internal)
-        )
-    if field.model._meta.db_table != model._meta.db_table:
-        raise TrustsConfigurationError(
-            '%s reset %r is stored on %s, not on %s. '
-            'register() rejects a parent-table join.'
-            % (role, text, field.model._meta.label, model._meta.label)
-        )
-    return field.column
+def _relation_chain(model, path):
+    """True when every segment of ``path`` is one relation hop."""
+    current = model
+    for name in path:
+        try:
+            field = current._meta.get_field(name)
+        except FieldDoesNotExist:
+            return False
+        if _classify_field(field) not in ('single', 'reverse_o2m', 'reverse_o2o'):
+            return False
+        related = getattr(field, 'related_model', None)
+        if related is None:
+            return False
+        current = related
+    return True
 
 
-def _reset_any_fk(rel, name, text, role='along'):
-    """Stop when any row on the reverse side of ``rel`` is true."""
-    fk = rel.field
-    host = fk.model
-    return ResetAt(
-        path=text,
-        kind='any',
-        column=_boolean_column(host, name, text, role),
-        through_table=host._meta.db_table,
-        through_node=fk.column,
-        node_column=fk.target_field.column,
-    )
+def _and_conjuncts(node):
+    if isinstance(node, Tree) and node.kind == 'and':
+        return _and_conjuncts(node.left) + _and_conjuncts(node.right)
+    return (node,)
 
 
-def _through_fk(through, column):
-    """Concrete through-FK whose database column is ``column``."""
-    for candidate in through._meta.local_fields:
-        if (
-            getattr(candidate, 'column', None) == column
-            and getattr(candidate, 'is_relation', False)
-        ):
-            return candidate
-    return None
+def _join_and(nodes):
+    merged = nodes[0]
+    for node in nodes[1:]:
+        merged = Tree('and', left=merged, right=node)
+    return merged
 
 
-def _reset_any_m2m(walk_model, field, name, text, role='along'):
-    """Stop when any row across ``field`` carries a true boolean."""
-    forward = field if isinstance(field, ManyToManyField) else field.field
-    through = forward.remote_field.through
-    if walk_model is forward.model:
-        far = forward.remote_field.model
-        node_column = forward.m2m_column_name()
-        far_fk = forward.m2m_reverse_name()
-    else:
-        far = forward.model
-        node_column = forward.m2m_reverse_name()
-        far_fk = forward.m2m_column_name()
-    source_fk = _through_fk(through, node_column)
-    far_field = _through_fk(through, far_fk)
-    if source_fk is None or far_field is None:
-        raise TrustsConfigurationError(
-            '%s reset %r cannot be read from %s.'
-            % (role, text, walk_model._meta.label)
-        )
-    return ResetAt(
-        path=text,
-        kind='any',
-        column=_boolean_column(far, name, text, role),
-        through_table=through._meta.db_table,
-        through_node=node_column,
-        far_table=far._meta.db_table,
-        far_column=far_field.target_field.column,
-        far_fk=far_fk,
-        node_column=source_fk.target_field.column,
-    )
-
-
-_RESET_RELATION = {
-    'reverse_o2o': 'a reverse one-to-one',
-    'single': 'a forward foreign key',
-    'gfk': 'a generic relation',
-    'reverse': 'a reverse relation',
-}
-
-
-def _resolve_reset(walk_model, shape, edge_path, edge_model, reset, role='along'):
-    """Resolve the third ``along`` element, or ``None`` when it is absent.
-
-    One segment is a column on the walked model. Two segments name the
-    link row this walk already traverses, one many-to-many, or one
-    reverse one-to-many. Anything else is rejected here, before a query
-    is built.
-    """
-    if reset is None:
+def _bare_relation_path(model, node):
+    """Path tuple when ``node`` is a bare relation chain, else ``None``."""
+    if not isinstance(node, Tree) or node.kind != 'bare':
         return None
+    field = node.item
     if (
-        not isinstance(reset, str)
-        or not reset
-        or reset.startswith('__')
-        or reset.endswith('__')
+        not isinstance(field, Tree)
+        or field.kind != 'field'
+        or not field.path
+        or field.root != 'row'
+    ):
+        return None
+    path = tuple(field.path)
+    if not _relation_chain(model, path):
+        return None
+    return path
+
+
+def _split_walk_result(root, result, token, role):
+    """Return ``(path, condition)`` from a path lambda's return value."""
+    if isinstance(result, Symbol):
+        if symbol_token(result) is not token:
+            raise PermissionConditionError(
+                '%s path builder used a path from another symbolic root.'
+                % (role,)
+            )
+        if not symbol_path(result):
+            raise PermissionConditionError(
+                '%s path builder returned an empty path.' % (role,)
+            )
+        return tuple(symbol_path(result)), None
+    if not isinstance(result, Tree) or result.kind != 'and':
+        raise TrustsConfigurationError(
+            '%s path must be attribute access, or a condition combined '
+            'with that path using &.' % (role,)
+        )
+    paths = []
+    conditions = []
+    for conjunct in _and_conjuncts(result):
+        found = _bare_relation_path(root, conjunct)
+        if found is not None:
+            paths.append(found)
+        else:
+            conditions.append(conjunct)
+    if len(paths) != 1 or not conditions:
+        raise TrustsConfigurationError(
+            '%s path lambda must combine exactly one relation path '
+            'with a condition using &.' % (role,)
+        )
+    return paths[0], normalize_expression(_join_and(tuple(conditions)), token)
+
+
+def _invoke_walk_path(root, builder, role):
+    """Run one path lambda once. The callable is not kept."""
+    if inspect.iscoroutinefunction(builder) or inspect.isasyncgenfunction(
+        builder,
     ):
         raise TrustsConfigurationError(
-            '%s reset must be a field path, not %r.' % (role, reset)
-        )
-    parts = reset.split('__')
-    if len(parts) == 1:
-        return ResetAt(
-            path=reset,
-            kind='node',
-            column=_boolean_column(walk_model, parts[0], reset, role),
-        )
-    if len(parts) != 2 or not all(parts):
-        raise TrustsConfigurationError(
-            '%s reset %r must name a field on the walked model '
-            'or one relation from it.' % (role, reset)
-        )
-    relation, name = parts
-    edge_name = edge_path[0] if edge_path else None
-    if shape == 'E' and edge_model is not None and relation == edge_name:
-        return ResetAt(
-            path=reset,
-            kind='edge',
-            column=_boolean_column(edge_model, name, reset, role),
+            '%s path builder must return a path, not a coroutine or '
+            'async generator.' % (role,)
         )
     try:
-        field = walk_model._meta.get_field(relation)
-    except FieldDoesNotExist:
+        signature = inspect.signature(builder)
+    except (TypeError, ValueError):
+        signature = None
+    if signature is not None:
+        try:
+            signature.bind(object())
+        except TypeError as exc:
+            raise TrustsConfigurationError(
+                '%s path builder must accept exactly one positional '
+                'argument: %s' % (role, exc)
+            ) from exc
+    token = object()
+    try:
+        result = builder(Symbol('row', token=token))
+    except TrustsConfigurationError:
+        raise
+    except Exception as exc:
         raise TrustsConfigurationError(
-            '%s reset %r refers to missing field %r on %s.'
-            % (role, reset, relation, walk_model._meta.label)
-        )
-    kind = _classify_field(field)
-    if kind == 'm2m':
-        return _reset_any_m2m(walk_model, field, name, reset, role)
-    if kind == 'reverse_o2m':
-        return _reset_any_fk(field, name, reset, role)
-    label = _RESET_RELATION.get(kind, 'relation %s' % kind)
-    raise TrustsConfigurationError(
-        '%s reset %r is not the link this walk traverses and '
-        'is not a many-to-many from %s. register() rejects %s.'
-        % (role, reset, walk_model._meta.label, label)
+            '%s path builder failed: %s' % (role, exc)
+        ) from exc
+    return _split_walk_result(root, result, token, role)
+
+
+def _map_condition(node, transform):
+    if not isinstance(node, Tree):
+        return node
+    if node.kind == 'field':
+        return transform(node)
+    left = _map_condition(node.left, transform) if node.left is not None else None
+    right = (
+        _map_condition(node.right, transform) if node.right is not None else None
     )
+    item = node.item
+    if isinstance(item, tuple):
+        item = tuple(_map_condition(part, transform) for part in item)
+    elif isinstance(item, Tree):
+        item = _map_condition(item, transform)
+    if left is node.left and right is node.right and item is node.item:
+        return node
+    return Tree(
+        node.kind, root=node.root, path=node.path, value=node.value,
+        left=left, right=right, item=item,
+    )
+
+
+def _rebase_walk_condition(node, walk_path, walk_model, role):
+    """Keep the part of each field that lives on the walked node."""
+    prefix = tuple(walk_path)
+
+    def transform(field):
+        if field.root != 'row':
+            raise TrustsConfigurationError(
+                '%s condition must be evaluated on the walked node %s.'
+                % (role, walk_model._meta.label)
+            )
+        path = tuple(field.path)
+        if path[:len(prefix)] != prefix:
+            raise TrustsConfigurationError(
+                '%s condition must be evaluated on the walked node %s, '
+                'not %r.' % (
+                    role, walk_model._meta.label, '__'.join(path),
+                )
+            )
+        relative = path[len(prefix):]
+        if not relative:
+            raise TrustsConfigurationError(
+                '%s condition must name a field on %s.'
+                % (role, walk_model._meta.label)
+            )
+        return Tree('field', root='row', path=relative)
+
+    return _map_condition(node, transform)
+
+
+def _install_walk_condition(along, walk_path, walk_model, role):
+    """Rebase the path condition and reject one SQL cannot render."""
+    condition = getattr(along, 'condition', None)
+    if condition is None:
+        return None
+    rebased = _rebase_walk_condition(condition, walk_path, walk_model, role)
+    _validate_relation_node(rebased, walk_model, None)
+    from trusts.plan.walk import prove_walk_condition
+    prove_walk_condition(rebased, walk_model)
+    return rebased
 
 
 def _build_along_walk(root, content_path, content_model, along, *,
@@ -1927,13 +1953,8 @@ def _build_along_walk(root, content_path, content_model, along, *,
         edge_parent_attname=edge_parent_attname,
         edge_child_attname=edge_child_attname,
         rewrite_attname=rewrite_attname,
-        reset=_resolve_reset(
-            walk_model,
-            shape,
-            edge_path,
-            edge_model,
-            getattr(along, 'reset', None),
-            role,
+        condition=_install_walk_condition(
+            along, tuple(walk_path), walk_model, role,
         ),
     )
 
@@ -2174,35 +2195,42 @@ def _public_ref(root, value, role, *, allow_empty=False):
         value, role, allow_empty=allow_empty,
     ))
 
+def _public_walk_path(root, value, role):
+    """A ``__`` string or a one-argument path lambda, plus its condition."""
+    if isinstance(value, Ref):
+        raise TypeError(
+            '%s must be a Django path string or a one-argument path '
+            'builder, not a Ref.' % (role,)
+        )
+    if isinstance(value, str):
+        return _public_path_segments(value, role), None
+    if not callable(value):
+        raise TrustsConfigurationError(
+            '%s must be a Django path string or a one-argument path '
+            'builder, not %r.' % (role, value)
+        )
+    return _invoke_walk_path(root, value, role)
+
+
 def _bind_public_walk(root, value, role):
-    """Normalize ``(path, bound)`` or ``(path, bound, field)`` to ``Along``."""
+    """Normalize ``(path, bound)`` to ``Along``. A third element is rejected."""
     if value is None:
         return None
     if isinstance(value, Along):
         raise TypeError(
-            '%s must be a (path, bound) pair or a '
-            '(path, bound, field) triple, not an Along instance.' % (role,)
+            '%s must be a (path, bound) pair, not an Along instance.' % (role,)
         )
     if isinstance(value, Ref):
         raise TypeError(
-            '%s must be a (path, bound) pair or a '
-            '(path, bound, field) triple, not a Ref.' % (role,)
+            '%s must be a (path, bound) pair, not a Ref.' % (role,)
         )
-    if not isinstance(value, tuple) or len(value) not in (2, 3):
+    if not isinstance(value, tuple) or len(value) != 2:
         raise TrustsConfigurationError(
-            '%s must be a (path, bound) pair or a '
-            '(path, bound, field) triple, not %r.' % (role, value)
+            '%s must be a (path, bound) pair, not %r.' % (role, value)
         )
-    if len(value) == 2:
-        path, bound = value
-        reset = None
-    else:
-        path, bound, reset = value
-        if not isinstance(reset, str) or not reset:
-            raise TrustsConfigurationError(
-                '%s reset must be a field path, not %r.' % (role, reset)
-            )
-    return Along(_public_ref(root, path, role), bound, reset)
+    path, bound = value
+    segments, condition = _public_walk_path(root, path, role)
+    return Along(Ref(root, segments), bound, condition)
 
 
 def _bind_public_along(root, along):
