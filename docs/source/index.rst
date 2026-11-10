@@ -704,9 +704,9 @@ with a constant, including ``None``. ``~`` applies to a boolean field, to
 ``Reachable(path)`` (below), and to ``&`` of those. Parenthesize comparisons when
 combining them with ``&`` or ``|``.
 
-Lambda evaluation follows 3-Valued-Logic, for example, True | Unknown is True.
-A comparison with a NULL operand or an unreachable field evaluates to Unknown.
-Only a final True grants permission.
+Conditions combine using SQL three-valued logic: for example, True | Unknown
+is True. A comparison with a NULL operand or an unreachable field evaluates
+to Unknown. Only a final True grants permission.
 
 The supported functions come from ``trusts.functions``; Django's own versions
 are rejected by ``register()``. Arguments may be fields, typed constants, or
