@@ -655,6 +655,83 @@ class AlongContainsTest(TransactionTestCase):
                 )
             self.assertEqual(held, {'A'})
 
+    def test_nested_parent_membership_reads_the_parent_row(self):
+        User = get_user_model()
+
+        class Tag(models.Model):
+            name = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'acond_nest_tag'
+
+        class NodeQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Node(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=20)
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+            tags = models.ManyToManyField(Tag, related_name='nest_nodes')
+            objects = models.Manager.from_queryset(NodeQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'acond_nest_node'
+
+        class Grant(models.Model):
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            node = models.ForeignKey(Node, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'acond_nest_grant'
+
+        with _tables(Tag, Node, Grant):
+            _bind_m2m(Node, 'tags', Tag)
+            change = _permission(Node, 'change_acond_nest')
+            code = '%s.%s' % (
+                change.content_type.app_label, change.codename,
+            )
+            kept = Tag.objects.create(name='kept')
+            other = Tag.objects.create(name='other')
+            root = Node.objects.create(title='A')
+            child = Node.objects.create(title='B', parent=root)
+            Node.objects.create(title='C', parent=child)
+            alice = User.objects.create_user('acond-nest-alice', password='x')
+            Grant.objects.create(user=alice, node=root, permission=change)
+            handle = compiler(path='tests.core.along-condition.nested-contains')
+            handle.register(
+                trust=Grant, user='user', permission='permission',
+                content='node',
+                along=(
+                    lambda t: t.node.parent.tags.contains(kept.pk) & t.node.parent,
+                    8,
+                ),
+            )
+
+            def held():
+                with _listed(handle):
+                    return set(
+                        Node.objects.permitted(code, alice).values_list(
+                            'title', flat=True,
+                        )
+                    )
+
+            with self.subTest('the child is out when only the child holds the tag'):
+                child.tags.add(kept)
+                self.assertEqual(held(), {'A'})
+            with self.subTest('the child is in when the parent holds the tag'):
+                child.tags.clear()
+                root.tags.add(kept)
+                self.assertEqual(held(), {'A', 'B'})
+            with self.subTest('a different tag on the child does not extend the walk'):
+                child.tags.add(other)
+                self.assertEqual(held(), {'A', 'B'})
+
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class MembershipIdentityTest(TransactionTestCase):
@@ -716,6 +793,39 @@ class MembershipIdentityTest(TransactionTestCase):
                 app_label = 'trusts_tests'
                 db_table = 'mem_both'
 
+        class Card(models.Model):
+            code = models.IntegerField(unique=True, db_column='card_code')
+            owner = models.ForeignKey(
+                User, to_field='username', null=True, db_column='card_owner',
+                on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'mem_card'
+
+        class CardTag(models.Model):
+            card = models.ForeignKey(
+                Card, to_field='code', db_column='link_card',
+                on_delete=models.CASCADE, related_name='+',
+            )
+            tag = models.ForeignKey(
+                Tag, to_field='key', db_column='link_tag',
+                on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'mem_card_tag'
+
+        Card.add_to_class(
+            'tags',
+            models.ManyToManyField(
+                Tag, through=CardTag, through_fields=('card', 'tag'),
+                related_name='+',
+            ),
+        )
+
         class NodeQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
             pass
 
@@ -733,6 +843,14 @@ class MembershipIdentityTest(TransactionTestCase):
             owner = models.ForeignKey(
                 User, to_field='username', null=True, db_column='owner_name',
                 on_delete=models.CASCADE, related_name='+',
+            )
+            boss = models.ForeignKey(
+                'self', to_field='code', null=True, db_column='boss_code',
+                on_delete=models.CASCADE, related_name='reports',
+            )
+            card = models.OneToOneField(
+                Card, to_field='code', null=True, db_column='card_ref',
+                on_delete=models.CASCADE, related_name='node',
             )
             tags_far = models.ManyToManyField(
                 Tag, through=MemFar, through_fields=('node', 'tag'),
@@ -753,6 +871,21 @@ class MembershipIdentityTest(TransactionTestCase):
             class Meta:
                 app_label = 'trusts_tests'
                 db_table = 'mem_node'
+
+        class Seal(models.Model):
+            code = models.IntegerField(unique=True, db_column='seal_code')
+            node = models.OneToOneField(
+                Node, to_field='code', db_column='seal_node',
+                on_delete=models.CASCADE, related_name='seal',
+            )
+            owner = models.ForeignKey(
+                User, to_field='username', null=True, db_column='seal_owner',
+                on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'mem_seal'
 
         class SheetQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
             pass
@@ -811,20 +944,23 @@ class MembershipIdentityTest(TransactionTestCase):
                 db_table = 'mem_via_grant'
 
         self.Node = Node
+        self.Card = Card
+        self.Seal = Seal
         self.Sheet = Sheet
         self.Grant = Grant
         self.GroupGrant = GroupGrant
         self.Delegation = Delegation
         self.ViaGrant = ViaGrant
         models_ = (
-            Tag, Node, MemFar, MemNear, MemBoth, Sheet, Grant, GroupGrant,
-            Delegation, ViaGrant,
+            Tag, Card, CardTag, Node, MemFar, MemNear, MemBoth, Seal, Sheet,
+            Grant, GroupGrant, Delegation, ViaGrant,
         )
         self._cm = _tables(*models_)
         self._cm.__enter__()
         self.addCleanup(self._cm.__exit__, None, None, None)
         for name in ('tags_far', 'tags_near', 'tags_both', 'tags_auto', 'members'):
             _bind_m2m(Node, name, Tag if name != 'members' else User)
+        _bind_m2m(Card, 'tags', Tag)
         self.change = _permission(Sheet, 'change_mem')
         self.code = '%s.%s' % (
             self.change.content_type.app_label, self.change.codename,
@@ -864,18 +1000,26 @@ class MembershipIdentityTest(TransactionTestCase):
         self.Node.tags_near.through.objects.all().delete()
         self.Node.tags_both.through.objects.all().delete()
         self.Node.tags_auto.through.objects.all().delete()
-        self.Node.objects.update(badge=None, owner=None)
+        self.Card.tags.through.objects.all().delete()
+        self.Seal.objects.all().delete()
+        self.Node.objects.update(badge=None, owner=None, boss=None, card=None)
+        self.Card.objects.all().delete()
         self.Grant.objects.all().delete()
         self.GroupGrant.objects.all().delete()
         self.Delegation.objects.all().delete()
         self.ViaGrant.objects.all().delete()
 
-    def _along(self, name, condition):
+    def _along(self, name, condition, edge='parent'):
         handle = compiler(path='tests.core.mem.%s' % name)
         handle.register(
             trust=self.Grant, user='user', permission='permission',
             content='node__sheets',
-            along=(lambda t, condition=condition: condition(t) & t.node.parent, 4),
+            along=(
+                lambda t, condition=condition, edge=edge: (
+                    condition(t) & getattr(t.node, edge)
+                ),
+                4,
+            ),
         )
         return handle
 
@@ -945,8 +1089,74 @@ class MembershipIdentityTest(TransactionTestCase):
         elif kind == 'fk-eq':
             child.owner = self.wanted_user if positive else self.decoy_user
             child.save(update_fields=['owner'])
+        elif kind == 'parent-owner':
+            parent.owner = self.wanted_user if positive else self.decoy_user
+            parent.save(update_fields=['owner'])
+        elif kind == 'boss-owner':
+            child.boss = parent
+            parent.owner = self.wanted_user if positive else self.decoy_user
+            parent.save(update_fields=['owner'])
+            child.save(update_fields=['boss'])
+        elif kind == 'card-owner':
+            held = self.Card.objects.create(
+                pk=1, code=2,
+                owner=self.wanted_user if positive else self.decoy_user,
+            )
+            self.Card.objects.create(
+                pk=2, code=1,
+                owner=self.decoy_user if positive else self.wanted_user,
+            )
+            child.card = held
+            child.save(update_fields=['card'])
+        elif kind == 'seal-owner':
+            self.Seal.objects.create(
+                pk=1, code=2, node=child,
+                owner=self.wanted_user if positive else self.decoy_user,
+            )
+            self.Seal.objects.create(
+                pk=2, code=1, node=parent,
+                owner=self.decoy_user if positive else self.wanted_user,
+            )
+        elif kind == 'boss-tags':
+            child.boss = parent
+            child.save(update_fields=['boss'])
+            parent.tags_far.add(self.wanted if positive else self.decoy)
+            child.tags_far.add(self.decoy if positive else self.wanted)
+        elif kind == 'card-tags':
+            held = self.Card.objects.create(pk=1, code=2)
+            other = self.Card.objects.create(pk=2, code=1)
+            held.tags.add(self.wanted if positive else self.decoy)
+            other.tags.add(self.decoy if positive else self.wanted)
+            child.card = held
+            child.save(update_fields=['card'])
         else:
             raise AssertionError(kind)
+
+    def _condition(self, kind):
+        if kind == 'fk-eq':
+            return lambda t: t.node.owner == self.wanted_user
+        if kind == 'fk-contains':
+            return lambda t: t.node.badge.contains(self.wanted.pk)
+        if kind == 'parent-owner':
+            return lambda t: t.node.parent.owner == self.wanted_user
+        if kind == 'boss-owner':
+            return lambda t: t.node.boss.owner == self.wanted_user
+        if kind == 'card-owner':
+            return lambda t: t.node.card.owner == self.wanted_user
+        if kind == 'seal-owner':
+            return lambda t: t.node.seal.owner == self.wanted_user
+        if kind == 'boss-tags':
+            return lambda t: t.node.boss.tags_far.contains(self.wanted.pk)
+        if kind == 'card-tags':
+            return lambda t: t.node.card.tags.contains(self.wanted.pk)
+        attr = {
+            'm2m-far': 'tags_far',
+            'm2m-near': 'tags_near',
+            'm2m-both': 'tags_both',
+            'm2m-auto': 'tags_auto',
+        }[kind]
+        pk = self.wanted.pk
+        return lambda t, attr=attr, pk=pk: getattr(t.node, attr).contains(pk)
 
     def test_swapped_keys_do_not_overgrant(self):
         kinds = (
@@ -966,21 +1176,7 @@ class MembershipIdentityTest(TransactionTestCase):
                         user=self.alice, node=self.nodes['A'],
                         permission=self.change,
                     )
-                    if kind == 'fk-eq':
-                        condition = lambda t: t.node.owner == self.wanted_user
-                    elif kind == 'fk-contains':
-                        condition = lambda t: t.node.badge.contains(self.wanted.pk)
-                    else:
-                        attr = {
-                            'm2m-far': 'tags_far',
-                            'm2m-near': 'tags_near',
-                            'm2m-both': 'tags_both',
-                            'm2m-auto': 'tags_auto',
-                        }[kind]
-                        pk = self.wanted.pk
-                        condition = lambda t, attr=attr, pk=pk: (
-                            getattr(t.node, attr).contains(pk)
-                        )
+                    condition = self._condition(kind)
                     handle = self._along('%s-%s' % (kind, positive), condition)
                     self._expect(handle, self.alice, titles)
 
@@ -1051,3 +1247,135 @@ class MembershipIdentityTest(TransactionTestCase):
                 self.assertIs(
                     self.cara.has_perm(self.code, self.sheets['A']), True,
                 )
+
+    def test_nested_relation_agrees_both_ways(self):
+        kinds = (
+            'parent-owner', 'boss-owner', 'card-owner', 'seal-owner',
+            'boss-tags', 'card-tags',
+        )
+        edges = (
+            ('parent', 'A', {'A'}, {'A', 'B'}),
+            ('children', 'B', {'B'}, {'A', 'B'}),
+        )
+        for kind in kinds:
+            for edge, seed, absent, present in edges:
+                for positive, titles in ((False, absent), (True, present)):
+                    with self.subTest(kind=kind, edge=edge, positive=positive):
+                        self._clear()
+                        self._plant(kind, positive)
+                        self.Grant.objects.create(
+                            user=self.alice, node=self.nodes[seed],
+                            permission=self.change,
+                        )
+                        handle = self._along(
+                            '%s-%s-%s' % (kind, edge, int(positive)),
+                            self._condition(kind), edge,
+                        )
+                        self._expect(handle, self.alice, titles)
+
+    def test_nested_owner_and_contains_agree_across_entries(self):
+        User = get_user_model()
+        for kind in ('parent-owner', 'boss-tags', 'card-owner'):
+            for positive, titles in ((False, {'A'}), (True, {'A', 'B'})):
+                with self.subTest(kind=kind, positive=positive):
+                    self._clear()
+                    self._plant(kind, positive)
+                    condition = self._condition(kind)
+                    self.Grant.objects.create(
+                        user=self.sponsor, node=self.nodes['A'],
+                        permission=self.change,
+                    )
+                    self.Delegation.objects.create(
+                        delegate=self.delegate, sponsor=self.sponsor,
+                        node=self.nodes['A'],
+                    )
+                    self.GroupGrant.objects.create(
+                        group=self.editors, node=self.nodes['A'],
+                    )
+                    self.ViaGrant.objects.create(
+                        node=self.nodes['A'], permission=self.change,
+                    )
+                    delegated = compiler(
+                        path='tests.core.mem.nest-deleg-%s-%s' % (
+                            kind, int(positive),
+                        ),
+                    )
+                    delegated.register(
+                        trust=self.Grant, user='user', permission='permission',
+                        content='node__sheets',
+                        along=(lambda t: condition(t) & t.node.parent, 4),
+                    )
+                    delegated.register(
+                        trust=self.Delegation, delegate='delegate',
+                        sponsor='sponsor', content='node__sheets',
+                        along=(lambda t: condition(t) & t.node.parent, 4),
+                    )
+                    grouped = compiler(
+                        path='tests.core.mem.nest-group-%s-%s' % (
+                            kind, int(positive),
+                        ),
+                    )
+                    grouped.register(
+                        trust=self.GroupGrant, user='group__user', group='group',
+                        content='node__sheets',
+                        along=(lambda t: condition(t) & t.node.parent, 4),
+                    )
+                    via = compiler(
+                        path='tests.core.mem.nest-via-%s-%s' % (
+                            kind, int(positive),
+                        ),
+                    )
+                    via.register(
+                        trust=self.ViaGrant, user='node__members',
+                        permission='permission', content='node__sheets',
+                        via=(lambda t: condition(t) & t.node.parent, 4),
+                    )
+                    self._expect(delegated, self.sponsor, titles)
+                    self._expect(delegated, self.delegate, titles)
+                    self._expect(grouped, self.bob, titles, group=True)
+                    with _listed(via):
+                        self.assertIs(
+                            self.alice.has_perm(self.code, self.sheets['A']),
+                            True,
+                        )
+                        self.assertIs(
+                            self.cara.has_perm(self.code, self.sheets['A']),
+                            positive,
+                        )
+                        holders = set(self.sheets['A'].get_permitted_users(
+                            self.change,
+                        ).values_list('pk', flat=True))
+                    self.assertIn(self.alice.pk, holders)
+                    self.assertEqual(self.cara.pk in holders, positive)
+                    if kind == 'parent-owner' and positive:
+                        text = render_configured_policy(delegated).decode()
+                        self.assertIn('owner_name', text)
+                        self.assertIn(User._meta.db_table, text)
+
+    def test_intermediate_collection_fails_at_register(self):
+        handle = compiler(path='tests.core.mem.intermediate-m2m')
+        with self.assertRaises(TrustsConfigurationError) as caught:
+            handle.register(
+                trust=self.Grant, user='user', permission='permission',
+                content='node__sheets',
+                along=(
+                    lambda t: (t.node.tags_far.key == self.wanted.key)
+                    & t.node.parent,
+                    4,
+                ),
+            )
+        self.assertNotIn('remote_field', str(caught.exception))
+        self.assertIn('SQL', str(caught.exception))
+        handle = compiler(path='tests.core.mem.field-member')
+        with self.assertRaises(TrustsConfigurationError) as member:
+            handle.register(
+                trust=self.Grant, user='user', permission='permission',
+                content='node__sheets',
+                along=(
+                    lambda t: t.node.tags_auto.contains(t.node.boss.badge)
+                    & t.node.parent,
+                    4,
+                ),
+            )
+        self.assertNotIn('remote_field', str(member.exception))
+        self.assertIn('member', str(member.exception))

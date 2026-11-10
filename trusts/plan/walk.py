@@ -248,6 +248,53 @@ def _lower_walk_node(node, model, connection):
         ) from exc
 
 
+def _forward_link(field):
+    """Concrete forward FK or one-to-one, including a non-PK ``to_field``."""
+    return bool(
+        getattr(field, 'concrete', False)
+        and (
+            getattr(field, 'many_to_one', False)
+            or getattr(field, 'one_to_one', False)
+        )
+    )
+
+
+def _reverse_link(field):
+    """Reverse one-to-one. The forward key lives on the related row."""
+    return bool(
+        getattr(field, 'one_to_one', False)
+        and not getattr(field, 'concrete', False)
+    )
+
+
+def _link_ends(field):
+    """``(related model, column on that row, column on the previous row)``.
+
+    A forward key stores its target on the previous row. A reverse
+    one-to-one stores it on the related row. Either column may be a
+    non-PK ``to_field`` or a ``db_column``.
+    """
+    if _forward_link(field):
+        return field.remote_field.model, field.target_field.column, field.column
+    if _reverse_link(field):
+        forward = field.field
+        return field.related_model, forward.column, forward.target_field.column
+    raise PermissionConditionError(
+        'This condition cannot be rendered in SQL.'
+    )
+
+
+def _follow(field):
+    related, _right, _left = _link_ends(field)
+    return related
+
+
+def _names_column(field, name):
+    """True when ``name`` is the attname, not the relation name."""
+    attname = getattr(field, 'attname', None)
+    return bool(attname) and name == attname and name != field.name
+
+
 def _contains_expr(node, model, qn):
     left = node.left
     if getattr(left, 'kind', None) != 'field' or left.root != 'row' or not left.path:
@@ -264,20 +311,14 @@ def _contains_expr(node, model, qn):
             raise PermissionConditionError(
                 'This condition cannot be rendered in SQL.'
             ) from exc
-        last = index == len(left.path) - 1
-        if not last:
-            if not (
-                getattr(field, 'concrete', False)
-                and (
-                    getattr(field, 'many_to_one', False)
-                    or getattr(field, 'one_to_one', False)
-                )
-            ):
+        if index != len(left.path) - 1:
+            try:
+                current = _follow(field)
+            except PermissionConditionError as exc:
                 raise PermissionConditionError(
                     'This condition cannot be rendered in SQL.'
-                )
+                ) from exc
             hops.append(field)
-            current = field.remote_field.model
     member_sql, member_params = _member_sql(node.right, model, qn)
     if getattr(field, 'many_to_many', False) and not isinstance(field, ManyToManyRel):
         return _m2m_contains(field, hops, member_sql, member_params, qn)
@@ -309,26 +350,42 @@ def _member_sql(node, model, qn):
     )
 
 
+def _select_column(hops, column, qn):
+    if not hops:
+        return '{alias}.%s' % qn(column)
+    owner, frm, where = _chain(hops, qn)
+    return '(SELECT %s.%s FROM %s WHERE %s)' % (
+        owner, qn(column), frm, where,
+    )
+
+
 def _chain(hops, qn):
-    """Related-row FROM clause correlated to ``{alias}``, and that row's alias."""
+    """Related-row FROM clause correlated to ``{alias}``, and that row's alias.
+
+    Each hop is a resolved forward FK, forward one-to-one, or reverse
+    one-to-one. A name string is not a hop and fails at register.
+    """
     if not hops:
         return '{alias}', '', ''
-    first = hops[0]
-    dest = qn('cnd0')
-    frm = '%s AS %s' % (qn(first.remote_field.model._meta.db_table), dest)
-    where = '%s.%s = {alias}.%s' % (
-        dest, qn(first.target_field.column), qn(first.column),
-    )
-    prev = dest
-    for index, field in enumerate(hops[1:], start=1):
-        nxt = qn('cnd%s' % index)
-        frm += ' JOIN %s AS %s ON %s.%s = %s.%s' % (
-            qn(field.remote_field.model._meta.db_table), nxt,
-            nxt, qn(field.target_field.column),
-            prev, qn(field.column),
+    frm = ''
+    where = ''
+    prev = '{alias}'
+    owner = '{alias}'
+    for index, field in enumerate(hops):
+        related, right_col, left_col = _link_ends(field)
+        dest = qn('cnd%s' % index)
+        table = '%s AS %s' % (qn(related._meta.db_table), dest)
+        cond = '%s.%s = %s.%s' % (
+            dest, qn(right_col), prev, qn(left_col),
         )
-        prev = nxt
-    return prev, frm, where
+        if not frm:
+            frm = table
+            where = cond
+        else:
+            frm += ' JOIN %s ON %s' % (table, cond)
+        prev = dest
+        owner = dest
+    return owner, frm, where
 
 
 def _fk_stores_pk(fk):
@@ -438,15 +495,17 @@ def _m2m_contains(field, hops, member_sql, member_params, qn):
 
 
 def _relation_fk(model, path):
-    """Forward FK named by ``path``, or ``None`` when it is a stored column.
+    """``(terminal link, resolved prefix fields)``, or ``None``.
 
     The attname (``badge_id``) is the stored ``to_field`` value. The
     relation name (``badge``) is the related row, identified by its PK.
+    Prefix hops are resolved fields, never path-name strings. A forward
+    FK or one-to-one and a reverse one-to-one are both links.
     """
     if not path:
         return None
     current = model
-    field = None
+    prefix = []
     for index, name in enumerate(path):
         try:
             field = current._meta.get_field(name)
@@ -454,27 +513,16 @@ def _relation_fk(model, path):
             return None
         last = index == len(path) - 1
         if last:
-            attname = getattr(field, 'attname', None)
-            if attname and name == attname and name != field.name:
+            if _names_column(field, name):
                 return None
-            if not (
-                getattr(field, 'many_to_one', False)
-                or (
-                    getattr(field, 'one_to_one', False)
-                    and getattr(field, 'concrete', False)
-                )
-            ):
+            if not (_forward_link(field) or _reverse_link(field)):
                 return None
-            return field
-        if not (
-            getattr(field, 'concrete', False)
-            and (
-                getattr(field, 'many_to_one', False)
-                or getattr(field, 'one_to_one', False)
-            )
-        ):
+            return field, tuple(prefix)
+        try:
+            current = _follow(field)
+        except PermissionConditionError:
             return None
-        current = field.remote_field.model
+        prefix.append(field)
     return None
 
 
@@ -491,19 +539,22 @@ def _identity_comparison(node, model, qn):
         return None
     if not isinstance(right.value, (Model, ModelIdentity)):
         return None
-    fk = _relation_fk(model, tuple(left.path))
-    if fk is None or _fk_stores_pk(fk):
+    resolved = _relation_fk(model, tuple(left.path))
+    if resolved is None:
         return None
-    hops = tuple(left.path[:-1])
-    if hops:
-        owner, frm, where = _chain(hops, qn)
-        stored = '(SELECT %s.%s FROM %s WHERE %s)' % (
-            owner, qn(fk.column), frm, where,
+    fk, hops = resolved
+    if _forward_link(fk) and _fk_stores_pk(fk):
+        return None
+    params = (member_pk(right.value),)
+    if _reverse_link(fk):
+        owner, frm, where = _chain(hops + (fk,), qn)
+        related = fk.related_model
+        sql = '((SELECT %s.%s FROM %s WHERE %s) = %%s)' % (
+            owner, qn(related._meta.pk.column), frm, where,
         )
     else:
-        stored = '{alias}.%s' % qn(fk.column)
-    sql = _pk_equals_sql(fk, stored, '%s', qn, 'cndeq')
-    params = (member_pk(right.value),)
+        stored = _select_column(hops, fk.column, qn)
+        sql = _pk_equals_sql(fk, stored, '%s', qn, 'cndeq')
     if node.kind == 'ne':
         return Expr('(NOT %s)' % sql, params)
     return Expr(sql, params)
