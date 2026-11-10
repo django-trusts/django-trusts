@@ -753,48 +753,6 @@ path providing permission.
 Inherited relationships
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Members of a parent group inherit into its subgroups:
-
-.. code-block:: python
-
-   from django.db import models
-
-
-   class GitlabGroup(models.Model):
-       parent = models.ForeignKey(
-           "self", null=True, blank=True, related_name="subgroups",
-           on_delete=models.CASCADE,
-       )
-       members = models.ManyToManyField("auth.User")
-
-   class Project(models.Model):
-       group = models.ForeignKey(
-           GitlabGroup, related_name="projects", on_delete=models.CASCADE,
-       )
-
-   class GitlabGroupPermission(models.Model):
-       group = models.ForeignKey(GitlabGroup, on_delete=models.CASCADE)
-       permission = models.ForeignKey(
-           "auth.Permission", on_delete=models.CASCADE,
-       )
-
-   registry.register(
-       trust=GitlabGroupPermission,
-       user="group__members",
-       permission="permission",
-       content="group__projects",
-       along=("group__parent", 8),
-       via=("group__subgroups", 8),
-   )
-
-``org`` is the parent of ``backend``, and ``backend`` is the parent of
-``api``. Alice is a member of ``org`` only. The grant's group is
-``backend``. She has the permission on the projects in ``backend`` and
-``api``.
-
-``along=`` and ``via=`` on the same registration are two walks. The user
-must be reached by ``via=`` and the object must be reached by ``along=``.
-
 Content: along=
 ^^^^^^^^^^^^^^^
 
@@ -816,6 +774,9 @@ Users: via=
 ``via=`` reaches users by walking a relation from the grant. The form is
 ``via=(path, bound)`` or ``via=(path, bound, field)``. The path, the bound,
 and a reset are the same as ``along=``.
+
+``along=`` and ``via=`` on the same registration are two walks. The user
+must be reached by ``via=`` and the object must be reached by ``along=``.
 
 See the `via= security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#users-via>`_.
