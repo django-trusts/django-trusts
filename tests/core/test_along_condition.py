@@ -654,3 +654,390 @@ class AlongContainsTest(TransactionTestCase):
                     )
                 )
             self.assertEqual(held, {'A'})
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class MembershipIdentityTest(TransactionTestCase):
+    """A member is the related row's PK, even when the FK stores ``to_field``.
+
+    Swapped keys: the decoy row's stored key equals the wanted row's PK,
+    and the wanted row's key equals the decoy's PK. Only the wanted row
+    may satisfy the condition.
+    """
+
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+
+        class Tag(models.Model):
+            key = models.IntegerField(unique=True, db_column='tag_key')
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'mem_tag'
+
+        class MemFar(models.Model):
+            node = models.ForeignKey(
+                'Node', on_delete=models.CASCADE, related_name='+',
+            )
+            tag = models.ForeignKey(
+                Tag, to_field='key', db_column='link_tag',
+                on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'mem_far'
+
+        class MemNear(models.Model):
+            node = models.ForeignKey(
+                'Node', to_field='code', db_column='link_node',
+                on_delete=models.CASCADE, related_name='+',
+            )
+            tag = models.ForeignKey(
+                Tag, on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'mem_near'
+
+        class MemBoth(models.Model):
+            node = models.ForeignKey(
+                'Node', to_field='code', db_column='link_node',
+                on_delete=models.CASCADE, related_name='+',
+            )
+            tag = models.ForeignKey(
+                Tag, to_field='key', db_column='link_tag',
+                on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'mem_both'
+
+        class NodeQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Node(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=20)
+            code = models.IntegerField(unique=True, db_column='node_code')
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+            badge = models.ForeignKey(
+                Tag, to_field='key', null=True, db_column='badge_key',
+                on_delete=models.CASCADE, related_name='+',
+            )
+            tags_far = models.ManyToManyField(
+                Tag, through=MemFar, through_fields=('node', 'tag'),
+                related_name='+',
+            )
+            tags_near = models.ManyToManyField(
+                Tag, through=MemNear, through_fields=('node', 'tag'),
+                related_name='+',
+            )
+            tags_both = models.ManyToManyField(
+                Tag, through=MemBoth, through_fields=('node', 'tag'),
+                related_name='+',
+            )
+            tags_auto = models.ManyToManyField(Tag, related_name='auto_nodes')
+            members = models.ManyToManyField(User, related_name='+')
+            objects = models.Manager.from_queryset(NodeQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'mem_node'
+
+        class SheetQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Sheet(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=20)
+            node = models.ForeignKey(
+                Node, related_name='sheets', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(SheetQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'mem_sheet'
+
+        class Grant(models.Model):
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            node = models.ForeignKey(Node, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'mem_grant'
+
+        class GroupGrant(models.Model):
+            group = models.ForeignKey(Group, on_delete=models.CASCADE)
+            node = models.ForeignKey(Node, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'mem_group_grant'
+
+        class Delegation(models.Model):
+            delegate = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            sponsor = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            node = models.ForeignKey(Node, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'mem_delegation'
+
+        class ViaGrant(models.Model):
+            node = models.ForeignKey(Node, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'mem_via_grant'
+
+        self.Node = Node
+        self.Sheet = Sheet
+        self.Grant = Grant
+        self.GroupGrant = GroupGrant
+        self.Delegation = Delegation
+        self.ViaGrant = ViaGrant
+        models_ = (
+            Tag, Node, MemFar, MemNear, MemBoth, Sheet, Grant, GroupGrant,
+            Delegation, ViaGrant,
+        )
+        self._cm = _tables(*models_)
+        self._cm.__enter__()
+        self.addCleanup(self._cm.__exit__, None, None, None)
+        for name in ('tags_far', 'tags_near', 'tags_both', 'tags_auto', 'members'):
+            _bind_m2m(Node, name, Tag if name != 'members' else User)
+        self.change = _permission(Sheet, 'change_mem')
+        self.code = '%s.%s' % (
+            self.change.content_type.app_label, self.change.codename,
+        )
+        # wanted pk=1 key=2, decoy pk=2 key=1. A pk=1 code=2, B pk=2 code=1.
+        import warnings
+        from django.apps import apps
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            apps.register_model('trusts_tests', Tag)
+        self.wanted = Tag.objects.create(pk=1, key=2)
+        self.decoy = Tag.objects.create(pk=2, key=1)
+        self.nodes = {}
+        self.sheets = {}
+        self.nodes['A'] = Node.objects.create(pk=1, code=2, title='A')
+        self.nodes['B'] = Node.objects.create(
+            pk=2, code=1, title='B', parent=self.nodes['A'],
+        )
+        for title, node in self.nodes.items():
+            self.sheets[title] = Sheet.objects.create(title=title, node=node)
+        self.alice = User.objects.create_user('mem-alice', password='x')
+        self.bob = User.objects.create_user('mem-bob', password='x')
+        self.cara = User.objects.create_user('mem-cara', password='x')
+        self.sponsor = User.objects.create_user('mem-sponsor', password='x')
+        self.delegate = User.objects.create_user('mem-delegate', password='x')
+        self.editors = Group.objects.create(name='mem-editors')
+        self.editors.permissions.add(self.change)
+        self.editors.user_set.add(self.bob)
+        self.nodes['A'].members.add(self.alice)
+        self.nodes['B'].members.add(self.cara)
+
+    def _clear(self):
+        self.Node.tags_far.through.objects.all().delete()
+        self.Node.tags_near.through.objects.all().delete()
+        self.Node.tags_both.through.objects.all().delete()
+        self.Node.tags_auto.through.objects.all().delete()
+        self.Node.objects.update(badge=None)
+        self.Grant.objects.all().delete()
+        self.GroupGrant.objects.all().delete()
+        self.Delegation.objects.all().delete()
+        self.ViaGrant.objects.all().delete()
+
+    def _along(self, name, condition):
+        handle = compiler(path='tests.core.mem.%s' % name)
+        handle.register(
+            trust=self.Grant, user='user', permission='permission',
+            content='node__sheets',
+            along=(lambda t, condition=condition: condition(t) & t.node.parent, 4),
+        )
+        return handle
+
+    def _titles(self, handle, user, *, group=False):
+        with _listed(handle):
+            permitted = set(self.Sheet.objects.permitted(
+                self.code, user,
+            ).values_list('title', flat=True))
+            forward = {
+                sheet.title: user.has_perm(self.code, sheet)
+                for sheet in self.Sheet.objects.all()
+            }
+            reverse = {
+                sheet.title: user.pk in set(sheet.get_permitted_users(
+                    self.change,
+                ).values_list('pk', flat=True))
+                for sheet in self.Sheet.objects.all()
+            }
+            enumerated = {
+                sheet.title: self.code in user.get_all_permissions(sheet)
+                for sheet in self.Sheet.objects.all()
+            }
+            grouped = None
+            if group:
+                grouped = {
+                    sheet.title: self.code in user.get_group_permissions(sheet)
+                    for sheet in self.Sheet.objects.all()
+                }
+            nodes = set(scoped_permitted_content(
+                self.Node.objects.all(), user, self.change,
+                content=self.Sheet, registry=built_catalog(handle),
+            ).values_list('title', flat=True))
+        return permitted, forward, reverse, enumerated, grouped, nodes
+
+    def _expect(self, handle, user, titles, *, group=False):
+        permitted, forward, reverse, enumerated, grouped, nodes = self._titles(
+            handle, user, group=group,
+        )
+        self.assertEqual(permitted, set(titles))
+        for title, sheet_ok in forward.items():
+            self.assertEqual(sheet_ok, title in titles, title)
+            self.assertEqual(reverse[title], title in titles, title)
+            self.assertEqual(enumerated[title], title in titles, title)
+            if grouped is not None:
+                self.assertEqual(grouped[title], title in titles, title)
+        self.assertEqual(nodes, set(titles))
+
+    def _plant(self, kind, positive):
+        child = self.nodes['B']
+        parent = self.nodes['A']
+        if kind == 'm2m-far':
+            child.tags_far.add(self.wanted if positive else self.decoy)
+        elif kind == 'm2m-near':
+            parent.tags_near.add(self.wanted)
+            if positive:
+                child.tags_near.add(self.wanted)
+        elif kind == 'm2m-both':
+            if positive:
+                child.tags_both.add(self.wanted)
+            else:
+                child.tags_both.add(self.decoy)
+        elif kind == 'm2m-auto':
+            child.tags_auto.add(self.wanted if positive else self.decoy)
+        elif kind in ('fk-contains', 'fk-eq'):
+            child.badge = self.wanted if positive else self.decoy
+            child.save(update_fields=['badge'])
+        else:
+            raise AssertionError(kind)
+
+    def test_swapped_keys_do_not_overgrant(self):
+        kinds = (
+            'm2m-far', 'm2m-near', 'm2m-both', 'm2m-auto',
+            'fk-contains', 'fk-eq',
+        )
+        for kind in kinds:
+            for positive, titles in ((False, {'A'}), (True, {'A', 'B'})):
+                with self.subTest(kind=kind, positive=positive):
+                    self._clear()
+                    self._plant(kind, positive)
+                    # The near-side negative attaches the wanted tag to A
+                    # only. Both directions must still leave B out.
+                    if kind == 'm2m-both' and not positive:
+                        self.nodes['A'].tags_both.add(self.wanted)
+                    self.Grant.objects.create(
+                        user=self.alice, node=self.nodes['A'],
+                        permission=self.change,
+                    )
+                    if kind == 'fk-eq':
+                        condition = lambda t: t.node.badge == self.wanted
+                    elif kind == 'fk-contains':
+                        condition = lambda t: t.node.badge.contains(self.wanted.pk)
+                    else:
+                        attr = {
+                            'm2m-far': 'tags_far',
+                            'm2m-near': 'tags_near',
+                            'm2m-both': 'tags_both',
+                            'm2m-auto': 'tags_auto',
+                        }[kind]
+                        pk = self.wanted.pk
+                        condition = lambda t, attr=attr, pk=pk: (
+                            getattr(t.node, attr).contains(pk)
+                        )
+                    handle = self._along('%s-%s' % (kind, positive), condition)
+                    self._expect(handle, self.alice, titles)
+
+    def test_far_to_field_agrees_across_entries(self):
+        self._clear()
+        self.nodes['B'].tags_far.add(self.decoy)
+        condition = lambda t: t.node.tags_far.contains(self.wanted.pk)
+        self.Grant.objects.create(
+            user=self.sponsor, node=self.nodes['A'], permission=self.change,
+        )
+        self.Delegation.objects.create(
+            delegate=self.delegate, sponsor=self.sponsor, node=self.nodes['A'],
+        )
+        self.GroupGrant.objects.create(
+            group=self.editors, node=self.nodes['A'],
+        )
+        self.ViaGrant.objects.create(
+            node=self.nodes['A'], permission=self.change,
+        )
+        delegated = compiler(path='tests.core.mem.deleg')
+        delegated.register(
+            trust=self.Grant, user='user', permission='permission',
+            content='node__sheets',
+            along=(lambda t: condition(t) & t.node.parent, 4),
+        )
+        delegated.register(
+            trust=self.Delegation, delegate='delegate', sponsor='sponsor',
+            content='node__sheets',
+            along=(lambda t: condition(t) & t.node.parent, 4),
+        )
+        grouped = compiler(path='tests.core.mem.group')
+        grouped.register(
+            trust=self.GroupGrant, user='group__user', group='group',
+            content='node__sheets',
+            along=(lambda t: condition(t) & t.node.parent, 4),
+        )
+        via = compiler(path='tests.core.mem.via')
+        via.register(
+            trust=self.ViaGrant, user='node__members', permission='permission',
+            content='node__sheets',
+            via=(lambda t: condition(t) & t.node.parent, 4),
+        )
+        with self.subTest('decoy does not reach the child'):
+            self._expect(delegated, self.sponsor, {'A'})
+            self._expect(delegated, self.delegate, {'A'})
+            self._expect(grouped, self.bob, {'A'}, group=True)
+            with _listed(via):
+                self.assertIs(
+                    self.alice.has_perm(self.code, self.sheets['A']), True,
+                )
+                self.assertIs(
+                    self.cara.has_perm(self.code, self.sheets['A']), False,
+                )
+                holders = set(self.sheets['A'].get_permitted_users(
+                    self.change,
+                ).values_list('pk', flat=True))
+            self.assertIn(self.alice.pk, holders)
+            self.assertNotIn(self.cara.pk, holders)
+        text = render_configured_policy(delegated).decode()
+        self.assertIn('mem_tag', text)
+        self.assertIn('tag_key', text)
+        self.nodes['B'].tags_far.add(self.wanted)
+        with self.subTest('wanted member reaches the child'):
+            self._expect(delegated, self.sponsor, {'A', 'B'})
+            self._expect(delegated, self.delegate, {'A', 'B'})
+            self._expect(grouped, self.bob, {'A', 'B'}, group=True)
+            with _listed(via):
+                self.assertIs(
+                    self.cara.has_perm(self.code, self.sheets['A']), True,
+                )

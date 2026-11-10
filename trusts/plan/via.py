@@ -38,8 +38,11 @@ from trusts.plan.standards import (
     rule_applies,
 )
 from trusts.plan.walk import (
+    _far_membership,
+    _fk_stores_pk,
     _grant_walk_attname,
     _m2m_columns,
+    _pk_equals_sql,
     _quoted_column,
     _render_reach_sql,
     _require_along_renderer,
@@ -714,27 +717,32 @@ def _contains_sql(node, user_model, content_model, content, carriers, name, qn,
         through_model = forward.remote_field.through
         user_fk = _fk_by_column(through_model, user_col, name)
         far_fk = _fk_by_column(through_model, target_col, name)
+        # The member is the related row's PK. A non-PK ``to_field`` is
+        # joined, not compared to that PK.
         member = _other_operand(
             node.right, user_model, content_model, content, carriers, name, qn,
-            field=far_fk,
         )
         probe = qn('hopm')
+        far_join, far = _far_membership(far_fk, probe, member, qn, 'hoppk')
         return (
-            'EXISTS (SELECT 1 FROM %s AS %s '
-            'WHERE %s.%s = {alias}.%s AND %s.%s = %s)'
+            'EXISTS (SELECT 1 FROM %s AS %s%s '
+            'WHERE %s.%s = {alias}.%s AND %s)'
             % (
-                qn(through_model._meta.db_table), probe,
+                qn(through_model._meta.db_table), probe, far_join,
                 probe, qn(user_fk.column),
                 qn(user_fk.target_field.column),
-                probe, qn(far_fk.column), member,
+                far,
             )
         )
     if getattr(field, 'concrete', False) and getattr(field, 'many_to_one', False):
         member = _other_operand(
             node.right, user_model, content_model, content, carriers, name, qn,
-            field=field,
         )
-        return '{alias}.%s = %s' % (qn(field.column), member)
+        if _fk_stores_pk(field):
+            return '{alias}.%s = %s' % (qn(field.column), member)
+        return _pk_equals_sql(
+            field, '{alias}.%s' % qn(field.column), member, qn, 'hoppk',
+        )
     raise _cannot(name)
 
 

@@ -8,10 +8,11 @@ stays in ``trusts.compile.graph``. Record binding lives in
 
 __all__ = []
 
-from django.db.models import F, Q
+from django.db.models import F, Model, Q
 from django.db.models.fields.related import ManyToManyRel
 
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
+from trusts.plan.conditions import ModelIdentity
 from trusts.plan.predicates import bind_record_qs, bind_terminal
 from trusts.plan.trivalent import (
     Expr,
@@ -19,7 +20,6 @@ from trusts.plan.trivalent import (
     _export_param,
     _exporting,
     _runtime_param,
-    has_contains,
     lower,
 )
 from trusts.plan.writers import member_pk
@@ -220,9 +220,12 @@ def compile_walk_condition(node, model, connection):
 
 def _lower_walk_node(node, model, connection):
     qn = connection.ops.quote_name
+    identity = _identity_comparison(node, model, qn)
+    if identity is not None:
+        return identity
     if node.kind == 'contains':
         return _contains_expr(node, model, qn)
-    if node.kind in ('and', 'or') and has_contains(node):
+    if node.kind in ('and', 'or'):
         left = _lower_walk_node(node.left, model, connection)
         right = _lower_walk_node(node.right, model, connection)
         word = 'AND' if node.kind == 'and' else 'OR'
@@ -230,7 +233,7 @@ def _lower_walk_node(node, model, connection):
             '((%s) %s (%s))' % (left.sql, word, right.sql),
             left.params + right.params,
         )
-    if node.kind == 'not' and has_contains(node):
+    if node.kind == 'not':
         inner = _lower_walk_node(node.item, model, connection)
         return Expr('(NOT (%s))' % inner.sql, inner.params)
     try:
@@ -328,7 +331,66 @@ def _chain(hops, qn):
     return prev, frm, where
 
 
+def _fk_stores_pk(fk):
+    """True when ``fk`` stores the related row's primary key."""
+    return bool(getattr(fk.target_field, 'primary_key', False))
+
+
+def _pk_equals_sql(fk, stored_sql, member_sql, qn, join_name):
+    """Compare ``member_sql`` (related PK) with the row ``fk`` points at.
+
+    A non-PK ``to_field`` is stored in ``fk``'s column. The target table
+    is joined so the comparison uses that row's primary key. ``db_column``
+    is the quoted column, not the field name.
+    """
+    if _fk_stores_pk(fk):
+        return '(%s = %s)' % (stored_sql, member_sql)
+    related = fk.remote_field.model
+    alias = qn(join_name)
+    return (
+        '((SELECT %s.%s FROM %s AS %s WHERE %s.%s = %s) = %s)'
+        % (
+            alias, qn(related._meta.pk.column),
+            qn(related._meta.db_table), alias,
+            alias, qn(fk.target_field.column),
+            stored_sql, member_sql,
+        )
+    )
+
+
+def _far_membership(fk, stored_alias, member_sql, qn, join_name):
+    """``(join_sql, match_sql)`` for a through FK and a related PK.
+
+    ``join_sql`` is empty when the through column already stores that PK.
+    """
+    if _fk_stores_pk(fk):
+        return '', '%s.%s = %s' % (stored_alias, qn(fk.column), member_sql)
+    related = fk.remote_field.model
+    alias = qn(join_name)
+    join = ' JOIN %s AS %s ON %s.%s = %s.%s' % (
+        qn(related._meta.db_table), alias,
+        alias, qn(fk.target_field.column),
+        stored_alias, qn(fk.column),
+    )
+    match = '%s.%s = %s' % (alias, qn(related._meta.pk.column), member_sql)
+    return join, match
+
+
 def _column_equals(hops, field, member_sql, member_params, qn):
+    if getattr(field, 'many_to_one', False) or (
+        getattr(field, 'one_to_one', False) and getattr(field, 'concrete', False)
+    ):
+        if not hops:
+            stored = '{alias}.%s' % qn(field.column)
+        else:
+            owner, frm, where = _chain(hops, qn)
+            stored = '(SELECT %s.%s FROM %s WHERE %s)' % (
+                owner, qn(field.column), frm, where,
+            )
+        return Expr(
+            _pk_equals_sql(field, stored, member_sql, qn, 'cndpk'),
+            member_params,
+        )
     if not hops:
         return Expr(
             '{alias}.%s = %s' % (qn(field.column), member_sql), member_params,
@@ -363,16 +425,88 @@ def _m2m_contains(field, hops, member_sql, member_params, qn):
     link = '%s.%s = %s.%s' % (
         probe, qn(here_fk.column), owner, qn(here_fk.target_field.column),
     )
-    far = '%s.%s = %s' % (probe, qn(far_fk.column), member_sql)
+    far_join, far = _far_membership(far_fk, probe, member_sql, qn, 'cndpk')
     if hops:
-        sql = 'EXISTS (SELECT 1 FROM %s JOIN %s ON %s WHERE %s AND %s)' % (
-            frm, through_sql, link, where, far,
+        sql = 'EXISTS (SELECT 1 FROM %s JOIN %s ON %s%s WHERE %s AND %s)' % (
+            frm, through_sql, link, far_join, where, far,
         )
     else:
-        sql = 'EXISTS (SELECT 1 FROM %s WHERE %s AND %s)' % (
-            through_sql, link, far,
+        sql = 'EXISTS (SELECT 1 FROM %s%s WHERE %s AND %s)' % (
+            through_sql, far_join, link, far,
         )
     return Expr(sql, member_params)
+
+
+def _relation_fk(model, path):
+    """Forward FK named by ``path``, or ``None`` when it is a stored column.
+
+    The attname (``badge_id``) is the stored ``to_field`` value. The
+    relation name (``badge``) is the related row, identified by its PK.
+    """
+    if not path:
+        return None
+    current = model
+    field = None
+    for index, name in enumerate(path):
+        try:
+            field = current._meta.get_field(name)
+        except Exception:
+            return None
+        last = index == len(path) - 1
+        if last:
+            attname = getattr(field, 'attname', None)
+            if attname and name == attname and name != field.name:
+                return None
+            if not (
+                getattr(field, 'many_to_one', False)
+                or (
+                    getattr(field, 'one_to_one', False)
+                    and getattr(field, 'concrete', False)
+                )
+            ):
+                return None
+            return field
+        if not (
+            getattr(field, 'concrete', False)
+            and (
+                getattr(field, 'many_to_one', False)
+                or getattr(field, 'one_to_one', False)
+            )
+        ):
+            return None
+        current = field.remote_field.model
+    return None
+
+
+def _identity_comparison(node, model, qn):
+    """``relation == instance`` by the related PK, not the stored ``to_field``."""
+    if node.kind not in ('eq', 'ne'):
+        return None
+    left, right = node.left, node.right
+    if getattr(left, 'kind', None) == 'const':
+        left, right = right, left
+    if getattr(left, 'kind', None) != 'field' or left.root != 'row':
+        return None
+    if getattr(right, 'kind', None) != 'const':
+        return None
+    if not isinstance(right.value, (Model, ModelIdentity)):
+        return None
+    fk = _relation_fk(model, tuple(left.path))
+    if fk is None or _fk_stores_pk(fk):
+        return None
+    hops = tuple(left.path[:-1])
+    if hops:
+        owner, frm, where = _chain(hops, qn)
+        stored = '(SELECT %s.%s FROM %s WHERE %s)' % (
+            owner, qn(fk.column), frm, where,
+        )
+    else:
+        stored = '{alias}.%s' % qn(fk.column)
+    sql = _pk_equals_sql(fk, stored, '%s', qn, 'cndeq')
+    params = (member_pk(right.value),)
+    if node.kind == 'ne':
+        return Expr('(NOT %s)' % sql, params)
+    return Expr(sql, params)
 
 
 def _format_hop(walk, template, node_alias):
