@@ -242,19 +242,63 @@ def _match_relation_targets(left, right):
     return pk_operand(left), pk_operand(right)
 
 
+def _row_is_present(operand):
+    """True when ``operand``'s row is already in the query.
+
+    That reachability guard is the constant ``1=1``. Parentheses and
+    spaces do not change it. A parameter, or any other predicate, is a
+    real guard: a missing row must stay Unknown.
+    """
+    if operand.reached_params:
+        return False
+    text = ''.join(operand.reached_sql.split())
+    while text.startswith('(') and text.endswith(')'):
+        depth = 0
+        wraps = True
+        for index, char in enumerate(text):
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+                if depth < 0:
+                    wraps = False
+                    break
+            if depth == 0 and index != len(text) - 1:
+                wraps = False
+                break
+        if not wraps or depth != 0:
+            break
+        text = text[1:-1]
+    return text == '1=1'
+
+
+def _null_test(field):
+    """``IS NULL`` for a stored column, guarded when the row may be missing.
+
+    A present row needs no ``CASE``. Wrapping ``1=1`` would still be true
+    or false, never Unknown, and the guard is noise. A real guard stays:
+    the ``ELSE NULL`` is Unknown when the row was not joined.
+    """
+    if _row_is_present(field):
+        return Expr('(%s IS NULL)' % field.value_sql, field.value_params)
+    return Expr(
+        'CASE WHEN (%s) THEN (%s IS NULL) ELSE NULL END' % (
+            field.reached_sql, field.value_sql,
+        ),
+        field.reached_params + field.value_params,
+    )
+
+
 def compare(kind, left, right, connection=None):
     """One comparison. ``== None`` / ``!= None`` test a stored NULL only."""
     if kind in ('eq', 'ne') and left.literal_none != right.literal_none:
         field = right if left.literal_none else left
-        eq = Expr(
-            'CASE WHEN (%s) THEN (%s IS NULL) ELSE NULL END' % (
-                field.reached_sql, field.value_sql,
-            ),
-            field.reached_params + field.value_params,
-        )
+        eq = _null_test(field)
         if kind == 'eq':
             return eq
         # Derived: unreachable stays Unknown, a reached value is true.
+        if _row_is_present(field):
+            return Expr('(NOT %s)' % eq.sql, eq.params)
         return Expr('(NOT (%s))' % eq.sql, eq.params)
     if kind in ('eq', 'ne'):
         left = _as_related_pk(left, right)
