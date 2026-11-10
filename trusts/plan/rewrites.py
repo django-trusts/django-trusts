@@ -393,15 +393,39 @@ def _validate_along_retarget(prepared, extras):
     raises, and the original statement is no longer available to fall back
     to. Compiling here makes that miss a rewrite failure. Copies keep the
     compiler from writing aliases onto the queryset this pass returns.
+
+    Each retarget is resolved on the query that contains it. That is the
+    query the statement compiler resolves, including a protected row nested
+    under a prefix listing. The prefix query is a different row.
     """
     nodes = []
     seen = set()
-    _collect_along_once(prepared.query, nodes, seen)
+    _collect_along_once(prepared.query, nodes, seen, prepared.query)
     for extra in extras:
-        _collect_along_once(extra, nodes, seen)
+        _collect_along_once(extra, nodes, seen, prepared.query)
     if not nodes:
         return
-    probe = prepared.query.clone()
+    compilers = {}
+    using = getattr(prepared, 'db', None) or 'default'
+    for node, owner in nodes:
+        compiler = compilers.get(id(owner))
+        if compiler is None:
+            probe = _retarget_probe(owner)
+            compiler = probe.get_compiler(using=using)
+            compilers[id(owner)] = compiler
+        # The statement compiler resolves F() before as_sql. Do the same
+        # on this query, or an unresolved F is reported as a rewrite failure.
+        standalone = _own_expr(node)
+        if hasattr(standalone, 'resolve_expression'):
+            standalone = standalone.resolve_expression(
+                compiler.query, allow_joins=True, reuse=None, summarize=False,
+            )
+        standalone.as_sql(compiler, compiler.connection)
+
+
+def _retarget_probe(query):
+    """A copy the retarget compiler can join without touching ``query``."""
+    probe = query.clone()
     probe.alias_map = {
         alias: table if table is None else copy.copy(table)
         for alias, table in probe.alias_map.items()
@@ -409,21 +433,10 @@ def _validate_along_retarget(prepared, extras):
     probe.table_map = {
         name: list(aliases) for name, aliases in probe.table_map.items()
     }
-    compiler = probe.get_compiler(
-        using=getattr(prepared, 'db', None) or 'default',
-    )
-    for node in nodes:
-        # The statement compiler resolves F() before as_sql. Do the same
-        # on the probe, or an unresolved F is reported as a rewrite failure.
-        standalone = _own_expr(node)
-        if hasattr(standalone, 'resolve_expression'):
-            standalone = standalone.resolve_expression(
-                probe, allow_joins=True, reuse=None, summarize=False,
-            )
-        standalone.as_sql(compiler, compiler.connection)
+    return probe
 
 
-def _collect_along_once(node, found, seen):
+def _collect_along_once(node, found, seen, query):
     if node is None or isinstance(node, (str, bytes, int, float, bool)):
         return
     marker = id(node)
@@ -431,37 +444,37 @@ def _collect_along_once(node, found, seen):
         return
     if isinstance(node, _AlongOnce):
         seen.add(marker)
-        found.append(node)
+        found.append((node, query))
         return
     if isinstance(node, Query):
         seen.add(marker)
-        _collect_along_once(node.where, found, seen)
+        _collect_along_once(node.where, found, seen, node)
         for annotation in node.annotations.values():
-            _collect_along_once(annotation, found, seen)
+            _collect_along_once(annotation, found, seen, node)
         for part in node.combined_queries or ():
-            _collect_along_once(part, found, seen)
+            _collect_along_once(part, found, seen, node)
         return
     if isinstance(node, (list, tuple)):
         seen.add(marker)
         for item in node:
-            _collect_along_once(item, found, seen)
+            _collect_along_once(item, found, seen, query)
         return
     if isinstance(node, Lookup):
         seen.add(marker)
-        _collect_along_once(node.lhs, found, seen)
+        _collect_along_once(node.lhs, found, seen, query)
         if not node.rhs_is_direct_value():
-            _collect_along_once(node.rhs, found, seen)
+            _collect_along_once(node.rhs, found, seen, query)
         return
     if isinstance(node, (WhereNode, Q)):
         seen.add(marker)
         for child in node.children:
-            _collect_along_once(child, found, seen)
+            _collect_along_once(child, found, seen, query)
         return
     if not hasattr(node, 'get_source_expressions'):
         return
     seen.add(marker)
     for source in node.get_source_expressions():
-        _collect_along_once(source, found, seen)
+        _collect_along_once(source, found, seen, query)
 
 
 def _prepare(queryset, also):
@@ -571,8 +584,13 @@ class _Walk(object):
             ):
                 # Every walk's match flag is the same True. One column,
                 # referenced from each comparison.
+                match = (
+                    'via match'
+                    if getattr(node.lhs, 'via_bound', None) is not None
+                    else 'along match'
+                )
                 self.hits.append(_Hit(
-                    True, 'const', 'along match', BooleanField(),
+                    True, 'const', match, BooleanField(),
                     lambda ref, lookup=node: setattr(lookup, 'rhs', ref),
                 ))
                 return
@@ -660,15 +678,18 @@ class _Walk(object):
         if id(node) in self.seen_along:
             return
         self.seen_along.add(id(node))
-        bound = int(node.along_bound)
-        self.hits.append(_Hit(bound, 'const', 'along bound', _INTEGER, apply))
+        label, bound = _bound_label(node)
+        self.hits.append(_Hit(bound, 'const', label, _INTEGER, apply))
         self._visit_sources(node)
 
     def _visit_sources(self, node):
         if not hasattr(node, 'get_source_expressions'):
             return
-        for source in node.get_source_expressions():
-            self.visit(source)
+        for index, source in enumerate(list(node.get_source_expressions() or ())):
+            if _is_along(source):
+                self._note_along(source, _source_apply(node, index, source))
+            else:
+                self.visit(source)
 
 
 class _Hit(object):
@@ -722,6 +743,14 @@ def _child_apply(parent, index, child):
 def _lhs_apply(lookup, child):
     def apply(ref, lookup=lookup, child=child):
         lookup.lhs = _AlongOnce(child, ref)
+    return apply
+
+
+def _source_apply(node, index, child):
+    def apply(ref, node=node, index=index, child=child):
+        sources = list(node.get_source_expressions())
+        sources[index] = _AlongOnce(child, ref)
+        node.set_source_expressions(sources)
     return apply
 
 
@@ -926,8 +955,18 @@ def _plain_value(value):
     return value
 
 
+def _bound_label(node):
+    via_bound = getattr(node, 'via_bound', None)
+    if via_bound is not None:
+        return 'via bound', int(via_bound)
+    along_bound = getattr(node, 'along_bound', None)
+    if along_bound is not None:
+        return 'along bound', int(along_bound)
+    return None
+
+
 def _is_along(node):
-    return getattr(node, 'along_bound', None) is not None
+    return _bound_label(node) is not None
 
 
 def _unresolved_pair(child):
@@ -960,10 +999,12 @@ def _column_base(kind, label):
             'content type app': 'app_label',
             'content type model': 'model',
             'along bound': 'along_bound',
+            'via bound': 'via_bound',
             'content pk': 'content_pk',
             'exists marker': 'exists_marker',
             'active': 'is_active',
             'along match': 'along_match',
+            'via match': 'via_match',
         }.get(label, (label or 'value').replace(' ', '_'))
     cleaned = []
     for char in base:

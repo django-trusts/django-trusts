@@ -448,8 +448,9 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
         self.assertEqual(either_row['params'], both_row['params'])
         self.assertEqual(filters[prefix + 'owner']['params'], ['$user.id'])
         self.assertEqual(filters[prefix + 'username']['params'], [
-            '$user.username',
+            '$user.id',
         ])
+        self.assertIn('username', filters[prefix + 'username']['sql'])
         self.assertNotIn('alpha', filters[prefix + 'owner']['sql'])
         self.assertEqual(filters[prefix + 'differs']['params'], [
             'label="nope"',
@@ -466,7 +467,10 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
         same_row = yaml.safe_load(same_bytes)['backends'][0]['contents'][0]
         same_filter = same_row['named_filters'][0]
         self.assertEqual(same_filter['params'], [])
-        self.assertIn('"label" = ("documents_constantdocument"."label")', same_filter['sql'])
+        self.assertIn(
+            '"documents_constantdocument"."label" = "documents_constantdocument"."label"',
+            same_filter['sql'],
+        )
         self.assertNotIn('%s', same_filter['sql'])
 
     def test_split_content_targets_bind_each_column(self):

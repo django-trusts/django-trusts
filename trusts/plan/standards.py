@@ -18,16 +18,15 @@ from django.db.models import BooleanField, F, Q
 from django.db.models.expressions import RawSQL
 
 from trusts.plan.conditions import (
+    capture_expression,
     require_boolean_field,
-    normalize_expression,
     validate_expression,
 )
-from trusts.plan.grammar import Tree, invoke, unsupported
+from trusts.plan.grammar import (
+    REACHABLE_KIND, ORDERED_KINDS, Tree, contains_call, unsupported,
+)
+from trusts.plan.trivalent import grant_q, has_contains
 from trusts.plan.writers import (
-    boolean_q,
-    negate_q,
-    column_q,
-    columns_q,
     contains_q,
     member_pk,
 )
@@ -64,6 +63,33 @@ def builtin_user_conditions(model):
     ):
         return BUILTIN_USER_CONDITIONS
     return ()
+
+
+def principal_identity_lookups(model, path, *, strict):
+    """``is_anonymous`` and ``is_authenticated`` lookups along ``path``.
+
+    A missing field is skipped. ``strict`` is the delegation principal:
+    a field that exists and is not a concrete boolean raises. The sponsor
+    walk passes ``strict=False`` and skips that field.
+    """
+    lookups = {}
+    for name, expected in (('is_anonymous', False), ('is_authenticated', True)):
+        try:
+            field = model._meta.get_field(name)
+        except FieldDoesNotExist:
+            continue
+        if (
+            not getattr(field, 'concrete', False)
+            or field.get_internal_type() != 'BooleanField'
+        ):
+            if not strict:
+                continue
+            raise TrustsConfigurationError(
+                '%s.%s must be a concrete BooleanField for delegated '
+                'principal eligibility.' % (model._meta.label, name)
+            )
+        lookups['%s__%s' % (path, name)] = expected
+    return lookups
 
 
 def rule_applies(on, role):
@@ -117,7 +143,7 @@ def walk_user_lambda(expr):
             'User condition expression must be a callable or None, not %r.'
             % (expr,)
         )
-    return normalize_expression(invoke(expr, ('user',)))
+    return capture_expression(expr, ('user',))
 
 
 def _require_user_boolean(model, node, name):
@@ -149,7 +175,14 @@ def validate_user_rule(model, expr, name):
     if expr.kind == 'bare':
         _require_user_boolean(model, expr.item, name)
         return
+    if expr.kind == REACHABLE_KIND:
+        validate_expression(expr, model, model)
+        return
+    if expr.kind in ORDERED_KINDS:
+        raise unsupported('Ordered comparison', 'a user condition')
     if expr.kind in ('eq', 'ne', 'contains'):
+        if contains_call(expr):
+            raise unsupported('An SQL function', 'a user condition')
         validate_expression(expr, model, model)
         return
     raise unsupported(expr.kind, 'a user condition')
@@ -171,7 +204,14 @@ def _prefixed(path, field_path):
     return name
 
 
+def _user_bindings(path, scope):
+    prefix = tuple(part for part in (path or '').split('__') if part)
+    return {'user': ('alias', scope, prefix)}
+
+
 def _compile(path, expr, scope):
+    if not has_contains(expr):
+        return grant_q(expr, _user_bindings(path, scope))
     if expr.kind == 'and':
         return (
             _compile(path, expr.left, scope)
@@ -182,36 +222,9 @@ def _compile(path, expr, scope):
             _compile(path, expr.left, scope)
             | _compile(path, expr.right, scope)
         )
-    if expr.kind == 'not':
-        return negate_q(scope, _compile(path, expr.item, scope))
-    if expr.kind == 'bare':
-        return _compile(path, expr.item, scope)
-    if expr.kind == 'field':
-        return boolean_q(_prefixed(path, expr.path))
-    if expr.kind in ('eq', 'ne'):
-        return _compile_user_comparison(path, expr)
     if expr.kind == 'contains':
         return _compile_user_contains(path, expr)
     raise unsupported(expr.kind, 'a user condition')
-
-
-def _compile_user_comparison(path, node):
-    equal = node.kind == 'eq'
-    left = node.left
-    right = node.right
-    if left.kind == 'field' and right.kind == 'field':
-        return columns_q(
-            _prefixed(path, left.path),
-            _prefixed(path, right.path),
-            equal,
-        )
-    if left.kind == 'field':
-        return column_q(
-            _prefixed(path, left.path), right.value, equal, field=False,
-        )
-    return column_q(
-        _prefixed(path, right.path), left.value, equal, field=False,
-    )
 
 
 def _compile_user_contains(path, node):

@@ -21,6 +21,7 @@ from trusts.plan.contents import (
     _delegation_sponsor_q,
     _ordinary_records,
 )
+from trusts.plan.via import delegate_q, protected_row, via_scope
 from trusts.plan.delegations import (
     _compatible_sponsor_records,
     _matched_delegation_q,
@@ -107,7 +108,9 @@ def _instance_grant_queryset(catalog, obj, user, permission, *, kind='complete',
     if extra_q is not None:
         granted_q = granted_q & extra_q
     model = obj._meta.concrete_model
-    return model._default_manager.filter(pk=obj.pk).filter(granted_q)
+    return protected_row(
+        model._default_manager.filter(pk=obj.pk),
+    ).filter(granted_q)
 
 
 def _bound_saved_row(catalog, obj, user, permission, *, kind='complete',
@@ -164,6 +167,14 @@ def instance_match(catalog, obj, user, permission, *, kind='complete', extra_q=N
 def _compile_common_permissions(catalog, candidates, user, *, kind='complete',
                                 skipped=()):
     """Permission queryset for ``catalog``. It sponsors itself."""
+    with via_scope(catalog, skipped):
+        return _compile_common_permissions_body(
+            catalog, candidates, user, kind=kind, skipped=skipped,
+        )
+
+
+def _compile_common_permissions_body(catalog, candidates, user, *, kind,
+                                     skipped):
     qs = candidate_queryset(candidates)
     plan = catalog.plan_for(candidates, user=user)
     if not plan.applicable:
@@ -233,9 +244,7 @@ def _delegated_user_exists(delegations, sponsor_records, content, permission,
         )
 
         def bound(record=record):
-            combined = Q(**{
-                record.delegate_field: OuterRef(record.delegate_target),
-            })
+            combined = delegate_q(record, OuterRef(record.delegate_target))
             combined &= _delegation_reaches(
                 record, forward=False, content=content,
             )

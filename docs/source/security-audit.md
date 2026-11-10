@@ -455,6 +455,13 @@ support matrix.
 For time-dependent conditions, audit the
 [setup guide's clock and queryset-cache boundaries](index.rst#supported-lambda-expressions).
 
+### Users: via=
+
+`via=` replaces equality at one user, delegate, or sponsor walk-site with
+bounded reachability. Audit the same points as a content walk: direction,
+bound, cycles, identity, renderer, and agreement across inquiries. User
+conditions apply to every user the walk reaches.
+
 ## Fail-closed principle
 
 django-trusts is designed around a fail-closed principle. We intend cases that

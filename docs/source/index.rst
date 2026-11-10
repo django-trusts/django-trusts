@@ -484,7 +484,8 @@ permitted content sits under those rows. The result is a lazy queryset of
 the same model.
 
 ``permission`` is an ``auth.Permission`` instance. ``content`` is the protected
-model. ``backend`` is optional and defaults to the installed relationship
+model. ``conditions`` is the same tuple of named-filter names ``.permitted()``
+takes. ``backend`` is optional and defaults to the installed relationship
 backends; pass ``backend=`` to select one.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
@@ -500,9 +501,6 @@ the user may read:
        read_sheet,
        content=Sheet,
    )
-
-``filter_by_permitted_content`` follows ``along=`` walks and one-level
-delegation.
 
 List the users who may perform one permission on one object:
 
@@ -702,15 +700,28 @@ Supported lambda expressions
 
 A condition lambda accepts ``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=``,
 ``&``, ``|``, ``.contains(member)``, a bare boolean field, and comparison
-with a constant, including ``None``; ``~`` applies only to a boolean field or
-to ``&`` of boolean fields. Parenthesize comparisons when combining them with
-``&`` or ``|``.
+with a constant, including ``None``. ``~`` applies to a boolean field, to
+``Reachable(path)`` (below), and to ``&`` of those. Parenthesize comparisons when
+combining them with ``&`` or ``|``.
 
-The supported SQL functions are ``Now()``, ``Lower(expression)``, and
-``Coalesce(first, second, ...)`` from ``trusts.functions``. Only these
-three Trusts functions are supported; using Django's own versions is rejected
-by ``register()``. Function arguments may be field references, typed
-constants, or nested supported functions. For example:
+Conditions combine using SQL three-valued logic: for example, True | Unknown
+is True. An ordinary comparison with a NULL operand or an unreachable field
+evaluates to Unknown. Only a final True grants permission.
+
+The supported functions come from ``trusts.functions``; Django's own versions
+are rejected by ``register()``. Arguments may be fields, typed constants, or
+nested supported functions.
+
+- ``Now()``: the database time when the query executes.
+- ``Lower(expression)``: lowercases text.
+- ``Coalesce(first, second, ...)``: the first non-null of two or more
+  compatible arguments.
+- ``Reachable(path)``: true when the path of relations, such as ``c.dept`` or
+  ``c.dept.unit``, reaches a related object, meaning the join along it found a
+  row. The path ends in a relation, a forward foreign key or reverse
+  one-to-one, not a field.
+
+For example:
 
 .. code-block:: python
 
@@ -719,22 +730,19 @@ constants, or nested supported functions. For example:
 
    condition=lambda d: Lower(d.name) == Lower(Value("BOB"))
 
-Use Django's ``Value`` for a literal string inside a function. ``Lower``
-accepts text; ``Coalesce`` requires at least two compatible arguments. The
-same expressions can be used in named filters.
+Use Django's ``Value`` for a literal string inside a function. The same
+expressions can be used in named filters.
 
-``Now()`` uses the database time when the query executes; clock precision and
-time-zone behavior follow the database backend. An evaluated queryset keeps
-its cached results; make a fresh inquiry to check expiration again.
+Clock precision and time-zone behavior of ``Now()`` follow the database
+backend. An evaluated queryset keeps its cached results; make a fresh
+inquiry to check expiration again.
 
 Python ``in``, ``and`` / ``or`` / ``not``, unsupported calls, arithmetic,
 and indexing are rejected.
 
 A path lambda, a ``condition=`` lambda, and a delegated condition builder
 are evaluated only when registering and compiling, never during a
-permission query.
-
-As a path in ``register()``, it is limited to attribute access.
+permission query. A path lambda is limited to attribute access.
 
 Applications may register more than one valid path to the same content. A
 direct user grant and a team-derived grant can coexist, with either
@@ -743,31 +751,32 @@ path providing permission.
 Inherited relationships
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-``along=`` declares bounded hierarchical reachability and also works with
-delegated registrations. For example, ``along=("parent", 8)`` on
+Content: along=
+^^^^^^^^^^^^^^^
+
+``along=`` declares bounded hierarchical reachability. The form is
+``along=(path, bound)`` or ``along=(path, bound, field)``, where ``field``
+sets an inheritance reset. For example, ``along=("parent", 8)`` on
 ``registry.register`` applies the same bounded walk to object checks,
 permitted-content querysets, permission enumeration, users from content, and
-authorization-policy output. See the `bounded-reach security audit
+authorization-policy output. See the `bounded-reach
+security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
-for the recursive-query and database boundaries.
+for the recursive query, the reset, and the database boundaries.
 
-An optional third element sets an inheritance reset:
-``along=("parent", 8, "reset_inheritance")``. Only a true flag cuts
-incoming inheritance; false, ``NULL``, and no related reset row do not.
+.. _users-via:
 
-The path must name a concrete ``BooleanField``:
+Users: via=
+^^^^^^^^^^^
 
-- On the walked model’s own table: cuts every incoming path at that node.
-- On a link the walk traverses, e.g. ``parent_links__reset_inheritance``:
-  cuts only that link.
-- Through a many-to-many or reverse foreign key from the node, e.g.
-  ``flags__reset_inheritance`` or ``policies__reset_inheritance``:
-  any true flag cuts incoming paths at the node.
+``via=`` reaches users by walking a relation from the grant. The form, the
+path, the bound, and the reset are the same as ``along=``.
 
-For A → B → C with B reset, A’s grant stops before B. B’s own grant
-still applies at B and can reach C. Other valid grants are unaffected.
-Each content, delegation, or sponsor walk uses its own reset path.
-``register()`` rejects unsupported paths.
+``along=`` and ``via=`` on the same registration are two walks. The user
+must be reached by ``via=`` and the object must be reached by ``along=``.
+
+See the `via= security audit
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#users-via>`_.
 
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~

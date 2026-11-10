@@ -1,7 +1,8 @@
 """#333: one condition tree, one NULL rule, and one duplicate rule.
 
-A field compared with a constant follows Python. Two fields never match
-when either side is NULL. ``has_perm``, ``permitted()``, and
+A NULL column is unknown under inequality and negation, so it does not
+grant. ``== None`` matches a stored NULL. Two fields never match when
+either side is NULL. ``has_perm``, ``permitted()``, and
 ``get_permitted_users`` give the same answer for every named filter.
 """
 from contextlib import contextmanager
@@ -64,7 +65,7 @@ FILTERS = {
     ),
     'not_five': (
         lambda u, p, o: o.left != 5,
-        lambda u, r: r.left != 5,
+        lambda u, r: r.left is not None and r.left != 5,
     ),
     'not_owner': (
         lambda u, p, o: u != o.owner,
@@ -114,7 +115,8 @@ FILTERS = {
     'both': (
         lambda u, p, o: (o.left != 5) & (u != o.owner),
         lambda u, r: (
-            r.left != 5 and _owner(r) is not None and _owner(r) != u.pk
+            r.left is not None and r.left != 5
+            and _owner(r) is not None and _owner(r) != u.pk
         ),
     ),
     'flagged': (
@@ -123,7 +125,7 @@ FILTERS = {
     ),
     'not_flagged': (
         lambda u, p, o: ~o.flag,
-        lambda u, r: r.flag is not True,
+        lambda u, r: r.flag is False,
     ),
     'staff': (
         lambda u, p, o: u.is_staff,
@@ -131,7 +133,7 @@ FILTERS = {
     ),
     'not_staff': (
         lambda u, p, o: ~u.is_staff,
-        lambda u, r: u.is_staff is not True,
+        lambda u, r: u.is_staff is False,
     ),
     'marked': (
         lambda u, p, o: o.marks.contains(o.label),
@@ -144,14 +146,14 @@ FILTERS = {
     'off_and_same': (
         lambda u, p, o: ~o.flag & (o.left == o.right),
         lambda u, r: (
-            r.flag is not True
+            r.flag is False
             and _both_set(r.left, r.right)
             and r.left == r.right
         ),
     ),
     'off_or_marked': (
         lambda u, p, o: ~o.flag | o.marks.contains(o.label),
-        lambda u, r: r.flag is not True or _marked(r),
+        lambda u, r: r.flag is False or _marked(r),
     ),
 }
 

@@ -28,24 +28,14 @@ Migration-bot checklist:
 - `filter_authorized_scopes(`
 - `filter_by_permitted_content(`
 
-## Two fields do not match NULL
+## Conditions use SQL three-valued logic
 
-A condition that compares two fields no longer treats NULL as a value.
-A field compared with a constant still follows Python: `== None` is
-`IS NULL`, `!= None` is `IS NOT NULL`, and `!= 5` is true when the
-field is NULL (`None != 5`).
-
-| Comparison | When | Old | New |
-| --- | --- | --- | --- |
-| `o.left == o.right` | both NULL | matches | does not match |
-| `o.left != o.right` | exactly one NULL | matches | does not match |
-| `u.manager == o.reviewer` | both NULL | matches | does not match |
-| `u != o.owner` | `owner` is NULL | matches | does not match |
-
-`has_perm`, a permitted queryset, and `get_permitted_users` use this
-rule. Relation `condition=` equality was already plain `a = b` (NULL
-never matches) and is unchanged. `o.left != o.right` when both are
-NULL already did not match.
+Previously, NULL and missing related rows could affect conditions
+differently depending on the expression. Conditions now combine using SQL
+three-valued logic: Unknown is distinct from False, and only a final True
+grants permission. Review conditions that rely on how missing values were
+handled and test the permissions they should grant after upgrading. See
+[supported lambda expressions](index.rst#supported-lambda-expressions).
 
 ## One condition error (#333)
 
