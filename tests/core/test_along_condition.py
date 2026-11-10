@@ -1367,15 +1367,13 @@ class MembershipIdentityTest(TransactionTestCase):
         self.assertNotIn('remote_field', str(caught.exception))
         self.assertIn('SQL', str(caught.exception))
         handle = compiler(path='tests.core.mem.field-member')
-        with self.assertRaises(TrustsConfigurationError) as member:
-            handle.register(
-                trust=self.Grant, user='user', permission='permission',
-                content='node__sheets',
-                along=(
-                    lambda t: t.node.tags_auto.contains(t.node.boss.badge)
-                    & t.node.parent,
-                    4,
-                ),
-            )
-        self.assertNotIn('remote_field', str(member.exception))
-        self.assertIn('member', str(member.exception))
+        handle.register(
+            trust=self.Grant, user='user', permission='permission',
+            content='node__sheets',
+            along=(
+                lambda t: t.node.tags_auto.contains(t.node.boss.badge)
+                & t.node.parent,
+                4,
+            ),
+        )
+        self.assertEqual(len(handle.records), 1)

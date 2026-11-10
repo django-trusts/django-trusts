@@ -25,7 +25,7 @@ from trusts.plan.conditions import (
 from trusts.plan.grammar import (
     REACHABLE_KIND, ORDERED_KINDS, Tree, contains_call, unsupported,
 )
-from trusts.plan.trivalent import grant_q, has_contains
+from trusts.plan.trivalent import grant_q, has_contains, identity_lookup
 from trusts.plan.writers import (
     contains_q,
     member_pk,
@@ -229,15 +229,19 @@ def _compile(path, expr, scope, user_model):
 
 
 def _compile_user_contains(path, node, user_model):
-    lookup = _prefixed(path, node.left.path)
+    lookup = pk_membership_lookup(
+        user_model, node.left.path, _prefixed(path, node.left.path),
+    )
     member = node.right
     if member.kind == 'const':
         value = member_pk(member.value)
         if value is None:
             return Q(pk__in=())
-        lookup = pk_membership_lookup(user_model, node.left.path, lookup)
         return contains_q(lookup, value)
-    return contains_q(lookup, F(_prefixed(path, member.path)))
+    member_lookup = identity_lookup(
+        user_model, member.path, _prefixed(path, member.path),
+    )
+    return contains_q(lookup, F(member_lookup))
 
 
 class SkipFlag(RawSQL):

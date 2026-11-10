@@ -20,7 +20,9 @@ from trusts.plan.trivalent import (
     _export_param,
     _exporting,
     _runtime_param,
+    field_operand,
     lower,
+    pk_operand,
 )
 from trusts.plan.writers import member_pk
 
@@ -335,16 +337,19 @@ def _member_sql(node, model, qn):
     if (
         getattr(node, 'kind', None) == 'field'
         and node.root == 'row'
-        and len(node.path) == 1
+        and node.path
     ):
         try:
-            field = model._meta.get_field(node.path[0])
+            operand = pk_operand(field_operand(
+                model, tuple(node.path), ('alias', '{alias}'), qn,
+            ))
+        except PermissionConditionError:
+            raise
         except Exception as exc:
             raise PermissionConditionError(
                 'This condition cannot be rendered in SQL.'
             ) from exc
-        if getattr(field, 'concrete', False) and not getattr(field, 'many_to_many', False):
-            return '{alias}.%s' % qn(field.column), ()
+        return operand.value_sql, operand.value_params
     raise PermissionConditionError(
         'This condition cannot be rendered in SQL.'
     )

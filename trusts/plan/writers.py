@@ -18,7 +18,7 @@ from trusts.plan.conditions import (
     resolve_field_path,
 )
 from trusts.plan.grammar import REACHABLE_NAME, Tree
-from trusts.plan.trivalent import grant_q, has_contains
+from trusts.plan.trivalent import grant_q, has_contains, identity_lookup
 
 
 def contains_q(lookup, member):
@@ -208,7 +208,13 @@ def _compile_contains(node, model, user, perm, user_model):
     if left.root == 'object':
         lookup = '__'.join(left.path)
         if _node(right, 'field') and right.root == 'object':
-            return contains_q(lookup, F('__'.join(right.path)))
+            member_lookup = identity_lookup(
+                model, right.path, '__'.join(right.path),
+            )
+            return contains_q(
+                pk_membership_lookup(model, left.path, lookup),
+                F(member_lookup),
+            )
         value = member_pk(_bound_value(right, user, perm, user_model))
         if value is None:
             return Q(pk__in=())
@@ -220,7 +226,7 @@ def _compile_contains(node, model, user, perm, user_model):
     if _node(right, 'field') and right.root == 'object':
         if manager is None:
             return Q(pk__in=())
-        member = '__'.join(right.path)
+        member = identity_lookup(model, right.path, '__'.join(right.path))
         return Q(**{'%s__in' % member: manager.values('pk')})
     # A known member used to become an empty ``Q()``. Django drops that
     # child of ``|``, so a true membership disappeared beside an unknown

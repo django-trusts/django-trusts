@@ -5501,8 +5501,16 @@ class ViaRelationIdentityTest(TransactionTestCase):
 
         class Node(models.Model):
             title = models.CharField(max_length=20)
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
             card = models.OneToOneField(
                 User, to_field='username', null=True, db_column='card_name',
+                on_delete=models.CASCADE, related_name='+',
+            )
+            by_pk = models.ForeignKey(
+                User, null=True, db_column='by_pk_id',
                 on_delete=models.CASCADE, related_name='+',
             )
 
@@ -5594,6 +5602,10 @@ class ViaRelationIdentityTest(TransactionTestCase):
                 Desk, to_field='code', db_column='user_desk', **link,
             ),
         )
+        _add_user_column(
+            self, User, 'boss',
+            models.ForeignKey(User, db_column='boss_id', **link),
+        )
         self.change = _permission(Sheet, 'change_via_rel')
         self.code = '%s.%s' % (
             self.change.content_type.app_label, self.change.codename,
@@ -5636,7 +5648,7 @@ class ViaRelationIdentityTest(TransactionTestCase):
         self.User.friends.through.objects.all().delete()
         self.User.objects.filter(pk__in=(
             self.alice.pk, self.bob.pk,
-        )).update(lead=None, desk=None)
+        )).update(lead=None, desk=None, boss=None)
 
     def _plant(self, kind, positive):
         self._clear_links()
@@ -5754,5 +5766,177 @@ class ViaRelationIdentityTest(TransactionTestCase):
                 self.handle = grouped
                 self._expect(self.alice, positive, group=True)
                 self._expect(self.bob, not positive, group=True)
+
+    def test_contains_field_uses_the_related_pk(self):
+        # Chat's regression. friends and lead both store username.
+        # The membership comparison is the related pk, so the same user
+        # matches and a decoy whose pk equals the wanted username does not.
+        pairs = (
+            (self.wanted, self.wanted, True),
+            (self.decoy, self.decoy, True),
+            (self.decoy, self.wanted, False),
+            (self.wanted, self.decoy, False),
+        )
+        for friend, lead, allowed in pairs:
+            for via in (False, True):
+                with self.subTest(friend=friend.username, lead=lead.username, via=via):
+                    self._clear_links()
+                    self.alice.lead = lead
+                    self.alice.save(update_fields=['lead'])
+                    self.alice.friends.add(friend)
+                    handle = compiler(
+                        path='tests.core.via-rel.member-%s-%s-%s' % (
+                            friend.pk, lead.pk, int(via),
+                        ),
+                    )
+                    handle.set_user_condition(
+                        'lead', lambda user: user.friends.contains(user.lead),
+                    )
+                    options = {}
+                    if via:
+                        options['via'] = ('user__via_manager', 2)
+                    handle.register(
+                        trust=self.Grant, user='user', permission='permission',
+                        content='node__sheets', **options,
+                    )
+                    self.handle = handle
+                    self.Grant.objects.all().delete()
+                    self.Grant.objects.create(
+                        user=self.alice, permission=self.change, node=self.node,
+                    )
+                    self._expect(self.alice, allowed)
+
+    def test_different_to_fields_compare_the_related_pk(self):
+        # lead and desk.owner store username. by_pk and boss store the pk.
+        # The decoy username equals the wanted pk, so a stored compare
+        # would treat those as the same row.
+        child = self.Node.objects.create(title='C', parent=self.node)
+        child_sheet = self.Sheet.objects.create(title='C', node=child)
+        cases = (
+            ('user', lambda user: user.lead == user.boss),
+            ('content', lambda user, permission, content: (
+                user.lead == content.node.by_pk
+            )),
+            ('hop', lambda user, permission, content: (
+                user.desk.owner == content.node.by_pk
+            )),
+        )
+        for kind, predicate in cases:
+            for positive in (False, True):
+                with self.subTest(kind=kind, positive=positive):
+                    self._plant_targets(positive)
+                    handle = compiler(
+                        path='tests.core.via-rel.targets-%s-%s' % (
+                            kind, int(positive),
+                        ),
+                    )
+                    if kind == 'user':
+                        handle.set_user_condition('lead', predicate)
+                    else:
+                        handle.add_named_filter(self.Sheet, 'pair', predicate)
+                    handle.register(
+                        trust=self.Grant, user='user', permission='permission',
+                        content='node__sheets',
+                        via=('user__via_manager', 2),
+                    )
+                    self.Grant.objects.all().delete()
+                    self.Grant.objects.create(
+                        user=self.alice, permission=self.change, node=self.node,
+                    )
+                    self.handle = handle
+                    if kind == 'user':
+                        self._expect(self.alice, positive)
+                    else:
+                        self._expect_filter(self.alice, positive)
+        for positive in (False, True):
+            with self.subTest(kind='relation', positive=positive):
+                self._plant_targets(positive)
+                handle = compiler(
+                    path='tests.core.via-rel.targets-row-%s' % int(positive),
+                )
+                handle.register(
+                    trust=self.Grant, user='user', permission='permission',
+                    content='node__sheets',
+                    condition=lambda t: t.user.lead == t.node.by_pk,
+                )
+                self.handle = handle
+                self.Grant.objects.all().delete()
+                self.Grant.objects.create(
+                    user=self.alice, permission=self.change, node=self.node,
+                )
+                self._expect(self.alice, positive)
+            with self.subTest(kind='along', positive=positive):
+                self.node.card = None
+                self.node.by_pk = None
+                self.node.save(update_fields=['card', 'by_pk'])
+                if positive:
+                    child.card = self.wanted
+                    child.by_pk = self.wanted
+                else:
+                    child.card = self.decoy
+                    child.by_pk = self.wanted
+                child.save(update_fields=['card', 'by_pk'])
+                handle = compiler(
+                    path='tests.core.via-rel.targets-along-%s' % int(positive),
+                )
+                handle.register(
+                    trust=self.Grant, user='user', permission='permission',
+                    content='node__sheets',
+                    along=(
+                        lambda t: (t.node.card == t.node.by_pk) & t.node.parent,
+                        4,
+                    ),
+                )
+                self.handle = handle
+                self.Grant.objects.all().delete()
+                self.Grant.objects.create(
+                    user=self.alice, permission=self.change, node=self.node,
+                )
+                self._expect(self.alice, True)
+                self.sheet = child_sheet
+                self.node = child
+                try:
+                    self._expect(self.alice, positive)
+                finally:
+                    self.node = child.parent
+                    self.sheet = self.node.sheets.get()
+
+    def _plant_targets(self, positive):
+        self._clear_links()
+        if positive:
+            self.alice.lead = self.wanted
+            self.alice.boss = self.wanted
+            self.alice.desk = self.wanted_desk
+            self.node.by_pk = self.wanted
+        else:
+            self.alice.lead = self.decoy
+            self.alice.boss = self.wanted
+            self.alice.desk = self.decoy_desk
+            self.node.by_pk = self.wanted
+        self.alice.save(update_fields=['lead', 'boss', 'desk'])
+        self.node.card = None
+        self.node.save(update_fields=['by_pk', 'card'])
+
+    def _expect_filter(self, user, allowed):
+        code = '%s:pair' % self.code
+        with _listed(self.handle):
+            has = user.has_perm(code, self.sheet)
+            permitted = set(self.Sheet.objects.permitted(
+                self.code, user, conditions=('pair',),
+            ).values_list('pk', flat=True))
+            holders = set(self.sheet.get_permitted_users(
+                code,
+            ).values_list('pk', flat=True))
+            # Named filters are not part of the unfiltered permission list.
+            listed = self.code in user.get_all_permissions(self.sheet)
+            nodes = set(filter_by_permitted_content(
+                self.Node.objects.all(), user, self.change, content=self.Sheet,
+                conditions=('pair',),
+            ).values_list('pk', flat=True))
+        self.assertIs(has, allowed)
+        self.assertEqual(self.sheet.pk in permitted, allowed)
+        self.assertEqual(user.pk in holders, allowed)
+        self.assertIs(listed, True)
+        self.assertEqual(self.node.pk in nodes, allowed)
 
 

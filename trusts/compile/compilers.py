@@ -1211,10 +1211,10 @@ class Compiler(object):
 
 
 def _validate_equal_paths(left_path, right_path, root):
-    _left_path, left_model, _left_field, left_target = _resolve_forward_singles(
+    _left_path, left_model, _left_field, _left_target = _resolve_forward_singles(
         root, left_path, 'condition',
     )
-    _right_path, right_model, _right_field, right_target = (
+    _right_path, right_model, _right_field, _right_target = (
         _resolve_forward_singles(root, right_path, 'condition')
     )
     if left_model is not right_model:
@@ -1222,18 +1222,8 @@ def _validate_equal_paths(left_path, right_path, root):
             'Equal paths must terminate on the same model; got %s and %s.'
             % (left_model._meta.label, right_model._meta.label)
         )
-    # Compiler compares stored FK columns via F(). Distinct unique
-    # fields (``to_field``) on the same model can collide across
-    # objects and fail open if only the terminal model is checked.
-    if left_target != right_target:
-        raise PermissionConditionError(
-            'Equal paths must share one resolved comparison field; '
-            'got %s.%s and %s.%s.'
-            % (
-                left_model._meta.label, left_target,
-                right_model._meta.label, right_target,
-            )
-        )
+    # Different ``to_field``s are still the same row. SQL compares the
+    # related primary keys, so slug and code cannot collide.
 
 def _relation_where(delegated):
     if delegated:
@@ -1245,8 +1235,9 @@ def _row_paths_comparable(left_path, right_path, root):
     """True when two row paths share one relation target.
 
     A scalar terminal is not a relation walk. ``_validate_equal_paths``
-    reports that with ``traverses scalar``. A multi-valued walk, a
-    mismatched model, and a mismatched ``to_field`` propagate unchanged.
+    reports that with ``traverses scalar``. A multi-valued walk and a
+    mismatched model propagate unchanged. Different ``to_field``s on
+    one model compare as that row's primary key.
     """
     try:
         _validate_equal_paths(left_path, right_path, root)
@@ -1284,7 +1275,8 @@ def _reject_inquiry_hop(node, where, *, member):
 
 def _validate_relation_node(node, root, permission_model, *,
                             permission_target=None, delegated=False,
-                            matches=None, registered_permission=None):
+                            matches=None, registered_permission=None,
+                            row_value=False):
     where = _relation_where(delegated)
     if not isinstance(node, Tree):
         raise unsupported('This condition', where)
@@ -1293,11 +1285,13 @@ def _validate_relation_node(node, root, permission_model, *,
             node.left, root, permission_model,
             permission_target=permission_target, delegated=delegated,
             matches=matches, registered_permission=registered_permission,
+            row_value=row_value,
         )
         _validate_relation_node(
             node.right, root, permission_model,
             permission_target=permission_target, delegated=delegated,
             matches=matches, registered_permission=registered_permission,
+            row_value=row_value,
         )
         return
     if node.kind == 'not':
@@ -1305,6 +1299,7 @@ def _validate_relation_node(node, root, permission_model, *,
             node.item, root, permission_model,
             permission_target=permission_target, delegated=delegated,
             matches=matches, registered_permission=registered_permission,
+            row_value=row_value,
         )
         return
     if node.kind == 'bare':
@@ -1342,6 +1337,7 @@ def _validate_relation_node(node, root, permission_model, *,
             permission_target=permission_target, delegated=delegated,
             matches=matches,
             registered_permission=registered_permission,
+            row_value=row_value,
         )
         return
     raise unsupported(node.kind, where)
@@ -1393,7 +1389,7 @@ def _validate_row_comparison(node, root, *, delegated, matches):
 
 def _validate_row_contains(node, root, permission_model, *,
                            permission_target, delegated, matches,
-                           registered_permission):
+                           registered_permission, row_value=False):
     where = _relation_where(delegated)
     _require_row_field(node.left)
     member = node.right
@@ -1409,6 +1405,8 @@ def _validate_row_contains(node, root, permission_model, *,
             matches.append((model, target))
         return
     member_path = _require_row_field(member)
+    if row_value:
+        return
     if delegated or registered_permission is None:
         raise PermissionConditionError(
             'row-only delegated condition .contains() cannot bind the '
@@ -1860,7 +1858,7 @@ def _install_walk_condition(along, walk_path, walk_model, role):
     if condition is None:
         return None
     rebased = _rebase_walk_condition(condition, walk_path, walk_model, role)
-    _validate_relation_node(rebased, walk_model, None)
+    _validate_relation_node(rebased, walk_model, None, row_value=True)
     from trusts.plan.walk import prove_walk_condition
     prove_walk_condition(rebased, walk_model)
     return rebased

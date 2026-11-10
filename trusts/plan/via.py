@@ -24,11 +24,15 @@ from trusts.plan.predicates import bind_record_qs, bind_terminal
 from trusts.plan.rewrites import CallInput
 from trusts.plan.trivalent import (
     Operand,
+    _forward_fk,
     compare,
     concrete_owner_hops,
     correlated,
     reachable_operand,
     field_operand,
+    pk_operand,
+    relation_pk_name,
+    relation_target,
     split_value_path,
 )
 from trusts.plan.writers import member_pk
@@ -646,18 +650,62 @@ def _compare_sql(node, user_model, content_model, content, carriers, name, qn,
         return _permission_predicate(
             permission_node.path, op, user_sql, carriers, name, qn,
         )
-    if getattr(left, 'kind', None) != 'field' or left.root != 'user':
-        raise _cannot(name)
+    pair = _user_field_pair(left, right)
+    if pair is None:
+        if getattr(left, 'kind', None) != 'field' or left.root != 'user':
+            raise _cannot(name)
+        user_node, other_node = left, right
+    else:
+        user_node, other_node = pair
     try:
         user_operand = field_operand(
-            user_model, left.path, ('alias', '{alias}'), qn,
+            user_model, user_node.path, ('alias', '{alias}'), qn,
         )
     except PermissionConditionError as exc:
         raise _cannot(name) from exc
+    if getattr(other_node, 'kind', None) == 'field' and other_node.root == 'user':
+        try:
+            other = field_operand(
+                user_model, other_node.path, ('alias', '{alias}'), qn,
+            )
+        except PermissionConditionError as exc:
+            raise _cannot(name) from exc
+        return compare(node.kind, user_operand, other).sql
+    if getattr(other_node, 'kind', None) == 'field' and other_node.root == 'object':
+        content_key = relation_target(content_model, other_node.path)
+        differ = _targets_differ(user_operand.target_key, content_key)
+        if differ:
+            user_operand = pk_operand(user_operand)
+        stores_pk = bool(
+            content_key and content_key[1] == relation_pk_name(
+                content_model, other_node.path,
+            )
+        )
+        index = _add_carrier(carriers, _object_value(
+            content_model, content, other_node.path, name,
+            identity=differ and not stores_pk,
+        ))
+        other = Operand('{c%s}' % index, (), '(1=1)', (), False)
+        return compare(node.kind, user_operand, other).sql
     other = _via_other_operand(
-        right, user_model, content_model, content, carriers, name, qn,
+        other_node, user_model, content_model, content, carriers, name, qn,
     )
     return compare(node.kind, user_operand, other).sql
+
+
+def _user_field_pair(left, right):
+    """``(user field, other field)`` when one side is the walked user."""
+    if getattr(left, 'kind', None) != 'field' or getattr(right, 'kind', None) != 'field':
+        return None
+    if left.root == 'user':
+        return left, right
+    if right.root == 'user':
+        return right, left
+    return None
+
+
+def _targets_differ(left, right):
+    return bool(left and right and left[0] == right[0] and left[1] != right[1])
 
 
 def _via_other_operand(node, user_model, content_model, content, carriers, name,
@@ -694,13 +742,22 @@ def _other_operand(node, user_model, content_model, content, carriers, name, qn,
         index = _add_carrier(carriers, _HopValue(value, 'via.const'))
         return '{c%s}' % index
     if getattr(node, 'kind', None) == 'field' and node.root == 'object':
+        key = relation_target(content_model, node.path)
+        identity = bool(
+            key and key[1] != relation_pk_name(content_model, node.path)
+        )
         index = _add_carrier(carriers, _object_value(
-            content_model, content, node.path, name,
+            content_model, content, node.path, name, identity=identity,
         ))
         return '{c%s}' % index
     if getattr(node, 'kind', None) == 'field' and node.root == 'user':
-        sql, _field = _user_expr(user_model, node.path, name, qn)
-        return sql
+        try:
+            operand = pk_operand(field_operand(
+                user_model, node.path, ('alias', '{alias}'), qn,
+            ))
+        except PermissionConditionError as exc:
+            raise _cannot(name) from exc
+        return operand.value_sql
     if getattr(node, 'kind', None) == 'field' and node.root == 'permission':
         index = _add_carrier(carriers, _permission_value(node.path, name))
         return '{c%s}' % index
@@ -818,22 +875,25 @@ class _CandidateContent(Expression):
         return query.resolve_ref('__'.join(self.path))
 
 
-def _object_value(model, content, path, name):
+def _object_value(model, content, path, name, *, identity=False):
     if not path:
         raise _cannot(name)
     if content is not None:
         # Inverse inquiry: ``content`` is the candidate row. Read that
         # object. Do not build a subquery off the grant or the user.
-        value = _read_instance(content, path, name)
+        value = _read_instance(content, path, name, identity=identity)
         hint = 'content.%s' % path[-1]
         return _HopValue(value, hint)
-    if len(path) == 1:
+    lookup = tuple(path)
+    if identity:
+        lookup = lookup + (relation_pk_name(model, path),)
+    if len(lookup) == 1:
         try:
-            model._meta.get_field(path[0])
+            model._meta.get_field(lookup[0])
         except Exception as exc:
             raise _cannot(name) from exc
     record = _hop_record.get()
-    return _CandidateContent(model, path, record)
+    return _CandidateContent(model, lookup, record)
 
 
 def _is_permission_field(node):
@@ -1002,7 +1062,7 @@ def _permission_join_sql(root, steps, source_alias, qn, name):
     return sql, perm_alias
 
 
-def _read_instance(obj, path, name):
+def _read_instance(obj, path, name, *, identity=False):
     """Value of ``path`` on a saved object.
 
     An intermediate relation is the related object. Only the last step
@@ -1025,6 +1085,14 @@ def _read_instance(obj, path, name):
         except Exception as exc:
             raise _cannot(name) from exc
         terminal = index == last
+        if terminal and identity and _forward_fk(field):
+            try:
+                current = getattr(current, field.name)
+            except ObjectDoesNotExist:
+                return None
+            if current is None:
+                return None
+            return current.pk
         if (
             terminal
             and getattr(field, 'concrete', False)

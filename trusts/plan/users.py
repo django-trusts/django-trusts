@@ -26,7 +26,7 @@ from trusts.utils import parse_perm_code
 from trusts.plan.contents import _as_q
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
 from trusts.plan.grammar import Tree
-from trusts.plan.trivalent import grant_q, has_contains
+from trusts.plan.trivalent import grant_q, has_contains, identity_lookup
 
 
 def _reverse_checked(plan, exists, user_model, permission, content, values,
@@ -184,12 +184,17 @@ def _contains_outcome(expr, content, singular, user_model):
         lookup = resolve_field_path(
             user_model, left.path, ref_kind='principal', collection=True,
         )
+        lookup = pk_membership_lookup(user_model, left.path, lookup)
         if _is_field(right, 'user'):
-            return contains_q(
-                lookup, F(_user_lookup(user_model, right.path)),
+            member = identity_lookup(
+                user_model, right.path, _user_lookup(user_model, right.path),
             )
+            return contains_q(lookup, F(member))
         if _is_field(right, 'object'):
-            member = _object_lookup(content, right.path)
+            member = identity_lookup(
+                content.__class__, right.path,
+                _object_lookup(content, right.path),
+            )
             saved = _saved_rows(content).filter(
                 **{'%s__isnull' % member: False},
             )
@@ -197,20 +202,25 @@ def _contains_outcome(expr, content, singular, user_model):
         pk = member_pk(_side_value(right, content, singular, user_model))
         if pk is None:
             return None
-        return contains_q(
-            pk_membership_lookup(user_model, left.path, lookup), pk,
-        )
+        return contains_q(lookup, pk)
     if left.root != 'object':
         raise TrustsConfigurationError(
             'Reverse permission inquiry cannot compile permission condition '
             'node %r.' % (left,)
         )
-    lookup = _object_lookup(content, left.path, collection=True)
+    lookup = pk_membership_lookup(
+        content.__class__, left.path,
+        _object_lookup(content, left.path, collection=True),
+    )
     if _is_field(right, 'user'):
-        member = _user_lookup(user_model, right.path)
+        member = identity_lookup(
+            user_model, right.path, _user_lookup(user_model, right.path),
+        )
         return _exists_q(content, Q(**{lookup: OuterRef(member)}))
     if _is_field(right, 'object'):
-        other = _object_lookup(content, right.path)
+        other = identity_lookup(
+            content.__class__, right.path, _object_lookup(content, right.path),
+        )
         return _exists_q(content, contains_q(lookup, F(other)))
     pk = member_pk(_side_value(right, content, singular, user_model))
     if pk is None:
