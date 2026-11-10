@@ -923,21 +923,19 @@ class Compiler(object):
             condition=condition, along=along, via=via, name=name,
             description=description,
         )
-        # ``user__groups`` stores a group primary key and compares it
-        # with the requesting user. That is not group membership.
-        # ``group=`` plus a user path that ends on the user model is
-        # the registration that grants to members.
-        configured = self.user_model
+        # A many-to-many hop that ends on ``auth.Group`` compares that
+        # group's primary key with the requesting user. A direct
+        # foreign key to ``Group`` is a group principal and stays.
+        # Membership uses ``group=`` and a user path that ends on the
+        # user model.
         if (
             record.user_model._meta.concrete_model is Group
-            and (
-                configured is None
-                or configured._meta.concrete_model is not Group
-            )
+            and _path_ends_on_m2m(record.root, record.user_path)
         ):
             raise TrustsConfigurationError(
-                'user path %r terminates on auth.Group. A group grant '
-                'uses group= and a user path that ends on the user model.'
+                'user path %r terminates on auth.Group through a '
+                'many-to-many. A group grant uses group= and a user '
+                'path that ends on the user model.'
                 % (path_text(record.user_path),)
             )
         root = record.root
@@ -1993,6 +1991,22 @@ def _build_via_walk(root, via, anchors):
         root, path, model, via,
         role='via', anchor_role=anchor_role, terminal_membership=True,
     )
+
+def _path_ends_on_m2m(root, path):
+    """True when the last hop of ``path`` is a many-to-many."""
+    current = root
+    field = None
+    for name in path:
+        try:
+            field = current._meta.get_field(name)
+        except FieldDoesNotExist:
+            return False
+        remote = getattr(field, 'remote_field', None)
+        related = getattr(remote, 'model', None) if remote is not None else None
+        if related is not None:
+            current = related
+    return bool(field is not None and getattr(field, 'many_to_many', False))
+
 
 def _same_terminal_bindings(existing, record):
     """True when two records share content/user/permission/along bindings."""
