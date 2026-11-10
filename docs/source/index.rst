@@ -490,9 +490,7 @@ model. ``conditions`` is the same tuple of named-filter names ``.permitted()``
 takes. The filter is resolved in SQL. A missing name, or a tuple that is not
 that exact form, returns an empty queryset. ``backend`` is optional and
 defaults to the installed relationship backends; pass ``backend=`` to select
-one. Bounded ``along=`` and ``via=`` walks, under
-:ref:`inherited-relationships`, apply here the same way they apply to an
-object check.
+one.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
 the user may read:
@@ -763,59 +761,31 @@ path providing permission.
 Inherited relationships
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-``along=`` walks content. ``via=`` walks users. The two walks are
-independent.
-
 .. _content-along:
 
 Content: along=
 ^^^^^^^^^^^^^^^
 
-``along=`` declares bounded hierarchical reachability and also works with
-delegated registrations. For example, ``along=("parent", 8)`` on
-``registry.register`` applies the same bounded walk to object checks,
-permitted-content querysets, permission enumeration, users from content, and
-authorization-policy output. ``filter_by_permitted_content`` follows those
-walks and one-level delegation. ``along=`` decides which content is
-reachable. An object filter on an ancestor of a delegated ``along=`` walk
-keeps the row only when one protected object passes that filter and both
-walks. See the `bounded-reach security audit
+``along=`` declares bounded hierarchical reachability. For example,
+``along=("parent", 8)`` on ``registry.register`` applies the same bounded
+walk to object checks, permitted-content querysets, permission enumeration,
+users from content, and authorization-policy output. An optional third
+element sets an inheritance reset:
+``along=("parent", 8, "reset_inheritance")``. See the `bounded-reach
+security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
-for the recursive-query and database boundaries.
-
-An optional third element sets an inheritance reset:
-``along=("parent", 8, "reset_inheritance")``. Only a true flag cuts
-incoming inheritance; false, ``NULL``, and no related reset row do not.
-
-The path must name a concrete ``BooleanField``:
-
-- On the walked model’s own table: cuts every incoming path at that node.
-- On a link the walk traverses, e.g. ``parent_links__reset_inheritance``:
-  cuts only that link.
-- Through a many-to-many or reverse foreign key from the node, e.g.
-  ``flags__reset_inheritance`` or ``policies__reset_inheritance``:
-  any true flag cuts incoming paths at the node.
-
-For A → B → C with B reset, A’s grant stops before B. B’s own grant
-still applies at B and can reach C. Other valid grants are unaffected.
-Each content, delegation, or sponsor walk uses its own reset path.
-``register()`` rejects unsupported paths.
+for the recursive query, the reset, and the database boundaries.
 
 .. _nested-users:
 
 Users: via=
 ^^^^^^^^^^^
 
-``via=(path, bound)`` or ``via=(path, bound, field)`` reaches users by
-walking a relation from the grant. The path is any relation ``along=``
-can walk, and the bound is required. The walk includes the starting row.
-The bound is the number of steps past that row, an integer from 1 to 64.
-The steps from a walked row to the user may end at a many-to-many
-membership. A repeated link adds no user; the users reached are the users
-reached with that link removed.
+``via=`` reaches users by walking a relation from the grant. The form is
+``via=(path, bound)`` or ``via=(path, bound, field)``. The path, the bound,
+and a reset are the same as ``along=``.
 
-Members of a parent group inherit into its subgroups, so this registration
-walks the reverse of ``parent``:
+Members of a parent group inherit into its subgroups:
 
 .. code-block:: python
 
@@ -859,32 +829,8 @@ member of the group above ``org`` is out of reach.
 must be reached by ``via=`` and the object must be reached by ``along=``.
 Each keeps its own path and bound.
 
-A user condition, including ``is_active``, and a named filter that reads
-the user are checked for each reached user, including the user on the
-grant: a failure on a user stops that path, and a failure on a group or a
-link drops that user while the walk continues. ``skip_is_active=True``
-skips ``is_active`` for every reached user. A named filter that reads the
-protected object constrains that object, including for
-``filter_by_permitted_content``, and its value is carried into a user-row
-``via=`` walk. The relationship ``condition=`` stays on the grant row.
-
-On a delegated registration, ``via=`` walks ``delegate=`` or ``sponsor=``,
-the one whose path shares the prefix. A delegate walk reaches the users
-who may act for that row. A sponsor walk reaches the users whose ordinary
-grants authorize that row, and each of those users must have that grant on
-the object. Sponsor conditions apply to each of those users. The
-delegation's ``along=``, and each sponsor grant's ``along=``, still have
-to reach the object. One delegation cannot sponsor another.
-
-The optional third element is the same reset ``along=`` accepts. Only true
-cuts; ``NULL`` and false inherit. In the direction the path walks, a true
-flag on B stops a grant from A at B, a grant on B can continue, and every
-path into B is cut. ``register()`` rejects any other reset field, and any
-path or bound the `via security audit
-<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#nested-users>`_
-rejects. The recursive query and the databases are the ones ``along=``
-uses. The policy output records the bound as ``$via_bound`` and a
-configured reset path as ``via.reset``.
+See the `nested-user security audit
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#nested-users>`_.
 
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~

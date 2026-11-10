@@ -460,9 +460,9 @@ For time-dependent conditions, audit the
 
 `via=` replaces equality at one user, delegate, or sponsor walk-site with
 bounded reachability. The [setup guide](index.rst#nested-users) shows the
-group walk, the bound, and the reset field. Audit the same points as a
-content walk: direction, bound, cycles, identity, renderer, and agreement
-across inquiries.
+group walk and points at `along=` for the bound and the reset. Audit the
+same points as a content walk: direction, bound, cycles, identity,
+renderer, and agreement across inquiries.
 
 The walk is one `WITH RECURSIVE` statement, shared by SQLite, PostgreSQL,
 and MySQL 8.4: `UNION ALL`, a depth column capped at the bound, and one
