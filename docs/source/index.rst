@@ -742,8 +742,7 @@ and indexing are rejected.
 
 A path lambda, a ``condition=`` lambda, and a delegated condition builder
 are evaluated only when registering and compiling, never during a
-permission query. A path lambda is limited to attribute access and
-``.when()``.
+permission query. A path lambda is limited to attribute access.
 
 Applications may register more than one valid path to the same content. A
 direct user grant and a team-derived grant can coexist, with either
@@ -757,14 +756,14 @@ Content: along=
 
 ``along=`` declares bounded hierarchical reachability. The form is
 ``along=(path, bound)``. The path is a ``__`` string or a path lambda, which
-may guard a step: ``lambda n: n.parent.when(n.inherits)`` continues only while
-the condition is True. For example, ``along=("parent", 8)`` on
+may include a condition: ``lambda n: n.inherits & n.parent`` continues only
+while the condition is True. For example, ``along=("parent", 8)`` on
 ``registry.register`` applies the same bounded walk to object checks,
 permitted-content querysets, permission enumeration, users from content, and
 authorization-policy output. See the `bounded-reach
 security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
-for the recursive query, the guard, and the database boundaries.
+for the recursive query, the condition, and the database boundaries.
 
 .. _users-via:
 
