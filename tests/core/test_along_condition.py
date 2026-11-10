@@ -730,6 +730,10 @@ class MembershipIdentityTest(TransactionTestCase):
                 Tag, to_field='key', null=True, db_column='badge_key',
                 on_delete=models.CASCADE, related_name='+',
             )
+            owner = models.ForeignKey(
+                User, to_field='username', null=True, db_column='owner_name',
+                on_delete=models.CASCADE, related_name='+',
+            )
             tags_far = models.ManyToManyField(
                 Tag, through=MemFar, through_fields=('node', 'tag'),
                 related_name='+',
@@ -826,11 +830,6 @@ class MembershipIdentityTest(TransactionTestCase):
             self.change.content_type.app_label, self.change.codename,
         )
         # wanted pk=1 key=2, decoy pk=2 key=1. A pk=1 code=2, B pk=2 code=1.
-        import warnings
-        from django.apps import apps
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore', RuntimeWarning)
-            apps.register_model('trusts_tests', Tag)
         self.wanted = Tag.objects.create(pk=1, key=2)
         self.decoy = Tag.objects.create(pk=2, key=1)
         self.nodes = {}
@@ -851,13 +850,21 @@ class MembershipIdentityTest(TransactionTestCase):
         self.editors.user_set.add(self.bob)
         self.nodes['A'].members.add(self.alice)
         self.nodes['B'].members.add(self.cara)
+        # username is the FK target. Decoy username '1001' equals the
+        # wanted user's pk, and the wanted username equals the decoy pk.
+        self.wanted_user = User.objects.create_user(
+            username='1002', password='x', pk=1001,
+        )
+        self.decoy_user = User.objects.create_user(
+            username='1001', password='x', pk=1002,
+        )
 
     def _clear(self):
         self.Node.tags_far.through.objects.all().delete()
         self.Node.tags_near.through.objects.all().delete()
         self.Node.tags_both.through.objects.all().delete()
         self.Node.tags_auto.through.objects.all().delete()
-        self.Node.objects.update(badge=None)
+        self.Node.objects.update(badge=None, owner=None)
         self.Grant.objects.all().delete()
         self.GroupGrant.objects.all().delete()
         self.Delegation.objects.all().delete()
@@ -932,9 +939,12 @@ class MembershipIdentityTest(TransactionTestCase):
                 child.tags_both.add(self.decoy)
         elif kind == 'm2m-auto':
             child.tags_auto.add(self.wanted if positive else self.decoy)
-        elif kind in ('fk-contains', 'fk-eq'):
+        elif kind == 'fk-contains':
             child.badge = self.wanted if positive else self.decoy
             child.save(update_fields=['badge'])
+        elif kind == 'fk-eq':
+            child.owner = self.wanted_user if positive else self.decoy_user
+            child.save(update_fields=['owner'])
         else:
             raise AssertionError(kind)
 
@@ -957,7 +967,7 @@ class MembershipIdentityTest(TransactionTestCase):
                         permission=self.change,
                     )
                     if kind == 'fk-eq':
-                        condition = lambda t: t.node.badge == self.wanted
+                        condition = lambda t: t.node.owner == self.wanted_user
                     elif kind == 'fk-contains':
                         condition = lambda t: t.node.badge.contains(self.wanted.pk)
                     else:
