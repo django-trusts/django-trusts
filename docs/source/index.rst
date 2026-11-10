@@ -755,22 +755,23 @@ Content: along=
 ^^^^^^^^^^^^^^^
 
 ``along=`` declares bounded hierarchical reachability. The form is
-``along=(path, bound)`` or ``along=(path, bound, field)``, where ``field``
-sets an inheritance reset. For example, ``along=("parent", 8)`` on
+``along=(path, bound)``. The path is a ``__`` string or a path lambda.
+With ``along=(lambda t: t.node.inherits & t.node.parent, 8)``, a step
+from ``t.node`` to its parent requires ``t.node.inherits`` to be True. For example, ``along=("parent", 8)`` on
 ``registry.register`` applies the same bounded walk to object checks,
 permitted-content querysets, permission enumeration, users from content, and
 authorization-policy output. See the `bounded-reach
 security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
-for the recursive query, the reset, and the database boundaries.
+for the recursive query, the condition, and the database boundaries.
 
 .. _users-via:
 
 Users: via=
 ^^^^^^^^^^^
 
-``via=`` reaches users by walking a relation from the grant. The form, the
-path, the bound, and the reset are the same as ``along=``.
+``via=`` reaches users by walking a relation from the grant. It takes the same
+``(path, bound)`` form as ``along=``, including a condition on the path.
 
 ``along=`` and ``via=`` on the same registration are two walks. The user
 must be reached by ``via=`` and the object must be reached by ``along=``.

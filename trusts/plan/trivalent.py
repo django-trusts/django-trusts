@@ -52,10 +52,14 @@ class Operand(object):
     __slots__ = (
         'value_sql', 'value_params', 'reached_sql', 'reached_params',
         'literal_none', 'output_field', 'export_hint',
+        'identity_sql', 'identity_params', 'identity_field', 'instance_pk',
+        'target_key',
     )
 
     def __init__(self, value_sql, value_params, reached_sql, reached_params,
-                 literal_none=False, output_field=None, export_hint=None):
+                 literal_none=False, output_field=None, export_hint=None,
+                 identity_sql=None, identity_params=(), identity_field=None,
+                 instance_pk=False, target_key=None):
         self.value_sql = value_sql
         self.value_params = tuple(value_params)
         self.reached_sql = reached_sql
@@ -63,6 +67,12 @@ class Operand(object):
         self.literal_none = literal_none
         self.output_field = output_field
         self.export_hint = export_hint
+        self.identity_sql = identity_sql
+        self.identity_params = tuple(identity_params)
+        self.identity_field = identity_field
+        self.instance_pk = instance_pk
+        # ``(concrete model label, to_field attname)`` for a relation name.
+        self.target_key = target_key
 
 
 class Expr(object):
@@ -189,6 +199,49 @@ def _align(left, right, connection):
     return left, right
 
 
+def pk_operand(operand):
+    """The related row's pk, or ``operand`` when its value already is one."""
+    if not operand.identity_sql:
+        return operand
+    return Operand(
+        operand.identity_sql, operand.identity_params,
+        operand.reached_sql, operand.reached_params,
+        False, operand.identity_field, operand.export_hint,
+    )
+
+
+def _as_related_pk(field_side, other):
+    """Compare a non-PK ``to_field`` relation by the related primary key.
+
+    ``== None`` keeps the stored column. An attname has no identity SQL.
+    A constant instance is the related pk, so the value becomes the
+    joined target's pk.
+    """
+    if not field_side.identity_sql or field_side.identity_field is None:
+        return field_side
+    if not other.instance_pk:
+        return field_side
+    return pk_operand(field_side)
+
+
+def _match_relation_targets(left, right):
+    """Use related pks when two relations store different ``to_field``s.
+
+    The same ``to_field`` stays a stored-column compare. That is the same
+    row, and callers already depend on that SQL. Different targets are
+    not the same value: a username can equal another row's pk.
+    """
+    left_key = left.target_key
+    right_key = right.target_key
+    if (
+        not left_key or not right_key
+        or left_key[0] != right_key[0]
+        or left_key[1] == right_key[1]
+    ):
+        return left, right
+    return pk_operand(left), pk_operand(right)
+
+
 def compare(kind, left, right, connection=None):
     """One comparison. ``== None`` / ``!= None`` test a stored NULL only."""
     if kind in ('eq', 'ne') and left.literal_none != right.literal_none:
@@ -203,6 +256,10 @@ def compare(kind, left, right, connection=None):
             return eq
         # Derived: unreachable stays Unknown, a reached value is true.
         return Expr('(NOT (%s))' % eq.sql, eq.params)
+    if kind in ('eq', 'ne'):
+        left = _as_related_pk(left, right)
+        right = _as_related_pk(right, left)
+        left, right = _match_relation_targets(left, right)
     left, right = _align(left, right, connection)
     if kind == 'ne':
         # The policy formatter accepts ``=`` and ``NOT``. ``<>`` is not
@@ -299,7 +356,10 @@ def _const_operand(value, connection):
         param = _Marked(value, runtime=runtime)
     else:
         param = runtime
-    return Operand(sql, (param,), '(1=1)', (), runtime is None)
+    return Operand(
+        sql, (param,), '(1=1)', (), runtime is None,
+        instance_pk=isinstance(value, ModelIdentity),
+    )
 
 
 def _forward_fk(field):
@@ -662,9 +722,61 @@ def field_operand(model, path, source, qn, query=None, raw_alias=None):
         model, hops, leaf.column, source, qn, reachable=True,
         query=query, raw_alias=raw_alias,
     )
+    identity_sql = None
+    identity_params = ()
+    identity_field = None
+    target_key = relation_target(model, path)
+    if target_key is not None and not getattr(leaf.target_field, 'primary_key', False):
+        related = leaf.remote_field.model
+        identity_field = related._meta.pk
+        identity_sql, identity_params = correlated(
+            model, tuple(hops) + (('fk', leaf),), identity_field.column,
+            source, qn, reachable=False, query=query, raw_alias=raw_alias,
+        )
     return Operand(
         value_sql, value_params, reached_sql, reached_params, False, leaf,
+        identity_sql=identity_sql, identity_params=identity_params,
+        identity_field=identity_field, target_key=target_key,
     )
+
+
+def relation_target(model, path):
+    """``(concrete model label, to_field attname)`` for a relation name.
+
+    ``None`` when ``path`` is not a forward foreign key or one-to-one,
+    including when the last name is the attname rather than the relation.
+    """
+    if not path:
+        return None
+    try:
+        _hops, leaf = split_value_path(model, path)
+    except PermissionConditionError:
+        return None
+    if not _forward_fk(leaf) or _names_attname(leaf, path[-1]):
+        return None
+    related = leaf.remote_field.model._meta.concrete_model
+    return (related._meta.label, leaf.target_field.attname)
+
+
+def relation_pk_name(model, path):
+    """Attname of the row a forward relation points at."""
+    _hops, leaf = split_value_path(model, path)
+    return leaf.remote_field.model._meta.pk.attname
+
+
+def identity_lookup(model, path, lookup):
+    """Lookup of the related pk when ``path`` stores a non-PK ``to_field``.
+
+    A relation that already stores the pk, and a non-relation column,
+    stay as ``lookup``. Membership and equality then see one identity.
+    """
+    key = relation_target(model, path)
+    if not key:
+        return lookup
+    pk_name = relation_pk_name(model, path)
+    if key[1] == pk_name:
+        return lookup
+    return '%s__%s' % (lookup, pk_name)
 
 
 def reachable_operand(model, path, source, qn, query=None, raw_alias=None):

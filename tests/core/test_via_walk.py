@@ -277,14 +277,9 @@ class ViaRegistrationTest(SimpleTestCase):
                 'walk-site model',
             ),
             (
-                'reset-type',
+                'triple',
                 dict(via=('team__subgroups', 2, 'rank')),
-                'BooleanField',
-            ),
-            (
-                'reset-missing',
-                dict(via=('team__subgroups', 2, 'missing')),
-                'missing field',
+                'pair',
             ),
         )
         for name, extra, fragment in cases:
@@ -346,7 +341,7 @@ class ViaRegistrationTest(SimpleTestCase):
             ('string', 'team__subgroups', 'pair'),
             ('empty', (), 'pair'),
             ('one', ('team__subgroups',), 'pair'),
-            ('four', ('team__subgroups', 2, 'reset_inheritance', 1), 'triple'),
+            ('four', ('team__subgroups', 2, 'reset_inheritance', 1), 'pair'),
             (
                 'along',
                 Along(Ref(self.Grant, ('team', 'subgroups')), 2),
@@ -510,43 +505,19 @@ class ViaRegistrationTest(SimpleTestCase):
                     user=user,
                 )
 
-    def test_rejects_a_reset_field_along_equals_rejects(self):
-        cases = (
-            (('team__subgroups', 4, 'portrait__reset_inheritance'), 'reverse one-to-one'),
-            (('team__subgroups', 4, 'parent__reset_inheritance'), 'forward foreign key'),
-            (('team__subgroups', 4, 'badge__reset_inheritance'), 'forward foreign key'),
-            (
-                ('team__subgroups', 4, 'parent__subgroups__reset_inheritance'),
-                'one relation',
-            ),
-            (('team__subgroups', 4, 'notes__reset_inheritance'), 'generic relation'),
-            (('team__subgroups', 4, 'title'), 'BooleanField'),
-            (('team__subgroups', 4, 'rank'), 'BooleanField'),
-            (('team__subgroups', 4, 'flags__name'), 'BooleanField'),
-            (('team__subgroups', 4, 'missing'), 'missing'),
-            (('team__subgroups', 4, None), 'field path'),
-            (('team__subgroups', 4, ''), 'field path'),
-            (
-                ('team__parent_links__parent', 4, 'parent_links__parent'),
-                'BooleanField',
-            ),
-            (
-                (
-                    'team__held_parents__parent', 4,
-                    'held_parents__reset_inheritance',
-                ),
-                'parent-table',
-            ),
-            (('team__subgroups', 4, 'wide__reset_inheritance'), 'parent-table'),
-        )
-        for via, fragment in cases:
+    def test_rejects_a_third_tuple_element(self):
+        for via in (
+            ('team__subgroups', 4, 'inherits'),
+            ('team__subgroups', 4, None),
+            ('team__subgroups', 4, ''),
+        ):
             with self.subTest(via=via):
-                self._reject('reset-%s' % (via[2],), via, fragment)
+                self._reject('triple-%s' % (via[2],), via, 'pair')
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ViaWalkTest(TransactionTestCase):
-    """The six inquiries agree on one group walk, including reset."""
+    """The six inquiries agree on one group walk."""
 
     def setUp(self):
         super().setUp()
@@ -750,29 +721,13 @@ class ViaWalkTest(TransactionTestCase):
             self.assertEqual(self._titles(short, self.bob), {'backend', 'api'})
         self.Grant.objects.all().delete()
 
-        self.teams['backend'].reset_inheritance = True
-        self.teams['backend'].save(update_fields=['reset_inheritance'])
-        stopped = self._open('reset', ('team__subgroups', 8, 'reset_inheritance'))
-        self._grant('api')
-        with self.subTest('reset stops before the flagged team'):
-            self.assertEqual(self._titles(stopped, self.cara), {'api'})
-            self.assertEqual(self._titles(stopped, self.bob), set())
-        self.Grant.objects.all().delete()
-        self._grant('backend')
-        with self.subTest('reset grant on the stop continues past it'):
-            self.assertEqual(self._titles(stopped, self.bob), {'backend'})
-            self.assertEqual(self._titles(stopped, self.alice), {'backend'})
-            self.assertEqual(self._titles(stopped, self.rita), {'backend'})
-            self.assertEqual(self._titles(stopped, self.cara), set())
-
-    def test_lockfile_records_bound_and_reset(self):
-        handle = self._open('lock', ('team__subgroups', 4, 'reset_inheritance'))
+    def test_lockfile_records_the_bound(self):
+        handle = self._open('lock', ('team__subgroups', 4))
         text = render_configured_policy(handle).decode()
         self.assertIn('$via_bound', text)
         self.assertIn('via:', text)
-        self.assertIn('reset: "reset_inheritance"', text)
         self.assertIn('__via_team__subgroups_C_4', text)
-        self.assertIn('__reset_reset_inheritance', text)
+        self.assertNotIn('reset:', text)
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -1258,223 +1213,6 @@ class ViaAgreementTest(_AgreementMixin, TransactionTestCase):
                 finally:
                     user.is_active = True
                     user.save(update_fields=['is_active'])
-
-
-@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class ViaResetPlacementTest(_AgreementMixin, TransactionTestCase):
-    """The four reset placements cut every path into the stop."""
-
-    path_prefix = 'via-cut'
-
-    def setUp(self):
-        super().setUp()
-        User = get_user_model()
-
-        class Flag(models.Model):
-            reset_inheritance = models.BooleanField(null=True)
-
-            class Meta:
-                app_label = 'trusts_tests'
-                db_table = 'via_cut_flag'
-
-        class Team(models.Model):
-            name = models.CharField(max_length=20)
-            parent = models.ForeignKey(
-                'self', null=True, related_name='subgroups',
-                on_delete=models.CASCADE,
-            )
-            members = models.ManyToManyField(User, related_name='+')
-            auth_group = models.ForeignKey(
-                Group, on_delete=models.CASCADE, related_name='+',
-            )
-            reset_inheritance = models.BooleanField(null=True)
-            flags = models.ManyToManyField(Flag, related_name='teams')
-
-            class Meta:
-                app_label = 'trusts_tests'
-                db_table = 'via_cut_team'
-
-        members = Team._meta.get_field('members')
-        if not hasattr(members, 'm2m_field_name'):
-            members.contribute_to_related_class(User, members.remote_field)
-
-        class Link(models.Model):
-            parent = models.ForeignKey(
-                Team, related_name='child_links', on_delete=models.CASCADE,
-            )
-            child = models.ForeignKey(
-                Team, related_name='parent_links', on_delete=models.CASCADE,
-            )
-            reset_inheritance = models.BooleanField(null=True)
-
-            class Meta:
-                app_label = 'trusts_tests'
-                db_table = 'via_cut_link'
-
-        class Policy(models.Model):
-            team = models.ForeignKey(
-                Team, related_name='policies', on_delete=models.CASCADE,
-            )
-            reset_inheritance = models.BooleanField(null=True)
-
-            class Meta:
-                app_label = 'trusts_tests'
-                db_table = 'via_cut_policy'
-
-        class JobQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
-            pass
-
-        class Job(PermittedUsersMixin, models.Model):
-            name = models.CharField(max_length=20)
-            team = models.ForeignKey(
-                Team, related_name='jobs', on_delete=models.CASCADE,
-            )
-            objects = models.Manager.from_queryset(JobQuerySet)()
-
-            class Meta:
-                app_label = 'trusts_tests'
-                db_table = 'via_cut_job'
-
-        class Grant(models.Model):
-            team = models.ForeignKey(Team, on_delete=models.CASCADE)
-            auth_group = models.ForeignKey(
-                Group, on_delete=models.CASCADE, related_name='+',
-            )
-
-            class Meta:
-                app_label = 'trusts_tests'
-                db_table = 'via_cut_grant'
-
-        self.Team, self.Job, self.Grant = Team, Job, Grant
-        self.Flag, self.Link, self.Policy = Flag, Link, Policy
-        cm = _tables(Flag, Team, Link, Policy, Job, Grant)
-        cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
-        self.change = _permission(Job, 'change_cutjob')
-        self.code = 'trusts_tests.change_cutjob'
-        self.teams = {}
-        self.users = {}
-        for name, parent in (('A', None), ('B', 'A'), ('C', 'B'), ('D', None)):
-            group = Group.objects.create(name='cut-%s' % name)
-            group.permissions.add(self.change)
-            self.teams[name] = Team.objects.create(
-                name=name, parent=self.teams.get(parent), auth_group=group,
-            )
-            Job.objects.create(name=name, team=self.teams[name])
-            user = User.objects.create_user('cut-%s' % name, password='x')
-            self.users[name] = user
-            self.teams[name].members.add(user)
-        self.links = {
-            'AB': Link.objects.create(
-                parent=self.teams['A'], child=self.teams['B'],
-            ),
-            'DB': Link.objects.create(
-                parent=self.teams['D'], child=self.teams['B'],
-            ),
-            'BC': Link.objects.create(
-                parent=self.teams['B'], child=self.teams['C'],
-            ),
-        }
-
-    def _clear_cuts(self):
-        self.Team.objects.update(reset_inheritance=None)
-        self.Link.objects.update(reset_inheritance=None)
-        self.Flag.objects.all().delete()
-        self.Policy.objects.all().delete()
-        self.Grant.objects.all().delete()
-
-    def _arm_node(self):
-        team = self.teams['B']
-        team.reset_inheritance = True
-        team.save(update_fields=['reset_inheritance'])
-
-    def _arm_false(self):
-        team = self.teams['B']
-        team.reset_inheritance = False
-        team.save(update_fields=['reset_inheritance'])
-
-    def _arm_flags(self):
-        true = self.Flag.objects.create(reset_inheritance=True)
-        false = self.Flag.objects.create(reset_inheritance=False)
-        self.teams['B'].flags.add(false, true)
-        self.teams['C'].flags.add(false)
-
-    def _arm_policies(self):
-        self.Policy.objects.create(
-            team=self.teams['B'], reset_inheritance=False,
-        )
-        self.Policy.objects.create(
-            team=self.teams['B'], reset_inheritance=True,
-        )
-        self.Policy.objects.create(
-            team=self.teams['C'], reset_inheritance=None,
-        )
-
-    def _arm_edge(self):
-        self.links['AB'].reset_inheritance = True
-        self.links['AB'].save(update_fields=['reset_inheritance'])
-        self.links['BC'].reset_inheritance = False
-        self.links['BC'].save(update_fields=['reset_inheritance'])
-
-    def test_four_placements_cut_every_path_into_the_stop(self):
-        stopped = (
-            ('A', {'A': {'A'}, 'B': set(), 'C': set(), 'D': set()}),
-            ('B', {'A': set(), 'B': {'B'}, 'C': {'B'}, 'D': set()}),
-        )
-        opened = (
-            ('A', {'A': {'A'}, 'B': {'A'}, 'C': {'A'}, 'D': set()}),
-        )
-        edge_stopped = (
-            ('A', {'A': {'A'}, 'B': set(), 'C': set(), 'D': set()}),
-            ('D', {'D': {'D'}, 'B': {'D'}, 'C': {'D'}, 'A': set()}),
-            ('B', {'B': {'B'}, 'C': {'B'}, 'A': set(), 'D': set()}),
-        )
-        every_path = (
-            ('A', {'A': {'A'}, 'B': set(), 'C': set(), 'D': set()}),
-            ('D', {'D': {'D'}, 'B': set(), 'C': set(), 'A': set()}),
-            ('B', {'B': {'B'}, 'C': {'B'}, 'A': set(), 'D': set()}),
-        )
-        cases = (
-            ('node', ('team__parent', 8, 'reset_inheritance'), self._arm_node, stopped),
-            ('node-null', ('team__parent', 8, 'reset_inheritance'), lambda: None, opened),
-            ('node-false', ('team__parent', 8, 'reset_inheritance'), self._arm_false, opened),
-            ('m2m', ('team__parent', 8, 'flags__reset_inheritance'), self._arm_flags, stopped),
-            (
-                'reverse-fk',
-                ('team__parent', 8, 'policies__reset_inheritance'),
-                self._arm_policies,
-                stopped,
-            ),
-            (
-                'edge',
-                (
-                    'team__parent_links__parent', 8,
-                    'parent_links__reset_inheritance',
-                ),
-                self._arm_edge,
-                edge_stopped,
-            ),
-            (
-                'node-every-path',
-                ('team__parent_links__parent', 8, 'reset_inheritance'),
-                self._arm_node,
-                every_path,
-            ),
-        )
-        for label, via, arm, expects in cases:
-            with self.subTest(label):
-                self._clear_cuts()
-                arm()
-                handle = self._open(label, via)
-                for grant_name, checks in expects:
-                    self._grant(grant_name)
-                    for user_name, want in checks.items():
-                        self.assertEqual(
-                            self._held(handle, self.users[user_name]),
-                            set(want),
-                            '%s grant %s' % (user_name, grant_name),
-                        )
-                    self.Grant.objects.all().delete()
 
 
 def _drop_manager_column(user_model):
@@ -2216,35 +1954,6 @@ class ViaHopFilterTest(TransactionTestCase):
         DeskGrant.objects.filter(user=dee).update(user=cy)
         with self.subTest(walk='sponsor', grant='cy'):
             self.assertIs(self._bundle(sponsor, zed, filtered=True)['has'], False)
-
-        dee.via_reset = True
-        dee.save(update_fields=['via_reset'])
-        reset = self._seat(
-            'reset',
-            lambda user, permission, content: user.username != 'hop-nobody',
-            ('holder__via_manager', 8, 'via_reset'),
-        )
-        for name, selected in (
-            ('ada', True), ('ben', True), ('cy', True),
-            ('dee', False), ('eve', False),
-        ):
-            with self.subTest(user=name, walk='reset'):
-                self._expect(
-                    reset, self.people[name], selected=selected, plain=selected,
-                )
-        blocked = self._seat(
-            'reset-seed',
-            lambda user, permission, content: user.username != 'hop-ada',
-            ('holder__via_manager', 8, 'via_reset'),
-        )
-        for name, plain in (
-            ('ada', True), ('ben', True), ('cy', True),
-            ('dee', False), ('eve', False),
-        ):
-            with self.subTest(user=name, walk='reset-seed'):
-                self._expect(
-                    blocked, self.people[name], selected=False, plain=plain,
-                )
 
     def test_user_condition_stops_at_each_hop(self):
         self._activate()
@@ -3151,29 +2860,6 @@ class ViaForeignKeyTargetTest(TransactionTestCase):
                 self._sees(handle, self.people[name], self.jobs['root']),
                 True, name,
             )
-
-    def test_reset_targets(self):
-        self.Grant.objects.create(
-            team=self.teams['root'], auth_group=self.teams['root'].auth_group,
-        )
-        mark = self.Mark.objects.create(slug='stop', reset_inheritance=True)
-        self.teams['mid'].marks.add(mark)
-        self.Flag.objects.create(team=self.teams['mid'], reset_inheritance=True)
-        self.teams['mid'].reset_inheritance = True
-        self.teams['mid'].save(update_fields=['reset_inheritance'])
-        cases = (
-            ('node', ('team__parent', 8, 'reset_inheritance')),
-            ('m2m', ('team__parent', 8, 'marks__reset_inheritance')),
-            ('reverse', ('team__parent', 8, 'flags__reset_inheritance')),
-        )
-        for name, via in cases:
-            handle = self._open(name, via)
-            job = self.jobs['root']
-            with self.subTest(reset=name):
-                self.assertIs(self._sees(handle, self.people['ada'], job), True)
-                self.assertIs(self._sees(handle, self.people['ben'], job), False)
-                self.assertIs(self._sees(handle, self.people['cy'], job), False)
-
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ViaInquiryParityTest(TransactionTestCase):
@@ -5771,4 +5457,486 @@ def _same_row_kept():
         'answers': {'low': denied, 'high': allowed, 'decoy': denied},
         'listed': {2},
     }
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class ViaRelationIdentityTest(TransactionTestCase):
+    """A relation compared to an instance matches that row's pk.
+
+    The target user pk and username are swapped. A foreign key, a
+    one-to-one, and a many-to-many store the username. Only the wanted
+    user may satisfy ``==`` or ``.contains()``.
+    """
+
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+        _attach_manager(self, User)
+        self.User = User
+
+        class Desk(models.Model):
+            code = models.IntegerField(unique=True, db_column='desk_code')
+            owner = models.OneToOneField(
+                User, to_field='username', null=True, db_column='desk_owner',
+                on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_rel_desk'
+
+        class Membership(models.Model):
+            person = models.ForeignKey(
+                User, to_field='username', db_column='member_name',
+                on_delete=models.CASCADE, related_name='+',
+            )
+            friend = models.ForeignKey(
+                User, to_field='username', db_column='friend_name',
+                on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_rel_member'
+
+        class Node(models.Model):
+            title = models.CharField(max_length=20)
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+            card = models.OneToOneField(
+                User, to_field='username', null=True, db_column='card_name',
+                on_delete=models.CASCADE, related_name='+',
+            )
+            by_pk = models.ForeignKey(
+                User, null=True, db_column='by_pk_id',
+                on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_rel_node'
+
+        class SheetQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Sheet(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=20)
+            node = models.ForeignKey(
+                Node, related_name='sheets', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(SheetQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_rel_sheet'
+
+        class Grant(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, related_name='+',
+            )
+            node = models.ForeignKey(Node, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_rel_grant'
+
+        class GroupGrant(models.Model):
+            group = models.ForeignKey(Group, on_delete=models.CASCADE)
+            node = models.ForeignKey(Node, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_rel_group'
+
+        class Delegation(models.Model):
+            delegate = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            sponsor = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            node = models.ForeignKey(Node, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_rel_deleg'
+
+        self.Desk = Desk
+        self.Node = Node
+        self.Sheet = Sheet
+        self.Grant = Grant
+        self.GroupGrant = GroupGrant
+        self.Delegation = Delegation
+        cm = _tables(
+            Desk, Membership, Node, Sheet, Grant, GroupGrant, Delegation,
+        )
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        User.add_to_class(
+            'friends',
+            models.ManyToManyField(
+                User, through=Membership, through_fields=('person', 'friend'),
+                related_name='+',
+            ),
+        )
+        _bind_m2m(User, 'friends', User)
+        self.addCleanup(self._drop_friends, User)
+        link = dict(
+            null=True, on_delete=models.DO_NOTHING, related_name='+',
+            db_constraint=False, db_index=False,
+        )
+        _add_user_column(
+            self, User, 'lead',
+            models.ForeignKey(
+                User, to_field='username', db_column='lead_name', **link,
+            ),
+        )
+        _add_user_column(
+            self, User, 'desk',
+            models.ForeignKey(
+                Desk, to_field='code', db_column='user_desk', **link,
+            ),
+        )
+        _add_user_column(
+            self, User, 'boss',
+            models.ForeignKey(User, db_column='boss_id', **link),
+        )
+        self.change = _permission(Sheet, 'change_via_rel')
+        self.code = '%s.%s' % (
+            self.change.content_type.app_label, self.change.codename,
+        )
+        self.wanted = User.objects.create_user(
+            username='1002', password='x', pk=1001,
+        )
+        self.decoy = User.objects.create_user(
+            username='1001', password='x', pk=1002,
+        )
+        self.alice = User.objects.create_user('via-rel-alice', password='x')
+        self.bob = User.objects.create_user('via-rel-bob', password='x')
+        self.dan = User.objects.create_user('via-rel-dan', password='x')
+        self.bob.via_manager = self.alice
+        self.bob.save(update_fields=['via_manager'])
+        self.wanted_desk = Desk.objects.create(
+            pk=1, code=2, owner=self.wanted,
+        )
+        self.decoy_desk = Desk.objects.create(
+            pk=2, code=1, owner=self.decoy,
+        )
+        self.node = Node.objects.create(title='N', card=self.wanted)
+        self.sheet = Sheet.objects.create(title='S', node=self.node)
+        self.editors = Group.objects.create(name='via-rel-editors')
+        self.editors.permissions.add(self.change)
+        self.editors.user_set.add(self.alice, self.bob)
+
+    def _drop_friends(self, user_model):
+        try:
+            field = user_model._meta.get_field('friends')
+        except Exception:
+            return
+        if field in user_model._meta.local_many_to_many:
+            user_model._meta.local_many_to_many.remove(field)
+        user_model._meta._expire_cache()
+        if hasattr(user_model, 'friends'):
+            delattr(user_model, 'friends')
+
+    def _clear_links(self):
+        self.User.friends.through.objects.all().delete()
+        self.User.objects.filter(pk__in=(
+            self.alice.pk, self.bob.pk,
+        )).update(lead=None, desk=None, boss=None)
+
+    def _plant(self, kind, positive):
+        self._clear_links()
+        held = self.wanted if positive else self.decoy
+        other = self.decoy if positive else self.wanted
+        self.alice.lead = held
+        self.bob.lead = other
+        self.alice.desk = self.wanted_desk if positive else self.decoy_desk
+        self.bob.desk = self.decoy_desk if positive else self.wanted_desk
+        self.alice.save(update_fields=['lead', 'desk'])
+        self.bob.save(update_fields=['lead', 'desk'])
+        self.alice.friends.add(held)
+        self.bob.friends.add(other)
+        self.node.card = held
+        self.node.save(update_fields=['card'])
+
+    def _condition(self, kind):
+        if kind == 'fk':
+            return lambda user: user.lead == self.wanted
+        if kind == 'm2m':
+            return lambda user: user.friends.contains(self.wanted.pk)
+        if kind == 'hop':
+            return lambda user: user.desk.owner == self.wanted
+        raise AssertionError(kind)
+
+    def _expect(self, user, allowed, *, group=False):
+        with _listed(self.handle):
+            has = user.has_perm(self.code, self.sheet)
+            permitted = set(self.Sheet.objects.permitted(
+                self.code, user,
+            ).values_list('pk', flat=True))
+            holders = set(self.sheet.get_permitted_users(
+                self.change,
+            ).values_list('pk', flat=True))
+            listed = self.code in user.get_all_permissions(self.sheet)
+            nodes = set(filter_by_permitted_content(
+                self.Node.objects.all(), user, self.change, content=self.Sheet,
+            ).values_list('pk', flat=True))
+            grouped = None
+            if group:
+                grouped = self.code in user.get_group_permissions(self.sheet)
+        self.assertIs(has, allowed)
+        self.assertEqual(self.sheet.pk in permitted, allowed)
+        self.assertEqual(user.pk in holders, allowed)
+        self.assertEqual(listed, allowed)
+        self.assertEqual(self.node.pk in nodes, allowed)
+        if grouped is not None:
+            self.assertEqual(grouped, allowed)
+
+    def test_via_user_condition_matches_the_related_pk(self):
+        for kind in ('fk', 'm2m', 'hop'):
+            for positive in (False, True):
+                with self.subTest(kind=kind, positive=positive):
+                    self._plant(kind, positive)
+                    handle = compiler(
+                        path='tests.core.via-rel.%s-%s' % (kind, int(positive)),
+                    )
+                    handle.set_user_condition('lead', self._condition(kind))
+                    handle.register(
+                        trust=self.Grant, user='user', permission='permission',
+                        content='node__sheets',
+                        via=('user__via_manager', 4),
+                    )
+                    self.handle = handle
+                    self.Grant.objects.all().delete()
+                    self.Grant.objects.create(
+                        user=self.alice, permission=self.change, node=self.node,
+                    )
+                    self._expect(self.alice, positive)
+                    self._expect(self.bob, False)
+
+    def test_relation_group_and_content_match_the_related_pk(self):
+        for positive in (False, True):
+            with self.subTest(positive=positive):
+                self._plant('fk', positive)
+                handle = compiler(
+                    path='tests.core.via-rel.row-%s' % int(positive),
+                )
+                handle.register(
+                    trust=self.Grant, user='user', permission='permission',
+                    content='node__sheets',
+                    condition=lambda t: (
+                        (t.user.lead == self.wanted) & (t.node.card == self.wanted)
+                    ),
+                )
+                handle.register(
+                    trust=self.Delegation, delegate='delegate', sponsor='sponsor',
+                    content='node__sheets',
+                )
+                self.handle = handle
+                self.Grant.objects.all().delete()
+                self.Delegation.objects.all().delete()
+                self.Grant.objects.create(
+                    user=self.alice, permission=self.change, node=self.node,
+                )
+                self.Delegation.objects.create(
+                    delegate=self.dan, sponsor=self.alice, node=self.node,
+                )
+                self._expect(self.alice, positive)
+                self._expect(self.dan, positive)
+                grouped = compiler(
+                    path='tests.core.via-rel.group-%s' % int(positive),
+                )
+                grouped.set_user_condition(
+                    'lead', lambda user: user.lead == self.wanted,
+                )
+                grouped.register(
+                    trust=self.GroupGrant, user='group__user', group='group',
+                    content='node__sheets',
+                )
+                self.GroupGrant.objects.all().delete()
+                self.GroupGrant.objects.create(
+                    group=self.editors, node=self.node,
+                )
+                self.handle = grouped
+                self._expect(self.alice, positive, group=True)
+                self._expect(self.bob, not positive, group=True)
+
+    def test_contains_field_uses_the_related_pk(self):
+        # Chat's regression. friends and lead both store username.
+        # The membership comparison is the related pk, so the same user
+        # matches and a decoy whose pk equals the wanted username does not.
+        pairs = (
+            (self.wanted, self.wanted, True),
+            (self.decoy, self.decoy, True),
+            (self.decoy, self.wanted, False),
+            (self.wanted, self.decoy, False),
+        )
+        for friend, lead, allowed in pairs:
+            for via in (False, True):
+                with self.subTest(friend=friend.username, lead=lead.username, via=via):
+                    self._clear_links()
+                    self.alice.lead = lead
+                    self.alice.save(update_fields=['lead'])
+                    self.alice.friends.add(friend)
+                    handle = compiler(
+                        path='tests.core.via-rel.member-%s-%s-%s' % (
+                            friend.pk, lead.pk, int(via),
+                        ),
+                    )
+                    handle.set_user_condition(
+                        'lead', lambda user: user.friends.contains(user.lead),
+                    )
+                    options = {}
+                    if via:
+                        options['via'] = ('user__via_manager', 2)
+                    handle.register(
+                        trust=self.Grant, user='user', permission='permission',
+                        content='node__sheets', **options,
+                    )
+                    self.handle = handle
+                    self.Grant.objects.all().delete()
+                    self.Grant.objects.create(
+                        user=self.alice, permission=self.change, node=self.node,
+                    )
+                    self._expect(self.alice, allowed)
+
+    def test_different_to_fields_compare_the_related_pk(self):
+        # lead and desk.owner store username. by_pk and boss store the pk.
+        # The decoy username equals the wanted pk, so a stored compare
+        # would treat those as the same row.
+        child = self.Node.objects.create(title='C', parent=self.node)
+        child_sheet = self.Sheet.objects.create(title='C', node=child)
+        cases = (
+            ('user', lambda user: user.lead == user.boss),
+            ('content', lambda user, permission, content: (
+                user.lead == content.node.by_pk
+            )),
+            ('hop', lambda user, permission, content: (
+                user.desk.owner == content.node.by_pk
+            )),
+        )
+        for kind, predicate in cases:
+            for positive in (False, True):
+                with self.subTest(kind=kind, positive=positive):
+                    self._plant_targets(positive)
+                    handle = compiler(
+                        path='tests.core.via-rel.targets-%s-%s' % (
+                            kind, int(positive),
+                        ),
+                    )
+                    if kind == 'user':
+                        handle.set_user_condition('lead', predicate)
+                    else:
+                        handle.add_named_filter(self.Sheet, 'pair', predicate)
+                    handle.register(
+                        trust=self.Grant, user='user', permission='permission',
+                        content='node__sheets',
+                        via=('user__via_manager', 2),
+                    )
+                    self.Grant.objects.all().delete()
+                    self.Grant.objects.create(
+                        user=self.alice, permission=self.change, node=self.node,
+                    )
+                    self.handle = handle
+                    if kind == 'user':
+                        self._expect(self.alice, positive)
+                    else:
+                        self._expect_filter(self.alice, positive)
+        for positive in (False, True):
+            with self.subTest(kind='relation', positive=positive):
+                self._plant_targets(positive)
+                handle = compiler(
+                    path='tests.core.via-rel.targets-row-%s' % int(positive),
+                )
+                handle.register(
+                    trust=self.Grant, user='user', permission='permission',
+                    content='node__sheets',
+                    condition=lambda t: t.user.lead == t.node.by_pk,
+                )
+                self.handle = handle
+                self.Grant.objects.all().delete()
+                self.Grant.objects.create(
+                    user=self.alice, permission=self.change, node=self.node,
+                )
+                self._expect(self.alice, positive)
+            with self.subTest(kind='along', positive=positive):
+                self.node.card = None
+                self.node.by_pk = None
+                self.node.save(update_fields=['card', 'by_pk'])
+                if positive:
+                    child.card = self.wanted
+                    child.by_pk = self.wanted
+                else:
+                    child.card = self.decoy
+                    child.by_pk = self.wanted
+                child.save(update_fields=['card', 'by_pk'])
+                handle = compiler(
+                    path='tests.core.via-rel.targets-along-%s' % int(positive),
+                )
+                handle.register(
+                    trust=self.Grant, user='user', permission='permission',
+                    content='node__sheets',
+                    along=(
+                        lambda t: (t.node.card == t.node.by_pk) & t.node.parent,
+                        4,
+                    ),
+                )
+                self.handle = handle
+                self.Grant.objects.all().delete()
+                self.Grant.objects.create(
+                    user=self.alice, permission=self.change, node=self.node,
+                )
+                self._expect(self.alice, True)
+                self.sheet = child_sheet
+                self.node = child
+                try:
+                    self._expect(self.alice, positive)
+                finally:
+                    self.node = child.parent
+                    self.sheet = self.node.sheets.get()
+
+    def _plant_targets(self, positive):
+        self._clear_links()
+        if positive:
+            self.alice.lead = self.wanted
+            self.alice.boss = self.wanted
+            self.alice.desk = self.wanted_desk
+            self.node.by_pk = self.wanted
+        else:
+            self.alice.lead = self.decoy
+            self.alice.boss = self.wanted
+            self.alice.desk = self.decoy_desk
+            self.node.by_pk = self.wanted
+        self.alice.save(update_fields=['lead', 'boss', 'desk'])
+        self.node.card = None
+        self.node.save(update_fields=['by_pk', 'card'])
+
+    def _expect_filter(self, user, allowed):
+        code = '%s:pair' % self.code
+        with _listed(self.handle):
+            has = user.has_perm(code, self.sheet)
+            permitted = set(self.Sheet.objects.permitted(
+                self.code, user, conditions=('pair',),
+            ).values_list('pk', flat=True))
+            holders = set(self.sheet.get_permitted_users(
+                code,
+            ).values_list('pk', flat=True))
+            # Named filters are not part of the unfiltered permission list.
+            listed = self.code in user.get_all_permissions(self.sheet)
+            nodes = set(filter_by_permitted_content(
+                self.Node.objects.all(), user, self.change, content=self.Sheet,
+                conditions=('pair',),
+            ).values_list('pk', flat=True))
+        self.assertIs(has, allowed)
+        self.assertEqual(self.sheet.pk in permitted, allowed)
+        self.assertEqual(user.pk in holders, allowed)
+        self.assertIs(listed, True)
+        self.assertEqual(self.node.pk in nodes, allowed)
+
 

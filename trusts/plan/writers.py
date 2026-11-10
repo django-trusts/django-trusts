@@ -10,6 +10,7 @@ already had.
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Exists, F, Model, Q
+from django.db.models.fields.related import ManyToManyRel
 
 from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
@@ -17,12 +18,72 @@ from trusts.plan.conditions import (
     resolve_field_path,
 )
 from trusts.plan.grammar import REACHABLE_NAME, Tree
-from trusts.plan.trivalent import grant_q, has_contains
+from trusts.plan.trivalent import grant_q, has_contains, identity_lookup
 
 
 def contains_q(lookup, member):
     """One membership lookup. ``member`` is a value or an ``F`` expression."""
     return Q(**{lookup: member})
+
+
+def _terminal_field(model, path):
+    current = model
+    field = None
+    for name in path:
+        field = current._meta.get_field(name)
+        remote = getattr(field, 'remote_field', None)
+        related = getattr(remote, 'model', None) if remote is not None else None
+        if related is None:
+            return field
+        current = related
+    return field
+
+
+def _far_stores_pk(field):
+    """True when membership already compares the related primary key."""
+    if (
+        getattr(field, 'concrete', False)
+        and (
+            getattr(field, 'many_to_one', False)
+            or getattr(field, 'one_to_one', False)
+        )
+    ):
+        return bool(getattr(field.target_field, 'primary_key', False))
+    if not getattr(field, 'many_to_many', False):
+        return True
+    if isinstance(field, ManyToManyRel):
+        forward = field.field
+        column = forward.m2m_column_name()
+    else:
+        forward = field
+        column = forward.m2m_reverse_name()
+    through = forward.remote_field.through
+    for candidate in through._meta.local_fields:
+        if (
+            getattr(candidate, 'column', None) == column
+            and getattr(candidate, 'is_relation', False)
+        ):
+            return bool(getattr(candidate.target_field, 'primary_key', False))
+    return True
+
+
+def pk_membership_lookup(model, path, lookup):
+    """``lookup`` that matches the related row's primary key.
+
+    A foreign key, one-to-one, or many-to-many that stores a non-PK
+    ``to_field`` would compare that stored value to the member pk.
+    ``__pk`` joins the target and compares its primary key. A relation
+    that already stores the pk is left unchanged.
+    """
+    if not path:
+        return lookup
+    try:
+        field = _terminal_field(model, path)
+    except Exception:
+        return lookup
+    if field is None or _far_stores_pk(field):
+        return lookup
+    return '%s__pk' % lookup
 
 
 def _node(node, *kinds):
@@ -147,16 +208,25 @@ def _compile_contains(node, model, user, perm, user_model):
     if left.root == 'object':
         lookup = '__'.join(left.path)
         if _node(right, 'field') and right.root == 'object':
-            return contains_q(lookup, F('__'.join(right.path)))
+            member_lookup = identity_lookup(
+                model, right.path, '__'.join(right.path),
+            )
+            return contains_q(
+                pk_membership_lookup(model, left.path, lookup),
+                F(member_lookup),
+            )
         value = member_pk(_bound_value(right, user, perm, user_model))
         if value is None:
             return Q(pk__in=())
-        return contains_q(lookup, value)
+        host = model if left.root == 'object' else user_model
+        return contains_q(
+            pk_membership_lookup(host, left.path, lookup), value,
+        )
     manager = _load_collection(left, user, None, model, user_model)
     if _node(right, 'field') and right.root == 'object':
         if manager is None:
             return Q(pk__in=())
-        member = '__'.join(right.path)
+        member = identity_lookup(model, right.path, '__'.join(right.path))
         return Q(**{'%s__in' % member: manager.values('pk')})
     # A known member used to become an empty ``Q()``. Django drops that
     # child of ``|``, so a true membership disappeared beside an unknown

@@ -951,15 +951,15 @@ def _dotless_id(*parts):
 
 
 def _along_mapping(along):
-    """Policy output for one walk, including its configured reset field."""
+    """Policy output for one walk, including a path condition when one is set."""
     mapping = {
         'path': '__'.join(along.path),
         'shape': along.shape,
         'bound': along.bound,
     }
-    reset = getattr(along, 'reset', None)
-    if reset is not None:
-        mapping['reset'] = reset.path
+    condition = _render_condition(getattr(along, 'condition', None))
+    if condition is not None:
+        mapping['condition'] = condition
     return mapping
 
 
@@ -980,9 +980,8 @@ def _base_id(record):
             getattr(along, 'shape', None),
             getattr(along, 'bound', None),
         )
-        reset = getattr(along, 'reset', None)
-        if reset is not None:
-            label += '__reset_%s' % reset.path
+        if getattr(along, 'condition', None) is not None:
+            label += '__along_cond'
     via = getattr(record, 'via', None)
     if via is not None:
         label += '__via_%s_%s_%s' % (
@@ -990,9 +989,8 @@ def _base_id(record):
             getattr(via, 'shape', None),
             getattr(via, 'bound', None),
         )
-        reset = getattr(via, 'reset', None)
-        if reset is not None:
-            label += '__reset_%s' % reset.path
+        if getattr(via, 'condition', None) is not None:
+            label += '__along_cond'
     return label.replace('.', '__')
 
 

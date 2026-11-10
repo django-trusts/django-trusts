@@ -11,6 +11,7 @@ from trusts.plan.writers import (
     column_q,
     contains_q,
     member_pk,
+    pk_membership_lookup,
 )
 
 __all__ = [
@@ -151,7 +152,11 @@ class _PredicateCompiler(object):
             value = member_pk(node.right.value)
             if value is None:
                 return Q(pk__in=())
-            return contains_q(lookup_text(node.left.path), value)
+            lookup = lookup_text(node.left.path)
+            return contains_q(
+                pk_membership_lookup(self.record.root, node.left.path, lookup),
+                value,
+            )
         return contains_q(
             lookup_text(node.left.path),
             F(self.record.permission_field),

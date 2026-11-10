@@ -216,7 +216,9 @@ class ClosedPredicateRegistrationTest(TestCase):
         self.assertEqual(registry.records, ())
         self.assertIs(Account._meta.concrete_model, Account)
 
-    def test_equal_rejects_mismatched_to_field_targets_with_zero_sql(self):
+    def test_equal_accepts_mismatched_to_field_targets_with_zero_sql(self):
+        # slug and code can hold the same text on different rows. SQL
+        # compares the site primary keys, so registration is allowed.
         Holder, Site, Document, Action, SiteGrant = _to_field_models(match=False)
         registry = compiler()
         with self.assertNumQueries(0):
@@ -226,9 +228,9 @@ class ClosedPredicateRegistrationTest(TestCase):
             self.assertEqual(SiteGrant._meta.get_field('right').target_field.attname, 'code')
             self.assertEqual(site_a.slug, site_b.code)
             self.assertNotEqual(site_a.slug, site_b.slug)
-            with self.assertRaisesRegex(TrustsConfigurationError, 'resolved comparison field'):
-                _register_site_grant(registry, SiteGrant)
-        self.assertEqual(registry.records, ())
+            record = _register_site_grant(registry, SiteGrant)
+        self.assertEqual(len(registry.records), 1)
+        self.assertEqual(record.condition.kind, 'eq')
         self.assertIs(Holder._meta.concrete_model, Holder)
         self.assertIs(Site._meta.concrete_model, Site)
         self.assertIs(Document._meta.concrete_model, Document)
