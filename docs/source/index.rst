@@ -742,7 +742,8 @@ and indexing are rejected.
 
 A path lambda, a ``condition=`` lambda, and a delegated condition builder
 are evaluated only when registering and compiling, never during a
-permission query. A path lambda is limited to attribute access.
+permission query. A path lambda is limited to attribute access and
+``.when()``.
 
 Applications may register more than one valid path to the same content. A
 direct user grant and a team-derived grant can coexist, with either
@@ -755,14 +756,15 @@ Content: along=
 ^^^^^^^^^^^^^^^
 
 ``along=`` declares bounded hierarchical reachability. The form is
-``along=(path, bound)`` or ``along=(path, bound, field)``, where ``field``
-sets an inheritance reset. For example, ``along=("parent", 8)`` on
+``along=(path, bound)``. The path is a ``__`` string or a path lambda, which
+may guard a step: ``lambda n: n.parent.when(n.inherits)`` continues only while
+the condition is True. For example, ``along=("parent", 8)`` on
 ``registry.register`` applies the same bounded walk to object checks,
 permitted-content querysets, permission enumeration, users from content, and
 authorization-policy output. See the `bounded-reach
 security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
-for the recursive query, the reset, and the database boundaries.
+for the recursive query, the guard, and the database boundaries.
 
 .. _users-via:
 
@@ -770,7 +772,7 @@ Users: via=
 ^^^^^^^^^^^
 
 ``via=`` reaches users by walking a relation from the grant. The form, the
-path, the bound, and the reset are the same as ``along=``.
+path, and the bound are the same as ``along=``.
 
 ``along=`` and ``via=`` on the same registration are two walks. The user
 must be reached by ``via=`` and the object must be reached by ``along=``.
