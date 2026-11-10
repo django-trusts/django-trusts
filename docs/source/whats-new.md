@@ -11,6 +11,11 @@ log.
 
 ## 1.1.0
 
+- **Richer condition lambdas.** Conditions accept `|`, `~`, ordered
+  comparisons, `Reachable(path)`, and the `trusts.functions` functions, and
+  combine using SQL three-valued logic. See the
+  [user guide](index.rst#supported-lambda-expressions) and [#367].
+
 - **User conditions and overrides.** `set_user_condition()` and
   `set_user_override()` add named user checks to Trusts inquiries. Skip one
   with `skip_<name>=True`. Rules use user model fields; Python properties raise
@@ -68,3 +73,4 @@ log.
 [#286]: https://github.com/django-trusts/django-trusts/pull/286
 [#292]: https://github.com/django-trusts/django-trusts/pull/292
 [#304]: https://github.com/django-trusts/django-trusts/pull/304
+[#367]: https://github.com/django-trusts/django-trusts/pull/367
