@@ -37,12 +37,6 @@ grants permission. Review conditions that rely on how missing values were
 handled and test the permissions they should grant after upgrading. See
 [supported lambda expressions](index.rst#supported-lambda-expressions).
 
-## Conditional walk paths
-
-`along=` and `via=` take `(path, bound)`. If you used a third reset field
-in a development build, replace it with a path lambda whose condition is
-True when the walk should continue. See [Inherited relationships](index.rst#inherited-relationships).
-
 ## One condition error (#333)
 
 `PermissionConditionError` is now the only condition error, and it is a
