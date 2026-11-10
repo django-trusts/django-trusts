@@ -9,7 +9,7 @@ already had.
 """
 
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import Exists, F, Model, Q
+from django.db.models import Exists, F, Model, Q, Value
 from django.db.models.fields.related import ManyToManyRel
 
 from trusts.errors import PermissionConditionError
@@ -18,7 +18,34 @@ from trusts.plan.conditions import (
     resolve_field_path,
 )
 from trusts.plan.grammar import REACHABLE_NAME, Tree
-from trusts.plan.trivalent import grant_q, has_contains, identity_lookup
+from trusts.plan.trivalent import (
+    _permission_app_label, grant_q, has_contains, identity_lookup,
+)
+
+
+class _BoundMember(Value):
+    """Membership value the policy render can label.
+
+    ``.contains(permission.codename)`` is a request value, not a frozen
+    literal. The export compiler reads ``bind`` off the compiled node.
+    """
+
+    def __init__(self, value, bind):
+        super().__init__(value)
+        self.bind = bind
+
+
+def _member_bind(node):
+    """Bind name for a permission member, or None for another member."""
+    if not _node(node, 'field') or node.root != 'permission':
+        return None
+    if not node.path:
+        return 'permission.id'
+    if node.path == ('app_label',):
+        return 'permission.app_label'
+    if node.path == ('codename',):
+        return 'permission.codename'
+    return None
 
 
 def contains_q(lookup, member):
@@ -130,9 +157,9 @@ def _walk_model_path(instance, model, path, *, collection=False):
 def _permission_attr(perm, path):
     """One attribute of the permission this inquiry asked for.
 
-    A string permission supplies ``app_label`` and ``codename``. A saved
-    permission row supplies any concrete attribute. Longer paths stay
-    rejected.
+    A string and a saved row both supply ``app_label`` and ``codename``.
+    ``app_label`` is the content type's label, not a column of
+    ``Permission``. Longer paths stay rejected.
     """
     if not path:
         return perm
@@ -142,17 +169,26 @@ def _permission_attr(perm, path):
         )
     attr = path[0]
     if isinstance(perm, Model):
+        if attr == 'app_label':
+            label = _permission_app_label(perm)
+            if isinstance(label, str):
+                return label
+        if attr == 'codename':
+            codename = getattr(perm, 'codename', None)
+            if isinstance(codename, str):
+                return codename
         try:
             return getattr(perm, attr)
         except AttributeError as exc:
             raise PermissionConditionError(
                 'Permission references cannot traverse attributes in V1.'
             ) from exc
-    if isinstance(perm, str) and perm.count('.') == 1:
-        app_label, codename = perm.split('.', 1)
-        if attr == 'app_label':
+    if isinstance(perm, str):
+        app_label, dot, rest = perm.partition('.')
+        codename = rest.split(':', 1)[0] if dot else ''
+        if attr == 'app_label' and dot and codename:
             return app_label
-        if attr == 'codename':
+        if attr == 'codename' and dot and codename:
             return codename
     raise PermissionConditionError(
         'Permission references cannot traverse attributes in V1.'
@@ -218,6 +254,9 @@ def _compile_contains(node, model, user, perm, user_model):
         value = member_pk(_bound_value(right, user, perm, user_model))
         if value is None:
             return Q(pk__in=())
+        bind = _member_bind(right)
+        if bind is not None and not hasattr(value, 'resolve_expression'):
+            value = _BoundMember(value, bind)
         host = model if left.root == 'object' else user_model
         return contains_q(
             pk_membership_lookup(host, left.path, lookup), value,
@@ -235,6 +274,9 @@ def _compile_contains(node, model, user, perm, user_model):
     value = member_pk(_bound_value(right, user, perm, user_model))
     if manager is None or value is None:
         return Q(pk__in=())
+    bind = _member_bind(right)
+    if bind is not None and not hasattr(value, 'resolve_expression'):
+        value = _BoundMember(value, bind)
     return Q(Exists(manager.filter(pk=value)))
 
 

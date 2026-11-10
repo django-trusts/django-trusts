@@ -768,6 +768,15 @@ class RegisterRejectionTest(SimpleTestCase):
                 with self.assertRaises(TrustsConfigurationError):
                     handle.register(**kwargs)
                 self.assertEqual(handle.records, ())
+        handle = compiler(path='tests.core.coverage-user-groups')
+        with self.assertRaisesRegex(
+            TrustsConfigurationError, 'terminates on auth.Group',
+        ):
+            handle.register(
+                trust=self.Grant, user='user__groups',
+                permission='permission', content='node',
+            )
+        self.assertEqual(handle.records, ())
 
 
 class _Outside(TrustModelBackendMixin, ModelBackend):
@@ -950,6 +959,8 @@ class BindOnceShapeTest(TestCase):
             (ContentType.objects.all(), Q(app_label=ct.app_label)),
             (ContentType.objects.all(), Q(model=ct.model)),
             (Permission.objects.all(), Q(content_type_id=ct.pk)),
+            (Permission.objects.all(), Q(content_type__app_label=ct.app_label)),
+            (Permission.objects.all(), Q(content_type__model=ct.model)),
             (Permission.objects.all(), Q(codename=perm.codename)),
             (Permission.objects.all(), Q(id=perm.pk)),
             (ContentType.objects.all(), Q(pk=ct.pk)),
@@ -1568,26 +1579,14 @@ class NamedFilterAgreementTest(TransactionTestCase):
         )
         self._agree(wrong, self.alice, note, False, name='wrong')
 
-        bad = self._handle(
-            'bad', lambda user, permission, obj: permission.name == 'Change note',
-        )
-        with published_class_catalog(
-            HostTrustModelBackend, bad,
-        ), override_settings(AUTHENTICATION_BACKENDS=(
-            'tests.kernel_host.backends.HostTrustModelBackend',
-        )):
-            for ask in (
-                lambda: self.alice.has_perm('%s:bad' % self.code, note),
-                lambda: list(self.Note.objects.permitted(
-                    self.code, self.alice, conditions=('bad',),
-                )),
-                lambda: list(self.Note.objects.permitted(
-                    self.change, self.alice, conditions=('bad',),
-                )),
-                lambda: list(note.get_permitted_users('%s:bad' % self.code)),
-            ):
-                with self.assertRaises(PermissionConditionError):
-                    ask()
+        rejected = compiler(path='tests.core.coverage-permission-name')
+        with self.assertRaises(PermissionConditionError) as raised:
+            rejected.add_named_filter(
+                self.Note, 'bad',
+                lambda user, permission, obj: permission.name == 'Change note',
+            )
+        self.assertIn('cannot traverse attributes in V1', str(raised.exception))
+        self.assertEqual(rejected.records, ())
 
     def test_null_membership_does_not_grant(self):
         handle = compiler(path='tests.core.coverage-null-member')
@@ -1621,21 +1620,25 @@ class NamedFilterAgreementTest(TransactionTestCase):
                 'fill',
                 lambda user, permission, obj: Coalesce(obj.title, 'shut') == 'open',
             )
+        filled = self._handle(
+            'filled',
+            lambda user, permission, obj: (
+                Coalesce(obj.title, Value('shut')) == 'open'
+            ),
+        )
+        self._agree(filled, self.alice, self.notes['ops'], True, name='filled')
+        self._agree(filled, self.alice, self.notes['bare'], False, name='filled')
         document = render_configured_policy(lowered)
         self.assertIn(b'LOWER', document.upper())
 
     def test_a_permission_id_is_not_a_group(self):
-        try:
-            handle = self._handle(
-                'perm_pk',
+        handle = compiler(path='tests.core.coverage-permission-id')
+        with self.assertRaises(PermissionConditionError):
+            handle.add_named_filter(
+                self.Note, 'perm_pk',
                 lambda user, permission, obj: user.groups.contains(permission.id),
             )
-        except (PermissionConditionError, TrustsConfigurationError):
-            return
-        allowed = self.group.pk == self.change.pk
-        self._agree(
-            handle, self.alice, self.notes['ops'], allowed, name='perm_pk',
-        )
+        self.assertEqual(handle.records, ())
 
     def test_a_missing_desk_does_not_grant(self):
         handle = self._handle(
@@ -2314,22 +2317,17 @@ class PermissionCodenameMembershipTest(TransactionTestCase):
                 {tagged.pk},
             )
             catalog = built_catalog(handle)
-            outcomes = []
             for _model, tree in catalog.prepared_conditions.values():
-                try:
-                    compiled = compile_to_q(tree, Sheet, alice, change, User)
-                except PermissionConditionError as exc:
-                    self.assertIn('cannot traverse', str(exc))
-                    outcomes.append('raised')
-                    continue
+                compiled = compile_to_q(tree, Sheet, alice, change, User)
                 self.assertEqual(
                     set(Sheet.objects.filter(compiled).values_list(
                         'pk', flat=True,
                     )),
                     {tagged.pk},
                 )
-                outcomes.append('matched')
-            self.assertEqual(sorted(outcomes), ['matched', 'raised'])
+            document = render_configured_policy(handle)
+            self.assertIn(b'$permission.codename', document)
+            self.assertIn(b'$permission.app_label', document)
             self.assertEqual(
                 set(tagged.get_permitted_users('%s:app' % code).values_list(
                     'username', flat=True,

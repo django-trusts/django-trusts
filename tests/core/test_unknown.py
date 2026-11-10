@@ -691,10 +691,11 @@ class UnknownEntryTests(TransactionTestCase):
         An unsaved user has no primary key, so the condition is compiled
         without a user binding. An object comparison still runs. A user
         field cannot. ``Reachable`` on a permission attribute is rejected
-        at registration. A string permission's ``name`` still fails when
-        the inquiry passes a codename. A permission row is the pk for a
-        bare ``p``, and a real column for ``p.codename``. Two function
-        grants compare and hash by that tree.
+        at registration. ``permission.name`` is rejected there too: a
+        string inquiry cannot read it, so it is not stored. A permission
+        row is the pk for a bare ``p``, and a real column for
+        ``p.codename``. ``app_label`` agrees for a row and a codename.
+        Two function grants compare and hash by that tree.
         """
         User = get_user_model()
         Room, _Tag, Desk, Note, DeskGrant = _models()
@@ -736,9 +737,17 @@ class UnknownEntryTests(TransactionTestCase):
         factory.add_named_filter(
             Note, 'by_missing', lambda u, p, o: p.codename == 'missing',
         )
+        with self.assertRaises(PermissionConditionError) as raised:
+            factory.add_named_filter(
+                Note, 'by_name',
+                lambda u, p, o: p.name == 'Can change unk desk',
+            )
+        self.assertIn(
+            'cannot traverse attributes in V1', str(raised.exception),
+        )
         factory.add_named_filter(
-            Note, 'by_name',
-            lambda u, p, o: p.name == 'Can change unk desk',
+            Note, 'by_app',
+            lambda u, p, o: p.app_label == 'trusts_tests',
         )
         factory.register(
             trust=DeskGrant, user='user', permission='permission',
@@ -832,21 +841,20 @@ class UnknownEntryTests(TransactionTestCase):
 
                 self.assertEqual(desks('same_perm'), granted_desks)
                 self.assertEqual(desks('by_code'), granted_desks)
-                self.assertEqual(desks('by_name'), granted_desks)
+                self.assertEqual(desks('by_app'), granted_desks)
                 self.assertEqual(desks('by_missing'), set())
-                with self.assertRaises(PermissionConditionError) as raised:
-                    alice.has_perm('%s:by_name' % PERM, upper_note)
-                self.assertIn(
-                    'Permission references cannot traverse attributes in V1',
-                    str(raised.exception),
+                self.assertTrue(alice.has_perm('%s:by_app' % PERM, upper_note))
+                self.assertEqual(
+                    set(Note.objects.permitted(
+                        change, alice, conditions=('by_app',),
+                    ).values_list('pk', flat=True)),
+                    {upper_note.pk, lower_note.pk, blank_note.pk},
                 )
-                with self.assertRaises(PermissionConditionError) as raised:
-                    list(Note.objects.permitted(
-                        PERM, alice, conditions=('by_name',),
-                    ))
-                self.assertIn(
-                    'Permission references cannot traverse attributes in V1',
-                    str(raised.exception),
+                self.assertEqual(
+                    set(Note.objects.permitted(
+                        PERM, alice, conditions=('by_app',),
+                    ).values_list('pk', flat=True)),
+                    {upper_note.pk, lower_note.pk, blank_note.pk},
                 )
 
     def test_registration_rejects_root_and_column_paths(self):

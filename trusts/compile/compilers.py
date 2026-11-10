@@ -13,7 +13,7 @@ from types import MappingProxyType
 
 from django.apps import apps as django_apps
 from django.conf import settings
-from django.contrib.auth.models import Permission
+from django.contrib.auth.models import Group, Permission
 from django.core.exceptions import AppRegistryNotReady, FieldDoesNotExist
 from django.db.models import Model, Q
 
@@ -923,6 +923,23 @@ class Compiler(object):
             condition=condition, along=along, via=via, name=name,
             description=description,
         )
+        # ``user__groups`` stores a group primary key and compares it
+        # with the requesting user. That is not group membership.
+        # ``group=`` plus a user path that ends on the user model is
+        # the registration that grants to members.
+        configured = self.user_model
+        if (
+            record.user_model._meta.concrete_model is Group
+            and (
+                configured is None
+                or configured._meta.concrete_model is not Group
+            )
+        ):
+            raise TrustsConfigurationError(
+                'user path %r terminates on auth.Group. A group grant '
+                'uses group= and a user path that ends on the user model.'
+                % (path_text(record.user_path),)
+            )
         root = record.root
         existing = self._by_root.get(root, ())
         conditions = self._stored_user_conditions()

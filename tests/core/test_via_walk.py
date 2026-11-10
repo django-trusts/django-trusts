@@ -2357,33 +2357,23 @@ class ViaHopFilterTest(TransactionTestCase):
                     selected=selected, plain=True,
                 )
 
-    def test_permission_name_is_rejected_on_the_forward_inquiry(self):
-        """``permission.name`` is a concrete column, and V1 still rejects it.
+    def test_permission_name_is_rejected_when_the_filter_is_stored(self):
+        """``permission.name`` is not a V1 permission reference.
 
-        The via member can name that column, so registration stores the
-        filter. The forward inquiry refuses to traverse it and grants
-        nothing.
+        A string inquiry cannot read that column, so the filter is not
+        stored for a later query to reject.
         """
         self._activate()
-        kept = lambda user, permission, content: (
-            permission.name == 'change_hoptask'
-        )
-        handle = self._seat('perm-name', kept, ('holder__via_manager', 8))
-        self.assertEqual(len(handle.records), 1)
-        with _listed(handle):
-            for ask in (
-                lambda: self.people['ada'].has_perm(
-                    '%s:kept' % self.code, self.task,
+        handle = compiler(path='tests.core.via-hop.perm-name')
+        with self.assertRaises(PermissionConditionError) as raised:
+            handle.add_named_filter(
+                self.Task, 'kept',
+                lambda user, permission, content: (
+                    permission.name == 'change_hoptask'
                 ),
-                lambda: list(self.Task.objects.permitted(
-                    self.code, self.people['ada'], conditions=('kept',),
-                )),
-                lambda: list(self.task.get_permitted_users(
-                    '%s:kept' % self.code,
-                )),
-            ):
-                with self.assertRaises(PermissionConditionError):
-                    ask()
+            )
+        self.assertIn('cannot traverse attributes in V1', str(raised.exception))
+        self.assertEqual(handle.records, ())
 
     def test_hop_filters_the_walk_cannot_render_are_rejected(self):
         """A via filter that is not one row comparison is not stored."""

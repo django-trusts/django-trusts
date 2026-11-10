@@ -862,7 +862,10 @@ def _validate_node(node, model, user_model):
                     user_model, node.path, ref_kind='principal',
                 )
         elif node.root == 'permission':
-            if len(node.path) > 1:
+            # A string inquiry only has the permission, its app label, and
+            # its codename. ``name`` and a longer path fail later on some
+            # inquiries and succeed on others, so registration rejects them.
+            if node.path not in ((), ('app_label',), ('codename',)):
                 raise PermissionConditionError(
                     'Permission references cannot traverse attributes in V1.'
                 )
