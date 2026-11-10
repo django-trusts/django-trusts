@@ -15,9 +15,10 @@ from contextvars import ContextVar
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import BooleanField, Model, OuterRef, Q, Subquery
 from django.db.models.expressions import Expression
+from django.db.models.fields.related import ManyToManyRel
 
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
-from trusts.plan.conditions import condition_model_key
+from trusts.plan.conditions import ModelIdentity, condition_model_key
 from trusts.plan.grammar import REACHABLE_KIND, Tree
 from trusts.plan.predicates import bind_record_qs, bind_terminal
 from trusts.plan.rewrites import CallInput
@@ -38,10 +39,13 @@ from trusts.plan.standards import (
     rule_applies,
 )
 from trusts.plan.walk import (
+    _column_equals,
     _far_membership,
     _fk_stores_pk,
+    _follow,
     _grant_walk_attname,
     _m2m_columns,
+    _m2m_contains,
     _pk_equals_sql,
     _quoted_column,
     _render_reach_sql,
@@ -664,7 +668,11 @@ def _via_other_operand(node, user_model, content_model, content, carriers, name,
     sql = _other_operand(
         node, user_model, content_model, content, carriers, name, qn,
     )
-    return Operand(sql, (), '(1=1)', (), False)
+    instance = (
+        getattr(node, 'kind', None) == 'const'
+        and isinstance(node.value, (Model, ModelIdentity))
+    )
+    return Operand(sql, (), '(1=1)', (), False, instance_pk=instance)
 
 
 def _user_operand(node, user_model, content_model, content, carriers, name, qn):
@@ -706,12 +714,33 @@ def _contains_sql(node, user_model, content_model, content, carriers, name, qn,
         return None
     if getattr(left, 'kind', None) != 'field' or left.root != 'user':
         raise _cannot(name)
-    if len(left.path) != 1:
+    current = user_model
+    hops = []
+    field = None
+    for index, part in enumerate(left.path):
+        try:
+            field = current._meta.get_field(part)
+        except Exception as exc:
+            raise _cannot(name) from exc
+        if index == len(left.path) - 1:
+            break
+        try:
+            current = _follow(field)
+        except PermissionConditionError as exc:
+            raise _cannot(name) from exc
+        hops.append(field)
+    if hops:
+        member = _other_operand(
+            node.right, user_model, content_model, content, carriers, name, qn,
+        )
+        if getattr(field, 'many_to_many', False) and not isinstance(field, ManyToManyRel):
+            return _m2m_contains(field, hops, member, (), qn).sql
+        if getattr(field, 'concrete', False) and (
+            getattr(field, 'many_to_one', False)
+            or getattr(field, 'one_to_one', False)
+        ):
+            return _column_equals(hops, field, member, (), qn).sql
         raise _cannot(name)
-    try:
-        field = user_model._meta.get_field(left.path[0])
-    except Exception as exc:
-        raise _cannot(name) from exc
     if getattr(field, 'many_to_many', False):
         forward, user_col, target_col = _m2m_columns(field)
         through_model = forward.remote_field.through
@@ -734,7 +763,10 @@ def _contains_sql(node, user_model, content_model, content, carriers, name, qn,
                 far,
             )
         )
-    if getattr(field, 'concrete', False) and getattr(field, 'many_to_one', False):
+    if getattr(field, 'concrete', False) and (
+        getattr(field, 'many_to_one', False)
+        or getattr(field, 'one_to_one', False)
+    ):
         member = _other_operand(
             node.right, user_model, content_model, content, carriers, name, qn,
         )

@@ -52,10 +52,13 @@ class Operand(object):
     __slots__ = (
         'value_sql', 'value_params', 'reached_sql', 'reached_params',
         'literal_none', 'output_field', 'export_hint',
+        'identity_sql', 'identity_params', 'identity_field', 'instance_pk',
     )
 
     def __init__(self, value_sql, value_params, reached_sql, reached_params,
-                 literal_none=False, output_field=None, export_hint=None):
+                 literal_none=False, output_field=None, export_hint=None,
+                 identity_sql=None, identity_params=(), identity_field=None,
+                 instance_pk=False):
         self.value_sql = value_sql
         self.value_params = tuple(value_params)
         self.reached_sql = reached_sql
@@ -63,6 +66,10 @@ class Operand(object):
         self.literal_none = literal_none
         self.output_field = output_field
         self.export_hint = export_hint
+        self.identity_sql = identity_sql
+        self.identity_params = tuple(identity_params)
+        self.identity_field = identity_field
+        self.instance_pk = instance_pk
 
 
 class Expr(object):
@@ -189,6 +196,24 @@ def _align(left, right, connection):
     return left, right
 
 
+def _as_related_pk(field_side, other):
+    """Compare a non-PK ``to_field`` relation by the related primary key.
+
+    ``== None`` keeps the stored column. A field on the other side keeps
+    the stored value too. A constant instance is the related pk, so the
+    value becomes the joined target's pk. An attname has no identity SQL.
+    """
+    if not field_side.identity_sql or field_side.identity_field is None:
+        return field_side
+    if not other.instance_pk:
+        return field_side
+    return Operand(
+        field_side.identity_sql, field_side.identity_params,
+        field_side.reached_sql, field_side.reached_params,
+        False, field_side.identity_field, field_side.export_hint,
+    )
+
+
 def compare(kind, left, right, connection=None):
     """One comparison. ``== None`` / ``!= None`` test a stored NULL only."""
     if kind in ('eq', 'ne') and left.literal_none != right.literal_none:
@@ -203,6 +228,9 @@ def compare(kind, left, right, connection=None):
             return eq
         # Derived: unreachable stays Unknown, a reached value is true.
         return Expr('(NOT (%s))' % eq.sql, eq.params)
+    if kind in ('eq', 'ne'):
+        left = _as_related_pk(left, right)
+        right = _as_related_pk(right, left)
     left, right = _align(left, right, connection)
     if kind == 'ne':
         # The policy formatter accepts ``=`` and ``NOT``. ``<>`` is not
@@ -299,7 +327,10 @@ def _const_operand(value, connection):
         param = _Marked(value, runtime=runtime)
     else:
         param = runtime
-    return Operand(sql, (param,), '(1=1)', (), runtime is None)
+    return Operand(
+        sql, (param,), '(1=1)', (), runtime is None,
+        instance_pk=isinstance(value, ModelIdentity),
+    )
 
 
 def _forward_fk(field):
@@ -662,8 +693,24 @@ def field_operand(model, path, source, qn, query=None, raw_alias=None):
         model, hops, leaf.column, source, qn, reachable=True,
         query=query, raw_alias=raw_alias,
     )
+    identity_sql = None
+    identity_params = ()
+    identity_field = None
+    if (
+        _forward_fk(leaf)
+        and not getattr(leaf.target_field, 'primary_key', False)
+        and not _names_attname(leaf, path[-1])
+    ):
+        related = leaf.remote_field.model
+        identity_field = related._meta.pk
+        identity_sql, identity_params = correlated(
+            model, tuple(hops) + (('fk', leaf),), identity_field.column,
+            source, qn, reachable=False, query=query, raw_alias=raw_alias,
+        )
     return Operand(
         value_sql, value_params, reached_sql, reached_params, False, leaf,
+        identity_sql=identity_sql, identity_params=identity_params,
+        identity_field=identity_field,
     )
 
 

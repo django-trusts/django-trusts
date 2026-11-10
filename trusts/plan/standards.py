@@ -29,6 +29,7 @@ from trusts.plan.trivalent import grant_q, has_contains
 from trusts.plan.writers import (
     contains_q,
     member_pk,
+    pk_membership_lookup,
 )
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 
@@ -209,31 +210,32 @@ def _user_bindings(path, scope):
     return {'user': ('alias', scope, prefix)}
 
 
-def _compile(path, expr, scope):
+def _compile(path, expr, scope, user_model):
     if not has_contains(expr):
         return grant_q(expr, _user_bindings(path, scope))
     if expr.kind == 'and':
         return (
-            _compile(path, expr.left, scope)
-            & _compile(path, expr.right, scope)
+            _compile(path, expr.left, scope, user_model)
+            & _compile(path, expr.right, scope, user_model)
         )
     if expr.kind == 'or':
         return (
-            _compile(path, expr.left, scope)
-            | _compile(path, expr.right, scope)
+            _compile(path, expr.left, scope, user_model)
+            | _compile(path, expr.right, scope, user_model)
         )
     if expr.kind == 'contains':
-        return _compile_user_contains(path, expr)
+        return _compile_user_contains(path, expr, user_model)
     raise unsupported(expr.kind, 'a user condition')
 
 
-def _compile_user_contains(path, node):
+def _compile_user_contains(path, node, user_model):
     lookup = _prefixed(path, node.left.path)
     member = node.right
     if member.kind == 'const':
         value = member_pk(member.value)
         if value is None:
             return Q(pk__in=())
+        lookup = pk_membership_lookup(user_model, node.left.path, lookup)
         return contains_q(lookup, value)
     return contains_q(lookup, F(_prefixed(path, member.path)))
 
@@ -294,7 +296,7 @@ def compile_user_rules(model, path, conditions, *, role, values, scope=None):
         if not rule_applies(rule.on, role):
             continue
         flag = SkipFlag(rule.name, values.get(rule.name, False))
-        part = Q(flag) | _compile(path, rule.expr, scope)
+        part = Q(flag) | _compile(path, rule.expr, scope, model)
         combined = part if combined is None else combined & part
     return Q() if combined is None else combined
 
@@ -304,4 +306,4 @@ def compile_override_q(model, path, slot, values):
     if slot is None:
         return None
     flag = SkipFlag(slot.name, (values or {}).get(slot.name, False))
-    return ~Q(flag) & _compile(path, slot.expr, model)
+    return ~Q(flag) & _compile(path, slot.expr, model, model)

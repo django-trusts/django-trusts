@@ -5458,3 +5458,301 @@ def _same_row_kept():
         'listed': {2},
     }
 
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class ViaRelationIdentityTest(TransactionTestCase):
+    """A relation compared to an instance matches that row's pk.
+
+    The target user pk and username are swapped. A foreign key, a
+    one-to-one, and a many-to-many store the username. Only the wanted
+    user may satisfy ``==`` or ``.contains()``.
+    """
+
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+        _attach_manager(self, User)
+        self.User = User
+
+        class Desk(models.Model):
+            code = models.IntegerField(unique=True, db_column='desk_code')
+            owner = models.OneToOneField(
+                User, to_field='username', null=True, db_column='desk_owner',
+                on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_rel_desk'
+
+        class Membership(models.Model):
+            person = models.ForeignKey(
+                User, to_field='username', db_column='member_name',
+                on_delete=models.CASCADE, related_name='+',
+            )
+            friend = models.ForeignKey(
+                User, to_field='username', db_column='friend_name',
+                on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_rel_member'
+
+        class Node(models.Model):
+            title = models.CharField(max_length=20)
+            card = models.OneToOneField(
+                User, to_field='username', null=True, db_column='card_name',
+                on_delete=models.CASCADE, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_rel_node'
+
+        class SheetQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Sheet(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=20)
+            node = models.ForeignKey(
+                Node, related_name='sheets', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(SheetQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_rel_sheet'
+
+        class Grant(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, related_name='+',
+            )
+            node = models.ForeignKey(Node, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_rel_grant'
+
+        class GroupGrant(models.Model):
+            group = models.ForeignKey(Group, on_delete=models.CASCADE)
+            node = models.ForeignKey(Node, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_rel_group'
+
+        class Delegation(models.Model):
+            delegate = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            sponsor = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            node = models.ForeignKey(Node, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_rel_deleg'
+
+        self.Desk = Desk
+        self.Node = Node
+        self.Sheet = Sheet
+        self.Grant = Grant
+        self.GroupGrant = GroupGrant
+        self.Delegation = Delegation
+        cm = _tables(
+            Desk, Membership, Node, Sheet, Grant, GroupGrant, Delegation,
+        )
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        User.add_to_class(
+            'friends',
+            models.ManyToManyField(
+                User, through=Membership, through_fields=('person', 'friend'),
+                related_name='+',
+            ),
+        )
+        _bind_m2m(User, 'friends', User)
+        self.addCleanup(self._drop_friends, User)
+        link = dict(
+            null=True, on_delete=models.DO_NOTHING, related_name='+',
+            db_constraint=False, db_index=False,
+        )
+        _add_user_column(
+            self, User, 'lead',
+            models.ForeignKey(
+                User, to_field='username', db_column='lead_name', **link,
+            ),
+        )
+        _add_user_column(
+            self, User, 'desk',
+            models.ForeignKey(
+                Desk, to_field='code', db_column='user_desk', **link,
+            ),
+        )
+        self.change = _permission(Sheet, 'change_via_rel')
+        self.code = '%s.%s' % (
+            self.change.content_type.app_label, self.change.codename,
+        )
+        self.wanted = User.objects.create_user(
+            username='1002', password='x', pk=1001,
+        )
+        self.decoy = User.objects.create_user(
+            username='1001', password='x', pk=1002,
+        )
+        self.alice = User.objects.create_user('via-rel-alice', password='x')
+        self.bob = User.objects.create_user('via-rel-bob', password='x')
+        self.dan = User.objects.create_user('via-rel-dan', password='x')
+        self.bob.via_manager = self.alice
+        self.bob.save(update_fields=['via_manager'])
+        self.wanted_desk = Desk.objects.create(
+            pk=1, code=2, owner=self.wanted,
+        )
+        self.decoy_desk = Desk.objects.create(
+            pk=2, code=1, owner=self.decoy,
+        )
+        self.node = Node.objects.create(title='N', card=self.wanted)
+        self.sheet = Sheet.objects.create(title='S', node=self.node)
+        self.editors = Group.objects.create(name='via-rel-editors')
+        self.editors.permissions.add(self.change)
+        self.editors.user_set.add(self.alice, self.bob)
+
+    def _drop_friends(self, user_model):
+        try:
+            field = user_model._meta.get_field('friends')
+        except Exception:
+            return
+        if field in user_model._meta.local_many_to_many:
+            user_model._meta.local_many_to_many.remove(field)
+        user_model._meta._expire_cache()
+        if hasattr(user_model, 'friends'):
+            delattr(user_model, 'friends')
+
+    def _clear_links(self):
+        self.User.friends.through.objects.all().delete()
+        self.User.objects.filter(pk__in=(
+            self.alice.pk, self.bob.pk,
+        )).update(lead=None, desk=None)
+
+    def _plant(self, kind, positive):
+        self._clear_links()
+        held = self.wanted if positive else self.decoy
+        other = self.decoy if positive else self.wanted
+        self.alice.lead = held
+        self.bob.lead = other
+        self.alice.desk = self.wanted_desk if positive else self.decoy_desk
+        self.bob.desk = self.decoy_desk if positive else self.wanted_desk
+        self.alice.save(update_fields=['lead', 'desk'])
+        self.bob.save(update_fields=['lead', 'desk'])
+        self.alice.friends.add(held)
+        self.bob.friends.add(other)
+        self.node.card = held
+        self.node.save(update_fields=['card'])
+
+    def _condition(self, kind):
+        if kind == 'fk':
+            return lambda user: user.lead == self.wanted
+        if kind == 'm2m':
+            return lambda user: user.friends.contains(self.wanted.pk)
+        if kind == 'hop':
+            return lambda user: user.desk.owner == self.wanted
+        raise AssertionError(kind)
+
+    def _expect(self, user, allowed, *, group=False):
+        with _listed(self.handle):
+            has = user.has_perm(self.code, self.sheet)
+            permitted = set(self.Sheet.objects.permitted(
+                self.code, user,
+            ).values_list('pk', flat=True))
+            holders = set(self.sheet.get_permitted_users(
+                self.change,
+            ).values_list('pk', flat=True))
+            listed = self.code in user.get_all_permissions(self.sheet)
+            nodes = set(filter_by_permitted_content(
+                self.Node.objects.all(), user, self.change, content=self.Sheet,
+            ).values_list('pk', flat=True))
+            grouped = None
+            if group:
+                grouped = self.code in user.get_group_permissions(self.sheet)
+        self.assertIs(has, allowed)
+        self.assertEqual(self.sheet.pk in permitted, allowed)
+        self.assertEqual(user.pk in holders, allowed)
+        self.assertEqual(listed, allowed)
+        self.assertEqual(self.node.pk in nodes, allowed)
+        if grouped is not None:
+            self.assertEqual(grouped, allowed)
+
+    def test_via_user_condition_matches_the_related_pk(self):
+        for kind in ('fk', 'm2m', 'hop'):
+            for positive in (False, True):
+                with self.subTest(kind=kind, positive=positive):
+                    self._plant(kind, positive)
+                    handle = compiler(
+                        path='tests.core.via-rel.%s-%s' % (kind, int(positive)),
+                    )
+                    handle.set_user_condition('lead', self._condition(kind))
+                    handle.register(
+                        trust=self.Grant, user='user', permission='permission',
+                        content='node__sheets',
+                        via=('user__via_manager', 4),
+                    )
+                    self.handle = handle
+                    self.Grant.objects.all().delete()
+                    self.Grant.objects.create(
+                        user=self.alice, permission=self.change, node=self.node,
+                    )
+                    self._expect(self.alice, positive)
+                    self._expect(self.bob, False)
+
+    def test_relation_group_and_content_match_the_related_pk(self):
+        for positive in (False, True):
+            with self.subTest(positive=positive):
+                self._plant('fk', positive)
+                handle = compiler(
+                    path='tests.core.via-rel.row-%s' % int(positive),
+                )
+                handle.register(
+                    trust=self.Grant, user='user', permission='permission',
+                    content='node__sheets',
+                    condition=lambda t: (
+                        (t.user.lead == self.wanted) & (t.node.card == self.wanted)
+                    ),
+                )
+                handle.register(
+                    trust=self.Delegation, delegate='delegate', sponsor='sponsor',
+                    content='node__sheets',
+                )
+                self.handle = handle
+                self.Grant.objects.all().delete()
+                self.Delegation.objects.all().delete()
+                self.Grant.objects.create(
+                    user=self.alice, permission=self.change, node=self.node,
+                )
+                self.Delegation.objects.create(
+                    delegate=self.dan, sponsor=self.alice, node=self.node,
+                )
+                self._expect(self.alice, positive)
+                self._expect(self.dan, positive)
+                grouped = compiler(
+                    path='tests.core.via-rel.group-%s' % int(positive),
+                )
+                grouped.set_user_condition(
+                    'lead', lambda user: user.lead == self.wanted,
+                )
+                grouped.register(
+                    trust=self.GroupGrant, user='group__user', group='group',
+                    content='node__sheets',
+                )
+                self.GroupGrant.objects.all().delete()
+                self.GroupGrant.objects.create(
+                    group=self.editors, node=self.node,
+                )
+                self.handle = grouped
+                self._expect(self.alice, positive, group=True)
+                self._expect(self.bob, not positive, group=True)
+
+

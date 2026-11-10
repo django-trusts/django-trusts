@@ -19,6 +19,7 @@ from trusts.plan.conditions import (
 from trusts.plan.writers import (
     contains_q,
     member_pk,
+    pk_membership_lookup,
 )
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.utils import parse_perm_code
@@ -196,7 +197,9 @@ def _contains_outcome(expr, content, singular, user_model):
         pk = member_pk(_side_value(right, content, singular, user_model))
         if pk is None:
             return None
-        return contains_q(lookup, pk)
+        return contains_q(
+            pk_membership_lookup(user_model, left.path, lookup), pk,
+        )
     if left.root != 'object':
         raise TrustsConfigurationError(
             'Reverse permission inquiry cannot compile permission condition '
@@ -212,7 +215,9 @@ def _contains_outcome(expr, content, singular, user_model):
     pk = member_pk(_side_value(right, content, singular, user_model))
     if pk is None:
         return None
-    return _exists_q(content, contains_q(lookup, pk))
+    return _exists_q(content, contains_q(
+        pk_membership_lookup(content.__class__, left.path, lookup), pk,
+    ))
 
 
 def _side_value(node, content, singular, user_model):
