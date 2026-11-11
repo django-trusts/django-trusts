@@ -25,7 +25,13 @@ from trusts.plan.rewrites import CallInput
 from trusts.plan.trivalent import (
     Operand,
     _forward_fk,
+    _and_expr,
+    _as_expr,
+    _not_expr,
+    _or_expr,
+    _reached_text,
     compare,
+    embed_and,
     concrete_owner_hops,
     correlated,
     reachable_operand,
@@ -427,14 +433,14 @@ def _render_hop(record, rules, filters, content, qn):
                 qn, force=True,
             )
             if rendered:
-                parts.append(rendered)
+                parts.append(embed_and(_as_expr(rendered)))
         for expr in filters:
             rendered = _walk_node(
                 expr, user_model, content_model, content, carriers, None,
                 qn, force=False,
             )
             if rendered:
-                parts.append(rendered)
+                parts.append(embed_and(_as_expr(rendered)))
         return ' AND '.join(parts), carriers
     finally:
         _hop_record.reset(token)
@@ -469,7 +475,7 @@ def _walk_node(node, user_model, content_model, content, carriers, name, qn,
             return right
         if right is None:
             return left
-        return '(%s AND %s)' % (left, right)
+        return _and_expr(_as_expr(left), _as_expr(right))
     if node.kind == 'or':
         if (
             not force
@@ -486,7 +492,7 @@ def _walk_node(node, user_model, content_model, content, carriers, name, qn,
         )
         if left is None or right is None:
             raise _cannot(name)
-        return '(%s OR %s)' % (left, right)
+        return _or_expr(_as_expr(left), _as_expr(right))
     if node.kind == 'not':
         inner = _walk_node(
             node.item, user_model, content_model, content, carriers, name,
@@ -494,7 +500,7 @@ def _walk_node(node, user_model, content_model, content, carriers, name, qn,
         )
         if inner is None:
             return None
-        return '(NOT %s)' % inner
+        return _not_expr(_as_expr(inner))
     if node.kind == 'bare':
         return _walk_node(
             node.item, user_model, content_model, content, carriers, name,
@@ -515,9 +521,9 @@ def _walk_node(node, user_model, content_model, content, carriers, name, qn,
         if getattr(field, 'kind', None) != 'field' or field.root != 'user':
             raise _cannot(name)
         try:
-            return reachable_operand(
+            return _reached_text(reachable_operand(
                 user_model, field.path, ('alias', '{alias}'), qn,
-            ).reached_sql
+            ).reached_sql)
         except PermissionConditionError as exc:
             raise _cannot(name) from exc
     if node.kind == 'contains':
@@ -713,7 +719,7 @@ def _compare_sql(node, user_model, content_model, content, carriers, name, qn,
             )
         except PermissionConditionError as exc:
             raise _cannot(name) from exc
-        return compare(node.kind, user_operand, other).sql
+        return compare(node.kind, user_operand, other)
     if getattr(other_node, 'kind', None) == 'field' and other_node.root == 'object':
         content_key = relation_target(content_model, other_node.path)
         differ = _targets_differ(user_operand.target_key, content_key)
@@ -728,12 +734,12 @@ def _compare_sql(node, user_model, content_model, content, carriers, name, qn,
             content_model, content, other_node.path, name,
             identity=differ and not stores_pk,
         ))
-        other = Operand('{c%s}' % index, (), '(1=1)', (), False)
-        return compare(node.kind, user_operand, other).sql
+        other = Operand('{c%s}' % index, (), None, (), False)
+        return compare(node.kind, user_operand, other)
     other = _via_other_operand(
         other_node, user_model, content_model, content, carriers, name, qn,
     )
-    return compare(node.kind, user_operand, other).sql
+    return compare(node.kind, user_operand, other)
 
 
 def _user_field_pair(left, right):
@@ -755,7 +761,7 @@ def _via_other_operand(node, user_model, content_model, content, carriers, name,
                        qn):
     """The non-user side of a hop comparison. A constant ``None`` stays literal."""
     if getattr(node, 'kind', None) == 'const' and _const_value(node) is None:
-        return Operand('(1=0)', (), '(1=1)', (), True)
+        return Operand('(1=0)', (), None, (), True)
     sql = _other_operand(
         node, user_model, content_model, content, carriers, name, qn,
     )
@@ -763,7 +769,7 @@ def _via_other_operand(node, user_model, content_model, content, carriers, name,
         getattr(node, 'kind', None) == 'const'
         and isinstance(node.value, (Model, ModelIdentity))
     )
-    return Operand(sql, (), '(1=1)', (), False, instance_pk=instance)
+    return Operand(sql, (), None, (), False, instance_pk=instance)
 
 
 def _user_operand(node, user_model, content_model, content, carriers, name, qn):
@@ -1444,7 +1450,7 @@ def _seed_sql(node, compiler, connection, qn, template, names):
         values = {'alias': alias}
         for index, sql in enumerate(carrier_sql):
             values['c%s' % index] = '(%s)' % sql
-        where = '%s AND (%s)' % (where, template.format(**values))
+        where = '%s AND %s' % (where, template.format(**values))
         params.extend(_placeholder_params(template, carrier_lists))
     sql = 'SELECT %s FROM %s AS %s WHERE %s' % (
         ', '.join(selected), table, alias, where,

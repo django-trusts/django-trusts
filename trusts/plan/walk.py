@@ -17,9 +17,13 @@ from trusts.plan.predicates import bind_record_qs, bind_terminal
 from trusts.plan.trivalent import (
     Expr,
     Scope,
+    _and_expr,
     _export_param,
     _exporting,
+    _not_expr,
+    _or_expr,
     _runtime_param,
+    embed_and,
     field_operand,
     lower,
     pk_operand,
@@ -205,7 +209,7 @@ def _prepare_walk(walk, connection):
         return walk, ()
     expr = compile_walk_condition(condition, walk.walk_model, connection)
     return (
-        _CompiledWalk(walk, expr.sql),
+        _CompiledWalk(walk, embed_and(expr)),
         _condition_params(expr.params, connection),
     )
 
@@ -230,14 +234,11 @@ def _lower_walk_node(node, model, connection):
     if node.kind in ('and', 'or'):
         left = _lower_walk_node(node.left, model, connection)
         right = _lower_walk_node(node.right, model, connection)
-        word = 'AND' if node.kind == 'and' else 'OR'
-        return Expr(
-            '((%s) %s (%s))' % (left.sql, word, right.sql),
-            left.params + right.params,
-        )
+        if node.kind == 'and':
+            return _and_expr(left, right)
+        return _or_expr(left, right)
     if node.kind == 'not':
-        inner = _lower_walk_node(node.item, model, connection)
-        return Expr('(NOT (%s))' % inner.sql, inner.params)
+        return _not_expr(_lower_walk_node(node.item, model, connection))
     try:
         return lower(node, Scope(
             {'row': ('alias', model, ())}, qn, connection, '{alias}',
@@ -452,16 +453,19 @@ def _column_equals(hops, field, member_sql, member_params, qn):
         return Expr(
             _pk_equals_sql(field, stored, member_sql, qn, 'cndpk'),
             member_params,
+            'cmp',
         )
     if not hops:
         return Expr(
-            '{alias}.%s = %s' % (qn(field.column), member_sql), member_params,
+            '{alias}.%s = %s' % (qn(field.column), member_sql),
+            member_params,
+            'cmp',
         )
     owner, frm, where = _chain(hops, qn)
     sql = '(SELECT %s.%s FROM %s WHERE %s) = %s' % (
         owner, qn(field.column), frm, where, member_sql,
     )
-    return Expr(sql, member_params)
+    return Expr(sql, member_params, 'cmp')
 
 
 def _fk_for_column(model, column):
@@ -561,8 +565,8 @@ def _identity_comparison(node, model, qn):
         stored = _select_column(hops, fk.column, qn)
         sql = _pk_equals_sql(fk, stored, '%s', qn, 'cndeq')
     if node.kind == 'ne':
-        return Expr('(NOT %s)' % sql, params)
-    return Expr(sql, params)
+        return _not_expr(Expr(sql, params, 'cmp'))
+    return Expr(sql, params, 'cmp')
 
 
 def _format_hop(walk, template, node_alias):

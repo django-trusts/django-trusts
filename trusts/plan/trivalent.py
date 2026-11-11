@@ -48,6 +48,8 @@ class Operand(object):
     ``literal_none`` is a constant ``None``, the explicit null test.
     A field whose value is NULL is not ``literal_none``. ``export_hint``
     is the lockfile name of this field when a constant is compared to it.
+    ``reached_sql`` is ``None`` when no join can miss. A string is a real
+    guard: the row may be absent, and that SQL says whether it was joined.
     """
 
     __slots__ = (
@@ -77,13 +79,18 @@ class Operand(object):
 
 
 class Expr(object):
-    """Boolean SQL that may be true, false, or NULL."""
+    """Boolean SQL that may be true, false, or NULL.
 
-    __slots__ = ('sql', 'params')
+    ``op`` is ``cmp``, ``not``, ``and``, ``or``, or ``None`` for an atom
+    such as ``CASE`` or ``EXISTS``. Parents add parentheses from ``op``.
+    """
 
-    def __init__(self, sql, params=()):
+    __slots__ = ('sql', 'params', 'op')
+
+    def __init__(self, sql, params=(), op=None):
         self.sql = sql
         self.params = tuple(params)
+        self.op = op
 
 
 _COMPARE = {
@@ -243,20 +250,88 @@ def _match_relation_targets(left, right):
     return pk_operand(left), pk_operand(right)
 
 
+def _reached_text(sql):
+    """Reachability SQL. ``None`` is a row no join can miss."""
+    if sql is None:
+        return '(1=1)'
+    return sql
+
+
+def _grouped(expr, parent):
+    """Parenthesize ``expr`` only when ``parent`` would bind it wrong.
+
+    Comparison and ``IS NULL`` outrank ``NOT``, ``AND``, and ``OR``.
+    ``AND`` outranks ``OR``. ``NOT`` outranks both. The same operator
+    needs no extra pair. ``CASE`` and ``EXISTS`` are atoms.
+    """
+    op = expr.op
+    if parent == 'and' and op == 'or':
+        return '(%s)' % expr.sql
+    if parent == 'or' and op == 'and':
+        return '(%s)' % expr.sql
+    if parent == 'not' and op in ('and', 'or'):
+        return '(%s)' % expr.sql
+    return expr.sql
+
+
+def _and_expr(left, right):
+    return Expr(
+        '%s AND %s' % (_grouped(left, 'and'), _grouped(right, 'and')),
+        left.params + right.params,
+        'and',
+    )
+
+
+def _or_expr(left, right):
+    return Expr(
+        '%s OR %s' % (_grouped(left, 'or'), _grouped(right, 'or')),
+        left.params + right.params,
+        'or',
+    )
+
+
+def _not_expr(inner):
+    return Expr('NOT %s' % _grouped(inner, 'not'), inner.params, 'not')
+
+
+def embed_and(expr):
+    """``expr`` beside an ``AND``. An ``OR`` root keeps one pair."""
+    return _grouped(expr, 'and')
+
+
+def _as_expr(value):
+    """An ``Expr``, or a finished atom such as ``EXISTS``."""
+    if isinstance(value, Expr):
+        return value
+    return Expr(value, (), None)
+
+
+def _null_test(field):
+    """``IS NULL`` for a stored column, guarded when the row may be missing.
+
+    ``reached_sql is None`` means the row is already in the query, so the
+    predicate is the column. A real guard stays in ``CASE``: ``ELSE NULL``
+    is Unknown when that join missed.
+    """
+    if field.reached_sql is None:
+        return Expr('%s IS NULL' % field.value_sql, field.value_params, 'cmp')
+    return Expr(
+        'CASE WHEN %s THEN %s IS NULL ELSE NULL END' % (
+            field.reached_sql, field.value_sql,
+        ),
+        field.reached_params + field.value_params,
+    )
+
+
 def compare(kind, left, right, connection=None):
     """One comparison. ``== None`` / ``!= None`` test a stored NULL only."""
     if kind in ('eq', 'ne') and left.literal_none != right.literal_none:
         field = right if left.literal_none else left
-        eq = Expr(
-            'CASE WHEN (%s) THEN (%s IS NULL) ELSE NULL END' % (
-                field.reached_sql, field.value_sql,
-            ),
-            field.reached_params + field.value_params,
-        )
+        eq = _null_test(field)
         if kind == 'eq':
             return eq
         # Derived: unreachable stays Unknown, a reached value is true.
-        return Expr('(NOT (%s))' % eq.sql, eq.params)
+        return _not_expr(eq)
     if kind in ('eq', 'ne'):
         left = _as_related_pk(left, right)
         right = _as_related_pk(right, left)
@@ -265,13 +340,15 @@ def compare(kind, left, right, connection=None):
     if kind == 'ne':
         # The policy formatter accepts ``=`` and ``NOT``. ``<>`` is not
         # emitted.
-        return Expr(
-            '(NOT (%s = %s))' % (left.value_sql, right.value_sql),
+        return _not_expr(Expr(
+            '%s = %s' % (left.value_sql, right.value_sql),
             left.value_params + right.value_params,
-        )
+            'cmp',
+        ))
     return Expr(
-        '(%s %s %s)' % (left.value_sql, _COMPARE[kind], right.value_sql),
+        '%s %s %s' % (left.value_sql, _COMPARE[kind], right.value_sql),
         left.value_params + right.value_params,
+        'cmp',
     )
 
 
@@ -295,20 +372,11 @@ def lower(node, scope):
     """Lower ``node`` to three-valued SQL. The caller demands true."""
     kind = node.kind
     if kind == 'and':
-        left, right = lower(node.left, scope), lower(node.right, scope)
-        return Expr(
-            '((%s) AND (%s))' % (left.sql, right.sql),
-            left.params + right.params,
-        )
+        return _and_expr(lower(node.left, scope), lower(node.right, scope))
     if kind == 'or':
-        left, right = lower(node.left, scope), lower(node.right, scope)
-        return Expr(
-            '((%s) OR (%s))' % (left.sql, right.sql),
-            left.params + right.params,
-        )
+        return _or_expr(lower(node.left, scope), lower(node.right, scope))
     if kind == 'not':
-        inner = lower(node.item, scope)
-        return Expr('(NOT (%s))' % inner.sql, inner.params)
+        return _not_expr(lower(node.item, scope))
     if kind == 'bare':
         operand = scope.operand(node.item)
         field = operand.output_field
@@ -323,14 +391,17 @@ def lower(node, scope):
                 except Exception:
                     prepared = True
             return Expr(
-                '(' + operand.value_sql + ' = %s)',
+                operand.value_sql + ' = %s',
                 operand.value_params + (
                     _Marked(prepared, const_hint=operand.export_hint or 'literal'),
                 ),
+                'cmp',
             )
     if kind == REACHABLE_KIND:
         operand = scope.reachable_operand(node.item)
-        return Expr('(%s)' % operand.reached_sql, operand.reached_params)
+        return Expr(
+            _reached_text(operand.reached_sql), operand.reached_params,
+        )
     if kind == 'ne' or kind in _COMPARE:
         return compare(
             kind, scope.operand(node.left), scope.operand(node.right),
@@ -374,7 +445,7 @@ def _const_operand(value, connection):
     else:
         param = runtime
     return Operand(
-        sql, (param,), '(1=1)', (), runtime is None,
+        sql, (param,), None, (), runtime is None,
         instance_pk=isinstance(value, ModelIdentity),
     )
 
@@ -643,7 +714,8 @@ def correlated(model, hops, leaf_column, source, qn, *, reachable,
     ``source`` is ``('alias', sql)`` or ``('pk', pk, model)``. A join that
     misses, including a dangling foreign key, yields no row. When the
     query already cites a prefix of ``hops``, that alias is the same row
-    and any later hops are a subquery from it.
+    and any later hops are a subquery from it. A reachable row with no
+    join that can miss is ``(None, ())``.
     """
     if source[0] == 'alias':
         reused = None
@@ -658,7 +730,7 @@ def correlated(model, hops, leaf_column, source, qn, *, reachable,
                     if nullable:
                         column = qn(last_model._meta.pk.column)
                         return '%s.%s IS NOT NULL' % (quoted, column), ()
-                    return '(1=1)', ()
+                    return None, ()
                 return '%s.%s' % (quoted, qn(leaf_column)), ()
             prev = quoted
         else:
@@ -681,7 +753,7 @@ def correlated(model, hops, leaf_column, source, qn, *, reachable,
             prev = dest
         if not hops:
             if reachable:
-                return '(1=1)', ()
+                return None, ()
             return '%s.%s' % (source[1], qn(leaf_column)), ()
         selected = '1' if reachable else '%s.%s' % (prev, qn(leaf_column))
         body = 'SELECT %s FROM %s WHERE %s' % (
@@ -722,7 +794,7 @@ def field_operand(model, path, source, qn, query=None, raw_alias=None):
         if source[0] == 'alias':
             column = model._meta.pk.column
             sql = '%s.%s' % (source[1], qn(column))
-            return Operand(sql, (), '(1=1)', (), False)
+            return Operand(sql, (), None, (), False)
         sql, params = correlated(
             model, (), model._meta.pk.column, source, qn, reachable=False,
         )
@@ -969,12 +1041,12 @@ class Scope(object):
     def _call(self, node):
         name = node.value
         if name == 'now':
-            return Operand(now_sql(self.connection), (), '(1=1)', (), False)
+            return Operand(now_sql(self.connection), (), None, (), False)
         if name == 'lower':
             inner = self.operand(node.item[0])
             return Operand(
                 'LOWER(%s)' % inner.value_sql, inner.value_params,
-                '(1=1)', (), False,
+                None, (), False,
             )
         if name == 'coalesce':
             parts = [self.operand(arg) for arg in node.item]
@@ -1010,7 +1082,7 @@ class Scope(object):
                     # so ``2.5 = '2.50'`` fails. The column type puts it back.
                     sql = 'CAST(%s AS %s)' % (sql, db_type)
             return Operand(
-                sql, tuple(params), '(1=1)', (), False, field, hint,
+                sql, tuple(params), None, (), False, field, hint,
             )
         raise PermissionConditionError(
             'Cannot lower function %r.' % (name,)
@@ -1115,9 +1187,10 @@ class GrantPredicate(Expression):
             self.bindings, qn, connection, alias,
             query=compiler.query, raw_alias=raw,
         ))
+        sql = embed_and(expr)
         if _exporting():
-            return expr.sql, tuple(_export_param(param) for param in expr.params)
-        return expr.sql, tuple(
+            return sql, tuple(_export_param(param) for param in expr.params)
+        return sql, tuple(
             _runtime_param(param, connection) for param in expr.params
         )
 
