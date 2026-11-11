@@ -28,7 +28,15 @@ from trusts.models import (
     PermittedUsersManagerMixin,
     PermittedUsersMixin,
 )
-from trusts.plan.trivalent import Operand, compare
+from trusts.plan.trivalent import (
+    Expr,
+    Operand,
+    _and_expr,
+    _not_expr,
+    _or_expr,
+    compare,
+    embed_and,
+)
 
 
 class _NullBackend(TrustModelBackendMixin, ModelBackend):
@@ -101,23 +109,23 @@ class PresentNullSqlTests(SimpleTestCase):
         eq = compare('eq', column, _none())
         ne = compare('ne', column, _none())
         swapped = compare('eq', _none(), column)
-        self.assertEqual(eq.sql, '("issue"."cut_here" IS NULL)')
+        self.assertEqual(eq.sql, '"issue"."cut_here" IS NULL')
         self.assertEqual(eq.params, ())
         self.assertEqual(swapped.sql, eq.sql)
-        self.assertEqual(ne.sql, '(NOT ("issue"."cut_here" IS NULL))')
+        self.assertEqual(ne.sql, 'NOT "issue"."cut_here" IS NULL')
         self.assertNotIn('CASE', eq.sql)
         self.assertNotIn('IS NOT NULL', ne.sql)
 
     def test_parenthesized_and_spaced_true_guards_are_the_same_constant(self):
         column = Operand('"t"."a"', (), None, (), False)
         sql = compare('eq', column, _none()).sql
-        self.assertEqual(sql, '("t"."a" IS NULL)')
+        self.assertEqual(sql, '"t"."a" IS NULL')
         self.assertNotIn('1=1', sql)
         # The marker is structural. A guard that merely says 1=1 stays.
         for guard in ('((1=1))', ' ( 1 = 1 ) ', '1=1', '(((1=1)))'):
             raw = Operand('"t"."a"', (), guard, (), False)
             kept = compare('eq', raw, _none()).sql
-            self.assertIn('CASE WHEN (%s)' % guard, kept, guard)
+            self.assertIn('CASE WHEN %s THEN' % guard, kept, guard)
 
     def test_real_guard_stays_unknown_when_the_row_is_missing(self):
         missing = Operand(
@@ -131,21 +139,21 @@ class PresentNullSqlTests(SimpleTestCase):
         )
         eq = compare('eq', missing, _none())
         ne = compare('ne', _none(), missing)
-        self.assertIn('CASE WHEN (EXISTS', eq.sql)
+        self.assertIn('CASE WHEN EXISTS', eq.sql)
         self.assertIn('"h0"."room_label"', eq.sql)
-        self.assertIn(') IS NULL)', eq.sql)
+        self.assertIn(' IS NULL ELSE NULL END', eq.sql)
         self.assertNotIn('1=1', eq.sql)
-        self.assertEqual(ne.sql, '(NOT (%s))' % eq.sql)
+        self.assertEqual(ne.sql, 'NOT %s' % eq.sql)
         self.assertNotIn('IS NOT NULL', ne.sql)
         reached = Operand(
             '"desk"."label"', (), '"desk"."id" IS NOT NULL', (), False,
         )
         guarded = compare('eq', reached, _none())
-        self.assertIn('CASE WHEN ("desk"."id" IS NOT NULL)', guarded.sql)
+        self.assertIn('CASE WHEN "desk"."id" IS NOT NULL THEN', guarded.sql)
         self.assertNotIn('1=1', guarded.sql)
         false_guard = Operand('"t"."a"', (), '(1=0)', (), False)
         kept = compare('eq', false_guard, _none()).sql
-        self.assertIn('CASE WHEN ((1=0))', kept)
+        self.assertIn('CASE WHEN (1=0) THEN', kept)
         compound = Operand('"t"."a"', ('x',), '(1=1) AND (1=1)', (), False)
         mixed = compare('eq', compound, _none())
         self.assertIn('CASE WHEN', mixed.sql)
@@ -154,12 +162,53 @@ class PresentNullSqlTests(SimpleTestCase):
     def test_present_null_keeps_value_params_only(self):
         column = Operand('%s', ('kept',), None, (), False)
         eq = compare('eq', _none(), column)
-        self.assertEqual(eq.sql, '(%s IS NULL)')
+        self.assertEqual(eq.sql, '%s IS NULL')
         self.assertEqual(eq.params, ('kept',))
         guarded = Operand('(%s)', ('v',), 'EXISTS (%s)', ('r',), False)
         eq = compare('ne', guarded, _none())
         self.assertEqual(eq.params, ('r', 'v'))
-        self.assertIn('CASE WHEN (EXISTS (%s))', eq.sql)
+        self.assertIn('CASE WHEN EXISTS (%s) THEN', eq.sql)
+
+    def test_nesting_keeps_one_pair_only_where_precedence_needs_it(self):
+        left = Expr('a = %s', ('L',), 'cmp')
+        mid = Expr('b IS NULL', (), 'cmp')
+        right = Expr('c = %s', ('R',), 'cmp')
+        either = _or_expr(left, mid)
+        both = _and_expr(left, mid)
+        self.assertEqual(either.params, ('L',))
+        self.assertEqual(embed_and(either), '(a = %s OR b IS NULL)')
+        self.assertEqual(embed_and(both), 'a = %s AND b IS NULL')
+        self.assertEqual(
+            embed_and(_and_expr(either, right)),
+            '(a = %s OR b IS NULL) AND c = %s',
+        )
+        self.assertEqual(
+            embed_and(_or_expr(both, right)),
+            '((a = %s AND b IS NULL) OR c = %s)',
+        )
+        self.assertEqual(_or_expr(both, right).params, ('L', 'R'))
+        self.assertEqual(_not_expr(either).sql, 'NOT (a = %s OR b IS NULL)')
+        self.assertEqual(_not_expr(both).sql, 'NOT (a = %s AND b IS NULL)')
+        self.assertEqual(_not_expr(left).sql, 'NOT a = %s')
+        self.assertEqual(_not_expr(mid).sql, 'NOT b IS NULL')
+        case = Expr(
+            'CASE WHEN EXISTS (SELECT 1) THEN a IS NULL ELSE NULL END',
+        )
+        reached = Expr('EXISTS (SELECT 1 FROM t)')
+        self.assertEqual(
+            embed_and(_or_expr(case, right)),
+            '(CASE WHEN EXISTS (SELECT 1) THEN a IS NULL ELSE NULL END'
+            ' OR c = %s)',
+        )
+        self.assertEqual(
+            _not_expr(case).sql,
+            'NOT CASE WHEN EXISTS (SELECT 1) THEN a IS NULL ELSE NULL END',
+        )
+        self.assertEqual(_not_expr(reached).sql, 'NOT EXISTS (SELECT 1 FROM t)')
+        self.assertEqual(
+            embed_and(_and_expr(reached, left)),
+            'EXISTS (SELECT 1 FROM t) AND a = %s',
+        )
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -344,15 +393,58 @@ class AlongNullGuardTests(TransactionTestCase):
             8,
         ))
         query, policy = self._sql(handle)
+        child = _q('child')
+        column = _q('cut_here')
+        grouped = '(%s.%s = %%s OR %s.%s IS NULL )' % (
+            child, column, child, column,
+        )
         for text in (query, policy):
             self._assert_plain(text, 'cut_here')
             self.assertNotIn(_q('reset_inheritance'), text, text)
+        self.assertIn(grouped, policy)
+        self.assertNotIn(
+            '((%s.%s = %%s))' % (child, column), policy,
+        )
         self._expect(handle, self.alice, {'A', 'B', 'E', 'F'})
         self.Grant.objects.create(
             user=self.alice, permission=self.change, issue=self.issues['C'],
         )
         self._expect(handle, self.alice, {'A', 'B', 'C', 'D', 'E', 'F'})
         self._expect(handle, self.bob, set())
+
+    def test_and_inside_or_does_not_pull_an_unrelated_row(self):
+        self._issue('A', reset=False, note='a')
+        self._issue('B', parent='A', reset=None, note=None, room='blank')
+        self._issue('E', parent='A', reset=False, note='e')
+        self._issue('H', parent='A', reset=False, note=None, room='blank')
+        self._issue('C', parent='B', reset=True, note='c', room=None)
+        self._issue('G', reset=None, note=None, room=None)
+        self.Grant.objects.create(
+            user=self.alice, permission=self.change, issue=self.issues['A'],
+        )
+        handle = self._open('and-or', (
+            lambda t: (
+                (
+                    (t.issue.reset_inheritance == False)  # noqa: E712
+                    & (t.issue.note != None)  # noqa: E711
+                )
+                | (t.issue.reset_inheritance == None)  # noqa: E711
+            ) & t.issue.parent,
+            8,
+        ))
+        _query, policy = self._sql(handle)
+        child = _q('child')
+        cut = _q('cut_here')
+        note = _q('issue_note')
+        self.assertIn(
+            '((%s.%s = %%s AND NOT %s.%s IS NULL ) OR %s.%s IS NULL )' % (
+                child, cut, child, note, child, cut,
+            ),
+            policy,
+        )
+        # H is false with a null note, so neither arm matches. G is not
+        # a child; a missing pair around the OR would let its null flag in.
+        self._expect(handle, self.alice, {'A', 'B', 'E'})
 
     def test_not_none_and_either_side_use_the_stored_column(self):
         self._issue('A', reset=False, note='a')

@@ -31,7 +31,7 @@ backends:
                 FROM "auth_user" "U0"
                 WHERE ("U0"."id" = ("trusts_bind"."user_id")
                     AND ((%s)
-                      OR ("U0"."is_active" = %s)
+                      OR "U0"."is_active" = %s
                   )
                 )
                 LIMIT 1
@@ -73,7 +73,7 @@ backends:
                 FROM "auth_user" "U0"
                 WHERE ("U0"."id" = ("trusts_bind"."user_id")
                     AND ((%s)
-                      OR ("U0"."is_active" = %s)
+                      OR "U0"."is_active" = %s
                   )
                 )
                 LIMIT 1
@@ -127,7 +127,7 @@ backends:
                         FROM "auth_user" "U0"
                         WHERE ("U0"."id" = ("trusts_bind"."user_id")
                             AND ((%s)
-                              OR ("U0"."is_active" = %s)
+                              OR "U0"."is_active" = %s
                           )
                         )
                         LIMIT 1
@@ -157,7 +157,7 @@ backends:
               SELECT %s AS "content_id", %s AS "app_label", %s AS "model"
             ) "trusts_bind"
             WHERE (((%s)
-                  OR ("auth_user"."is_active" = %s)
+                  OR "auth_user"."is_active" = %s
               )
               AND EXISTS (
                 SELECT 1 AS "a"
@@ -188,7 +188,7 @@ backends:
             sql: |-
               SELECT "documents_document"."id", "documents_document"."title", "documents_document"."confidential"
               FROM "documents_document"
-              WHERE (NOT ("documents_document"."confidential" = %s))
+              WHERE NOT "documents_document"."confidential" = %s
             has_perm:
               params: ["$user.id", "$content.id", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False", "user.is_active=True", "$permission.codename", "confidential=True"]
               sql: |-
@@ -203,7 +203,7 @@ backends:
                     FROM "auth_user" "U0"
                     WHERE ("U0"."id" = ("trusts_bind"."user_id")
                         AND ((%s)
-                          OR ("U0"."is_active" = %s)
+                          OR "U0"."is_active" = %s
                       )
                     )
                     LIMIT 1
@@ -231,7 +231,7 @@ backends:
                     )
                     LIMIT 1
                   )
-                    AND (NOT ("documents_document"."confidential" = %s))
+                    AND NOT "documents_document"."confidential" = %s
                 )
                 LIMIT 1
             permitted:
@@ -248,7 +248,7 @@ backends:
                     FROM "auth_user" "U0"
                     WHERE ("U0"."id" = ("trusts_bind"."user_id")
                         AND ((%s)
-                          OR ("U0"."is_active" = %s)
+                          OR "U0"."is_active" = %s
                       )
                     )
                     LIMIT 1
@@ -276,7 +276,7 @@ backends:
                     )
                     LIMIT 1
                   )
-                    AND (NOT ("documents_document"."confidential" = %s))
+                    AND NOT "documents_document"."confidential" = %s
                 )
   - path: "documents.backends.OrBackend"
     contents:
@@ -308,7 +308,7 @@ backends:
                 FROM "auth_user" "U0"
                 WHERE ("U0"."id" = ("trusts_bind"."user_id")
                     AND ((%s)
-                      OR ("U0"."is_active" = %s)
+                      OR "U0"."is_active" = %s
                   )
                 )
                 LIMIT 1
@@ -375,7 +375,7 @@ backends:
                 FROM "auth_user" "U0"
                 WHERE ("U0"."id" = ("trusts_bind"."user_id")
                     AND ((%s)
-                      OR ("U0"."is_active" = %s)
+                      OR "U0"."is_active" = %s
                   )
                 )
                 LIMIT 1
@@ -454,7 +454,7 @@ backends:
                         FROM "auth_user" "U0"
                         WHERE ("U0"."id" = ("trusts_bind"."user_id")
                             AND ((%s)
-                              OR ("U0"."is_active" = %s)
+                              OR "U0"."is_active" = %s
                           )
                         )
                         LIMIT 1
@@ -499,7 +499,7 @@ backends:
               SELECT %s AS "content_id", %s AS "app_label", %s AS "model"
             ) "trusts_bind"
             WHERE (((%s)
-                  OR ("auth_user"."is_active" = %s)
+                  OR "auth_user"."is_active" = %s
               )
                 AND ( EXISTS (
                   SELECT 1 AS "a"

@@ -78,13 +78,18 @@ class Operand(object):
 
 
 class Expr(object):
-    """Boolean SQL that may be true, false, or NULL."""
+    """Boolean SQL that may be true, false, or NULL.
 
-    __slots__ = ('sql', 'params')
+    ``op`` is ``cmp``, ``not``, ``and``, ``or``, or ``None`` for an atom
+    such as ``CASE`` or ``EXISTS``. Parents add parentheses from ``op``.
+    """
 
-    def __init__(self, sql, params=()):
+    __slots__ = ('sql', 'params', 'op')
+
+    def __init__(self, sql, params=(), op=None):
         self.sql = sql
         self.params = tuple(params)
+        self.op = op
 
 
 _COMPARE = {
@@ -251,6 +256,55 @@ def _reached_text(sql):
     return sql
 
 
+def _grouped(expr, parent):
+    """Parenthesize ``expr`` only when ``parent`` would bind it wrong.
+
+    Comparison and ``IS NULL`` outrank ``NOT``, ``AND``, and ``OR``.
+    ``AND`` outranks ``OR``. ``NOT`` outranks both. The same operator
+    needs no extra pair. ``CASE`` and ``EXISTS`` are atoms.
+    """
+    op = expr.op
+    if parent == 'and' and op == 'or':
+        return '(%s)' % expr.sql
+    if parent == 'or' and op == 'and':
+        return '(%s)' % expr.sql
+    if parent == 'not' and op in ('and', 'or'):
+        return '(%s)' % expr.sql
+    return expr.sql
+
+
+def _and_expr(left, right):
+    return Expr(
+        '%s AND %s' % (_grouped(left, 'and'), _grouped(right, 'and')),
+        left.params + right.params,
+        'and',
+    )
+
+
+def _or_expr(left, right):
+    return Expr(
+        '%s OR %s' % (_grouped(left, 'or'), _grouped(right, 'or')),
+        left.params + right.params,
+        'or',
+    )
+
+
+def _not_expr(inner):
+    return Expr('NOT %s' % _grouped(inner, 'not'), inner.params, 'not')
+
+
+def embed_and(expr):
+    """``expr`` beside an ``AND``. An ``OR`` root keeps one pair."""
+    return _grouped(expr, 'and')
+
+
+def _as_expr(value):
+    """An ``Expr``, or a finished atom such as ``EXISTS``."""
+    if isinstance(value, Expr):
+        return value
+    return Expr(value, (), None)
+
+
 def _null_test(field):
     """``IS NULL`` for a stored column, guarded when the row may be missing.
 
@@ -259,9 +313,9 @@ def _null_test(field):
     is Unknown when that join missed.
     """
     if field.reached_sql is None:
-        return Expr('(%s IS NULL)' % field.value_sql, field.value_params)
+        return Expr('%s IS NULL' % field.value_sql, field.value_params, 'cmp')
     return Expr(
-        'CASE WHEN (%s) THEN (%s IS NULL) ELSE NULL END' % (
+        'CASE WHEN %s THEN %s IS NULL ELSE NULL END' % (
             field.reached_sql, field.value_sql,
         ),
         field.reached_params + field.value_params,
@@ -276,9 +330,7 @@ def compare(kind, left, right, connection=None):
         if kind == 'eq':
             return eq
         # Derived: unreachable stays Unknown, a reached value is true.
-        if field.reached_sql is None:
-            return Expr('(NOT %s)' % eq.sql, eq.params)
-        return Expr('(NOT (%s))' % eq.sql, eq.params)
+        return _not_expr(eq)
     if kind in ('eq', 'ne'):
         left = _as_related_pk(left, right)
         right = _as_related_pk(right, left)
@@ -287,13 +339,15 @@ def compare(kind, left, right, connection=None):
     if kind == 'ne':
         # The policy formatter accepts ``=`` and ``NOT``. ``<>`` is not
         # emitted.
-        return Expr(
-            '(NOT (%s = %s))' % (left.value_sql, right.value_sql),
+        return _not_expr(Expr(
+            '%s = %s' % (left.value_sql, right.value_sql),
             left.value_params + right.value_params,
-        )
+            'cmp',
+        ))
     return Expr(
-        '(%s %s %s)' % (left.value_sql, _COMPARE[kind], right.value_sql),
+        '%s %s %s' % (left.value_sql, _COMPARE[kind], right.value_sql),
         left.value_params + right.value_params,
+        'cmp',
     )
 
 
@@ -301,20 +355,11 @@ def lower(node, scope):
     """Lower ``node`` to three-valued SQL. The caller demands true."""
     kind = node.kind
     if kind == 'and':
-        left, right = lower(node.left, scope), lower(node.right, scope)
-        return Expr(
-            '((%s) AND (%s))' % (left.sql, right.sql),
-            left.params + right.params,
-        )
+        return _and_expr(lower(node.left, scope), lower(node.right, scope))
     if kind == 'or':
-        left, right = lower(node.left, scope), lower(node.right, scope)
-        return Expr(
-            '((%s) OR (%s))' % (left.sql, right.sql),
-            left.params + right.params,
-        )
+        return _or_expr(lower(node.left, scope), lower(node.right, scope))
     if kind == 'not':
-        inner = lower(node.item, scope)
-        return Expr('(NOT (%s))' % inner.sql, inner.params)
+        return _not_expr(lower(node.item, scope))
     if kind == 'bare':
         operand = scope.operand(node.item)
         field = operand.output_field
@@ -329,16 +374,16 @@ def lower(node, scope):
                 except Exception:
                     prepared = True
             return Expr(
-                '(' + operand.value_sql + ' = %s)',
+                operand.value_sql + ' = %s',
                 operand.value_params + (
                     _Marked(prepared, const_hint=operand.export_hint or 'literal'),
                 ),
+                'cmp',
             )
     if kind == REACHABLE_KIND:
         operand = scope.reachable_operand(node.item)
         return Expr(
-            '(%s)' % _reached_text(operand.reached_sql),
-            operand.reached_params,
+            _reached_text(operand.reached_sql), operand.reached_params,
         )
     if kind == 'ne' or kind in _COMPARE:
         return compare(
@@ -1109,9 +1154,10 @@ class GrantPredicate(Expression):
             self.bindings, qn, connection, alias,
             query=compiler.query, raw_alias=raw,
         ))
+        sql = embed_and(expr)
         if _exporting():
-            return expr.sql, tuple(_export_param(param) for param in expr.params)
-        return expr.sql, tuple(
+            return sql, tuple(_export_param(param) for param in expr.params)
+        return sql, tuple(
             _runtime_param(param, connection) for param in expr.params
         )
 
