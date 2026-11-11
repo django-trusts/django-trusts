@@ -160,16 +160,10 @@ def _condition_outcome(expr, content, singular, user_model):
 def _combine_and(left, right):
     if left is None or right is None:
         return None
-    if left is True:
-        return right
-    if right is True:
-        return left
     return left & right
 
 
 def _combine_or(left, right):
-    if left is True or right is True:
-        return True
     if left is None:
         return right
     if right is None:

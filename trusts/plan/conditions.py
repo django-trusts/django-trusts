@@ -385,10 +385,6 @@ def resolve_field_path(model, path, ref_kind='object', *, collection=False):
     return '__'.join(path)
 
 
-def resolve_object_field_path(model, path):
-    return resolve_field_path(model, path, ref_kind='object')
-
-
 def _terminal_field(model, path, ref_kind='object', *, collection=False):
     resolve_field_path(
         model, path, ref_kind=ref_kind, collection=collection,
@@ -621,19 +617,6 @@ def _coalesce_fields(node, model, user_model):
     return found
 
 
-def coalesce_output_field(node, model, user_model):
-    """The field Django must use so ``Value()`` does not pick a sibling type."""
-    found = _coalesce_fields(node, model, user_model)
-    if len(found) != 1:
-        return None
-    field = next(iter(found.values()))
-    if isinstance(field, DecimalField):
-        return DecimalField(
-            max_digits=field.max_digits, decimal_places=field.decimal_places,
-        )
-    return type(field)()
-
-
 def check_comparison_types(node, model, user_model):
     left = _operand_spec(node.left, model, user_model)
     right = _operand_spec(node.right, model, user_model)
@@ -862,7 +845,10 @@ def _validate_node(node, model, user_model):
                     user_model, node.path, ref_kind='principal',
                 )
         elif node.root == 'permission':
-            if len(node.path) > 1:
+            # A string inquiry only has the permission, its app label, and
+            # its codename. ``name`` and a longer path fail later on some
+            # inquiries and succeed on others, so registration rejects them.
+            if node.path not in ((), ('app_label',), ('codename',)):
                 raise PermissionConditionError(
                     'Permission references cannot traverse attributes in V1.'
                 )

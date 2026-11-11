@@ -20,6 +20,7 @@ import copy
 from datetime import datetime
 from decimal import Decimal
 
+from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import BooleanField, Model, Q
 from django.db.models.expressions import Expression
 from django.db.models.lookups import Lookup
@@ -349,6 +350,22 @@ def compare(kind, left, right, connection=None):
         left.value_params + right.value_params,
         'cmp',
     )
+
+
+def _permission_app_label(perm):
+    """Content-type label, or '' for an unsaved render sentinel."""
+    if not getattr(perm, 'content_type_id', None):
+        if getattr(getattr(perm, '_state', None), 'adding', False):
+            return ''
+        return None
+    try:
+        content_type = perm.content_type
+    except ObjectDoesNotExist:
+        return None
+    label = getattr(content_type, 'app_label', None)
+    if isinstance(label, str):
+        return label
+    return None
 
 
 def lower(node, scope):
@@ -997,6 +1014,22 @@ class Scope(object):
                     'permission.codename',
                 )
         if isinstance(perm, Model):
+            # ``app_label`` lives on the content type. Reading it as a
+            # column of ``Permission`` disagrees with the string form.
+            if attr == 'app_label':
+                label = _permission_app_label(perm)
+                if isinstance(label, str):
+                    return _mark_const(
+                        _const_operand(label, self.connection),
+                        'permission.app_label',
+                    )
+            if attr == 'codename':
+                codename = getattr(perm, 'codename', None)
+                if isinstance(codename, str):
+                    return _mark_const(
+                        _const_operand(codename, self.connection),
+                        'permission.codename',
+                    )
             return field_operand(
                 perm.__class__, (attr,),
                 ('pk', perm.pk, perm.__class__), self.qn,

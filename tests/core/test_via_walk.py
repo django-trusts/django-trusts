@@ -34,6 +34,7 @@ from trusts.functions import Reachable
 from trusts.models import (
     AuthorizedQuerySet,
     PermittedQuerySetMixin,
+    PermittedUsersManagerMixin,
     PermittedUsersMixin,
 )
 
@@ -2268,6 +2269,188 @@ class ViaHopFilterTest(TransactionTestCase):
         )
         self._expect(coded, ada, selected=True, plain=True)
         self._expect(coded, ben, selected=False, plain=True)
+
+    def test_manager_username_is_read_from_the_related_row(self):
+        """A hop comparison follows ``via_manager`` to that user's username.
+
+        Ada's own username is ``hop-ada``, and her manager is null. Ben
+        and Dee report to Ada. Cy reports to Ben. Comparing the walked
+        user's own username would allow Ada and deny Ben.
+        """
+        self._activate()
+        kept = lambda user, permission, content: (
+            (user.username == 'hop-ada')
+            | (user.via_manager.username == 'hop-ada')
+        )
+        handle = self._seat(
+            'manager-name', kept, ('holder__via_manager', 8),
+        )
+        expected = {
+            'ada': True,
+            'ben': True,
+            'cy': False,
+            'dee': True,
+            'eve': False,
+        }
+        for name, selected in expected.items():
+            with self.subTest(user=name):
+                self._expect(
+                    handle, self.people[name],
+                    selected=selected, plain=True,
+                )
+
+    def test_manager_nick_matches_the_permission_codename(self):
+        """A hop comparison reads a column on the related user row.
+
+        Ada stays in because her username matches, so the walk can
+        reach the people who report to her. Ben and Dee report to Ada,
+        whose nick is the permission codename. Cy reports to Ben, whose
+        nick does not match, so the walk stops before Cy.
+        """
+        self._activate()
+        self.people['ada'].via_nick = self.change.codename
+        self.people['ada'].save(update_fields=['via_nick'])
+        kept = lambda user, permission, content: (
+            (user.username == 'hop-ada')
+            | (user.via_manager.via_nick == permission.codename)
+        )
+        handle = self._seat('manager-code', kept, ('holder__via_manager', 8))
+        expected = {
+            'ada': True,
+            'ben': True,
+            'cy': False,
+            'dee': True,
+            'eve': False,
+        }
+        for name, selected in expected.items():
+            with self.subTest(user=name):
+                self._expect(
+                    handle, self.people[name],
+                    selected=selected, plain=True,
+                )
+
+    def test_manager_group_membership_is_read_through_the_hop(self):
+        """``.contains()`` follows the manager, then that user's groups.
+
+        Ada stays in because her username matches. She is also in the
+        granting group, so Ben and Dee, who report to her, match. Cy
+        reports to Ben, who is not in the group, so Cy is not reached.
+        """
+        self._activate()
+        self.people['ada'].groups.add(self.group)
+        kept = lambda user, permission, content: (
+            (user.username == 'hop-ada')
+            | user.via_manager.groups.contains(self.group)
+        )
+        handle = self._seat('manager-group', kept, ('holder__via_manager', 8))
+        expected = {
+            'ada': True,
+            'ben': True,
+            'cy': False,
+            'dee': True,
+            'eve': False,
+        }
+        for name, selected in expected.items():
+            with self.subTest(user=name):
+                self._expect(
+                    handle, self.people[name],
+                    selected=selected, plain=True,
+                )
+
+    def test_permission_name_is_rejected_when_the_filter_is_stored(self):
+        """``permission.name`` is not a V1 permission reference.
+
+        A string inquiry cannot read that column, so the filter is not
+        stored for a later query to reject.
+        """
+        self._activate()
+        handle = compiler(path='tests.core.via-hop.perm-name')
+        with self.assertRaises(PermissionConditionError) as raised:
+            handle.add_named_filter(
+                self.Task, 'kept',
+                lambda user, permission, content: (
+                    permission.name == 'change_hoptask'
+                ),
+            )
+        self.assertIn('cannot traverse attributes in V1', str(raised.exception))
+        self.assertEqual(handle.records, ())
+
+    def test_hop_filters_the_walk_cannot_render_are_rejected(self):
+        """A via filter that is not one row comparison is not stored."""
+        self._activate()
+        rejected = (
+            ('missing-user', lambda user, permission, content: user.no_such == 'x'),
+            ('missing-hop', lambda user, permission, content: user.via_manager.no_such == 'x'),
+            ('scalar-hop', lambda user, permission, content: user.via_nick.groups == 'x'),
+            ('contains-permission', lambda user, permission, content: user.groups.contains(permission)),
+            ('missing-object', lambda user, permission, content: content.no_such == user.username),
+            ('manager-permission', lambda user, permission, content: user.via_manager == permission),
+            ('bare-text', lambda user, permission, content: user.username),
+            (
+                'permission-path',
+                lambda user, permission, content: (
+                    user.username == permission.content_type.app_label
+                ),
+            ),
+            (
+                'permission-bool',
+                lambda user, permission, content: permission.codename,
+            ),
+        )
+        for name, predicate in rejected:
+            with self.subTest(name=name):
+                with self.assertRaises(TrustsConfigurationError):
+                    self._seat(name, predicate, ('holder__via_manager', 8))
+
+    def test_swapped_operands_read_the_same_hop(self):
+        """A constant or the permission may sit on the left of ``==``."""
+        self._activate()
+        ada = self.people['ada']
+        ben = self.people['ben']
+        dee = self.people['dee']
+        ada.via_nick = self.change.codename
+        ada.save(update_fields=['via_nick'])
+        self.task.name = 'hop-ada'
+        self.task.save(update_fields=['name'])
+        granted = {'ada', 'ben', 'dee'}
+        cases = (
+            (
+                'const-left',
+                lambda user, permission, content: (
+                    ('hop-ada' == user.username)
+                    | ('hop-ada' == user.via_manager.username)
+                ),
+            ),
+            (
+                'perm-left',
+                lambda user, permission, content: (
+                    (permission.codename == user.via_nick)
+                    | (permission.codename == user.via_manager.via_nick)
+                ),
+            ),
+            (
+                'user-right',
+                lambda user, permission, content: (
+                    (content.name == user.username)
+                    | (content.name == user.via_manager.username)
+                ),
+            ),
+            (
+                'manager-row',
+                lambda user, permission, content: (
+                    (user.username == 'hop-ada') | (user.via_manager == ada)
+                ),
+            ),
+        )
+        for name, predicate in cases:
+            handle = self._seat(name, predicate, ('holder__via_manager', 8))
+            for person in self.people.values():
+                with self.subTest(filter=name, user=person.username):
+                    self._expect(
+                        handle, person,
+                        selected=person.username[4:] in granted,
+                        plain=True,
+                    )
 
     def _holder_answer(self, handle, user):
         with _listed(handle):
@@ -5938,5 +6121,317 @@ class ViaRelationIdentityTest(TransactionTestCase):
         self.assertEqual(user.pk in holders, allowed)
         self.assertIs(listed, True)
         self.assertEqual(self.node.pk in nodes, allowed)
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class ViaStoredTargetTest(TransactionTestCase):
+    """A hop reads a missing relation and a non-primary-key target."""
+
+    def test_missing_owner_and_code_target_do_not_overgrant(self):
+        User = get_user_model()
+        _attach_manager(self, User)
+
+        class Mark(models.Model):
+            code = models.CharField(max_length=20, unique=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_mark'
+
+        class PageQuerySet(PermittedQuerySetMixin, models.QuerySet):
+            pass
+
+        class Page(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=20)
+            parent = models.ForeignKey(
+                Mark, to_field='code', null=True, blank=True,
+                db_constraint=False, on_delete=models.CASCADE,
+                related_name='pages',
+            )
+            owner = models.ForeignKey(
+                User, null=True, blank=True, db_constraint=False,
+                on_delete=models.CASCADE, related_name='+',
+            )
+            objects = models.Manager.from_queryset(PageQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_page'
+
+        class PageGrant(models.Model):
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            page = models.ForeignKey(Page, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'via_page_grant'
+
+        with _tables(Mark, Page, PageGrant):
+            _add_user_column(
+                self, User, 'via_mark',
+                models.ForeignKey(
+                    Mark, null=True, blank=True,
+                    db_constraint=False, db_index=False,
+                    on_delete=models.DO_NOTHING, related_name='+',
+                ),
+            )
+            change = _permission(Page, 'change_viapage')
+            ada = User.objects.create_user('via-ada', password='x')
+            root = Mark.objects.create(code='root')
+            page = Page.objects.create(title='p', owner=ada, parent=root)
+            ada.via_mark = root
+            ada.save(update_fields=['via_mark'])
+            PageGrant.objects.create(user=ada, page=page, permission=change)
+            code = 'trusts_tests.change_viapage'
+            owner_handle = compiler(path='tests.core.via-owner')
+            owner_handle.add_named_filter(
+                Page, 'owner',
+                lambda user, permission, content: user.username == content.owner.username,
+            )
+            owner_handle.register(
+                trust=PageGrant, user='user', permission='permission',
+                content='page', via=('user__via_manager', 4),
+            )
+            mark_handle = compiler(path='tests.core.via-mark')
+            mark_handle.add_named_filter(
+                Page, 'mark',
+                lambda user, permission, content: user.via_mark == content.parent,
+            )
+            mark_handle.register(
+                trust=PageGrant, user='user', permission='permission',
+                content='page', via=('user__via_manager', 4),
+            )
+            with _listed(owner_handle):
+                self.assertIs(ada.has_perm('%s:owner' % code, page), True)
+                self.assertEqual(
+                    set(page.get_permitted_users('%s:owner' % code).values_list(
+                        'username', flat=True,
+                    )),
+                    {'via-ada'},
+                )
+                Page.objects.filter(pk=page.pk).update(owner_id=2147483646)
+                page.refresh_from_db()
+                self.assertIs(ada.has_perm('%s:owner' % code, page), False)
+                self.assertEqual(
+                    set(page.get_permitted_users('%s:owner' % code).values_list(
+                        'username', flat=True,
+                    )),
+                    set(),
+                )
+            with _listed(mark_handle):
+                Page.objects.filter(pk=page.pk).update(parent_id='root')
+                page.refresh_from_db()
+                self.assertIs(ada.has_perm('%s:mark' % code, page), True)
+                Page.objects.filter(pk=page.pk).update(parent_id='missing')
+                page.refresh_from_db()
+                self.assertIs(ada.has_perm('%s:mark' % code, page), False)
+                self.assertEqual(
+                    set(page.get_permitted_users(
+                        '%s:mark' % code,
+                    ).values_list('username', flat=True)),
+                    set(),
+                )
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class IdentityDomainTest(TransactionTestCase):
+    """Two relations to one model compare that model's primary key.
+
+    ``stamp`` stores the primary key. ``token`` stores ``code``. The
+    decoy row's code is the wanted primary key, so a stored-column
+    compare would grant it. A dangling ``token`` is SQL NULL of the
+    primary-key type, not an ``integer = text`` error.
+    """
+
+    def test_via_along_and_condition_agree(self):
+        User = get_user_model()
+        _attach_manager(self, User)
+
+        class Mark(models.Model):
+            id = models.IntegerField(primary_key=True)
+            code = models.CharField(max_length=20, unique=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'ident_mark'
+
+        class PageQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Page(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=20)
+            parent = models.ForeignKey(
+                'self', null=True, related_name='kids',
+                on_delete=models.CASCADE,
+            )
+            stamp = models.ForeignKey(
+                Mark, on_delete=models.CASCADE, related_name='+',
+            )
+            token = models.ForeignKey(
+                Mark, to_field='code', null=True, blank=True,
+                db_constraint=False, on_delete=models.CASCADE,
+                related_name='+',
+            )
+            objects = models.Manager.from_queryset(PageQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'ident_page'
+
+        class SheetQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Sheet(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=20)
+            page = models.ForeignKey(
+                Page, related_name='sheets', on_delete=models.CASCADE,
+            )
+            objects = models.Manager.from_queryset(SheetQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'ident_sheet'
+
+        class Grant(models.Model):
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            page = models.ForeignKey(Page, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'ident_grant'
+
+        with _tables(Mark, Page, Sheet, Grant):
+            _add_user_column(
+                self, User, 'badge',
+                models.ForeignKey(
+                    Mark, null=True, blank=True,
+                    db_constraint=False, db_index=False,
+                    on_delete=models.DO_NOTHING, related_name='+',
+                ),
+            )
+            wanted = Mark.objects.create(id=1, code='2')
+            decoy = Mark.objects.create(id=2, code='1')
+            root = Page.objects.create(
+                title='root', stamp=wanted, token=wanted,
+            )
+            match = Page.objects.create(
+                title='match', parent=root, stamp=wanted, token=wanted,
+            )
+            swapped = Page.objects.create(
+                title='swap', parent=root, stamp=wanted, token=decoy,
+            )
+            dangling = Page.objects.create(
+                title='gone', parent=root, stamp=wanted, token_id='missing',
+            )
+            sheets = {}
+            for page in (root, match, swapped, dangling):
+                sheets[page.title] = Sheet.objects.create(
+                    title=page.title, page=page,
+                )
+            change = _permission(Sheet, 'change_identsheet')
+            code = 'trusts_tests.change_identsheet'
+            ada = User.objects.create_user('ident-ada', password='x')
+            ada.badge = wanted
+            ada.save(update_fields=['badge'])
+            for page in (root, match, swapped, dangling):
+                Grant.objects.create(user=ada, page=page, permission=change)
+
+            def users_of(sheet, perm):
+                class Listing(PermittedUsersManagerMixin, type(User.objects)):
+                    pass
+                listing = Listing()
+                listing.model = User
+                return set(listing.permitted(sheet, perm).values_list(
+                    'username', flat=True,
+                ))
+
+            def check(handle, allowed, *, named=None, unfiltered=None):
+                filtered = set(allowed)
+                plain = filtered if unfiltered is None else set(unfiltered)
+                with _listed(handle):
+                    permitted = set(Sheet.objects.permitted(
+                        code, ada, conditions=(named,) if named else (),
+                    ).values_list('title', flat=True))
+                    self.assertEqual(permitted, filtered)
+                    authorized = set(Sheet.objects.authorized(
+                        ada, change,
+                    ).values_list('title', flat=True))
+                    self.assertEqual(authorized, plain)
+                    pages = set(filter_by_permitted_content(
+                        Page.objects.all(), ada, change, content=Sheet,
+                        conditions=(named,) if named else (),
+                    ).values_list('title', flat=True))
+                    self.assertEqual(pages, filtered)
+                    for title, sheet in sheets.items():
+                        selected = title in filtered
+                        base = title in plain
+                        asked = '%s:%s' % (code, named) if named else code
+                        self.assertIs(
+                            ada.has_perm(asked, sheet), selected, title,
+                        )
+                        self.assertIs(ada.has_perm(code, sheet), base, title)
+                        self.assertEqual(
+                            set(sheet.get_permitted_users(asked).values_list(
+                                'username', flat=True,
+                            )),
+                            {'ident-ada'} if selected else set(),
+                            title,
+                        )
+                        self.assertEqual(
+                            users_of(sheet, asked),
+                            {'ident-ada'} if selected else set(),
+                            title,
+                        )
+                        self.assertEqual(
+                            code in ada.get_all_permissions(sheet),
+                            base,
+                            title,
+                        )
+
+            via = compiler(path='tests.core.ident-via')
+            via.add_named_filter(
+                Sheet, 'same',
+                lambda user, permission, content: (
+                    user.badge == content.page.token
+                ),
+            )
+            via.register(
+                trust=Grant, user='user', permission='permission',
+                content='page__sheets', via=('user__via_manager', 2),
+            )
+            check(
+                via, {'root', 'match'}, named='same',
+                unfiltered={'root', 'match', 'swap', 'gone'},
+            )
+
+            Grant.objects.all().delete()
+            for page in (root, match, swapped, dangling):
+                Grant.objects.create(user=ada, page=page, permission=change)
+            conditioned = compiler(path='tests.core.ident-plain')
+            conditioned.register(
+                trust=Grant, user='user', permission='permission',
+                content='page__sheets',
+                condition=lambda row: row.user.badge == row.page.token,
+            )
+            check(conditioned, {'root', 'match'})
+
+            Grant.objects.all().delete()
+            Grant.objects.create(user=ada, page=root, permission=change)
+            walked = compiler(path='tests.core.ident-along')
+            walked.register(
+                trust=Grant, user='user', permission='permission',
+                content='page__sheets',
+                along=(
+                    lambda row: (
+                        (row.page.stamp == row.page.token) & row.page.parent
+                    ),
+                    4,
+                ),
+            )
+            check(walked, {'root', 'match'})
 
 

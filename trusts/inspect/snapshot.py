@@ -1197,9 +1197,7 @@ def _lockfile_check_message():
     if not _lockfile_enforcement_applies(location):
         return None
     resolve_policy_database(None)
-    action = _presence_action(location, writing=False)
-    if action == 'inactive':
-        return None
+    _presence_action(location, writing=False)
     raw = _read_lock_bytes(location)
     if raw is None:
         return None
@@ -1716,10 +1714,6 @@ def _classify_lockfile(path):
         return 'missing_parent'
     except PermissionError:
         return 'permission'
-    except OSError as exc:
-        if exc.errno in (errno.EACCES, errno.EPERM):
-            return 'permission'
-        raise
     if not stat.S_ISDIR(parent_mode):
         return 'not_a_directory'
     try:
@@ -1728,15 +1722,11 @@ def _classify_lockfile(path):
         return 'absent'
     except PermissionError:
         return 'permission'
-    except OSError as exc:
-        if exc.errno in (errno.EACCES, errno.EPERM):
-            return 'permission'
-        raise
     return 'present'
 
 
 def _presence_action(location, *, writing):
-    """Map presence to inactive, create, or present. Fail closed otherwise."""
+    """Return ``create`` or ``present``. Other states fail closed."""
     state = location.state
     path = location.path
     if state == 'permission':
@@ -1744,25 +1734,19 @@ def _presence_action(location, *, writing):
             'Policy lock permission denied: %s.' % path
         )
     if state == 'missing_parent':
-        if location.explicit or writing:
-            raise TrustsConfigurationError(
-                'Policy lock parent directory is missing: %s.' % path.parent
-            )
-        return 'inactive'
+        raise TrustsConfigurationError(
+            'Policy lock parent directory is missing: %s.' % path.parent
+        )
     if state == 'not_a_directory':
-        if location.explicit or writing:
-            raise TrustsConfigurationError(
-                'Policy lock parent is not a directory: %s.' % path.parent
-            )
-        return 'inactive'
+        raise TrustsConfigurationError(
+            'Policy lock parent is not a directory: %s.' % path.parent
+        )
     if state == 'absent':
         if writing:
             return 'create'
-        if location.explicit:
-            raise TrustsConfigurationError(
-                'Policy lock file is missing: %s.' % path
-            )
-        return 'inactive'
+        raise TrustsConfigurationError(
+            'Policy lock file is missing: %s.' % path
+        )
     if state == 'present':
         return 'present'
     raise TrustsConfigurationError(
@@ -1771,13 +1755,7 @@ def _presence_action(location, *, writing):
 
 
 def _require_writable_parent(location):
-    action = _presence_action(location, writing=True)
-    if action not in ('create', 'present'):
-        raise TrustsConfigurationError(
-            'Policy lock path %s cannot be written (state %s).'
-            % (location.path, location.state)
-        )
-    return action
+    _presence_action(location, writing=True)
 
 
 def _lockfile_is_directory(path):
@@ -1838,10 +1816,6 @@ def _atomic_write(path, payload):
             'Policy lock permission denied: %s.' % path
         ) from exc
     except OSError as exc:
-        if exc.errno in (errno.EACCES, errno.EPERM):
-            raise TrustsConfigurationError(
-                'Policy lock permission denied: %s.' % path
-            ) from exc
         if exc.errno in (errno.EISDIR, errno.ENOTDIR):
             raise TrustsConfigurationError(
                 'Policy lock path is a directory: %s.' % path

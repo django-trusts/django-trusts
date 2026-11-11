@@ -20,7 +20,9 @@ import logging
 import re
 import weakref
 
-from django.db.models import BooleanField, Exists, IntegerField, QuerySet, Value
+from django.db.models import (
+    BooleanField, CharField, Exists, IntegerField, QuerySet, Value,
+)
 from django.db.models.expressions import BaseExpression, Expression, F
 from django.db.models.lookups import Lookup
 from django.db.models.query_utils import Q
@@ -38,6 +40,7 @@ BIND_ALIAS = 'trusts_bind'
 
 _SKIP = object()
 _INTEGER = IntegerField()
+_TEXT = CharField()
 _DEPTH_CAP = re.compile(r'["`]depth["`]\s*<\s*%s')
 _EXISTS_MARKER = re.compile(r'SELECT %s AS (["`])a\1')
 _ELIGIBILITY = {
@@ -667,8 +670,14 @@ class _Walk(object):
             return
         if kind != 'bind' and kind != 'const':
             return
+        # An unresolved ``content_type__app_label`` pair has no lookup
+        # output. Defaulting that column to an integer writes the text
+        # onto the foreign key and raises at execution.
+        output = None
+        if label in ('content type app', 'content type model'):
+            output = _TEXT
         self.hits.append(_Hit(
-            plain, kind, label, None,
+            plain, kind, label, output,
             lambda ref, parent=parent, index=index, key=key: (
                 parent.children.__setitem__(index, (key, ref))
             ),
