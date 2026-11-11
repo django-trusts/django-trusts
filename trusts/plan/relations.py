@@ -35,10 +35,10 @@ from django.contrib.auth.models import Permission
 class GrantWitness:
     """One registration's applicable rows, before they are combined.
 
-    ``rows`` is the correlated queryset ``register`` already built:
-    user, permission, content, ``condition``, and ``via=``. ``reach``
-    is an ``along=`` witness, which is not that queryset. The default
-    compiler ORs an ``Exists`` of ``rows`` with ``reach``.
+    ``rows`` is the correlated queryset for the bindings the caller
+    passed, plus ``condition`` and ``via=`` when the registration has
+    them. ``reach`` is an ``along=`` witness. The default compiler ORs
+    an ``Exists`` of ``rows`` with ``reach``.
     """
 
     record: object
@@ -56,21 +56,13 @@ class PlanQueryCompiler(object):
     ``get_group_permissions``.
 
     ``combine`` is how those witnesses become one predicate. The
-    default is OR. A plugin compiler replaces that and nothing about
-    how each registration selects its rows.
+    default is OR. ``group_exists`` keeps this compiler on the sliced
+    plan, so the same ``combine`` runs there.
     """
 
     def applies(self, plan):
         """Relationship applicability: ordinary or delegated records."""
         return bool(plan.records or plan.delegations)
-
-    def or_delegations(self):
-        """True when this predicate is OR'd with one-level delegations.
-
-        A delegation is another matching row. A compiler that folds
-        rows returns False so a delegation cannot grant around the fold.
-        """
-        return True
 
     def combine(self, plan, witnesses):
         """OR each witness. ``plan`` is the plan that produced them."""
@@ -104,6 +96,7 @@ class PlanQueryCompiler(object):
             content_identity=getattr(plan, 'content_identity', None),
             user_model=plan.user_model,
             permission_column=plan.permission_column,
+            query_compiler=plan.query_compiler,
         ).content_exists(user, permission)
 
 

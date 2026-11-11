@@ -311,7 +311,7 @@ def _compile_granted_body(catalog, candidates, user, permission, *, kind,
         fn = compiler.group_exists
     part = _as_q(fn(plan, candidates, user, permission))
     delegated = None
-    if kind == 'complete' and plan.delegations and compiler.or_delegations():
+    if kind == 'complete' and plan.delegations:
         delegated = _delegated_content_exists(
             tuple(plan.delegations),
             _ordinary_records(catalog, candidates, permission_model),

@@ -188,7 +188,7 @@ def _compile_common_permissions_body(catalog, candidates, user, *, kind,
         fn = compiler.group_exists
     part = _as_q(fn(plan, qs, user, perm_expr))
     delegated = None
-    if kind == 'complete' and plan.delegations and compiler.or_delegations():
+    if kind == 'complete' and plan.delegations:
         sponsor_records = _ordinary_records(catalog, candidates)
         compatible_records = _compatible_sponsor_records(
             plan.delegations, sponsor_records,
