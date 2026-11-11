@@ -79,3 +79,4 @@ class CompilerCarriedOnEveryPlanTest(TestCase):
         predicate = plan.content_exists(user, permission)
         self.assertIsNotNone(predicate)
         self.assertIs(plan.query_compiler.__class__, PlanQueryCompiler)
+        self.assertIs(plan.query_compiler.replaces_grant(), False)

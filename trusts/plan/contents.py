@@ -338,8 +338,13 @@ def granted(catalog, candidates, user, permission, *, kind='complete',
     (``Subquery`` / ``OuterRef``). Expressions are not passed to
     ``plan_for``; the plan is selected by content and user terminals.
     """
-    if catalog.family != 'relationship' or not isinstance(user, Model):
+    if not isinstance(user, Model):
         return None
+    if catalog.family != 'relationship':
+        plan = catalog.plan_for(candidates, user=user)
+        compiler = plan.query_compiler
+        if compiler is None or not compiler.replaces_grant():
+            return None
     return _compile_granted(
         catalog, candidates, user, permission, kind=kind,
         permission_model=permission_model,

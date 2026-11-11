@@ -64,6 +64,19 @@ class PlanQueryCompiler(object):
         """Relationship applicability: ordinary or delegated records."""
         return bool(plan.records or plan.delegations)
 
+    def replaces_grant(self):
+        """True when this compiler's predicate replaces the relationship OR.
+
+        ``.permitted()`` and ``get_permitted_users`` skip a
+        non-relationship catalog whose compiler does not replace the
+        grant. The default OR stays on ``combine``.
+        """
+        return False
+
+    def users_exist(self, plan, content, permission):
+        """Predicate over candidate users, or None to use ``user_exists``."""
+        return None
+
     def combine(self, plan, witnesses):
         """OR each witness. ``plan`` is the plan that produced them."""
         parts = []
