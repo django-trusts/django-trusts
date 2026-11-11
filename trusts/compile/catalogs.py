@@ -309,7 +309,10 @@ class Catalog(object):
                 selected = (stored[1],)
         with via_scope(filters=selected):
             exists = plan.user_exists(content, binding) if plan.records else None
-            if plan.delegations:
+            compiler = plan.query_compiler
+            if plan.delegations and (
+                compiler is None or compiler.or_delegations()
+            ):
                 permission_model = (
                     binding._meta.concrete_model
                     if isinstance(binding, Model) else Permission
