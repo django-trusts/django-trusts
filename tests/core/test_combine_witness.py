@@ -9,7 +9,6 @@ from dataclasses import replace
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
-from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
 
 from tests.myapp.models import Document, DocumentGrant
@@ -26,6 +25,17 @@ class _MarkingCompiler(PlanQueryCompiler):
         return None
 
 
+def _saved_permission():
+    """A migrated auth permission. Creating one for Document leaves a
+    content-type id in the cache after the test transaction rolls back.
+    """
+    return Permission.objects.get(
+        content_type__app_label='auth',
+        content_type__model='user',
+        codename='add_user',
+    )
+
+
 class CompilerCarriedOnEveryPlanTest(TestCase):
     def test_content_and_group_slice_use_the_plans_compiler(self):
         marker = _MarkingCompiler()
@@ -40,11 +50,7 @@ class CompilerCarriedOnEveryPlanTest(TestCase):
         user = get_user_model().objects.create_user(
             'combine-witness', password='x',
         )
-        permission = Permission.objects.create(
-            content_type=ContentType.objects.get_for_model(Document),
-            codename='combine_witness',
-            name='combine witness',
-        )
+        permission = _saved_permission()
         self.assertIs(plan.content_exists(user, permission), None)
         self.assertEqual(marker.compilers, [marker])
 
@@ -69,11 +75,7 @@ class CompilerCarriedOnEveryPlanTest(TestCase):
         user = get_user_model().objects.create_user(
             'combine-default', password='x',
         )
-        permission = Permission.objects.create(
-            content_type=ContentType.objects.get_for_model(Document),
-            codename='combine_default',
-            name='combine default',
-        )
+        permission = _saved_permission()
         predicate = plan.content_exists(user, permission)
         self.assertIsNotNone(predicate)
         self.assertIs(plan.query_compiler.__class__, PlanQueryCompiler)
