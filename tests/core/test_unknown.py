@@ -40,6 +40,7 @@ from trusts.plan.trivalent import (
     GrantPredicate,
     Operand,
     _unwrap,
+    _reached_text,
     compare,
     reachable_operand,
     field_operand,
@@ -261,7 +262,7 @@ class UnknownLoweringTests(TransactionTestCase):
             reached = field_operand(
                 Desk, ('room', 'name'), ('alias', quoted('d')), quoted,
             )
-            none = Operand('(1=0)', (), '(1=1)', (), True)
+            none = Operand('(1=0)', (), None, (), True)
             derived = compare('ne', reached, none)
             self.assertIn('IS NULL', derived.sql)
             self.assertIn('NOT', derived.sql)
@@ -282,8 +283,9 @@ class UnknownLoweringTests(TransactionTestCase):
             root = reachable_operand(
                 Desk, (), ('alias', quoted('d')), quoted,
             )
-            self.assertIn('1=1', root.reached_sql)
-            self.assertNotIn('EXISTS', root.reached_sql)
+            self.assertIsNone(root.reached_sql)
+            self.assertEqual(_reached_text(root.reached_sql), '(1=1)')
+            self.assertNotIn('EXISTS', _reached_text(root.reached_sql))
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')

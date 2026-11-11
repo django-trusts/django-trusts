@@ -47,6 +47,8 @@ class Operand(object):
     ``literal_none`` is a constant ``None``, the explicit null test.
     A field whose value is NULL is not ``literal_none``. ``export_hint``
     is the lockfile name of this field when a constant is compared to it.
+    ``reached_sql`` is ``None`` when no join can miss. A string is a real
+    guard: the row may be absent, and that SQL says whether it was joined.
     """
 
     __slots__ = (
@@ -242,44 +244,21 @@ def _match_relation_targets(left, right):
     return pk_operand(left), pk_operand(right)
 
 
-def _row_is_present(operand):
-    """True when ``operand``'s row is already in the query.
-
-    That reachability guard is the constant ``1=1``. Parentheses and
-    spaces do not change it. A parameter, or any other predicate, is a
-    real guard: a missing row must stay Unknown.
-    """
-    if operand.reached_params:
-        return False
-    text = ''.join(operand.reached_sql.split())
-    while text.startswith('(') and text.endswith(')'):
-        depth = 0
-        wraps = True
-        for index, char in enumerate(text):
-            if char == '(':
-                depth += 1
-            elif char == ')':
-                depth -= 1
-                if depth < 0:
-                    wraps = False
-                    break
-            if depth == 0 and index != len(text) - 1:
-                wraps = False
-                break
-        if not wraps or depth != 0:
-            break
-        text = text[1:-1]
-    return text == '1=1'
+def _reached_text(sql):
+    """Reachability SQL. ``None`` is a row no join can miss."""
+    if sql is None:
+        return '(1=1)'
+    return sql
 
 
 def _null_test(field):
     """``IS NULL`` for a stored column, guarded when the row may be missing.
 
-    A present row needs no ``CASE``. Wrapping ``1=1`` would still be true
-    or false, never Unknown, and the guard is noise. A real guard stays:
-    the ``ELSE NULL`` is Unknown when the row was not joined.
+    ``reached_sql is None`` means the row is already in the query, so the
+    predicate is the column. A real guard stays in ``CASE``: ``ELSE NULL``
+    is Unknown when that join missed.
     """
-    if _row_is_present(field):
+    if field.reached_sql is None:
         return Expr('(%s IS NULL)' % field.value_sql, field.value_params)
     return Expr(
         'CASE WHEN (%s) THEN (%s IS NULL) ELSE NULL END' % (
@@ -297,7 +276,7 @@ def compare(kind, left, right, connection=None):
         if kind == 'eq':
             return eq
         # Derived: unreachable stays Unknown, a reached value is true.
-        if _row_is_present(field):
+        if field.reached_sql is None:
             return Expr('(NOT %s)' % eq.sql, eq.params)
         return Expr('(NOT (%s))' % eq.sql, eq.params)
     if kind in ('eq', 'ne'):
@@ -357,7 +336,10 @@ def lower(node, scope):
             )
     if kind == REACHABLE_KIND:
         operand = scope.reachable_operand(node.item)
-        return Expr('(%s)' % operand.reached_sql, operand.reached_params)
+        return Expr(
+            '(%s)' % _reached_text(operand.reached_sql),
+            operand.reached_params,
+        )
     if kind == 'ne' or kind in _COMPARE:
         return compare(
             kind, scope.operand(node.left), scope.operand(node.right),
@@ -401,7 +383,7 @@ def _const_operand(value, connection):
     else:
         param = runtime
     return Operand(
-        sql, (param,), '(1=1)', (), runtime is None,
+        sql, (param,), None, (), runtime is None,
         instance_pk=isinstance(value, ModelIdentity),
     )
 
@@ -670,7 +652,8 @@ def correlated(model, hops, leaf_column, source, qn, *, reachable,
     ``source`` is ``('alias', sql)`` or ``('pk', pk, model)``. A join that
     misses, including a dangling foreign key, yields no row. When the
     query already cites a prefix of ``hops``, that alias is the same row
-    and any later hops are a subquery from it.
+    and any later hops are a subquery from it. A reachable row with no
+    join that can miss is ``(None, ())``.
     """
     if source[0] == 'alias':
         reused = None
@@ -685,7 +668,7 @@ def correlated(model, hops, leaf_column, source, qn, *, reachable,
                     if nullable:
                         column = qn(last_model._meta.pk.column)
                         return '%s.%s IS NOT NULL' % (quoted, column), ()
-                    return '(1=1)', ()
+                    return None, ()
                 return '%s.%s' % (quoted, qn(leaf_column)), ()
             prev = quoted
         else:
@@ -708,7 +691,7 @@ def correlated(model, hops, leaf_column, source, qn, *, reachable,
             prev = dest
         if not hops:
             if reachable:
-                return '(1=1)', ()
+                return None, ()
             return '%s.%s' % (source[1], qn(leaf_column)), ()
         selected = '1' if reachable else '%s.%s' % (prev, qn(leaf_column))
         body = 'SELECT %s FROM %s WHERE %s' % (
@@ -749,7 +732,7 @@ def field_operand(model, path, source, qn, query=None, raw_alias=None):
         if source[0] == 'alias':
             column = model._meta.pk.column
             sql = '%s.%s' % (source[1], qn(column))
-            return Operand(sql, (), '(1=1)', (), False)
+            return Operand(sql, (), None, (), False)
         sql, params = correlated(
             model, (), model._meta.pk.column, source, qn, reachable=False,
         )
@@ -980,12 +963,12 @@ class Scope(object):
     def _call(self, node):
         name = node.value
         if name == 'now':
-            return Operand(now_sql(self.connection), (), '(1=1)', (), False)
+            return Operand(now_sql(self.connection), (), None, (), False)
         if name == 'lower':
             inner = self.operand(node.item[0])
             return Operand(
                 'LOWER(%s)' % inner.value_sql, inner.value_params,
-                '(1=1)', (), False,
+                None, (), False,
             )
         if name == 'coalesce':
             parts = [self.operand(arg) for arg in node.item]
@@ -1021,7 +1004,7 @@ class Scope(object):
                     # so ``2.5 = '2.50'`` fails. The column type puts it back.
                     sql = 'CAST(%s AS %s)' % (sql, db_type)
             return Operand(
-                sql, tuple(params), '(1=1)', (), False, field, hint,
+                sql, tuple(params), None, (), False, field, hint,
             )
         raise PermissionConditionError(
             'Cannot lower function %r.' % (name,)

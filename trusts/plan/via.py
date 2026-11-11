@@ -25,6 +25,7 @@ from trusts.plan.rewrites import CallInput
 from trusts.plan.trivalent import (
     Operand,
     _forward_fk,
+    _reached_text,
     compare,
     concrete_owner_hops,
     correlated,
@@ -472,9 +473,9 @@ def _walk_node(node, user_model, content_model, content, carriers, name, qn,
         if getattr(field, 'kind', None) != 'field' or field.root != 'user':
             raise _cannot(name)
         try:
-            return reachable_operand(
+            return _reached_text(reachable_operand(
                 user_model, field.path, ('alias', '{alias}'), qn,
-            ).reached_sql
+            ).reached_sql)
         except PermissionConditionError as exc:
             raise _cannot(name) from exc
     if node.kind == 'contains':
@@ -685,7 +686,7 @@ def _compare_sql(node, user_model, content_model, content, carriers, name, qn,
             content_model, content, other_node.path, name,
             identity=differ and not stores_pk,
         ))
-        other = Operand('{c%s}' % index, (), '(1=1)', (), False)
+        other = Operand('{c%s}' % index, (), None, (), False)
         return compare(node.kind, user_operand, other).sql
     other = _via_other_operand(
         other_node, user_model, content_model, content, carriers, name, qn,
@@ -712,7 +713,7 @@ def _via_other_operand(node, user_model, content_model, content, carriers, name,
                        qn):
     """The non-user side of a hop comparison. A constant ``None`` stays literal."""
     if getattr(node, 'kind', None) == 'const' and _const_value(node) is None:
-        return Operand('(1=0)', (), '(1=1)', (), True)
+        return Operand('(1=0)', (), None, (), True)
     sql = _other_operand(
         node, user_model, content_model, content, carriers, name, qn,
     )
@@ -720,7 +721,7 @@ def _via_other_operand(node, user_model, content_model, content, carriers, name,
         getattr(node, 'kind', None) == 'const'
         and isinstance(node.value, (Model, ModelIdentity))
     )
-    return Operand(sql, (), '(1=1)', (), False, instance_pk=instance)
+    return Operand(sql, (), None, (), False, instance_pk=instance)
 
 
 def _user_operand(node, user_model, content_model, content, carriers, name, qn):

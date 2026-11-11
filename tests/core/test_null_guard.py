@@ -90,14 +90,14 @@ def _user_pks(content, perm):
 
 
 def _none():
-    return Operand('(1=0)', (), '(1=1)', (), True)
+    return Operand('(1=0)', (), None, (), True)
 
 
 class PresentNullSqlTests(SimpleTestCase):
     """The constant-true guard is dropped. A real guard stays."""
 
     def test_present_row_is_plain_null(self):
-        column = Operand('"issue"."cut_here"', (), '(1=1)', (), False)
+        column = Operand('"issue"."cut_here"', (), None, (), False)
         eq = compare('eq', column, _none())
         ne = compare('ne', column, _none())
         swapped = compare('eq', _none(), column)
@@ -109,11 +109,15 @@ class PresentNullSqlTests(SimpleTestCase):
         self.assertNotIn('IS NOT NULL', ne.sql)
 
     def test_parenthesized_and_spaced_true_guards_are_the_same_constant(self):
+        column = Operand('"t"."a"', (), None, (), False)
+        sql = compare('eq', column, _none()).sql
+        self.assertEqual(sql, '("t"."a" IS NULL)')
+        self.assertNotIn('1=1', sql)
+        # The marker is structural. A guard that merely says 1=1 stays.
         for guard in ('((1=1))', ' ( 1 = 1 ) ', '1=1', '(((1=1)))'):
-            column = Operand('"t"."a"', (), guard, (), False)
-            sql = compare('eq', column, _none()).sql
-            self.assertEqual(sql, '("t"."a" IS NULL)', guard)
-            self.assertNotIn('1=1', sql)
+            raw = Operand('"t"."a"', (), guard, (), False)
+            kept = compare('eq', raw, _none()).sql
+            self.assertIn('CASE WHEN (%s)' % guard, kept, guard)
 
     def test_real_guard_stays_unknown_when_the_row_is_missing(self):
         missing = Operand(
@@ -148,7 +152,7 @@ class PresentNullSqlTests(SimpleTestCase):
         self.assertEqual(mixed.params, ('x',))
 
     def test_present_null_keeps_value_params_only(self):
-        column = Operand('%s', ('kept',), '(1=1)', (), False)
+        column = Operand('%s', ('kept',), None, (), False)
         eq = compare('eq', _none(), column)
         self.assertEqual(eq.sql, '(%s IS NULL)')
         self.assertEqual(eq.params, ('kept',))
