@@ -102,6 +102,49 @@ class _HopWalk(object):
         return getattr(self._walk, name)
 
 
+class _SavedIdentity(Expression):
+    """Related primary key of one saved row, as a typed scalar subquery.
+
+    A non-PK ``to_field`` is joined, so the selected column is that
+    target's primary key. A dangling key is SQL NULL of that column's
+    type. An untyped ``NULL`` parameter would make PostgreSQL treat the
+    recursive carrier as text and reject ``integer = text``.
+    """
+
+    def __init__(self, model, pk, path):
+        _hops, leaf = split_value_path(model, path)
+        if not _forward_fk(leaf):
+            raise PermissionConditionError(
+                'Cannot read an identity from %s.%s.'
+                % (model._meta.label, '.'.join(path))
+            )
+        related = leaf.remote_field.model._meta.concrete_model._meta.pk
+        super().__init__(output_field=related)
+        self.model = model
+        self.pk = pk
+        self.path = tuple(path)
+
+    def as_sql(self, compiler, connection):
+        qn = connection.ops.quote_name
+        operand = pk_operand(field_operand(
+            self.model, self.path, ('pk', self.pk, self.model), qn,
+        ))
+        return operand.value_sql, tuple(operand.value_params)
+
+    def resolve_expression(
+        self, query=None, allow_joins=True, reuse=None,
+        summarize=False, for_save=False,
+    ):
+        return copy.copy(self)
+
+    def get_source_expressions(self):
+        return []
+
+    def set_source_expressions(self, exprs):
+        if exprs:
+            raise TypeError('_SavedIdentity has no source expressions.')
+
+
 class _HopValue(Expression):
     """One constant carried into the seed. The recursive member copies it."""
 
@@ -878,10 +921,19 @@ class _CandidateContent(Expression):
 def _object_value(model, content, path, name, *, identity=False):
     if not path:
         raise _cannot(name)
+    if content is not None and identity:
+        # Inverse inquiry. Join the target so both relations compare in
+        # one identity domain. A Python NULL would lose that column type.
+        if content.pk is None:
+            raise _cannot(name)
+        try:
+            return _SavedIdentity(model, content.pk, path)
+        except PermissionConditionError as exc:
+            raise _cannot(name) from exc
     if content is not None:
         # Inverse inquiry: ``content`` is the candidate row. Read that
         # object. Do not build a subquery off the grant or the user.
-        value = _read_instance(content, path, name, identity=identity)
+        value = _read_instance(content, path, name)
         hint = 'content.%s' % path[-1]
         return _HopValue(value, hint)
     lookup = tuple(path)
@@ -1062,7 +1114,7 @@ def _permission_join_sql(root, steps, source_alias, qn, name):
     return sql, perm_alias
 
 
-def _read_instance(obj, path, name, *, identity=False):
+def _read_instance(obj, path, name):
     """Value of ``path`` on a saved object.
 
     An intermediate relation is the related object. Only the last step
@@ -1085,14 +1137,6 @@ def _read_instance(obj, path, name, *, identity=False):
         except Exception as exc:
             raise _cannot(name) from exc
         terminal = index == last
-        if terminal and identity and _forward_fk(field):
-            try:
-                current = getattr(current, field.name)
-            except ObjectDoesNotExist:
-                return None
-            if current is None:
-                return None
-            return current.pk
         if (
             terminal
             and getattr(field, 'concrete', False)
