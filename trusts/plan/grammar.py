@@ -428,7 +428,7 @@ def is_predicate(node):
     return isinstance(node, Tree) and node.kind in _PREDICATE_KINDS
 
 
-def invoke(fn, roots, prepare=None):
+def invoke(fn, roots, prepare):
     """Call ``fn`` once with one symbol per root name. Return a predicate.
 
     ``prepare(tree, token)`` runs after the predicate check, while the
@@ -450,8 +450,6 @@ def invoke(fn, roots, prepare=None):
             'Condition builder failed: %s' % exc
         ) from exc
     result = _require_predicate(result)
-    if prepare is None:
-        return result
     return prepare(result, token)
 
 

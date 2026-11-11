@@ -385,10 +385,6 @@ def resolve_field_path(model, path, ref_kind='object', *, collection=False):
     return '__'.join(path)
 
 
-def resolve_object_field_path(model, path):
-    return resolve_field_path(model, path, ref_kind='object')
-
-
 def _terminal_field(model, path, ref_kind='object', *, collection=False):
     resolve_field_path(
         model, path, ref_kind=ref_kind, collection=collection,
@@ -619,19 +615,6 @@ def _coalesce_fields(node, model, user_model):
             )
         found[type(field).__name__] = field
     return found
-
-
-def coalesce_output_field(node, model, user_model):
-    """The field Django must use so ``Value()`` does not pick a sibling type."""
-    found = _coalesce_fields(node, model, user_model)
-    if len(found) != 1:
-        return None
-    field = next(iter(found.values()))
-    if isinstance(field, DecimalField):
-        return DecimalField(
-            max_digits=field.max_digits, decimal_places=field.decimal_places,
-        )
-    return type(field)()
 
 
 def check_comparison_types(node, model, user_model):

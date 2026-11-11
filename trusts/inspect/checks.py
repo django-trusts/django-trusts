@@ -61,16 +61,11 @@ def _trusts_abstract_base(model, label):
 
 
 def _model_label(model):
-    meta = getattr(model, '_meta', None)
-    if meta is not None:
-        return meta.label
-    return repr(model)
+    return model._meta.label
 
 
 def _is_concrete_model(model):
-    opts = getattr(model, '_meta', None)
-    if opts is None:
-        return False
+    opts = model._meta
     return not opts.abstract and not opts.proxy
 
 

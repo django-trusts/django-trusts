@@ -933,7 +933,7 @@ def _object_value(model, content, path, name, *, identity=False):
     if content is not None:
         # Inverse inquiry: ``content`` is the candidate row. Read that
         # object. Do not build a subquery off the grant or the user.
-        value = _read_instance(content, path, name, identity=identity)
+        value = _read_instance(content, path, name)
         hint = 'content.%s' % path[-1]
         return _HopValue(value, hint)
     lookup = tuple(path)
@@ -1114,7 +1114,7 @@ def _permission_join_sql(root, steps, source_alias, qn, name):
     return sql, perm_alias
 
 
-def _read_instance(obj, path, name, *, identity=False):
+def _read_instance(obj, path, name):
     """Value of ``path`` on a saved object.
 
     An intermediate relation is the related object. Only the last step
@@ -1137,14 +1137,6 @@ def _read_instance(obj, path, name, *, identity=False):
         except Exception as exc:
             raise _cannot(name) from exc
         terminal = index == last
-        if terminal and identity and _forward_fk(field):
-            try:
-                current = getattr(current, field.name)
-            except ObjectDoesNotExist:
-                return None
-            if current is None:
-                return None
-            return current.pk
         if (
             terminal
             and getattr(field, 'concrete', False)

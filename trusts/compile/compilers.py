@@ -1009,10 +1009,6 @@ class Compiler(object):
                 raise TrustsConfigurationError(
                     'delegated register requires both delegate= and sponsor=.'
                 )
-            if user is not None or permission is not None or group is not None:
-                raise TrustsConfigurationError(
-                    'delegated register forbids user=, permission=, and group=.'
-                )
         else:
             if user is None:
                 raise TrustsConfigurationError(
