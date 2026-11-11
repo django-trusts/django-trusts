@@ -223,7 +223,10 @@ def _record_predicate(record, correlation=None, *, content_identity=None,
         filters[getattr(record, _BINDING_FIELDS[role])] = bind_terminal(
             value, role,
         )
-    filters.update(_permission_content_type_filters(record, content_identity))
+    if 'permission' in bindings:
+        filters.update(_permission_content_type_filters(
+            record, content_identity,
+        ))
     combined = Q(**filters)
     compiled = compile_predicate(record.condition, record)
     if compiled is not None:

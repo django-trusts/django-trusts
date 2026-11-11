@@ -308,7 +308,13 @@ class Catalog(object):
             if stored is not None:
                 selected = (stored[1],)
         with via_scope(filters=selected):
-            exists = plan.user_exists(content, binding) if plan.records else None
+            compiler = plan.query_compiler
+            if compiler is not None and compiler.replaces_grant():
+                exists = compiler.users_exist(plan, content, binding)
+            elif plan.records:
+                exists = plan.user_exists(content, binding)
+            else:
+                exists = None
             if plan.delegations:
                 permission_model = (
                     binding._meta.concrete_model
@@ -402,7 +408,13 @@ class Catalog(object):
         when names were selected and this catalog registered every one.
         """
         if _auth_permission_plan(self, candidates, user) is None:
-            return None, False
+            plan = self.plan_for(candidates, user=user)
+            compiler = plan.query_compiler
+            if (
+                compiler is None or not compiler.replaces_grant()
+                or not plan.records
+            ):
+                return None, False
         if conditions:
             overlay = _selected_condition_q(
                 self, model, permission, conditions, user, api=api,

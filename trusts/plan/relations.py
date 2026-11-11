@@ -31,6 +31,21 @@ from trusts.plan.standards import (
 from django.contrib.auth.models import Permission
 
 
+@dataclass(frozen=True, slots=True)
+class GrantWitness:
+    """One registration's applicable rows, before they are combined.
+
+    ``rows`` is the correlated queryset for the bindings the caller
+    passed, plus ``condition`` and ``via=`` when the registration has
+    them. ``reach`` is an ``along=`` witness. The default compiler ORs
+    an ``Exists`` of ``rows`` with ``reach``.
+    """
+
+    record: object
+    rows: object = None
+    reach: object = None
+
+
 class PlanQueryCompiler(object):
     """Immutable mixin default: registered plan; group slice is explicit.
 
@@ -39,11 +54,42 @@ class PlanQueryCompiler(object):
     those ``group=`` records. A many-to-many or membership-shaped user
     path is not a Django group. ``permission=`` records stay out of
     ``get_group_permissions``.
+
+    ``combine`` is how those witnesses become one predicate. The
+    default is OR. ``group_exists`` keeps this compiler on the sliced
+    plan, so the same ``combine`` runs there.
     """
 
     def applies(self, plan):
         """Relationship applicability: ordinary or delegated records."""
         return bool(plan.records or plan.delegations)
+
+    def replaces_grant(self):
+        """True when this compiler's predicate replaces the relationship OR.
+
+        ``.permitted()`` and ``get_permitted_users`` skip a
+        non-relationship catalog whose compiler does not replace the
+        grant. The default OR stays on ``combine``.
+        """
+        return False
+
+    def users_exist(self, plan, content, permission):
+        """Predicate over candidate users, or None to use ``user_exists``."""
+        return None
+
+    def combine(self, plan, witnesses):
+        """OR each witness. ``plan`` is the plan that produced them."""
+        parts = []
+        for witness in witnesses:
+            if witness.reach is not None:
+                parts.append(witness.reach)
+            elif witness.rows is not None:
+                parts.append(Exists(witness.rows))
+        if not parts:
+            return None
+        if len(parts) == 1:
+            return parts[0]
+        return reduce(or_, parts)
 
     def complete_exists(self, plan, candidates, user, permission):
         if not plan.records:
@@ -63,7 +109,19 @@ class PlanQueryCompiler(object):
             content_identity=getattr(plan, 'content_identity', None),
             user_model=plan.user_model,
             permission_column=plan.permission_column,
+            query_compiler=plan.query_compiler,
         ).content_exists(user, permission)
+
+
+def _combine_witnesses(plan, witnesses):
+    """Ask the plan's compiler to combine witnesses. Default is OR."""
+    compiler = plan.query_compiler
+    if compiler is None:
+        compiler = _DEFAULT_QUERY_COMPILER
+    return compiler.combine(plan, witnesses)
+
+
+_DEFAULT_QUERY_COMPILER = PlanQueryCompiler()
 
 
 def candidate_queryset(content):
@@ -301,28 +359,34 @@ class RelationPlan:
             **bindings,
         )
 
-    def _correlated_exists(self, terminal_field_attr, **bindings):
-        parts = []
+    def grant_witnesses(self, terminal_field_attr, **bindings):
+        """Applicable rows for each registration, in registration order.
+
+        Selection is unchanged: ``condition``, ``via=``, and ``along=``
+        are applied here. Combination is :meth:`PlanQueryCompiler.combine`.
+        """
+        witnesses = []
         for record in self.records:
             if record.along is not None:
                 if terminal_field_attr == 'content_field':
-                    parts.append(GrantReach(
+                    reach = GrantReach(
                         record, bindings['user'], bindings['permission'],
                         content_identity=self.content_identity,
-                    ))
+                    )
                 elif terminal_field_attr == 'user_field':
-                    parts.append(GrantReach(
+                    reach = GrantReach(
                         record, OuterRef(record.user_target),
                         bindings['permission'], content=bindings['content'],
                         content_identity=self.content_identity,
-                    ))
+                    )
                 else:
                     target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
-                    parts.append(GrantReach(
+                    reach = GrantReach(
                         record, bindings['user'], OuterRef(target),
                         content=bindings['content'],
                         content_identity=self.content_identity,
-                    ))
+                    )
+                witnesses.append(GrantWitness(record, reach=reach))
                 continue
             terminal = getattr(record, terminal_field_attr)
             target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
@@ -342,19 +406,20 @@ class RelationPlan:
                         content_identity=self.content_identity,
                         **local,
                     ).filter(via_grant_q(record, actor))
-                parts.append(Exists(inner))
+                witnesses.append(GrantWitness(record, rows=inner))
                 continue
             inner = self._bound_root_qs(
                 record,
                 correlation=Q(**{terminal: OuterRef(target)}),
                 **bindings,
             )
-            parts.append(Exists(inner))
-        if not parts:
-            return None
-        if len(parts) == 1:
-            return parts[0]
-        return reduce(or_, parts)
+            witnesses.append(GrantWitness(record, rows=inner))
+        return tuple(witnesses)
+
+    def _correlated_exists(self, terminal_field_attr, **bindings):
+        return _combine_witnesses(
+            self, self.grant_witnesses(terminal_field_attr, **bindings),
+        )
 
     def content_exists(self, user, permission):
         """Candidate-row ``EXISTS`` correlating content through this plan.
